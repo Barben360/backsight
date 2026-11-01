@@ -16,7 +16,7 @@ import (
 // their order: each a function of its own, each failing the run with its
 // name.
 var ncwSteps = []string{"build", "install", "setup", "dlls", "store", "backup", "restore", "upgrade-rollback",
-	"kill-postgres", "kill-supervisor", "refuse-identity", "refuse-stray", "refuse-fsync", "uninstall"}
+	"kill-postgres", "kill-supervisor", "refuse-identity", "refuse-missing", "refuse-stray", "refuse-fsync", "uninstall"}
 
 func ncwScript(t *testing.T) string {
 	t.Helper()
@@ -138,20 +138,54 @@ func TestNativeChainWindowsHasEveryStep(t *testing.T) {
 		"dlls":             {".Modules", "$NCRuntimeDll", "outside the native root", "$script:pgBin"},
 		"store":            {"@('store',", "@('search',"},
 		"backup":           {"@('backup', 'create',", "@('backup', 'verify',"},
-		"restore":          {"@('restore',", "Save-NcKeys 'keys-restore'", "Test-NcSameKeys 'keys-backup' 'keys-restore'", "Wait-NcHealthy"},
-		"upgrade-rollback": {"$script:bin2", "@('server', 'upgrade',", "BACKSIGHT_TEST_FAIL_SMOKE", "-ne 30", "Test-NcSameKeys 'keys-before-upgrade' 'keys-after-upgrade'", "Wait-NcHealthy"},
+		"restore":          {"@('store',", "Test-NcDocumentKey 'keys-after-backup'", "@('restore',", "Save-NcKeys 'keys-restore'", "Test-NcDocumentKey 'keys-restore'", "Test-NcSameKeys 'keys-backup' 'keys-restore'", "Wait-NcHealthy"},
+		"upgrade-rollback": {"$script:bin2", "@('server', 'upgrade',", "BACKSIGHT_TEST_FAIL_SMOKE", "-ne 30", "Get-NcProcs $script:native 'hindsight-api'", "Test-NcUnder $_.Path $venvDir", "Test-NcSameKeys 'keys-before-upgrade' 'keys-after-upgrade'", "Wait-NcHealthy"},
 		"kill-postgres":    {"Get-NcPostmaster", "Stop-Process", "-lt 30", "Test-NcPgReady", "Wait-NcHealthy"},
 		"kill-supervisor":  {"Get-NcSupervisors", "Stop-Process", "Wait-NcGone", "Start-NcServer", `a postgres \(pid \d+\) runs on`},
-		"refuse-identity":  {"'identity'", "@('server', 'start',", "@('server', 'status',", "is not the one backsight recorded", "Get-NcSupervisors"},
-		"refuse-stray":     {"'pg_ctl.exe'", "Start-NcServer", "stopping it", "Wait-NcGone"},
-		"refuse-fsync":     {`'"fsync=off"'`, "'/Run'", "not fsync=on", "@('server', 'status',", "Compare-NcFingerprint"},
-		"uninstall":        {"'--delete-data'", "Test-NcTask", "Get-NcProcs $script:bh", "Test-Path -LiteralPath $script:native", "$script:userPathKey"},
+		"refuse-identity":  {"'identity'", "@('server', 'start',", "Start-Sleep -Seconds $NCSettle", "@('server', 'status',", "is not the one backsight recorded", "Get-NcSupervisors"},
+		"refuse-missing":   {"Move-NcDir $db $aside", "@('server', 'start',", "Start-Sleep -Seconds $NCSettle", "@('server', 'status',", "is missing: refusing to start", "Get-NcSupervisors", "Move-NcDir $aside $db"},
+		"refuse-stray":     {"'pg_ctl.exe'", "Start-NcServer", "-not $started", "stopping it", "Wait-NcGone"},
+		"refuse-fsync":     {`'"fsync=off"'`, "'/Run'", "not fsync=on", "Start-Sleep -Seconds $NCSettle", "@('server', 'status',", "Compare-NcFingerprint"},
+		"uninstall":        {"'--delete-data'", "Test-NcTask", "Get-NcProcs $script:bh", "Test-Path -LiteralPath $script:native", "$script:userPathKey", `'data\backups'`},
 	}
+	// Each checked outcome fails the step: its message is a Fail's. (A
+	// regular expression cannot tell which condition guards a Fail; the
+	// PowerShell tests below run the helpers those conditions call.)
+	fails := map[string][]string{
+		"build":            {"go build of", "testrelease"},
+		"install":          {"install.ps1", "real user PATH"},
+		"setup":            {"setup", "not healthy", "task", "doctor"},
+		"dlls":             {"outside the native root"},
+		"store":            {"was not stored", "never found"},
+		"backup":           {"backup create", "backup verify", "restored no rows", "changed while it was backed up"},
+		"restore":          {"stored after the backup", "restore failed", "did not pass its checks", "still there after the restore"},
+		"upgrade-rollback": {"want 30", "rolled back", "never installed", "after the rollback", "hindsight-api.exe runs from"},
+		"kill-postgres":    {"no running postgres", "within 30 s"},
+		"kill-supervisor":  {"supervisors run", "left pid", "without a supervisor", "reported a stray"},
+		"refuse-identity":  {"accepted a database", "is not the recorded one", "started something", "server status does not give"},
+		"refuse-missing":   {"accepted a missing database", "database is missing", "started something", "in place of the missing one", "server status does not give"},
+		"refuse-stray":     {"pg_ctl start", "did not stop it", "was not reported", "under one supervisor"},
+		"refuse-fsync":     {"never gave the fsync refusal", "name supervise.json", "runs with fsync=off", "changed across the refusals"},
+		"uninstall":        {"failed", "still finds the task", "still run from", "still there", "user PATH", "left"},
+	}
+	failRE := regexp.MustCompile(`Fail ("[^"]*"|'[^']*')`)
 	for _, s := range ncwSteps {
 		body := ncwFunction(t, src, "Step-"+s)
 		for _, want := range does[s] {
 			if !strings.Contains(body, want) {
 				t.Errorf("step %s does not do its check: its function lacks %q", s, want)
+			}
+		}
+		var msgs []string
+		for _, m := range failRE.FindAllStringSubmatch(body, -1) {
+			msgs = append(msgs, m[1])
+		}
+		if len(fails[s]) == 0 {
+			t.Errorf("step %s has no failure message to check", s)
+		}
+		for _, want := range fails[s] {
+			if !slices.ContainsFunc(msgs, func(m string) bool { return strings.Contains(m, want) }) {
+				t.Errorf("step %s: no Fail says %q (its Fails: %q)", s, want, msgs)
 			}
 		}
 	}
@@ -458,14 +492,43 @@ func TestNativeChainWindowsComparesKeys(t *testing.T) {
 		}
 		return p
 	}
-	before := write("before.keys", `{"documents":["(d1,bk)","(epoch,bk-control)"],"memory_units":["(u1)","(u2)","(e1)"],`+
-		`"memory_links":["(u1,u2,semantic,,1,\"t\",bk)","(e1,e1,semantic,,1,\"t\",bk-control)"],"llm_requests":["(r1)"]}`)
-	same := write("same.keys", `{"documents":["(d1,bk)","(epoch,bk-control)"],"memory_units":["(u1)","(u2)","(e2)"],`+
-		`"memory_links":["(u1,u2,semantic,,1,\"t\",bk)","(e2,e2,semantic,,1,\"t\",bk-control)"],"llm_requests":["(r2)"]}`)
-	lost := write("lost.keys", `{"documents":["(epoch,bk-control)"],"memory_units":["(u1)","(e1)","(u9)"],`+
-		`"memory_links":["(e1,e1,semantic,,1,\"t\",bk-control)"],"llm_requests":["(r1)"]}`)
-	body := "[Console]::Out.WriteLine('same=' + (@(Compare-NcKeys " + psQuote(before) + " " + psQuote(same) + " 'bk-control') -join '|') + ' control=' + $script:controlChanged)\n" +
-		"[Console]::Out.WriteLine('lost=' + (@(Compare-NcKeys " + psQuote(before) + " " + psQuote(lost) + " 'bk-control') -join '|'))"
+	link := func(a, b, bank string) string { return `"(` + a + `,` + b + `,semantic,,1,\"t\",` + bank + `)"` }
+	keys := func(docs, chunks, units, links string) string {
+		return `{"documents":[` + docs + `],"chunks":[` + chunks + `],"memory_units":[` + units + `],"memory_links":[` + links + `],"llm_requests":["(r1)"]}`
+	}
+	docs := `"(d1,bk)","(backsight:epoch,bk-control)","(backsight:server,bk-control)"`
+	before := write("before.keys", keys(docs, `"(bk-control_backsight:epoch_c1)"`, `"(u1)","(u2)","(e1)","(s1)"`,
+		link("u1", "u2", "bk")+","+link("e1", "s1", "bk-control")))
+	// The epoch document rewritten: its chunk, its unit and the link to it
+	// replaced, the history table grown.
+	same := write("same.keys", strings.Replace(keys(docs, `"(bk-control_backsight:epoch_c2)"`, `"(u1)","(u2)","(e2)","(s1)"`,
+		link("u1", "u2", "bk")+","+link("e2", "s1", "bk-control")), `"(r1)"`, `"(r1)","(r2)"`, 1))
+	// The user's rows lost or new.
+	lost := write("lost.keys", keys(`"(backsight:epoch,bk-control)","(backsight:server,bk-control)"`, `"(bk-control_backsight:epoch_c1)"`,
+		`"(u1)","(e1)","(s1)","(u9)"`, link("e1", "s1", "bk-control")))
+	// The server document lost, with its unit and link: no unit added.
+	lostCtl := write("lostctl.keys", keys(`"(d1,bk)","(backsight:epoch,bk-control)"`, `"(bk-control_backsight:epoch_c1)"`,
+		`"(u1)","(u2)","(e1)"`, link("u1", "u2", "bk")))
+	// Two control units replaced: more than the epoch document's one.
+	twice := write("twice.keys", keys(docs, `"(bk-control_backsight:epoch_c2)"`, `"(u1)","(u2)","(e2)","(s2)"`,
+		link("u1", "u2", "bk")+","+link("e2", "s2", "bk-control")))
+	// The first restore: the epoch document new, with its unit and links.
+	first := write("first.keys", keys(docs, `"(bk-control_backsight:epoch_c1)"`, `"(u1)","(u2)","(e1)","(s1)"`,
+		link("u1", "u2", "bk")+","+link("e1", "s1", "bk-control")))
+	firstBefore := write("firstbefore.keys", keys(`"(d1,bk)","(backsight:server,bk-control)"`, ``, `"(u1)","(u2)","(s1)"`, link("u1", "u2", "bk")))
+	// A control unit and its link added, the epoch document not new.
+	unitOnly := write("unitonly.keys", keys(`"(d1,bk)","(backsight:server,bk-control)"`, ``, `"(u1)","(u2)","(s1)","(e1)"`,
+		link("u1", "u2", "bk")+","+link("e1", "s1", "bk-control")))
+	cmp := func(label, after string) string {
+		return "[Console]::Out.WriteLine('" + label + "=' + (@(Compare-NcKeys " + psQuote(before) + " " + psQuote(after) + " 'bk-control') -join '|') + ' control=' + $script:controlChanged)\n"
+	}
+	body := cmp("same", same) + cmp("lost", lost) + cmp("lostctl", lostCtl) + cmp("twice", twice) +
+		"[Console]::Out.WriteLine('first=' + (@(Compare-NcKeys " + psQuote(firstBefore) + " " + psQuote(first) + " 'bk-control') -join '|') + ' control=' + $script:controlChanged)\n" +
+		"[Console]::Out.WriteLine('unitonly=' + (@(Compare-NcKeys " + psQuote(firstBefore) + " " + psQuote(unitOnly) + " 'bk-control') -join '|'))\n" +
+		"$a = [pscustomobject]@{ control_documents = [pscustomobject]@{ 'backsight:epoch' = 'e1'; 'backsight:server' = 's1' } }\n" +
+		"$b = [pscustomobject]@{ control_documents = [pscustomobject]@{ 'backsight:epoch' = 'e2'; 'backsight:server' = 's1' } }\n" +
+		"$c = [pscustomobject]@{ control_documents = [pscustomobject]@{ 'backsight:epoch' = 'e1' } }\n" +
+		"[Console]::Out.WriteLine('docs-same=' + (@(Compare-NcControlDocs $a $b) -join '|') + ' docs-lost=' + (@(Compare-NcControlDocs $a $c) -join '|'))\n"
 	for _, shell := range powerShells(t) {
 		t.Run(shellName(shell), func(t *testing.T) {
 			out, err := ncwPS(t, shell, body)
@@ -473,8 +536,14 @@ func TestNativeChainWindowsComparesKeys(t *testing.T) {
 				t.Fatalf("%v\n%s", err, out)
 			}
 			for _, want := range []string{
-				"same= control=4\n",
-				"lost=gone: documents (d1,bk)|gone: memory_links (u1,u2,semantic,,1,\"t\",bk)|gone: memory_units (u2)|added: memory_units (u9)\n",
+				"same= control=6\n",
+				"lost=gone: documents (d1,bk)|gone: memory_links (u1,u2,semantic,,1,\"t\",bk)|gone: memory_units (u2)|added: memory_units (u9) control=0\n",
+				"lostctl=gone: documents (backsight:server,bk-control)|gone: memory_units (s1) (control units gone 1, added 0: the epoch document's rewrite replaces one)|gone: memory_links (e1,s1,semantic,,1,\"t\",bk-control) (a control link joining no unit of the epoch document) control=0\n",
+				"twice=gone: memory_units (e1) (control units gone 2, added 2",
+				"added: memory_units (s2) (control units gone 2, added 2",
+				"docs-same= docs-lost=control document backsight:server\n",
+				"first= control=4\n",
+				"unitonly=added: memory_units (e1) (control units gone 0, added 1: the epoch document's rewrite replaces one)|added: memory_links (e1,s1,semantic,,1,\"t\",bk-control) (a control link joining no unit of the epoch document)\n",
 			} {
 				if !strings.Contains(out, want) {
 					t.Errorf("output lacks %q:\n%s", want, out)

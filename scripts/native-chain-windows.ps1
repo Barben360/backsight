@@ -14,21 +14,25 @@
 #                     under the native root, none from System32 (the runner may have them there)
 #   store             notes stored, then found by a search
 #   backup            backup create, then backup verify of its archive
-#   restore           restore of that archive: its checks pass, healthy, no row of the backup gone
+#   restore           restore of that archive, a note stored after the backup: its checks pass,
+#                     healthy, the backup's data exactly (that note gone)
 #   upgrade-rollback  server upgrade to a second lock whose smoke fails: exit 30, rolled back to
-#                     the first venv, healthy, the same data
+#                     the first venv (hindsight-api.exe runs from it), healthy, the same data
 #   kill-postgres     the postmaster killed: the supervisor has one back within 30 s, healthy
 #   kill-supervisor   the supervisor killed: none of its postgres.exe or hindsight-api.exe is
 #                     left; server start: healthy, no stray reported
 #   refuse-identity   identity file changed: server start refused, nothing started, server
 #                     status gives the reason; put back, healthy
+#   refuse-missing    the database (native\db) moved away: server start refused, nothing started,
+#                     server status gives the reason; put back, healthy
 #   refuse-stray      a postgres.exe started on the data outside the supervisor's job (pg_ctl):
 #                     server start reports it and stops it, healthy
 #   refuse-fsync      fsync=off in supervise.json, the supervisor started by the task (server
 #                     start would render it again): refused, server status names fsync, nothing
 #                     started; then healthy on the data as before the refusals
 #   uninstall         uninstall --delete-data: no task (schtasks /Query fails), no process, no
-#                     native root, backsight's directory off the user PATH
+#                     native root, backsight's directory off the user PATH, nothing left but
+#                     config\, state\ and data\backups\
 #
 # The user PATH the install writes is a throwaway key under HKCU
 # (BACKSIGHT_TEST_USERPATH_KEY, the testhooks build): the real one is
@@ -56,13 +60,18 @@
 # Hugging Face). Written for Windows PowerShell 5.1 and PowerShell 7.
 
 $NCSteps = @('build', 'install', 'setup', 'dlls', 'store', 'backup', 'restore', 'upgrade-rollback',
-    'kill-postgres', 'kill-supervisor', 'refuse-identity', 'refuse-stray', 'refuse-fsync', 'uninstall')
+    'kill-postgres', 'kill-supervisor', 'refuse-identity', 'refuse-missing', 'refuse-stray', 'refuse-fsync', 'uninstall')
 
 # Hindsight's operational history: tables a recall appends to, left out
 # when the data is compared (as native-chain.sh's NC_HISTORY).
 $NCHistory = @('llm_requests', 'audit_log')
 
 $NCVersion = '0.950.0'
+
+# $NCSettle: seconds a refused start is given to start something anyway
+# (a task run asked for before the refusal) before nothing started is
+# checked.
+$NCSettle = 5
 $NCPkg = 'github.com/Barben360/backsight'
 
 function Fail([string]$m) { throw "native-chain-windows: $m" }
@@ -307,6 +316,10 @@ function Read-NcKeys([string]$Path) {
     return $h
 }
 
+# $NCEpochDoc is the restore epoch's document (retain.EpochDocument): a
+# restore writes it, and a rollback writes it again.
+$NCEpochDoc = 'backsight:epoch'
+
 # Get-NcControlUnits: the memory units the control bank's links join.
 function Get-NcControlUnits($keys, [string]$control) {
     $u = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -322,10 +335,13 @@ function Get-NcControlUnits($keys, [string]$control) {
 }
 
 # Compare-NcKeys: the keys gone from before and added in after, one line
-# each, but Hindsight's history tables and the control bank's own rows:
-# the restore epoch's document, which a restore writes and a rollback
-# writes again (its chunk, memory unit and links come and go with it).
-# The control bank's changes are counted in $script:controlChanged.
+# each, but Hindsight's history tables and the rewrite of one control
+# document, the restore epoch's ($NCEpochDoc): its own rows (the keys
+# naming it), its memory unit replaced (one control unit gone and one
+# added, no more; only added when the document is new, the first
+# restore's), and the control bank's links that join one of those. Any other key of the control bank (its server, tombstones or
+# feedback documents, their units or links) is a difference like any
+# other. The epoch's changes are counted in $script:controlChanged.
 function Compare-NcKeys([string]$Before, [string]$After, [string]$Control) {
     $b = Read-NcKeys $Before
     $a = Read-NcKeys $After
@@ -334,25 +350,65 @@ function Compare-NcKeys([string]$Before, [string]$After, [string]$Control) {
     $out = @()
     $script:controlChanged = 0
     $none = New-Object 'System.Collections.Generic.HashSet[string]'
+    $units = @{ gone = @(); added = @() }
+    $links = @{ gone = @(); added = @() }
+    $epochNew = $false
     foreach ($t in @(@($b.Keys) + @($a.Keys) | Sort-Object -Unique)) {
         if ($NCHistory -contains $t) { continue }
-        $bs = if ($b.ContainsKey($t)) { $b[$t] } else { $none }
-        $as = if ($a.ContainsKey($t)) { $a[$t] } else { $none }
+        # Assigned, never an if's output: PowerShell unrolls an empty set
+        # to $null there (an empty table).
+        $bs = $none; if ($b.ContainsKey($t)) { $bs = $b[$t] }
+        $as = $none; if ($a.ContainsKey($t)) { $as = $a[$t] }
         foreach ($pair in @(@($bs, $as, 'gone', $cb), @($as, $bs, 'added', $ca))) {
             foreach ($k in $pair[0]) {
                 if ($pair[1].Contains($k)) { continue }
-                if ($k.Contains($Control) -or ($t -eq 'memory_units' -and $pair[3].Contains($k))) { $script:controlChanged++; continue }
+                if ($k.Contains($Control) -and $k.Contains($NCEpochDoc)) {
+                    if ($t -eq 'documents' -and $pair[2] -eq 'added') { $epochNew = $true }
+                    $script:controlChanged++; continue
+                }
+                if ($t -eq 'memory_units' -and $pair[3].Contains($k)) { $units[$pair[2]] += $k; continue }
+                if ($t -eq 'memory_links' -and $k.EndsWith(",$Control)")) { $links[$pair[2]] += $k; continue }
                 $out += "$($pair[2]): $t $k"
             }
+        }
+    }
+    # The epoch's rewrite replaces its one unit: one gone and one added, or
+    # one added and none gone when the document is new. Else every changed
+    # control unit and link is a difference.
+    $g = $units['gone'].Count; $n = $units['added'].Count
+    $epochOk = $n -le 1 -and ($g -eq $n -or ($epochNew -and $g -eq 0))
+    foreach ($dir in 'gone', 'added') {
+        foreach ($k in $units[$dir]) {
+            if ($epochOk) { $script:controlChanged++; continue }
+            $out += "${dir}: memory_units $k (control units gone $($units['gone'].Count), added $($units['added'].Count): the epoch document's rewrite replaces one)"
+        }
+        foreach ($k in $links[$dir]) {
+            $f = $k.TrimStart('(').Split(',')
+            if ($epochOk -and ($units[$dir] -contains "($($f[0]))" -or $units[$dir] -contains "($($f[1]))")) { $script:controlChanged++; continue }
+            $out += "${dir}: memory_links $k (a control link joining no unit of the epoch document)"
         }
     }
     return $out
 }
 
-# Test-NcSameKeys: no key of before gone, none added, but the control
-# bank's (Compare-NcKeys).
-function Test-NcSameKeys([string]$Before, [string]$After, [string]$What) {
+# Compare-NcControlDocs: the control documents but the epoch's whose
+# metadata differs or that are gone or new between two fingerprints.
+function Compare-NcControlDocs($a, $b) {
+    $out = @()
+    $docs = @(@($a.control_documents.PSObject.Properties.Name) + @($b.control_documents.PSObject.Properties.Name) | Sort-Object -Unique)
+    foreach ($d in $docs) {
+        if ($d -eq $NCEpochDoc) { continue }
+        if ($a.control_documents.$d -ne $b.control_documents.$d) { $out += "control document $d" }
+    }
+    return $out
+}
+
+# Test-NcSameKeys: no key of before gone, none added, but the epoch
+# document's rewrite (Compare-NcKeys); every other control document's
+# metadata as it was (the fingerprints fpBefore and fpAfter).
+function Test-NcSameKeys([string]$Before, [string]$After, [string]$What, $FpBefore, $FpAfter) {
     $diff = @(Compare-NcKeys (Join-Path $script:work "$Before.keys") (Join-Path $script:work "$After.keys") "$($script:bank)-control")
+    $diff += @(Compare-NcControlDocs $FpBefore $FpAfter)
     if ($diff.Count -gt 0) { Write-NcLog (Protect-NcText (($diff | Select-Object -First 40) -join "`n")); Fail "the data changed $What ($($diff.Count) key(s))" }
     return "$($script:controlChanged) key(s) of the control bank's epoch document rewritten"
 }
@@ -601,6 +657,7 @@ function Step-backup {
     # background): the archive then holds exactly what restore must bring
     # back.
     $fpBackup = Get-NcFingerprint 'fp-backup'
+    $script:fpBackup = $fpBackup
     Save-NcKeys 'keys-backup'
     if ((Bs 'backup' @('backup', 'create', '--json')) -ne 0) { Show-Nc 'backup'; Fail 'backup create failed' }
     $j = Read-NcJson 'backup'
@@ -617,7 +674,26 @@ function Step-backup {
     return "$(Split-Path -Leaf $script:archive) created and verified ($rows rows restored in a throwaway instance)"
 }
 
+# Test-NcDocumentKey: a documents key of the --keys file name names doc.
+function Test-NcDocumentKey([string]$Name, [string]$Doc) {
+    $k = Read-NcKeys (Join-Path $script:work "$Name.keys")
+    if (-not $k.ContainsKey('documents')) { return $false }
+    foreach ($x in $k['documents']) { if ($x.Contains($Doc)) { return $true } }
+    return $false
+}
+
 function Step-restore {
+    # A note the archive does not hold: the restore must remove it.
+    if ((Bs 'store-after-backup' @('store', '--json', '--kind', 'decision', 'Native chain note 4: stored after the backup, gone after the restore.')) -ne 0) { Show-Nc 'store-after-backup'; Fail 'storing a note after the backup failed' }
+    $doc = (Read-NcJson 'store-after-backup').data.document
+    if (-not $doc) { Show-Nc 'store-after-backup'; Fail 'the note stored after the backup has no document id' }
+    $seen = $false
+    for ($i = 1; $i -le 30 -and -not $seen; $i++) {
+        Save-NcKeys 'keys-after-backup'
+        $seen = Test-NcDocumentKey 'keys-after-backup' $doc
+        if (-not $seen) { Start-Sleep -Seconds 2 }
+    }
+    if (-not $seen) { Fail "the note stored after the backup ($doc) never reached the documents table" }
     $code = Bs 'restore' @('restore', '--json', '--non-interactive', $script:archive)
     $j = Read-NcJson 'restore'
     if ($code -ne 0 -or $null -eq $j -or -not $j.ok) { Show-Nc 'restore'; Fail "restore failed (exit $code)" }
@@ -626,16 +702,17 @@ function Step-restore {
         Show-Nc 'restore'; Fail 'the restore did not pass its checks (counts, recall, epoch)'
     }
     [void](Wait-NcHealthy 120 'after the restore')
-    [void](Get-NcFingerprint 'fp-restore')
+    $fpRestore = Get-NcFingerprint 'fp-restore'
     Save-NcKeys 'keys-restore'
-    $same = Test-NcSameKeys 'keys-backup' 'keys-restore' 'across the restore'
-    return "restored $(Split-Path -Leaf $script:archive): epoch $($j.data.epoch.epoch), healthy, the backup's data ($same)"
+    if (Test-NcDocumentKey 'keys-restore' $doc) { Fail "the note stored after the backup ($doc) is still there after the restore: the archive was not restored" }
+    $same = Test-NcSameKeys 'keys-backup' 'keys-restore' 'across the restore' $script:fpBackup $fpRestore
+    return "restored $(Split-Path -Leaf $script:archive): epoch $($j.data.epoch.epoch), healthy, the backup's data, the note stored after it gone ($same)"
 }
 
 function Step-upgrade-rollback {
     $venv = (Get-NcSuperviseJson).venv
     if (-not $venv) { Fail 'supervise.json names no venv' }
-    [void](Get-NcFingerprint 'fp-before-upgrade')
+    $fpBefore = Get-NcFingerprint 'fp-before-upgrade'
     Save-NcKeys 'keys-before-upgrade'
     $code = Invoke-Nc -Name 'upgrade' -Exe $script:bin2 -Arguments @('server', 'upgrade', '--allow-unordered', '--json') -Env @{ BACKSIGHT_TEST_FAIL_SMOKE = '1' }
     $j = Read-NcJson 'upgrade'
@@ -647,10 +724,15 @@ function Step-upgrade-rollback {
     $now = (Get-NcSuperviseJson).venv
     if ($now -ne $venv) { Fail "supervise.json runs $now after the rollback, want $venv" }
     [void](Wait-NcHealthy 120 'after the rollback')
-    [void](Get-NcFingerprint 'fp-after-upgrade')
+    $venvDir = Join-Path $script:native "venv\$venv"
+    $api = @(Get-NcProcs $script:native 'hindsight-api')
+    if ($api.Count -eq 0) { Fail 'no hindsight-api.exe runs after the rollback' }
+    $off = @($api | Where-Object { -not (Test-NcUnder $_.Path $venvDir) })
+    if ($off.Count -gt 0) { Fail "hindsight-api.exe runs from $(@($off | ForEach-Object { $_.Path }) -join ', ') after the rollback, not from $venvDir" }
+    $fpAfter = Get-NcFingerprint 'fp-after-upgrade'
     Save-NcKeys 'keys-after-upgrade'
-    $same = Test-NcSameKeys 'keys-before-upgrade' 'keys-after-upgrade' 'across the rolled-back upgrade'
-    return "exit 30, rolled back to $venv from $($j.data.target), healthy, the same data ($same)"
+    $same = Test-NcSameKeys 'keys-before-upgrade' 'keys-after-upgrade' 'across the rolled-back upgrade' $fpBefore $fpAfter
+    return "exit 30, rolled back to $venv from $($j.data.target), hindsight-api.exe runs from it, healthy, the same data ($same)"
 }
 
 function Step-kill-postgres {
@@ -704,6 +786,7 @@ function Step-refuse-identity {
         $said = (Read-NcText 'start-identity') + (Read-NcText 'start-identity' 'err')
         if ($code -eq 0) { Fail 'server start accepted a database whose identity is not the recorded one' }
         if ($said -notmatch 'is not the one backsight recorded') { Show-Nc 'start-identity'; Fail 'the refusal does not say the identity is not the recorded one' }
+        Start-Sleep -Seconds $NCSettle # a start the task runs after the refusal would show by now
         $sup = @(Get-NcSupervisors); $pg = @(Get-NcProcs $script:native 'postgres')
         if ($sup.Count -gt 0 -or $pg.Count -gt 0) { Fail "the refused start started something: $($sup.Count) supervisor(s), $($pg.Count) postgres.exe" }
         [void](Bs 'status-identity' @('server', 'status', '--json'))
@@ -714,6 +797,39 @@ function Step-refuse-identity {
     }
     Start-NcServer 'start-identity-back' 'with the identity put back'
     return "server start refused exit $code, nothing started, server status gives the reason; identity put back, healthy"
+}
+
+# Move-NcDir renames a directory, retried a few seconds while denied (an
+# indexer or an antivirus holding a file a moment).
+function Move-NcDir([string]$From, [string]$To) {
+    for ($i = 0; ; $i++) {
+        try { [IO.Directory]::Move($From, $To); return } catch { if ($i -ge 20) { throw } }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+function Step-refuse-missing {
+    Stop-NcServer 'stop-missing'
+    $db = Join-Path $script:native 'db'
+    $aside = Join-Path $script:work 'db-aside'
+    Move-NcDir $db $aside
+    try {
+        $code = Bs 'start-missing' @('server', 'start', '--json')
+        $said = (Read-NcText 'start-missing') + (Read-NcText 'start-missing' 'err')
+        if ($code -eq 0) { Fail 'server start accepted a missing database' }
+        if ($said -notmatch 'is missing: refusing to start') { Show-Nc 'start-missing'; Fail 'the refusal does not say the database is missing' }
+        Start-Sleep -Seconds $NCSettle
+        $sup = @(Get-NcSupervisors); $pg = @(Get-NcProcs $script:native 'postgres')
+        if ($sup.Count -gt 0 -or $pg.Count -gt 0) { Fail "the refused start started something: $($sup.Count) supervisor(s), $($pg.Count) postgres.exe" }
+        if (Test-Path -LiteralPath $db) { Fail "the refused start made a database at $db in place of the missing one" }
+        [void](Bs 'status-missing' @('server', 'status', '--json'))
+        $st = (Read-NcText 'status-missing') + (Read-NcText 'status-missing' 'err')
+        if ($st -notmatch 'is missing: refusing to start') { Show-Nc 'status-missing'; Fail 'server status does not give the missing-database refusal' }
+    } finally {
+        if (-not (Test-Path -LiteralPath $db)) { Move-NcDir $aside $db }
+    }
+    Start-NcServer 'start-missing-back' 'with the database put back'
+    return "server start refused exit $code (the database is missing), nothing started, server status gives the reason; put back, healthy"
 }
 
 function Step-refuse-stray {
@@ -727,13 +843,20 @@ function Step-refuse-stray {
     if ($stray -le 0 -or (Get-Process -Id $stray -ErrorAction SilentlyContinue).Name -ne 'postgres') { Fail "postmaster.pid does not name the stray postgres ($stray)" }
     if (-not (Test-NcPgReady)) { Show-NcFile $log; Fail 'the stray postgres never answered' }
     $from = Get-NcLogLength $script:supLog
+    $started = $false
     try {
         Start-NcServer 'start-stray' 'beside a stray postgres'
+        $started = $true
     } finally {
-        if (Test-NcAlive $stray) { Stop-Process -Id $stray -Force -ErrorAction SilentlyContinue }
+        # Killed here only when server start failed: else the product
+        # must have stopped it, checked below before any kill.
+        if (-not $started -and (Test-NcAlive $stray)) { Stop-Process -Id $stray -Force -ErrorAction SilentlyContinue }
     }
     $left = @(Wait-NcGone @($stray) 5)
-    if ($left.Count -gt 0) { Fail "the stray postgres $stray still runs after server start" }
+    if ($left.Count -gt 0) {
+        Stop-Process -Id $stray -Force -ErrorAction SilentlyContinue
+        Fail "the stray postgres $stray still runs after server start: server start did not stop it"
+    }
     $said = (Read-NcText 'start-stray') + (Read-NcText 'start-stray' 'err') + (Read-NcLogSince $script:supLog $from)
     if ($said -notmatch "a postgres \(pid $stray\) runs on .*stopping it") { Write-NcLog (Protect-NcText $said); Fail "the stray $stray was not reported (server start's output, the supervisor's log)" }
     $pm = Get-NcPostmaster
@@ -774,6 +897,7 @@ function Step-refuse-fsync {
         }
         if (-not $refusal) { Show-Nc 'status-fsync'; Show-NcFile $script:supLog; Fail 'server status never gave the fsync refusal' }
         if (-not $refusal.Contains('supervise.json')) { Show-Nc 'status-fsync'; Fail 'the fsync refusal does not name supervise.json' }
+        Start-Sleep -Seconds $NCSettle
         $pg = @(Get-NcProcs $script:native 'postgres')
         if ($pg.Count -gt 0) { Fail "postgres.exe (pid $(@($pg | ForEach-Object { $_.Id }) -join ', ')) runs with fsync=off in supervise.json" }
         Stop-NcServer 'stop-fsync-refused'
@@ -805,10 +929,14 @@ function Step-uninstall {
         $in = @(Get-ChildItem -LiteralPath $script:pg0Home -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object { $_.FullName.Substring($script:pg0Home.Length + 1) + $(if ($_.PSIsContainer) { '\' } else { " ($($_.Length) bytes)" }) }) -join ', '
         Fail "$($script:pg0Home), which this run's install created, is still there, holding: $in"
     }
-    $left = @(Get-ChildItem -LiteralPath $script:bh -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($script:bh.Length + 1) } |
-        Where-Object { $_ -notlike 'config\*' -and $_ -notlike 'state\*' }) -join ', '
-    if (-not $left) { $left = 'nothing' }
-    return "uninstalled: no task, no process, no native root, off the user PATH; left beside config\ and state\: $left"
+    # What uninstall keeps (docs/uninstall.md): config, secrets and state,
+    # and the backups; nothing else, not an empty directory.
+    $kept = @('config', 'state', 'data', 'data\backups')
+    $left = @(Get-ChildItem -LiteralPath $script:bh -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($script:bh.Length + 1) } |
+        Where-Object { $kept -notcontains $_ -and $_ -notlike 'config\*' -and $_ -notlike 'state\*' -and $_ -notlike 'data\backups\*' })
+    if ($left.Count -gt 0) { Fail "uninstall --delete-data left $($left.Count) path(s) besides config\, state\ and data\backups\: $(($left | Select-Object -First 30) -join ', ')" }
+    $backups = @(Get-ChildItem -LiteralPath (Join-Path $script:bh 'data\backups') -File -Force -ErrorAction SilentlyContinue).Count
+    return "uninstalled: no task, no process, no native root, off the user PATH; nothing left but config\, state\ and $backups backup file(s)"
 }
 
 # ---- the run -----------------------------------------------------------
