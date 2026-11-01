@@ -316,7 +316,7 @@ func TestReleaseDocumentsNameNoPrivateReference(t *testing.T) {
 // The dashboard's pages are text a user reads: every template file, and
 // every page and answer of a dashboard on the canary state, names no private
 // reference. The stylesheets and the script are scanned too (every asset
-// the overview links); hex colours, icon path data and the logos' drawings are not text.
+// the overview links), with the non-text parts left out (see assetText).
 func TestDashboardPagesArePublicText(t *testing.T) {
 	files, err := fs.Glob(dashboard.Templates(), "*.html")
 	if err != nil || len(files) < 10 {
@@ -335,17 +335,71 @@ func TestDashboardPagesArePublicText(t *testing.T) {
 	}
 	for path, body := range got.pages {
 		if strings.HasPrefix(path, "/assets/") {
-			if strings.HasSuffix(path, ".svg") {
-				continue // a drawing, not text
-			}
-			body = svgPath.ReplaceAllString(hexColour.ReplaceAllString(body, ""), "")
+			body = assetText(path, body)
 		}
 		checkPublic(t, "the dashboard's answer to "+path, body)
 	}
 }
 
-// svgPath is the path data of an icon inlined in a stylesheet, d='M8 12...'.
-var svgPath = regexp.MustCompile(`\bd=(?:'[^']*'|"[^"]*")`)
+// assetText is what a reader of an embedded asset can read: its comments,
+// text nodes and titles in full. Not text, so not scanned: in a stylesheet,
+// hex colours and the path data of an icon inlined as a data URL (both only
+// outside comments), and in a drawing, every attribute value.
+func assetText(path, body string) string {
+	if strings.HasSuffix(path, ".svg") {
+		return attrValue.ReplaceAllString(body, `=""`)
+	}
+	if !strings.HasSuffix(path, ".css") {
+		return body
+	}
+	var out strings.Builder
+	last := 0
+	for _, c := range cssComment.FindAllStringIndex(body, -1) {
+		out.WriteString(cssCode(body[last:c[0]]))
+		out.WriteString(body[c[0]:c[1]])
+		last = c[1]
+	}
+	out.WriteString(cssCode(body[last:]))
+	return out.String()
+}
 
-// hexColour is a CSS colour such as #0a3d62, which is not text.
-var hexColour = regexp.MustCompile(`#[0-9A-Fa-f]{3,8}\b`)
+// cssCode drops the non-text parts of stylesheet code (no comments in it).
+func cssCode(code string) string {
+	code = dataURL.ReplaceAllStringFunc(code, func(u string) string { return svgPath.ReplaceAllString(u, "") })
+	return hexColour.ReplaceAllString(code, "")
+}
+
+var (
+	// attrValue is an attribute value, quoted either way.
+	attrValue = regexp.MustCompile(`=(?:"[^"]*"|'[^']*')`)
+	// cssComment is a stylesheet comment.
+	cssComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	// dataURL is url("data:...") or url('data:...') or url(data:...).
+	dataURL = regexp.MustCompile(`url\(\s*(?:"data:[^"]*"|'data:[^']*'|data:[^)]*)\s*\)`)
+	// svgPath is the path data of an icon, d='M8 12...'.
+	svgPath = regexp.MustCompile(`\bd=(?:'[^']*'|"[^"]*")`)
+	// hexColour is a CSS colour such as #0a3d62.
+	hexColour = regexp.MustCompile(`#[0-9A-Fa-f]{3,8}\b`)
+)
+
+func TestAssetTextScan(t *testing.T) {
+	for _, c := range []struct {
+		name, path, body string
+		leak             bool
+	}{
+		{"issue in a comment", "/assets/x.css", "a{color:#abc} /* issue #115 */", true},
+		{"decision in a comment", "/assets/x.css", "/* decision #0079 */", true},
+		{"d= in a comment", "/assets/x.css", "/* d='block 3' */", true},
+		{"block in a comment", "/assets/x.css", "/* block 3 draft */", true},
+		{"block in svg title", "/assets/l.svg", `<svg viewBox="0 0 1 1"><title>block 3</title><path d="M4 5"/></svg>`, true},
+		{"block in svg comment", "/assets/l.svg", `<svg><!-- block 3 --></svg>`, true},
+		{"hex colour", "/assets/x.css", "a{color:#0050ff;background:#004}", false},
+		{"data url path", "/assets/x.css", `a{mask:url("data:image/svg+xml,<svg><path d='M8 12h4'/></svg>")}`, false},
+		{"d= outside a data url", "/assets/x.css", "a{content:\"d='block 3'\"}", true},
+		{"svg path and fill", "/assets/l.svg", `<svg viewBox="0 0 9 9"><title>backsight</title><path d="M37 42" fill="#0050ff"/></svg>`, false},
+	} {
+		if got := privateRefsIn(assetText(c.path, c.body)) != ""; got != c.leak {
+			t.Errorf("%s: flagged %v, want %v", c.name, got, c.leak)
+		}
+	}
+}
