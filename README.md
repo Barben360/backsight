@@ -283,6 +283,13 @@ You mostly use Claude Code as before. Commands you may need:
 | `backsight stats` | See how memory was used this week, and what it cost. |
 | `backsight update apply` | Install a newer release, after checking its signature; you are told when one is out. |
 
+## The dashboard
+
+`backsight dashboard` opens a local page that answers "is my memory working?" with the numbers `backsight stats` prints, in the light or dark theme. [docs/dashboard.md](docs/dashboard.md) explains each page and each number.
+
+<img alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/dashboard-light.png#gh-light-mode-only">
+<img alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/dashboard-dark.png#gh-dark-mode-only">
+
 ## Documentation
 
 `backsight guide` browses these docs in the terminal, and `backsight guide search "<question>"` searches them.

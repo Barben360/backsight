@@ -34,22 +34,28 @@ The cookie then lives in the browser of the other PC, and other users of that PC
 
 ## What the pages show
 
-Each page is one `backsight stats` view: Overview, Quality, Cost, Bank, Pipeline and System are in the top bar, Projects, Sessions and Memories under Browse. Releases and Definitions appear in developer mode (the Developer preference). Days opens from the links in other pages. The questions each view answers are in the next section.
+Each page asks one question, and its cards answer parts of it. Overview, Quality, Cost, Bank and Pipeline are in the top bar, with System; Projects, Sessions and Memories are under Browse. Releases and Definitions appear in developer mode (see Preferences). Days opens from links in other pages.
 
-| Page | View |
-|---|---|
-| Overview | `backsight stats overview` |
-| Quality | `backsight stats quality` |
-| Cost | `backsight stats cost` |
-| Bank | `backsight stats bank` |
-| Pipeline | `backsight stats pipeline` |
-| System | `backsight stats system` |
-| Releases | `backsight stats releases` |
-| Definitions | `backsight stats defs` |
-| Projects | `backsight stats projects` |
-| Sessions | `backsight stats sessions` |
-| Memories | `backsight stats memories` |
-| Days | `backsight stats days` |
+| Page | The question it asks | What it shows | `stats` view |
+|---|---|---|---|
+| Overview | Is my memory working? | The verdict on four axes (Found, Right, Cost, Flowing) for the last 7 days, a summary line, six tiles with their change from the previous period and a small trend, what to do about it, how big the memory is and what happened lately. | `backsight stats overview` |
+| Quality | Is it right? | Whether Claude used the memories shown, whether it says which it used, memories reported wrong, why some prompts got nothing, Claude's own searches and what became of each memory shown. | `backsight stats quality` |
+| Cost | Is it worth it? | The context backsight adds per session and where it adds it, the time memory adds to a prompt and to a search, and what the server's model spent. | `backsight stats cost` |
+| Bank | Is the memory healthy? | The memory's size by kind, its growth, memories per project, summaries waiting, facts stored, memories retired, hidden or restored, and which memories need a look. | `backsight stats bank` |
+| Pipeline | Is it flowing? | Sessions sent, what waits on this PC and on the server, the time to turn a session into memories, the background jobs and the steps that crashed. | `backsight stats pipeline` |
+| System | Is the service up? | The memory server, this PC, what needs a look here and the doctor's checks. | `backsight stats system` |
+| Releases | Did a release or a setting help? | The numbers per backsight version, the settings in effect and a command that replays a setting. Read differences as hints, not proof. | `backsight stats releases` |
+| Definitions | What does each number mean? | Every number: its question, what it counts, when it is watched and how many events it needs, grouped by axis (Found, Right, Cost, Flowing, memory, review). | `backsight stats defs` |
+| Projects | Which projects use memory? | One row per project; a project's name opens its own page. | `backsight stats projects` |
+| Sessions | Which sessions used memory? | One row per session, which you can filter; an id opens that session turn by turn ("What happened in session ...?"). | `backsight stats sessions` |
+| Memories | Which memories were shown? | One row per memory, with an order and a filter and badges for what to review; an id opens that memory ("How has memory ... done?"). | `backsight stats memories` |
+| Days | How did each day go? | One row per day; a date opens that day ("What happened on Friday, Oct 30?"). | `backsight stats days` |
+
+Each card is titled with the question it answers. Its info button says what the number counts, its limits and the smallest change it can show, and its CLI button gives the `backsight stats` command that prints the same numbers.
+
+**Window and project.** Most pages have a window picker (24 h, 7 d, 30 d, 90 d; 7 d by default) and a project filter, where you type a project's name or choose one from the Projects page. The Overview's verdict always judges the last 7 days. The page of one day shows that day and has no picker; the page of one session shows the days the session spans, and the page of one memory reads "all time", neither with a picker.
+
+**Language.** Numbers and dates follow your browser's language setting. The words stay in English.
 
 Every number on a page is in `backsight stats <view> --json`: that is what scripts and agents read. The dashboard's own address `/api/v1/<view>` returns the same JSON, but only to a browser that is signed in, to feed the pages; it is not an interface for scripts.
 
@@ -60,6 +66,53 @@ A memory's text is not on the pages. Its own page has a "Show text" link; the te
 The dashboard listens on `127.0.0.1` only. Its pages load nothing from other sites; the dashboard itself reads your memory server, as `backsight stats` does, and runs the doctor's checks. The footer's help link opens GitHub only when you click it.
 
 The sign-in cookie is sent by the browser to every program that answers on the same host name (`127.0.0.1`, or `localhost` if you signed in through it), on any port. A program that gets it can read every page, and the text of any memory, until the session ends (2 hours without use, or when the dashboard stops). Local development servers are the typical case: do not open untrusted local services in the same browser while you are signed in. [privacy.md](privacy.md#the-dashboard) has the details.
+
+## When a number is missing
+
+A card never shows a bare dash: it says why there is no number. These are the sentences, and what to do.
+
+| The page says | It means | What to do |
+|---|---|---|
+| "12 of 140: too few to judge. 140 prompts; 200 are needed." | The number is shown but there are too few events to judge it. | Nothing is wrong. Use memory a while and look again. |
+| "Nothing recorded in the last 7 days." | No event of this kind in the window. | Pick a longer window: the card offers the longer ones up to 90 days. If a longer window is also empty, the feature has not been used. |
+| "Memory feedback is off (`feedback.enabled`). Quality numbers need it. Found, Cost and Flowing still work." | backsight is not recording which memories Claude used. | To see quality numbers, set `enabled = true` under `[feedback]` in `config.toml` ([configuration](configuration.md)). |
+| "This PC runs the server only: activity is recorded on the PCs that use it." | This PC hosts the memory server and has no Claude Code activity of its own. | Open the dashboard on a PC that uses the memory. |
+| "Memory server not answering since 14:02." (or without the time) | The dashboard could not read the server. Numbers that come from the server wait; the others stay. | Run `backsight doctor`; it gives the fix. |
+| "No memory server is set up on this PC." | There is no server to ask. | Run `backsight setup`, or `backsight connect` to join one. |
+| "This memory server does not provide it." | The server is older than the number needs. | Update backsight with `backsight update apply`; if the server runs on another machine, update it there. |
+| "No data." | The source holds nothing to count. | Not a fault; look again after some use. |
+
+A whole page can also be replaced by a short message:
+
+| The page says | What to do |
+|---|---|
+| "Preparing the dashboard." (building the metrics index from this PC's history; the page refreshes every 2 seconds) | Wait; the first build takes seconds to a minute or two. |
+| "An update is being applied." ("Try again in a minute.") | Wait, then use Try again. |
+| "backsight was updated." (stop this dashboard and start it again) | Press Ctrl+C in its terminal and run `backsight dashboard`. |
+| "The page took too long." | Use Try again. |
+| "This link has expired." (a one-time link, used or older than 2 minutes) | Run `backsight dashboard link` for a new one. |
+
+A page that is not found, a malformed request and a page that fails keep the page's own question as their title, with a sentence that says what is wrong; for a failure, run `backsight doctor`.
+
+## Preferences
+
+The Preferences menu in the top bar keeps three choices in a cookie in your browser, for a year. The server writes the theme into the page it sends, so the page opens in the right colours with no flash.
+
+- **Theme.** System follows your system's light or dark setting; Light and Dark force one.
+- **Developer mode.** Off by default. On, the top bar gets a Developer menu with Releases and Definitions; each card and tile names the id of the numbers it shows; Quality gains a card on how well memory is ranked and per-path charts of what became of each memory shown; Cost gains the extraction per session; a memory's page shows its learned ranking as a number; and the CLI commands carry `--dev`.
+- **Auto-refresh.** Off by default. On ("Every minute"), the page reloads itself every minute. The Refresh link in the top bar reloads it once. A page left open for more than 5 minutes shows "Updated over 5 min ago. Refresh."
+
+The dashboard changes memory in no way: a preference only changes what you see.
+
+## Keyboard and screen readers
+
+- **Skip to content.** The first Tab stop on every page is "Skip to content", which jumps over the top bar.
+- **Tab order.** On the Overview it runs: Skip to content, the logo, the pages (Overview, Quality, Cost, Bank, Pipeline, Browse, System), the window picker (24 h, 7 d, 30 d, 90 d), the project filter, Refresh, Preferences, then the verdict's info and CLI buttons, and the cards from top to bottom. Menus are native disclosure controls: Enter or Space opens one.
+- **Charts have a table.** Every chart has a "Show as a table" control with the same numbers as text, which a screen reader can walk. It needs no script.
+- **Copy buttons need scripts.** Commands the page suggests have a Copy button. Without scripts the button is absent and the command is plain text you can select. With scripts, if the browser does not let the page use the clipboard, the button selects the command and says "Selected: press Ctrl+C".
+- **Works without scripts.** Everything else, including the menus, the preferences and the table views, works with scripts off.
+- **Contrast and colours.** Text has at least 4.5:1 contrast and chart marks at least 3:1, in the light and the dark theme. Status is never only a colour: it is also a word or an icon. In a high-contrast mode (forced colours) the page and its charts use your system's colours.
+- **Small screens.** Under 900 px wide, buttons and links are at least 40 px tall, and the window and project choices move into the Menu button.
 
 ## What each view answers
 
