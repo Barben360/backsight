@@ -45,7 +45,7 @@ func TestHistBins(t *testing.T) {
 	if hs[0] <= hs[1] {
 		t.Errorf("the first bar must be the tallest: %v", hs)
 	}
-	lines := regexp.MustCompile(`<line class="(thr-w|thr)" x1="([^"]*)" x2="[^"]*" y1="14.0" y2="200.0"></line><text class="lbl ta-m" x="[^"]*" y="12">([a-z]+)</text>`).FindAllStringSubmatch(out, -1)
+	lines := regexp.MustCompile(`<line class="(thr-w|thr)" x1="([^"]*)" x2="[^"]*" y1="14.0" y2="200.0"></line><text class="(?:lbl|lbl ta-e)" x="[^"]*" y="12">([a-z]+)</text>`).FindAllStringSubmatch(out, -1)
 	if len(lines) != 2 || lines[0][3] != "typical" || lines[1][3] != "high" || lines[0][1] == lines[1][1] {
 		t.Fatalf("markers: %v", lines)
 	}
@@ -151,6 +151,14 @@ func TestHistLabelsAreAtMostTwelve(t *testing.T) {
 	if n < 7 || n > 12 {
 		t.Errorf("want between 7 and 12 x labels on 40 bins, got %d", n)
 	}
+	short := h
+	short.Bins = nil
+	for i := 0; i < 40; i++ {
+		short.Bins = append(short.Bins, Bin{strconv.Itoa(i % 10), 1})
+	}
+	if k := strings.Count(string(short.HTML()), `<text class="ta-m"`); k != 12 {
+		t.Errorf("short labels on 40 bins: exactly 12 labels, got %d", k)
+	}
 	h.Size = Half
 	if n2 := strings.Count(string(h.HTML()), `<text class="ta-m"`); n2 >= n {
 		t.Errorf("a narrower plot keeps fewer labels, not overlapping ones: %d vs %d", n2, n)
@@ -179,5 +187,66 @@ func TestHistEscapesText(t *testing.T) {
 	}
 	if !strings.Contains(string(h.HTML()), `<code>`+escaped+`</code>`) {
 		t.Error("the more-command is not escaped")
+	}
+}
+
+func TestHistMarkersFollowTheMerge(t *testing.T) {
+	h := rankHist()
+	h.Size = Full
+	h.Bins = nil
+	for i := 0; i < 1200; i++ {
+		h.Bins = append(h.Bins, Bin{strconv.Itoa(i), 1})
+	}
+	h.Markers = []Marker{{"mid", 600, "thr-w"}}
+	out := string(h.HTML())
+	// 3 bins a bar: bin 600 is bar 200 of 400; the plot runs 44 to 992.
+	if want := f(44 + 200*(992.0-44)/400); !strings.Contains(out, `<line class="thr-w" x1="`+want+`"`) {
+		t.Errorf("marker not mid-plot (%s): %s", want, out)
+	}
+}
+
+func TestHistMarkerLabelsPointAway(t *testing.T) {
+	h := rankHist()
+	h.Markers = []Marker{{"high", 4.5, "thr"}, {"typical", 2.5, "mk"}}
+	out := string(h.HTML())
+	l := func(x float64) string { return f(44 + x*(552.0-44)/6) }
+	must(t, out, `<line class="mk" x1="`+l(2.5)+`"`, `<text class="lbl ta-e" x="`+f(44+2.5*(552.0-44)/6-4)+`" y="12">typical</text>`,
+		`<text class="lbl" x="`+f(44+4.5*(552.0-44)/6+4)+`" y="12">high</text>`)
+	h.Markers = h.Markers[:1]
+	must(t, string(h.HTML()), `<text class="lbl ta-m"`)
+	// the leftmost label has no room on its left: it goes right; a label at the right edge goes left.
+	h.Markers = []Marker{{"typical", 0.01, "mk"}, {"high", 5.99, "thr"}}
+	must(t, string(h.HTML()), `<text class="lbl" x="`+f(44+0.01*(552.0-44)/6+4)+`" y="12">typical</text>`, `<text class="lbl ta-e" x="`+f(44+5.99*(552.0-44)/6-4)+`" y="12">high</text>`)
+}
+
+func TestHistScaleAndBarGeometry(t *testing.T) {
+	h := Hist{Size: Half, Fmt: plain, Bins: []Bin{{"a", 9}, {"b", 1}, {"c", 0}}}
+	out := string(h.HTML())
+	r := rectRe.FindAllStringSubmatch(out, -1)
+	// max 9 rounds up to 12; the tallest bar is 9/12 of 176 high; bar width is slot - 4.
+	slot := (552.0 - 44) / 3
+	if r[0][5] != "132.0" || r[0][3] != "68.0" || r[0][4] != f(slot-4) || r[0][2] != "46.0" {
+		t.Errorf("first bar: %v", r[0])
+	}
+	for _, y := range []string{">0</text>", ">3</text>", ">6</text>", ">9</text>", ">12</text>"} {
+		must(t, out, y)
+	}
+	// a count too small to see is still one unit tall.
+	h.Bins = []Bin{{"a", 1000000}, {"b", 1}}
+	if r := rectRe.FindAllStringSubmatch(string(h.HTML()), -1); r[1][5] != "1.0" {
+		t.Errorf("a tiny bar: %v", r[1])
+	}
+}
+
+func TestHistFromLabelsSitAtTheBarStart(t *testing.T) {
+	h := rankHist()
+	h.FromLabels = true
+	out := string(h.HTML())
+	if !strings.Contains(out, `<text class="ta-m" x="46.0" y="218">Rank 1</text>`) {
+		t.Errorf("the first label is at the first bar's start: %s", out)
+	}
+	h.FromLabels = false
+	if strings.Contains(string(h.HTML()), `x="46.0" y="218"`) {
+		t.Error("labels are centred by default")
 	}
 }

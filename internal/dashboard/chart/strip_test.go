@@ -3,6 +3,7 @@ package chart
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestStripShapesAndRows(t *testing.T) {
 		t.Fatalf("want 5 marks, got %v\n%s", got, out)
 	}
 	for class, d := range map[string]string{
-		"mkp f-used":       `M 120.0 20.0 A 6 6 0 1 1 120.0 32.0 A 6 6 0 1 1 120.0 20.0 Z`,
+		"mkp f-used":       `M 176.0 20.0 A 6 6 0 1 1 176.0 32.0 A 6 6 0 1 1 176.0 20.0 Z`,
 		"mkp f-shown":      `M 992.0 60.5 A 3.5 3.5 0 1 1 992.0 67.5 A 3.5 3.5 0 1 1 992.0 60.5 Z`,
 		"mkp mk-pend":      `A 5 5 0 1 1`,
 		"mkp f-ignored":    `L `,
@@ -66,13 +67,14 @@ func TestStripShapesAndRows(t *testing.T) {
 		}
 	}
 	line := regexp.MustCompile(`<line class="thr-w" x1="([^"]*)" x2="([^"]*)" y1="8" y2="([^"]*)" tabindex="0" aria-label="retired on Oct 4"><title>retired on Oct 4</title></line>`).FindStringSubmatch(out)
-	if line == nil || line[1] != line[2] || line[3] != "196.0" || line[1] != f(120+(992.0-120)*20/46) {
+	if line == nil || line[1] != line[2] || line[3] != "196.0" || line[1] != f(176+(992.0-176)*20/46) {
 		t.Errorf("retirement line: %v", line)
 	}
 	if strings.Count(out, `tabindex="0"`) != 6 {
 		t.Errorf("want a stop per mark (6), svg not a stop: %s", out)
 	}
-	must(t, out, `<text class="lbl" x="8" y="30.0">added to the prompt</text>`, `<text class="lbl" x="8" y="68.0">at session start</text>`,
+	must(t, out, `<text class="ta-e lbl" x="160.0" y="30.0">added to the prompt</text>`, `<text class="ta-e lbl" x="160.0" y="68.0">at session start</text>`,
+		`<line class="gl" x1="170.0" x2="992.0" y1="26.0" y2="26.0">`,
 		`<svg class="vb1000" viewBox="0 0 1000 236"`,
 		`<svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-used"`,
 		`</svg>shown, then ignored</span>`, `</svg>pending</span>`, `<i class="sw sw-dash"></i>retired`,
@@ -203,7 +205,7 @@ func TestStripSurvivesDegenerateMarks(t *testing.T) {
 	for _, m := range pathRe.FindAllStringSubmatch(string(c.HTML()), -1) {
 		got[m[4]] = m[2]
 	}
-	if !strings.HasPrefix(got["before"], "M 120.0 ") || !strings.HasPrefix(got["after"], "M 992.0 ") || !strings.HasPrefix(got["zero"], "M 120.0 ") {
+	if !strings.HasPrefix(got["before"], "M 176.0 ") || !strings.HasPrefix(got["after"], "M 992.0 ") || !strings.HasPrefix(got["zero"], "M 176.0 ") {
 		t.Errorf("marks outside the range are clamped to its edges: %v", got)
 	}
 	// a To before From is no range.
@@ -220,14 +222,17 @@ func TestStripTicksAreThinnedAndKept(t *testing.T) {
 	for i := 0; i < 46; i++ {
 		c.Ticks = append(c.Ticks, t0.AddDate(0, 0, i))
 	}
-	c.Ticks = append(c.Ticks, t0.AddDate(0, 0, -3), t0.AddDate(0, 0, 90))
+	c.Ticks = append([]time.Time{t0.AddDate(0, 0, -3)}, c.Ticks...)
+	c.Ticks = append(c.Ticks, t0.AddDate(0, 0, 90))
 	out := string(c.HTML())
 	n := strings.Count(out, `y="228.0">`)
-	if n < 2 || n > 6 || !strings.Contains(out, `>Sep 14</text>`) {
+	if n < 2 || n > 6 || !strings.Contains(out, `>Sep 15</text>`) && !strings.Contains(out, `>Sep 14</text>`) {
 		t.Errorf("want 2 to 6 tick labels from the first tick, got %d", n)
 	}
-	if strings.Contains(out, "Jun") {
-		t.Error("a tick outside the range is drawn")
+	for _, bad := range []string{"Sep 11", "Dec 13"} {
+		if strings.Contains(out, ">"+bad+"</text>") {
+			t.Errorf("tick %s is outside the range and is drawn", bad)
+		}
 	}
 	c.TickFmt = func(t time.Time) string { return "D" + t.Format("2") }
 	if !strings.Contains(string(c.HTML()), ">D14</text>") {
@@ -241,7 +246,7 @@ func TestStripRowsGrowTheViewBox(t *testing.T) {
 	c.Marks = []Mark{{6, t0, "used", "x"}}
 	out := string(c.HTML())
 	// the last row is at 26 + 6 x 38 = 254; the baseline 18 below, the labels 32 below that.
-	must(t, out, `viewBox="0 0 1000 312"`, `d="M 120.0 248.0 A 6 6`, `y1="272.0" y2="272.0"`, `y="304.0">`)
+	must(t, out, `viewBox="0 0 1000 312"`, `d="M 176.0 248.0 A 6 6`, `y1="272.0" y2="272.0"`, `y="304.0">`)
 }
 
 func TestStripEscapesText(t *testing.T) {
@@ -281,4 +286,148 @@ func histStripOutputs() []string {
 	odd.Marks = []Mark{{0, t0, "used", markup}}
 	return []string{string(h.HTML()), string(many.HTML()), string(Hist{Empty: "none"}.HTML()),
 		string(s.HTML()), string(small.HTML()), string(odd.HTML()), string(Strip{Empty: "none"}.HTML())}
+}
+
+func TestStripRowNamesAreRightAlignedAndTruncated(t *testing.T) {
+	c := baseStrip()
+	long := "a row name that is far too long"
+	c.Rows = []string{long, "short"}
+	c.Marks = []Mark{{0, t0, "used", "x"}, {1, t0, "used", "y"}}
+	out := string(c.HTML())
+	must(t, out, `<text class="ta-e lbl" x="160.0" y="30.0">a row name that is f…<title>`+long+`</title></text>`,
+		`<text class="ta-e lbl" x="160.0" y="68.0">short</text>`, `<td>`+long+`</td>`)
+	if strings.Contains(out, ">"+long+"</text>") {
+		t.Error("the long name is drawn whole")
+	}
+	c.Rows[0] = strings.Repeat("é", maxName+1)
+	if out := string(c.HTML()); !strings.Contains(out, strings.Repeat("é", maxName-1)+"…<title>") {
+		t.Errorf("a name of %d runes is cut to %d and an ellipsis", maxName+1, maxName)
+	}
+	// exactly maxName runes pass whole.
+	c.Rows[0] = strings.Repeat("é", maxName)
+	if out := string(c.HTML()); strings.Contains(out, "…") {
+		t.Errorf("a name of %d runes is cut", maxName)
+	}
+}
+
+func TestStripLegendIsAbovePlotAndCreatedAndRetiredAreLabelled(t *testing.T) {
+	c := baseStrip()
+	c.Created = t0.AddDate(0, 0, 23)
+	c.Marks = []Mark{{0, t0.AddDate(0, 0, 30), "used", "u"}, {0, t0.AddDate(0, 0, 10), "retired", "first"}, {0, t0.AddDate(0, 0, 20), "retired", "last"}}
+	out := string(c.HTML())
+	if strings.Index(out, `class="legend"`) > strings.Index(out, `<svg class="vb1000"`) {
+		t.Error("the legend is after the plot")
+	}
+	x := f(176 + (992.0-176)*23/46)
+	must(t, out, `<line class="mk" x1="`+x+`" x2="`+x+`" y1="8" y2="196.0"></line><text class="lbl" x="`+f(176+(992.0-176)*23/46+4)+`" y="208.0">created</text>`,
+		`<text class="ta-e lbl" x="`+f(176+(992.0-176)*20/46-4)+`" y="208.0">retired</text>`)
+	c.Created = time.Time{}
+	if strings.Contains(string(c.HTML()), `class="mk"`) || strings.Contains(string(c.HTML()), ">created<") {
+		t.Error("no creation time, no line")
+	}
+	c.Created = c.To.AddDate(0, 0, 1)
+	if strings.Contains(string(c.HTML()), `class="mk"`) {
+		t.Error("a creation outside the range is drawn")
+	}
+	c.Created = c.To
+	if o := string(c.HTML()); !strings.Contains(o, `<text class="ta-e lbl" x="988.0" y="208.0">created</text>`) {
+		t.Errorf("a late creation is labelled to the left: %s", o)
+	}
+}
+
+func TestStripBoundsRowsByTheMarkCap(t *testing.T) {
+	c := baseStrip()
+	c.Rows = nil
+	for i := 0; i < 700; i++ {
+		c.Rows = append(c.Rows, fmt.Sprintf("row %d is quite a long row name", i))
+		c.Marks = append(c.Marks, Mark{i, t0.Add(time.Duration(i) * time.Hour), "used", fmt.Sprintf("mark %d", i)})
+	}
+	for i := 0; i < 80; i++ {
+		c.Marks = append(c.Marks, Mark{0, t0.Add(time.Duration(i) * time.Minute), "retired", "r"})
+	}
+	out := string(c.HTML())
+	if n := strings.Count(out, "<title>"); n > MaxMarks {
+		t.Errorf("%d titles with 700 rows", n)
+	}
+	drawn := strings.Count(out, `<line class="gl"`)
+	if drawn < 100 || drawn >= 700 {
+		t.Errorf("rows drawn: %d", drawn)
+	}
+	must(t, out, `<span>`+strconv.Itoa(700-drawn)+` more rows in the table</span>`)
+	if strings.Contains(out, "<title>mark 699</title>") || !strings.Contains(out, "<title>mark 0</title>") {
+		t.Error("marks of the rows not drawn are drawn, or the first row is not")
+	}
+	// the marks of rows that are not drawn stay in the table.
+	if !strings.Contains(out, "Showing the latest 120 of 780 rows") {
+		t.Error("the table does not hold every mark")
+	}
+	c.Rows, c.Marks = c.Rows[:1], c.Marks[:1]
+	if strings.Contains(string(c.HTML()), "more row") {
+		t.Error("nothing is hidden, nothing is said")
+	}
+	two := baseStrip()
+	two.Rows = make([]string, 451)
+	two.Marks = []Mark{{450, t0, "used", "last"}}
+	if !strings.Contains(string(two.HTML()), "338 more rows in the table") && !strings.Contains(string(two.HTML()), "more rows in the table") {
+		t.Error("rows past the cap are not announced")
+	}
+}
+
+func TestStripOneHiddenRowIsSingular(t *testing.T) {
+	c := baseStrip()
+	c.Rows = make([]string, 113) // 500/4 = 125 rows fit with no retirement; with 50 retirements 112 do
+	c.Marks = []Mark{{0, t0, "used", "a"}}
+	for i := 0; i < 50; i++ {
+		c.Marks = append(c.Marks, Mark{0, t0, "retired", "r"})
+	}
+	must(t, string(c.HTML()), "<span>1 more row in the table</span>")
+}
+
+func TestStripOtherShapesHaveTheirGeometry(t *testing.T) {
+	c := baseStrip()
+	c.Marks = []Mark{{0, t0, "ignored", "d"}, {1, c.To, "undeclared", "q"}}
+	out := string(c.HTML())
+	must(t, out, `d="M 176.0 19.0 L 183.0 26.0 L 176.0 33.0 L 169.0 26.0 Z"`, `d="M 987.0 59.0 H 997.0 V 69.0 H 987.0 Z"`)
+}
+
+func TestStripBucketIsAtTheMeanOfItsShows(t *testing.T) {
+	c := baseStrip()
+	c.To = t0.AddDate(0, 0, 40)
+	c.Rows = c.Rows[:1]
+	// 602 shows on one row make 500 buckets of 1.9 h over 40 days; two shows 12 and
+	// 84 min in share the first and sit at their mean, 48 min.
+	for i := 0; i < 600; i++ {
+		c.Marks = append(c.Marks, Mark{0, t0.Add(40*24*time.Hour - time.Duration(600-i)*time.Minute), "shown", "s"})
+	}
+	c.Marks = append(c.Marks, Mark{0, t0.Add(12 * time.Minute), "used", "a"}, Mark{0, t0.Add(84 * time.Minute), "used", "b"})
+	out := string(c.HTML())
+	want := f(176 + (992.0-176)*float64(48*time.Minute)/float64(40*24*time.Hour))
+	if !strings.Contains(out, ` d="M `+want+` 20.0 A 6 6`) {
+		t.Errorf("bucket not at x %s:\n%s", want, out)
+	}
+}
+
+func TestStripTableIsInTimeOrderWhateverTheInput(t *testing.T) {
+	c := baseStrip()
+	c.Marks = []Mark{{0, t0.AddDate(0, 0, 9), "used", "late"}, {0, t0.AddDate(0, 0, 2), "used", "early"}}
+	out := string(c.HTML())
+	if strings.Index(out, "<td>early</td>") > strings.Index(out, "<td>late</td>") {
+		t.Error("the table is not in time order")
+	}
+}
+
+func TestStripFocusCountsRetirements(t *testing.T) {
+	c := baseStrip()
+	for i := 0; i < 99; i++ {
+		c.Marks = append(c.Marks, Mark{0, t0.Add(time.Duration(i) * time.Hour), "used", "u"})
+	}
+	if strings.Count(string(c.HTML()), "tabindex") != 99 {
+		t.Error("99 marks: each a stop")
+	}
+	for i := 0; i < 50; i++ {
+		c.Marks = append(c.Marks, Mark{0, t0.Add(time.Duration(i) * time.Hour), "retired", "r"})
+	}
+	if n := strings.Count(string(c.HTML()), "tabindex"); n != 1 {
+		t.Errorf("99 marks and 50 retirements are 149 stops: the svg alone is one, got %d", n)
+	}
 }

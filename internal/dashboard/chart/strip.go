@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Mark is one event of a strip. Shape is used, ignored, undeclared, shown,
@@ -29,8 +30,11 @@ type Strip struct {
 	Ticks    []time.Time
 	TickFmt  func(time.Time) string
 	Marks    []Mark
-	Empty    string
-	More     string
+	// Created, when not the zero time and inside [From, To], draws a line
+	// labelled "created".
+	Created time.Time
+	Empty   string
+	More    string
 }
 
 // ShapeWords names each shape for people (legend, table and bucket titles).
@@ -40,9 +44,15 @@ var ShapeWords = map[string]string{
 }
 
 const (
-	stripL, stripR = 120.0, 992.0
-	rowGap         = 38.0
-	rowFirst       = 26.0
+	// stripL is where From sits and stripR where To sits; the gridlines start a
+	// little left of stripL and the row names end at stripName.
+	stripL, stripR = 176.0, 992.0
+	stripGrid      = 170.0
+	stripName      = 160.0
+	// maxName is the most runes of a row name drawn; a longer one ends in "…".
+	maxName  = 21
+	rowGap   = 38.0
+	rowFirst = 26.0
 	// maxRetired is the most retirement lines of one strip (the latest).
 	maxRetired = 50
 )
@@ -171,8 +181,18 @@ func (c Strip) HTML() template.HTML {
 	for _, m := range retired {
 		lines = append(lines, drawn{shape: "retired", x: c.pos(m.At), text: m.Text})
 	}
-	per := max(1, (MaxMarks-len(retired))/len(c.Rows))
-	for row, ms := range byRow {
+	// every row drawn has a name (a title when truncated) and at least one
+	// mark, so the rows drawn are bounded to keep the titles within MaxMarks;
+	// the others stay in the table.
+	nrows := min(len(c.Rows), (MaxMarks-len(retired))/4)
+	titled := 0
+	for _, name := range c.Rows[:nrows] {
+		if utf8.RuneCountInString(name) > maxName {
+			titled++
+		}
+	}
+	per := (MaxMarks - len(retired) - titled) / nrows
+	for row, ms := range byRow[:nrows] {
 		byTime(ms)
 		if len(ms) <= per {
 			for _, m := range ms {
@@ -200,7 +220,7 @@ func (c Strip) HTML() template.HTML {
 	}
 
 	W := float64(c.Size.W)
-	base := math.Max(196, rowFirst+float64(len(c.Rows)-1)*rowGap+18) // 196 up to five rows, as designed
+	base := math.Max(196, rowFirst+float64(nrows-1)*rowGap+18) // 196 up to five rows, as designed
 	sz := Size{c.Size.W, int(base) + 40, c.Size.Class}
 	focus := len(lines)+len(marks) <= FocusMax
 	attrs := func(b *strings.Builder, text string) {
@@ -209,10 +229,29 @@ func (c Strip) HTML() template.HTML {
 		}
 	}
 	var b strings.Builder
-	for i, name := range c.Rows {
+	for i, name := range c.Rows[:nrows] {
 		ry := rowFirst + float64(i)*rowGap
-		b.WriteString(`<line class="gl" x1="` + f(stripL) + `" x2="` + f(stripR) + `" y1="` + f(ry) + `" y2="` + f(ry) + `"></line>`)
-		b.WriteString(`<text class="lbl" x="8" y="` + f(ry+4) + `">` + esc(name) + `</text>`)
+		b.WriteString(`<line class="gl" x1="` + f(stripGrid) + `" x2="` + f(stripR) + `" y1="` + f(ry) + `" y2="` + f(ry) + `"></line>`)
+		b.WriteString(`<text class="ta-e lbl" x="` + f(stripName) + `" y="` + f(ry+4) + `">`)
+		if r := []rune(name); len(r) > maxName {
+			b.WriteString(esc(string(r[:maxName-1])+"…") + `<title>` + esc(name) + `</title>`)
+		} else {
+			b.WriteString(esc(name))
+		}
+		b.WriteString(`</text>`)
+	}
+	if !c.Created.IsZero() && !c.Created.Before(c.From) && !c.Created.After(c.To) {
+		x := c.pos(c.Created)
+		b.WriteString(`<line class="mk" x1="` + f(x) + `" x2="` + f(x) + `" y1="8" y2="` + f(base) + `"></line>`)
+		if x+4+7*7 > float64(c.Size.W) {
+			b.WriteString(`<text class="ta-e lbl" x="` + f(x-4) + `" y="` + f(base+12) + `">created</text>`)
+		} else {
+			b.WriteString(`<text class="lbl" x="` + f(x+4) + `" y="` + f(base+12) + `">created</text>`)
+		}
+	}
+	if n := len(lines); n > 0 {
+		// the latest retirement is named, to the left of its line.
+		b.WriteString(`<text class="ta-e lbl" x="` + f(lines[n-1].x-4) + `" y="` + f(base+12) + `">` + esc(ShapeWords["retired"]) + `</text>`)
 	}
 	for _, l := range lines {
 		b.WriteString(`<line class="thr-w" x1="` + f(l.x) + `" x2="` + f(l.x) + `" y1="8" y2="` + f(base) + `"`)
@@ -250,6 +289,13 @@ func (c Strip) HTML() template.HTML {
 		lg.WriteString(`<span><i class="sw sw-dash"></i>` + esc(ShapeWords["retired"]) + `</span>`)
 	}
 
+	if hidden := len(c.Rows) - nrows; hidden > 0 {
+		word := " more rows"
+		if hidden == 1 {
+			word = " more row"
+		}
+		lg.WriteString(`<span>` + strconv.Itoa(hidden) + word + ` in the table</span>`)
+	}
 	rows := make([][]string, len(all))
 	for i, m := range all {
 		where := "all"
@@ -258,7 +304,7 @@ func (c Strip) HTML() template.HTML {
 		}
 		rows[i] = []string{m.At.Format("Jan 2, 15:04"), where, ShapeWords[m.Shape], m.Text}
 	}
-	return template.HTML(figureLegend(c.Label, sz, !focus, b.String(), lg.String(),
+	return template.HTML(figureLegend(c.Label, sz, !focus, b.String(), lg.String(), true,
 		tableData{head: []string{"When", "Where", "What", "Detail"}, rows: rows, more: c.More, text: true}))
 }
 

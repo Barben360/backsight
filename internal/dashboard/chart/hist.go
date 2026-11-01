@@ -3,7 +3,9 @@ package chart
 import (
 	"html/template"
 	"math"
+	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Bin is one bar of a histogram.
@@ -12,8 +14,8 @@ type Bin struct {
 	N     int64
 }
 
-// Marker is a vertical reference line; At is a position in bins (2.5 is the
-// middle of the third bin) and Class is "thr-w", "thr" or "mk".
+// Marker is a vertical reference line; At is a position in the caller's bins
+// (2.5 is the middle of the third bin), whatever merging the chart does and Class is "thr-w", "thr" or "mk".
 type Marker struct {
 	Label string
 	At    float64
@@ -27,11 +29,14 @@ type Hist struct {
 	XName   string
 	Bins    []Bin
 	Markers []Marker
-	Class   string // the bar class, "f-used" when not a known class
-	Unit    string // what a count counts, in each title ("times shown")
-	Fmt     Num
-	Empty   string
-	More    string
+	// FromLabels says each bin label is where its bin starts (a range "from"):
+	// the x label then sits at the bar's start, not its middle.
+	FromLabels bool
+	Class      string // the bar class, "f-used" when not a known class
+	Unit       string // what a count counts, in each title ("times shown")
+	Fmt        Num
+	Empty      string
+	More       string
 }
 
 const (
@@ -118,19 +123,35 @@ func (c Hist) HTML() template.HTML {
 		}
 		b.WriteString(`><title>` + esc(t) + `</title></rect>`)
 	}
+	// markers left to right; with several, the leftmost labels to the left of
+	// its line and the others to the right, so the labels do not meet.
+	k := float64(bucketSize(len(c.Bins)))
+	type placed struct {
+		mk Marker
+		x  float64
+	}
+	var ms []placed
 	for _, mk := range c.Markers {
-		if !finite(mk.At) {
-			continue
+		if finite(mk.At) {
+			ms = append(ms, placed{mk, clamp(left+mk.At/k*slot, left, right)})
 		}
-		mc := known(mk.Class)
+	}
+	sort.SliceStable(ms, func(i, j int) bool { return ms[i].x < ms[j].x })
+	for i, p := range ms {
+		mc := known(p.mk.Class)
 		if mc == "" {
 			mc = "thr-w"
 		}
-		x := clamp(left+mk.At*slot, left, right)
-		b.WriteString(`<line class="` + mc + `" x1="` + f(x) + `" x2="` + f(x) + `" y1="` + f(histTop) + `" y2="` + f(plotBase) + `"></line>`)
-		hw := float64(len([]rune(mk.Label))) * 7 / 2
-		tx := clamp(x, hw+1, math.Max(hw+1, W-hw-1))
-		b.WriteString(`<text class="lbl ta-m" x="` + f(tx) + `" y="12">` + esc(mk.Label) + `</text>`)
+		b.WriteString(`<line class="` + mc + `" x1="` + f(p.x) + `" x2="` + f(p.x) + `" y1="` + f(histTop) + `" y2="` + f(plotBase) + `"></line>`)
+		tw := float64(utf8.RuneCountInString(p.mk.Label)) * 7
+		cls, tx := "lbl", p.x+4
+		switch {
+		case len(ms) == 1:
+			cls, tx = "lbl ta-m", clamp(p.x, tw/2+1, math.Max(tw/2+1, W-tw/2-1))
+		case (i == 0 && p.x-4 >= tw) || p.x+4+tw > W:
+			cls, tx = "lbl ta-e", p.x-4
+		}
+		b.WriteString(`<text class="` + cls + `" x="` + f(tx) + `" y="12">` + esc(p.mk.Label) + `</text>`)
 	}
 	b.WriteString(`<line class="bl" x1="` + f(left) + `" x2="` + f(right) + `" y1="` + f(plotBase) + `" y2="` + f(plotBase) + `"></line>`)
 	labels := make([]string, m)
@@ -138,6 +159,9 @@ func (c Hist) HTML() template.HTML {
 		labels[j] = bins[j].Label
 	}
 	centre := func(j int) float64 { return left + slot*(float64(j)+0.5) }
+	if c.FromLabels {
+		centre = func(j int) float64 { return left + slot*float64(j) + 2 }
+	}
 	for _, l := range pickLabelsMax(labels, centre, W, maxHistLabels) {
 		b.WriteString(`<text class="ta-m" x="` + f(l.x) + `" y="218">` + esc(labels[l.j]) + `</text>`)
 	}
