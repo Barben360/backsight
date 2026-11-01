@@ -535,3 +535,6 @@ details.tabs > summary { display: flex; align-items: center; gap: 6px; min-heigh
 details.tabs[open] > summary { color: var(--fg); font-weight: var(--fw-bold); }
 details.tabs > p { margin-block: var(--sp-2); }
 details.tabs .count { font-variant-numeric: tabular-nums; color: var(--fg-3); font-weight: var(--fw-regular, 400); }
+
+/* ---------- the memory's text page ---------- */
+.memtext { margin: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--fg); font-family: var(--mono); font-size: var(--fs-sm); line-height: var(--lh); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }

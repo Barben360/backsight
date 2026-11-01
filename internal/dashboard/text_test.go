@@ -67,7 +67,7 @@ func TestTextPageShowsTheTextEscaped(t *testing.T) {
 	if strings.Contains(b, "<script>alert") {
 		t.Errorf("the text is not escaped: %q", b)
 	}
-	if !strings.Contains(b, "<pre>&lt;script&gt;") {
+	if !strings.Contains(b, `<pre class="memtext">&lt;script&gt;`) {
 		t.Errorf("the text is not in <pre>: %q", b)
 	}
 	if !strings.Contains(b, `href="/memories/`+url.PathEscape(mem)+`"`) {

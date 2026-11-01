@@ -165,7 +165,7 @@
 {{end}}</section>
 {{end}}
 
-{{define "fig"}}<div class="fig"><span class="lab">{{with .Icon}}<span class="i i-sm i-{{.}}"></span>{{end}}{{with .Swatch}}<i class="sw {{.}}"></i>{{end}}{{.Label}}</span><span class="v">{{.Value}}</span>{{if .Word}}<span class="st {{.Class}}">{{.Word}}</span>{{end}}{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
+{{define "fig"}}<div class="fig"><span class="lab">{{with .Icon}}<span class="i i-sm i-{{.}}"></span>{{end}}{{with .Swatch}}<i class="sw {{.}}"></i>{{end}}{{.Label}}</span><span class="v{{if .WordValue}} v-word{{end}}">{{.Value}}</span>{{if .Word}}<span class="st {{.Class}}">{{.Word}}</span>{{end}}{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
 
 {{/*
   lead: dot is a Card; its headline numbers and the word for the first.

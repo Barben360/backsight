@@ -74,6 +74,9 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 	data := s.pageData(r, textTitle, prefs, started)
 	data.V, data.ID = map[string]*metrics.Result{"memories": &res}, id
 	s.withResult(&data, &res)
+	if res.Text != nil { // the page is named by the memory it shows
+		data.Frame.Title = "Memory " + views.ShortID(res.Text.ID)
+	}
 	var buf bytes.Buffer
 	if err := s.tpl.pages[textPageName].ExecuteTemplate(&buf, textPageName+".html", data); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")

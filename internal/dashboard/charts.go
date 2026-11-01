@@ -5,6 +5,8 @@ import (
 	"math"
 	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/chart"
@@ -527,4 +529,200 @@ func flowOf(l format.Locale, more string, v MetricView) template.HTML {
 		}
 	}
 	return partsOf(l, "Sends by result, per day", more, v, order, wordsOf(order, func(k string) string { return k }), classes, "f-failed")
+}
+
+// pathOrder are the recall paths in the order the strip lists them. A path
+// outside it (or none) is drawn on the last row, "elsewhere", under that
+// word and never under its stored value.
+var pathOrder = []string{"prompt", "gate", "briefing", "search", "read", "failure", "sources"}
+
+// elsewhere names the row of the shows whose path the page has no word for.
+const elsewhere = "elsewhere"
+
+// shapeByOutcome is the shape a show is drawn as, by what became of it.
+var shapeByOutcome = map[string]string{
+	"credit": "used", "confident_miss": "ignored", "unknown": "undeclared", "undeclared": "undeclared",
+	"shown": "shown", "pending": "pending",
+}
+
+// shapeOf is the shape of an outcome; an outcome the page has no word for
+// is drawn as "shown only", the least it claims.
+func shapeOf(outcome string) string {
+	if s, ok := shapeByOutcome[outcome]; ok {
+		return s
+	}
+	return "shown"
+}
+
+// swatchOf is the class of the swatch that stands for a shape.
+func swatchOf(shape string) string {
+	for _, o := range outcomeShapes {
+		if o.shape == shape {
+			return o.class
+		}
+	}
+	return "f-shown"
+}
+
+// pathWord is the words of a recall path; "elsewhere" for any other.
+func pathWord(path string) string { return wordOr(views.PathWords, path, elsewhere) }
+
+// stripRows are the rows of the strip, the known paths present in pathOrder
+// then "elsewhere", and the row index of a path.
+func stripRows(shows []metrics.ShowMark) (index func(path string) int, names []string) {
+	known := func(path string) bool { return slices.Contains(pathOrder, path) }
+	present := map[string]bool{}
+	for _, s := range shows {
+		if known(s.Path) {
+			present[s.Path] = true
+		} else {
+			present[elsewhere] = true
+		}
+	}
+	var keys []string
+	for _, k := range pathOrder {
+		if present[k] {
+			keys = append(keys, k)
+			names = append(names, pathWord(k))
+		}
+	}
+	if present[elsewhere] {
+		keys, names = append(keys, elsewhere), append(names, elsewhere)
+	}
+	return func(path string) int {
+		if !known(path) {
+			path = elsewhere
+		}
+		return slices.Index(keys, path)
+	}, names
+}
+
+// stripTicks are the days labelled under the strip: about six, at local midnight.
+func stripTicks(from, to time.Time, loc *time.Location) []time.Time {
+	loc = zoneOr(loc)
+	y, m, d := from.In(loc).Date()
+	t := time.Date(y, m, d, 0, 0, 0, 0, loc)
+	days := int(math.Ceil(to.Sub(from).Hours() / 24))
+	step := max(1, (days+5)/6)
+	var out []time.Time
+	for ; !t.After(to) && len(out) < 400; t = t.AddDate(0, 0, step) {
+		out = append(out, t)
+	}
+	return out
+}
+
+// stripOf is when and where a memory was shown: a row per place, a mark per
+// show drawn as what became of it, a line per hide or restore. It carries
+// ids, words and numbers only.
+func stripOf(l format.Locale, more string, p *metrics.MemoryPage, now time.Time, loc *time.Location) template.HTML {
+	c := chart.Strip{Label: "Every time this memory was shown, by where", Size: chart.StripSize, More: more,
+		Empty: "This memory has not been shown yet."}
+	if p == nil {
+		return c.HTML()
+	}
+	loc = zoneOr(loc)
+	c.Label = "Every time memory " + views.ShortID(p.Row.ID) + " was shown, by where"
+	row, names := stripRows(p.Shows)
+	c.Rows = names
+	var from time.Time
+	to := now
+	widen := func(t time.Time) {
+		if from.IsZero() || t.Before(from) {
+			from = t
+		}
+		if t.After(to) {
+			to = t
+		}
+	}
+	for _, s := range p.Shows {
+		widen(s.At)
+	}
+	for _, r := range p.Retirements {
+		widen(r.At)
+	}
+	if p.Created != nil && !p.Created.IsZero() {
+		widen(*p.Created)
+		c.Created = *p.Created
+	}
+	if len(p.Shows) == 0 {
+		return c.HTML()
+	}
+	c.From, c.To = from, to
+	c.Ticks = stripTicks(from, to, loc)
+	if to.Sub(from) >= 365*24*time.Hour {
+		c.TickFmt = func(t time.Time) string { return t.In(loc).Format("Jan 2006") }
+	} else {
+		c.TickFmt = func(t time.Time) string { return t.In(loc).Format("Jan 2") }
+	}
+	for _, s := range p.Shows {
+		shape := shapeOf(s.Outcome)
+		text := s.At.In(loc).Format("Jan 2") + " · " + pathWord(s.Path) + " · " + chart.ShapeWords[shape]
+		if s.Rank != nil && *s.Rank > 0 {
+			text += " · rank " + l.Int(*s.Rank)
+			if s.RankWithoutBoost != nil && *s.RankWithoutBoost > 0 {
+				text += " (without the learned ranking: " + l.Int(*s.RankWithoutBoost) + ")"
+			}
+		}
+		if s.Session != "" {
+			text += " · session " + views.ShortID(s.Session)
+		}
+		c.Marks = append(c.Marks, chart.Mark{Row: row(s.Path), At: s.At, Shape: shape, Text: text})
+	}
+	for _, r := range p.Retirements {
+		c.Marks = append(c.Marks, chart.Mark{At: r.At, Shape: "retired",
+			Text: r.At.In(loc).Format("Jan 2") + " · " + wordOr(views.RetireWords, r.Kind, chart.ShapeWords["retired"])})
+	}
+	return c.HTML()
+}
+
+// rankOrder orders the bars of a memory's rank
+// histogram: the numbers in numeric order, "6+" after them, and the shows
+// that had no rank first, only when there are some.
+func rankOrder(h map[string]int64) []string {
+	var keys []string
+	for k, n := range h {
+		if k == "unranked" && n > 0 {
+			keys = append(keys, k)
+			continue
+		}
+		if _, ok := rankNumber(k); ok {
+			keys = append(keys, k)
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int { return rankPlace(a) - rankPlace(b) })
+	return keys
+}
+
+// rankNumber is the number of a rank key ("6+" is 6).
+func rankNumber(k string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSuffix(k, "+"))
+	return n, err == nil && n >= 0
+}
+
+// rankPlace orders the keys: unranked, then the ranks by number, then the
+// open ones ("6+") last.
+func rankPlace(k string) int {
+	if k == "unranked" {
+		return -1
+	}
+	n, _ := rankNumber(k)
+	if strings.HasSuffix(k, "+") {
+		return 1_000_000 + n
+	}
+	return n
+}
+
+// rankOf is how high a memory ranked each time it was shown.
+func rankOf(l format.Locale, more string, h map[string]int64) template.HTML {
+	c := chart.Hist{Label: "Times this memory was shown, by its rank", Size: chart.Half, XName: "Rank when shown",
+		Class: "f-used", Unit: "times shown", More: more, Empty: "This memory has not been shown yet.",
+		Fmt: func(x float64) string { return l.Int(int64(math.Round(x))) }}
+	for _, k := range rankOrder(h) {
+		label := "Rank " + k
+		if k == "unranked" {
+			label = "Not ranked"
+		}
+		c.Bins = append(c.Bins, chart.Bin{Label: label, N: h[k]})
+	}
+	return c.HTML()
 }

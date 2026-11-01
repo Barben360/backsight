@@ -213,16 +213,6 @@ func TestFilterLinks(t *testing.T) {
 	}
 }
 
-// section is the part of the page from the heading to the end of its section.
-func section(page, heading string) string {
-	_, rest, ok := strings.Cut(page, "<h2>"+heading+"</h2>")
-	if !ok {
-		return ""
-	}
-	sec, _, _ := strings.Cut(rest, "</section>")
-	return sec
-}
-
 func TestIDPages(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
@@ -247,8 +237,8 @@ func TestIDPages(t *testing.T) {
 		t.Fatal("no session with turns in the fixture")
 	}
 	b := get("/sessions/" + url.PathEscape(sid))
-	if got := strings.Count(section(b, "Turns"), "<tr>") - 1; got != turns {
-		t.Errorf("session %s: %d turn rows, the API has %d", sid, got, turns)
+	if got := len(parseHTML(t, b).find("main li.turn")); got != min(turns, metrics.DefaultLimit) {
+		t.Errorf("session %s: %d turns on the rail, the API has %d", sid, got, turns)
 	}
 	// A memory.
 	mem := apiPath(t, h, "/api/v1/memories").Tables.Memories[0].ID
@@ -318,7 +308,7 @@ func TestIDLinksAreEscaped(t *testing.T) {
 	// A session of the odd project links back to it and to its memory.
 	_, b := pageGet(t, h, ck, "/sessions/sess-odd-0")
 	if !strings.Contains(b, `href="/memories/a:b"`) {
-		t.Errorf("the turn rail lacks the link to the memory: %s", section(b, "Turns"))
+		t.Errorf("the turn rail lacks the link to the memory: %s", visibleText(b))
 	}
 }
 
@@ -441,7 +431,7 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 			m.Row.State = "wrong"
 			m.Shows = []metrics.ShowMark{{At: now, Path: "search", Outcome: "confident_miss", Session: "sess-1", Rank: &one}}
 			m.Retirements = []metrics.RetireMark{{At: now, Kind: "unhide"}, {At: now, Kind: "hide"}}
-		}, []string{"facts about you and your work", "forgotten", "reported wrong", "Claude's search", "shown, then ignored", "restored", "hidden"}, notStored},
+		}, []string{"fact about you and your work", "forgotten", "reported wrong", "Claude's search", "shown, then ignored", "restored", "hidden"}, notStored},
 		{"day", func(d *PageData) { sessions(&metrics.Tables{Sessions: d.V["days"].Tables.Day.Sessions}, "failed") }, []string{"failed"}, notStored},
 		{"project", func(d *PageData) {
 			for i := range d.V["projects"].Tables.Project.Sessions {

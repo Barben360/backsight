@@ -398,6 +398,7 @@ type Fig struct {
 	Sub                       string // a muted line under the value; "" none
 	Icon                      string // the icon before the label (server, pc, doc); "" none
 	Swatch                    string // the class of a swatch before the label (a kind of memory); "" none
+	WordValue                 bool   // the value is a word: it is set smaller than a number
 }
 
 // figOf is the figure of metric v; the developer's detail is its id.

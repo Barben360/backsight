@@ -119,6 +119,9 @@ var funcs = template.FuncMap{
 	"projectpage":  projectOf,
 	"sessionspage": sessionsOf,
 	"memoriespage": memoriesOf,
+	"sessionpage":  sessionOf,
+	"memorypage":   memoryOf,
+	"memlink":      memlink,
 	"dayspage":     daysOf,
 	"daypage":      dayOf,
 	"latelyhead":   latelyHead,
@@ -299,4 +302,26 @@ func since(now time.Time, at *time.Time) string {
 		return ""
 	}
 	return views.Age(max(0, now.Sub(*at).Milliseconds()))
+}
+
+// pagingOf is the paging of a list the page cuts itself, total rows long:
+// Limit rows from Offset, the default size when none is asked, at most the largest.
+func pagingOf(p views.Params, total int) *metrics.Page {
+	limit := p.Limit
+	switch {
+	case limit <= 0:
+		limit = metrics.DefaultLimit
+	case limit > metrics.MaxLimit:
+		limit = metrics.MaxLimit
+	}
+	return &metrics.Page{Limit: limit, Offset: max(p.Offset, 0), Total: total}
+}
+
+// turnsPage is the turns the page shows: Limit of them from Offset. The
+// view gives a session's turns whole; the slice shares their memory and
+// changes none.
+func turnsPage(turns []metrics.TurnRow, p views.Params) []metrics.TurnRow {
+	pg := pagingOf(p, len(turns))
+	lo := min(pg.Offset, len(turns))
+	return turns[lo:min(lo+pg.Limit, len(turns))]
 }
