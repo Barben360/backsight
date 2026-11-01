@@ -30,7 +30,7 @@ const (
 	// subagentAppendMargin is what SubagentStop keeps of its child's
 	// deadline once the wait for the outbox lock ends: the append itself
 	// (a write and its fsync, up to about 100 ms on a slow disk), the
-	// telemetry and the process's own start before hookChildStart.
+	// telemetry and the end-of-turn check.
 	subagentAppendMargin = 500 * time.Millisecond
 	gateHits             = 2
 	lastReplyChars       = 1000 // the end of the last reply, for the detector and outcomes
@@ -64,7 +64,7 @@ func init() {
 		if !ok {
 			return nil, nil
 		}
-		return h.subagentStop(start.Add(hook.ChildDeadline(event, input) - subagentAppendMargin)), nil
+		return h.subagentStop(hook.KillAt(start, event, input, os.Getenv).Add(-subagentAppendMargin)), nil
 	}
 	handlers["session-end"] = sessionEnd
 }

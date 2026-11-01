@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,6 +23,12 @@ const (
 	// panic | fatal | hang | kill | exit2. Only a testhooks build honours
 	// it (chaos_testhooks.go); a release ignores it.
 	ChaosEnv = "BACKSIGHT_HOOK_CHAOS"
+	// KillAtEnv carries the supervisor's kill time to the child (Unix
+	// nanoseconds): the child's clock starts after its process started,
+	// which on Windows can take over a second (a fresh exe scanned by
+	// Defender after an update, a loaded machine), the supervisor's at
+	// the spawn.
+	KillAtEnv = "BACKSIGHT_HOOK_KILL_AT"
 	// MaxInput caps the event JSON read from stdin.
 	MaxInput  = 16 << 20
 	maxOutput = 64 << 10 // Claude Code caps hook fields at 10 000 chars
@@ -68,6 +75,22 @@ func ChildDeadline(event string, input []byte) time.Duration {
 	return 3 * time.Second // subagent-start, subagent-stop, stop, anything else
 }
 
+// KillAt is when the child that began at start is killed: the time its
+// supervisor passed (KillAtEnv), else start plus ChildDeadline. A passed
+// time later than that (a clock step, a stray variable) counts as absent:
+// it never lengthens the child's budget.
+func KillAt(start time.Time, event string, input []byte, getenv func(string) string) time.Time {
+	own := start.Add(ChildDeadline(event, input))
+	ns, err := strconv.ParseInt(getenv(KillAtEnv), 10, 64)
+	if err != nil {
+		return own
+	}
+	if at := time.Unix(0, ns); at.Before(own) {
+		return at
+	}
+	return own
+}
+
 // Run feeds input to a child and returns what may be printed, or why not.
 func (s Supervisor) Run(ctx context.Context, event string, input []byte) ([]byte, *Failure) {
 	start := time.Now()
@@ -77,9 +100,14 @@ func (s Supervisor) Run(ctx context.Context, event string, input []byte) ([]byte
 	if len(input) > MaxInput {
 		return fail("input_too_large", "")
 	}
-	cctx, cancel := context.WithTimeout(ctx, s.Deadline(event, input))
+	killAt := start.Add(s.Deadline(event, input))
+	cctx, cancel := context.WithDeadline(ctx, killAt)
 	defer cancel()
 	cmd := s.Command(cctx, event)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, KillAtEnv+"="+strconv.FormatInt(killAt.UnixNano(), 10))
 	cmd.Stdin = bytes.NewReader(input)
 	out, errb := &capped{max: maxOutput}, &capped{max: maxOutput}
 	cmd.Stdout, cmd.Stderr = out, errb

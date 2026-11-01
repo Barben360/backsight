@@ -67,8 +67,8 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 }
 
 // hookChildStart is when this process began as a hook child (zero when a
-// handler runs in-process): its supervisor kills it hook.ChildDeadline after
-// starting it.
+// handler runs in-process): its supervisor kills it at hook.KillAt, the
+// time it passed or hook.ChildDeadline after this.
 var hookChildStart time.Time
 
 // runHookChild is the hidden `backsight hook-child <event>`.

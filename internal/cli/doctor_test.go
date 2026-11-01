@@ -34,7 +34,7 @@ import (
 // the real machine; isolate unsets them.
 var isolatedEnv = []string{
 	"BACKSIGHT_STATE_DIR", "BACKSIGHT_SESSION", "BACKSIGHT_PROJECT", "CLAUDE_ENV_FILE", "DOCKER_HOST", claudePIDEnv,
-	updateLockEnv, "BACKSIGHT_HOOK_CHAOS", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+	updateLockEnv, "BACKSIGHT_HOOK_CHAOS", "BACKSIGHT_HOOK_KILL_AT", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
 }
 
 // unsetMachineEnv unsets isolatedEnv for the test (t.Setenv restores it).

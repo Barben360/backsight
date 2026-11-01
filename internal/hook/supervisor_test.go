@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,8 @@ func TestMain(m *testing.M) {
 				return []byte(`{"systemMessage":` + string(msg) + `}`), nil
 			case "echo":
 				return []byte(`{"hookSpecificOutput":{"hookEventName":"` + event + `","additionalContext":"ok"}}`), nil
+			case "kill-at":
+				return []byte(`{"systemMessage":"` + os.Getenv(KillAtEnv) + `"}`), nil
 			case "empty":
 				return nil, nil
 			case "garbage":
@@ -196,5 +199,54 @@ func TestTheChildReceivesTheEvent(t *testing.T) {
 	out, f := super(t, "echo-input", "", 5*time.Second)
 	if f != nil || !strings.Contains(string(out), `session_id`) || !strings.Contains(string(out), `s1`) {
 		t.Errorf("out %q failure %+v", out, f)
+	}
+}
+
+// The child learns when its supervisor kills it, a time fixed before the
+// spawn: its own clock starts after its process started, which on Windows
+// can take over a second (final review, M7 block 2).
+func TestTheChildReceivesItsKillTime(t *testing.T) {
+	before := time.Now()
+	out, f := super(t, "kill-at", "", 5*time.Second)
+	after := time.Now()
+	var msg struct {
+		SystemMessage string `json:"systemMessage"`
+	}
+	if f != nil || json.Unmarshal(out, &msg) != nil {
+		t.Fatalf("out %q failure %+v", out, f)
+	}
+	ns, err := strconv.ParseInt(msg.SystemMessage, 10, 64)
+	if err != nil {
+		t.Fatalf("%s = %q, want Unix nanoseconds", KillAtEnv, msg.SystemMessage)
+	}
+	if at := time.Unix(0, ns); at.Before(before.Add(5*time.Second)) || at.After(after.Add(5*time.Second)) {
+		t.Errorf("kill time %v, want the run's start plus its 5 s deadline (between %v and %v)", at, before.Add(5*time.Second), after.Add(5*time.Second))
+	}
+}
+
+// KillAt takes the supervisor's time when it is earlier than the child's
+// own start plus its deadline, never a later one or garbage.
+func TestKillAt(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	own := start.Add(3 * time.Second)
+	early := start.Add(1200 * time.Millisecond)
+	for _, c := range []struct {
+		name, env string
+		want      time.Time
+	}{
+		{"absent", "", own},
+		{"earlier", strconv.FormatInt(early.UnixNano(), 10), early},
+		{"later", strconv.FormatInt(start.Add(time.Minute).UnixNano(), 10), own},
+		{"garbage", "soon", own},
+	} {
+		got := KillAt(start, "subagent-stop", nil, func(k string) string {
+			if k != KillAtEnv {
+				return ""
+			}
+			return c.env
+		})
+		if !got.Equal(c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }
