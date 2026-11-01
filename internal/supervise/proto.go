@@ -35,6 +35,11 @@ type Status struct {
 // ErrNotRunning is Ask's error when no supervisor of the project answers.
 var ErrNotRunning = errors.New("the supervisor is not running")
 
+// ErrAccessDenied is Ask's error when a supervisor runs but its control
+// channel refuses this process: on Windows, a supervisor started from an
+// elevated terminal, whose pipe a normal terminal's process cannot open.
+var ErrAccessDenied = errors.New("the supervisor's control channel refuses this process: it was started from an elevated (administrator) terminal; stop it from one (backsight server stop), then start it from a normal terminal")
+
 const (
 	opStatus   = "status"
 	opStop     = "stop"
@@ -63,7 +68,8 @@ var errListenerClosed = errors.New("the control channel is closed")
 const maxRequest = 4096
 
 // Ask sends op to the project's supervisor and returns its answer:
-// ErrNotRunning when none answers. stop is answered at once, before the
+// ErrNotRunning when none answers, ErrAccessDenied when one runs whose
+// channel refuses this process. stop is answered at once, before the
 // stop; api-stop once the API stopped; api-start once it started (or is
 // waiting for the database).
 func Ask(ctx context.Context, project string, op string) (Status, error) {

@@ -66,7 +66,12 @@ var (
 	superviseAsk = supervise.Ask
 	// startSupervisor starts conhost.exe (its real path) with args,
 	// detached from the caller and out of its job (native_task_*.go).
-	startSupervisor = startDetachedSupervisor
+	startSupervisor = startUnelevated
+	// detachSupervisor is the real detached start startUnelevated makes.
+	detachSupervisor = startDetachedSupervisor
+	// elevated: this process runs elevated beside its user's filtered
+	// token (native_task_*.go).
+	elevated = processElevated
 	// userSID is the current user's SID, the task's principal.
 	userSID           = currentUserSID
 	taskRunWait       = 10 * time.Second  // the pipe answering after /Run or a detached start
@@ -75,6 +80,21 @@ var (
 	askStatusWait     = 10 * time.Second // a status answer
 	askOpWait         = 2 * time.Minute  // api-stop waits for the API to stop
 )
+
+// errElevated refuses a detached supervisor start from an elevated
+// terminal.
+var errElevated = errors.New("refused from an elevated (administrator) terminal: a supervisor started from it makes its pipe, job and mutex at high integrity, which your normal terminals, Claude Code's hooks, update and uninstall cannot open; run backsight server start from a normal terminal")
+
+// startUnelevated is the real detached start, refused when this process
+// is elevated beside its user's filtered token (UAC's split token): the
+// supervisor would inherit that token. The task's start is never refused:
+// it runs LeastPrivilege, whoever registers or runs it.
+func startUnelevated(args ...string) error {
+	if elevated() {
+		return errElevated
+	}
+	return detachSupervisor(args...)
+}
 
 // SuperviseFile is the supervisor's configuration: Render writes it on
 // Windows, server supervise reads it.

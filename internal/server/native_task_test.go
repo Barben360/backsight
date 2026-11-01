@@ -1336,6 +1336,43 @@ func TestUnregisterMarksTheServerStoppedFirst(t *testing.T) {
 	}
 }
 
+// A detached supervisor started from an elevated terminal (UAC's full
+// token, beside the user's filtered one) would make High-integrity
+// objects that the user's normal terminals, hooks, update and uninstall
+// cannot open: the start is refused, nothing started, naming a normal
+// terminal. The task's own start is not (it runs LeastPrivilege), nor a
+// start that is not elevated.
+func TestDetachedStartIsRefusedWhenElevated(t *testing.T) {
+	h, f := taskFixture(t)
+	ctx := context.Background()
+	var started [][]string
+	oldD, oldE := detachSupervisor, elevated
+	startSupervisor = startUnelevated // the product's own, around a fake real start
+	detachSupervisor = func(args ...string) error { started = append(started, args); f.start(); return nil }
+	elevated = func() bool { return true }
+	t.Cleanup(func() { detachSupervisor, elevated = oldD, oldE })
+	refused := func(what string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "elevated") || !strings.Contains(err.Error(), "normal terminal") || len(started) != 0 {
+			t.Errorf("%s: %v, detached starts %q; want the elevated refusal and nothing started", what, err, started)
+		}
+	}
+	refused("server start without a logon", h.StartDB(ctx, false))
+	_, err := h.n.StartIfDown(ctx)
+	refused("the SessionStart start", err)
+	refused("the database alone", h.startDBAlone(ctx))
+
+	f.runStarts = true
+	if err := h.StartDB(ctx, false); err != nil || len(started) != 0 {
+		t.Errorf("the task's start while elevated: %v, detached %q; want the task's start", err, started)
+	}
+	f.up, f.runStarts = false, false
+	elevated = func() bool { return false }
+	if err := h.StartDB(ctx, false); err != nil || len(started) != 1 {
+		t.Errorf("not elevated: %v, detached %q; want one detached start", err, started)
+	}
+}
+
 // With no supervisor answering, server status and doctor read <Root>\refused,
 // the last supervisor's refusal (0080: "where server status and doctor
 // read it"); the identity check's own refusal, current, comes first.

@@ -11,3 +11,5 @@ var errWindowsOnly = errors.New("the scheduled task host runs on Windows only")
 func currentUserSID() (string, error) { return "", errWindowsOnly }
 
 func startDetachedSupervisor(...string) error { return errWindowsOnly }
+
+func processElevated() bool { return false }

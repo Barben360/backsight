@@ -3,6 +3,7 @@
 package supervise
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -380,5 +381,40 @@ func TestInJobFindsTheSupervisorsChildren(t *testing.T) {
 	}
 	if in, err := InJob(project("injob-other"), pg); err != nil || in {
 		t.Errorf("another project's job: %v %v, want false", in, err)
+	}
+}
+
+// A supervisor started from an elevated terminal has a pipe a normal
+// terminal's process cannot open: Ask says so (ErrAccessDenied, naming
+// the elevated terminal), never "not running", which would start a second
+// supervisor or report the server down.
+func TestAskTellsAPipeThatRefusesAccessFromNotRunning(t *testing.T) {
+	p := project("denied")
+	name, err := pipeName(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An empty, protected DACL: nobody may open it (the elevated
+	// supervisor's objects, as a normal terminal meets them).
+	sd, err := windows.SecurityDescriptorFromString("D:P")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	np, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateNamedPipe(np, windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
+		windows.PIPE_TYPE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS, 1, maxRequest, maxRequest, 0, sa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = Ask(ctx, p, opStatus)
+	if !errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrNotRunning) || !strings.Contains(err.Error(), "elevated") {
+		t.Errorf("Ask on a pipe that refuses access = %v, want ErrAccessDenied naming the elevated terminal", err)
 	}
 }

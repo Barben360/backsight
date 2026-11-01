@@ -141,7 +141,7 @@ backsight writes only:
 - Claude Code's files in your profile, as on Linux;
 - `%USERPROFILE%\.pg0`, which pg0 creates (two empty folders once the server is installed).
 
-It never asks for elevation, never writes under `C:\Program Files`, `C:\Windows` or `HKEY_LOCAL_MACHINE`, and never installs the VC++ redistributable. On a PC where you are an administrator, it works the same way: PostgreSQL refuses to run with administrator rights, so the supervisor starts it with those rights removed.
+It never asks for elevation, never writes under `C:\Program Files`, `C:\Windows` or `HKEY_LOCAL_MACHINE`, and never installs the VC++ redistributable. On a PC where you are an administrator, it works the same way: PostgreSQL refuses to run with administrator rights, so the supervisor starts it with those rights removed. From an elevated terminal ("Run as administrator"), `backsight server start` does not start the server outside its task: a server started from there would be out of reach of your normal terminals and of Claude Code (`access denied`). Run it from a normal terminal; the task itself always runs with your normal rights.
 
 ## SmartScreen and Microsoft Defender
 

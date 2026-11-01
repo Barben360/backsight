@@ -194,7 +194,8 @@ func (l *pipeListener) Close() error {
 }
 
 // dial connects to the project's pipe: ErrNotRunning when no supervisor
-// has it, a wait while every instance is busy. The server may only
+// has it, ErrAccessDenied when its pipe refuses this process, a wait
+// while every instance is busy. The server may only
 // identify the client, never act as it.
 func dial(ctx context.Context, project string) (conn, error) {
 	name, err := pipeName(project)
@@ -213,6 +214,10 @@ func dial(ctx context.Context, project string) (conn, error) {
 			return os.NewFile(uintptr(h), name), nil
 		case errors.Is(err, windows.ERROR_FILE_NOT_FOUND):
 			return nil, ErrNotRunning
+		case errors.Is(err, windows.ERROR_ACCESS_DENIED):
+			// A supervisor runs, its pipe at an integrity this process
+			// cannot open (started from an elevated terminal).
+			return nil, fmt.Errorf("%w (%w)", ErrAccessDenied, err)
 		case errors.Is(err, windows.ERROR_PIPE_BUSY):
 			_, _, _ = procWaitNamedPipe.Call(uintptr(unsafe.Pointer(p)), 100)
 		default:

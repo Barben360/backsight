@@ -4,6 +4,7 @@ package server
 
 import (
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -30,3 +31,20 @@ func startDetachedSupervisor(args ...string) error {
 	}
 	return detach.StartNoStdio(winJoin(root, "System32", "conhost.exe"), args...)
 }
+
+// processElevated: this process's token is UAC's full token of a user who
+// also has a filtered one (TokenElevationTypeFull: "Run as
+// administrator"), so the user's other processes run at a lower integrity
+// and cannot open what this one creates. A token with no split (UAC off,
+// a CI runner: TokenElevationTypeDefault) has no such neighbour, and a
+// token that cannot be read is taken as not elevated.
+func processElevated() bool {
+	var typ uint32
+	var n uint32
+	err := windows.GetTokenInformation(windows.GetCurrentProcessToken(), windows.TokenElevationType, (*byte)(unsafe.Pointer(&typ)), uint32(unsafe.Sizeof(typ)), &n)
+	return err == nil && typ == tokenElevationTypeFull
+}
+
+// tokenElevationTypeFull is TOKEN_ELEVATION_TYPE's TokenElevationTypeFull,
+// which x/sys lacks.
+const tokenElevationTypeFull = 2
