@@ -631,8 +631,6 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
 
 /* ---------- narrow: block 6 parts under 900 px ---------- */
 @container page (max-width: 899px) {
-  /* Fix: the window links inside the Menu were hidden by ".tools .seg". */
-  .tools .navmenu .seg { display: inline-flex; }
   .seg details.wpick > summary, .field input, .field select { min-height: var(--touch); }
   .seg details.wpick[open] { flex-basis: 100%; }
   .seg details.wpick .menu-pop { position: static; box-shadow: none; border: 0; padding: 0; min-width: 0; }

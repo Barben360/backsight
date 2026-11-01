@@ -40,7 +40,6 @@ body{margin:0}
   <p class="tile-q">{{t.q}}</p>
   <div class="tile-v"><span class="big num">{{t.big}}</span><span class="unit">{{t.unit}}</span><span class="ci">{{t.ci}}</span></div>
   <p class="tile-sub">{{t.sub}}</p>
-  <sc-if value="{{ttrWatch}}" hint-placeholder-val="{{ false }}"><p class="tile-sub"><span class="st st-watch">watch</span> Slow to become memory: 1 in 20 sessions took over 2 h 40 min (watch over 1 h).</p></sc-if>
   <div class="tile-st">
     <span class="st {{t.st}}">{{t.word}}</span>
     <sc-if value="{{hasDelta}}" hint-placeholder-val="{{ true }}"><span class="delta {{t.dcls}}"><span class="arr">{{t.darr}}</span> {{t.dtext}}</span></sc-if>
@@ -166,7 +165,8 @@ class Component extends DCLogic {
     // Block 6 (opt-in, off for every block 3 artboard): the Flowing tile's subline becomes time to recall.
     const ttr = p.ttr ?? 'none';
     if (slot === 'flowing' && ttr !== 'none') {
-      t.sub = 'Session to recalled memory: typical 1 d 2 h · ' + t.sub;
+      // The value only: its watch shows on its own card on Pipeline, never on the tile.
+      t.sub = 'Session to recalled memory: typical ' + (ttr === 'watch' ? '1 d 3 h' : '1 d 2 h') + ' · ' + t.sub;
       t.n = t.n + '; time to recall from 118 sessions recalled';
     }
     t.nf = String(p.nf ?? false) === 'true';
@@ -190,7 +190,6 @@ class Component extends DCLogic {
       chipIco: isServer ? 'i-server' : 'i-pc',
       chipTitle: isServer ? 'From the memory server: all PCs' : 'Activity recorded on this PC',
       hasDelta: !t.nodelta, hasNote: !!t.note,
-      ttrWatch: slot === 'flowing' && (p.ttr ?? 'none') === 'watch',
       infoOpen: String(p.info ?? false) === 'true' || undefined,
       pts, area, ex: last[0], ey: last[1],
       sparkLabel: t.name + ' per day, last 7 days',

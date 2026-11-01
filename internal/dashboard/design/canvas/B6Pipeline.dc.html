@@ -30,11 +30,9 @@ body{margin:0}
     <div style="width: 300px"><dc-import name="Tile" theme="inherit" scenario="healthy" slot="flowing" ttr="ok" hint-size="100%,360px"></dc-import></div>
     <div style="width: 300px"><dc-import name="Tile" theme="inherit" scenario="healthy" slot="flowing" ttr="watch" hint-size="100%,400px"></dc-import></div>
     <div class="stack" style="max-width: 560px; gap: 12px">
-      <p class="small sub">The tile’s number and status stay those of sessions sent. Time to recall is a second line: its watch shows there with its word and icon, on this page, and as one item in “What should I do?”:</p>
-      <ul class="att card">
-        <li class="att-item"><span class="pill st st-watch">watch</span><div class="body"><p>Sessions are slow to become memory: 1 in 20 took over 2 h 40 min (watch over 1 h).</p><div class="cmd"><code>backsight doctor</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div><details class="why"><summary>Why this matters</summary><div>What you did today only helps tomorrow once the server has turned it into memories. A slow server queue or model delays that; doctor checks both.</div></details></div></li>
-      </ul>
-      <p class="xs muted">It does not change the Flowing verdict, which only reads failures and backlogs.</p>
+      <p class="small sub">The tile’s number and status stay those of sessions sent. Time to recall is a second line with its typical value only, left as ok (first tile) and in its watch week (second tile): no watch word or icon on the tile.</p>
+      <p class="small sub">Its watch shows only on its own card, above. “What should I do?” keeps a single item for slow extraction: the existing one, from the time to turn a session into memories (slowest 1 in 20 over 30 min).</p>
+      <p class="xs muted">The Flowing verdict is unchanged: it only reads failures and backlogs.</p>
     </div>
   </div>
 </main>
