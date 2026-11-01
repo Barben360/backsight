@@ -32,8 +32,8 @@ func TestReadmeShowsTheDashboard(t *testing.T) {
 	const alt = `alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/`
 	var shots [][]byte
 	for _, img := range []struct{ file, mode string }{
-		{"dashboard-light.png", "gh-light-mode-only"},
-		{"dashboard-dark.png", "gh-dark-mode-only"},
+		{"dashboard/overview-healthy-light.png", "gh-light-mode-only"},
+		{"dashboard/overview-healthy-dark.png", "gh-dark-mode-only"},
 	} {
 		if !strings.Contains(section, "docs/assets/"+img.file+"#"+img.mode) {
 			t.Errorf("the dashboard section does not show docs/assets/%s#%s", img.file, img.mode)

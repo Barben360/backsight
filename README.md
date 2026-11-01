@@ -287,8 +287,8 @@ You mostly use Claude Code as before. Commands you may need:
 
 `backsight dashboard` opens a local page that answers "is my memory working?" with the numbers `backsight stats` prints, in the light or dark theme. [docs/dashboard.md](docs/dashboard.md) explains each page and each number.
 
-<img alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/dashboard-light.png#gh-light-mode-only">
-<img alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/dashboard-dark.png#gh-dark-mode-only">
+<img alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/dashboard/overview-healthy-light.png#gh-light-mode-only">
+<img alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/dashboard/overview-healthy-dark.png#gh-dark-mode-only">
 
 ## Documentation
 
