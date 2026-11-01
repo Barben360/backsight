@@ -55,6 +55,11 @@ func isolate(t *testing.T) string {
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
 	testtool.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	// The git-bash check (Windows) finds this one, not the machine's Git.
+	bash := filepath.Join(home, "git", "bin", "bash.exe")
+	_ = os.MkdirAll(filepath.Dir(bash), 0o700)
+	_ = os.WriteFile(bash, []byte("MZ"), 0o700)
+	t.Setenv("CLAUDE_CODE_GIT_BASH_PATH", bash)
 	old := probes
 	probes = func(e *doctor.Env) {
 		e.ManagedDir = filepath.Join(home, "etc")
@@ -686,5 +691,36 @@ func TestDoctorCountsTheShimsEarlierCopiesOnWindows(t *testing.T) {
 	if got.Status != doctor.Info || !strings.HasPrefix(got.Summary, "2 earlier copies") ||
 		got.Detail != filepath.Join(bin, "current.exe.old-1")+", "+filepath.Join(bin, "current.exe.old-12") {
 		t.Errorf("shim-copies %+v", got)
+	}
+}
+
+// Doctor on Windows says whether Claude Code will find Git Bash, reading
+// this machine (the variable names a file, not a directory); elsewhere
+// there is no such check.
+func TestDoctorChecksGitBashOnWindows(t *testing.T) {
+	home := devInstall(t, true)
+	if _, c := doctorChecks(t); runtime.GOOS != "windows" {
+		if _, ok := c["git-bash"]; ok {
+			t.Errorf("a git-bash check on %s: %+v", runtime.GOOS, c["git-bash"])
+		}
+	}
+	old := doctorGOOS
+	doctorGOOS = "windows"
+	t.Cleanup(func() { doctorGOOS = old })
+	t.Setenv("ProgramFiles", filepath.Join(home, "pf"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "local"))
+	t.Setenv("PATH", t.TempDir()) // no git
+	bash := filepath.Join(home, "PortableGit", "bin", "bash.exe")
+	_ = os.MkdirAll(filepath.Dir(bash), 0o700)
+	if err := os.WriteFile(bash, []byte("MZ"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_GIT_BASH_PATH", bash)
+	if _, c := doctorChecks(t); c["git-bash"].Status != doctor.OK || !strings.Contains(c["git-bash"].Summary, bash) {
+		t.Errorf("named: %+v", c["git-bash"])
+	}
+	t.Setenv("CLAUDE_CODE_GIT_BASH_PATH", filepath.Dir(bash))
+	if _, c := doctorChecks(t); c["git-bash"].Status != doctor.Warn || !strings.Contains(c["git-bash"].Fix, "restart Claude Code") {
+		t.Errorf("a directory named: %+v", c["git-bash"])
 	}
 }

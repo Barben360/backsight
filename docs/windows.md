@@ -179,6 +179,7 @@ Start with `backsight doctor`. On a native Windows install, these checks replace
 | `native-dlls` | Each copy of the VC++ runtime DLLs matches `dlls.json`. One missing or changed: `backsight server stop`, delete the `.backsight-complete` mark doctor names, then `backsight server install`. |
 | `native-private` | The data directory, the config directory, `secrets.toml` and `server.env` are readable by you, SYSTEM and Administrators only. Otherwise doctor gives the `icacls` command that puts it right, to run in PowerShell. |
 | `path-length` | The server's Python environment is within the path bound. Otherwise move backsight to a short `BACKSIGHT_HOME` (back up first). |
+| `git-bash` | Whether Claude Code will find Git Bash, judged conservatively: ok when `CLAUDE_CODE_GIT_BASH_PATH` names an existing file, or Git for Windows is in `%ProgramFiles%\Git` or `%LOCALAPPDATA%\Programs\Git`; any other Git (a PortableGit, a `git` on `PATH` elsewhere) is a warning whose fix names the `bin\bash.exe` beside that `git.exe`. |
 | `shim-copies` | Earlier copies of the shim an update renamed, still run by a session or the supervisor (info: the next update deletes those no longer running). |
 
 Other things you may meet:
