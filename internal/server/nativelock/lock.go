@@ -58,14 +58,24 @@ const (
 	PGInstallation = "18.1.0"
 )
 
-func init() {
-	if p := testLock(); p != "" {
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			panic(fmt.Sprintf("nativelock.TestLock: %v", err))
-		}
-		Requirements = raw
+func init() { applyTestLock(testLock(), runtime.GOOS) }
+
+// applyTestLock loads the lock file p, when set, in place of goos's own
+// lock: Windows' on Windows (the native chain's upgrade there installs a
+// second version from it), the Linux one elsewhere.
+func applyTestLock(p, goos string) {
+	if p == "" {
+		return
 	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		panic(fmt.Sprintf("nativelock.TestLock: %v", err))
+	}
+	if goos == "windows" {
+		WindowsRequirements = raw
+		return
+	}
+	Requirements = raw
 }
 
 // header is the value of the lock's "# key: value" line.

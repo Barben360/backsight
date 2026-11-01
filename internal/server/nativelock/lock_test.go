@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -246,5 +247,34 @@ func TestForWindowsPicksTheZipAndItsHash(t *testing.T) {
 	}
 	if got := For("darwin").UVAsset; got != UVAsset {
 		t.Errorf("an unknown GOOS gets %s, want the Linux pins", got)
+	}
+}
+
+// A test lock (TestLock, testhooks builds) stands in for the lock of the
+// OS that runs: Windows' own on Windows, where the native chain upgrades
+// to a second version from it, the Linux one elsewhere; the other OS's
+// lock is left as embedded.
+func TestTheTestLockReplacesTheRunningOSsLock(t *testing.T) {
+	linux, windows := Requirements, WindowsRequirements
+	t.Cleanup(func() { Requirements, WindowsRequirements = linux, windows })
+	file := t.TempDir() + "/lock2.txt"
+	if err := os.WriteFile(file, []byte(sampleLock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applyTestLock("", "windows")
+	if !bytes.Equal(Requirements, linux) || !bytes.Equal(WindowsRequirements, windows) {
+		t.Fatal("no test lock changed a lock")
+	}
+	applyTestLock(file, "windows")
+	if got := For("windows").Requirements; string(got) != sampleLock {
+		t.Errorf("Windows' lock is not the test lock after applyTestLock(windows):\n%.200s", got)
+	}
+	if !bytes.Equal(Requirements, linux) {
+		t.Error("the Linux lock changed for a Windows test lock")
+	}
+	WindowsRequirements = windows
+	applyTestLock(file, "linux")
+	if string(For("linux").Requirements) != sampleLock || !bytes.Equal(WindowsRequirements, windows) {
+		t.Error("a Linux test lock did not replace the Linux lock alone")
 	}
 }
