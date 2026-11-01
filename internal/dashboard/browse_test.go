@@ -288,7 +288,7 @@ func TestIDPagesAnswerNotFound(t *testing.T) {
 		if r.StatusCode < 400 || r.StatusCode >= 500 {
 			t.Errorf("GET %s: %d, want a 4xx", p, r.StatusCode)
 		}
-		if strings.Contains(b, "<table>") {
+		if strings.Contains(b, "<table") {
 			t.Errorf("GET %s shows a table", p)
 		}
 	}
@@ -387,22 +387,6 @@ func TestReleasesListsVersionsAndSettings(t *testing.T) {
 	}
 }
 
-func TestProjectPageWithoutMemories(t *testing.T) {
-	for _, none := range []bool{true, false} {
-		b := render(t, "project", func(d *PageData) {
-			p := d.V["projects"].Tables.Project
-			p.NoMemories, p.Command = none, "backsight import --project zz"
-		})
-		got := strings.Contains(visibleText(b), "This project has no memories yet. Import its past sessions:")
-		if got != none {
-			t.Errorf("no memories %v: sentence shown %v", none, got)
-		}
-		if has := strings.Contains(b, "<code>backsight import --project zz</code>"); has != none {
-			t.Errorf("no memories %v: command in <code> %v", none, has)
-		}
-	}
-}
-
 func TestProjectNamesAreClippedWithTheFullNameOnHover(t *testing.T) {
 	long := strings.Repeat("p", 30)
 	b := render(t, "projects", func(d *PageData) { d.V["projects"].Tables.Projects[0].Project = long })
@@ -450,7 +434,7 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 			for i := range d.V["memories"].Tables.Memories {
 				d.V["memories"].Tables.Memories[i].State = "never_used"
 			}
-		}, []string{"often shown, never used", "recent-weighted counts"}, notStored},
+		}, []string{"often shown, never used", "Counts are recent-weighted"}, notStored},
 		{"memory", func(d *PageData) {
 			m := d.V["memories"].Tables.Memory
 			m.Kind, m.ServerState = "world", "invalidated"
@@ -468,6 +452,9 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 	} {
 		b := render(t, p.name, p.edit)
 		text := visibleText(b)
+		if p.name == "day" || p.name == "project" { // the tiles' popovers are the catalog's prose, which names the stored values it counts
+			text = visibleText(popovers.ReplaceAllString(b, ""))
+		}
 		for _, w := range p.want {
 			if !strings.Contains(b, w) && !strings.Contains(text, w) {
 				t.Errorf("%s lacks %q in %q", p.name, w, text)
@@ -549,8 +536,8 @@ func TestSessionsOfProjectAndDayArePaged(t *testing.T) {
 
 func TestEmptyDayAndProjectLinks(t *testing.T) {
 	b := render(t, "day", func(d *PageData) { d.V["days"].Tables.Day.Sessions = nil })
-	if !strings.Contains(visibleText(b), "No sessions that day.") || strings.Contains(section(b, "Sessions"), "<table>") {
-		t.Errorf("an empty day: %q", section(b, "Sessions"))
+	if !strings.Contains(visibleText(b), "No sessions that day.") || parseHTML(t, b).first("main table") != nil {
+		t.Errorf("an empty day: %q", visibleText(b))
 	}
 	for _, name := range []string{"sessions", "memories", "day"} {
 		b := render(t, name, func(d *PageData) {
@@ -563,7 +550,7 @@ func TestEmptyDayAndProjectLinks(t *testing.T) {
 				d.V["days"].Tables.Day.Sessions[0].Project = "my project"
 			}
 		})
-		if !strings.Contains(b, `<a href="/projects/my%20project" title="my project">my project</a>`) {
+		if !strings.Contains(b, `<a class="trunc" href="/projects/my%20project" title="my project">my project</a>`) {
 			t.Errorf("%s: project name not linked", name)
 		}
 	}

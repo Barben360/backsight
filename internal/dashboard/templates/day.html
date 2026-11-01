@@ -1,25 +1,10 @@
 {{/* views: days */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.days}}
 
-{{/* widget: tiles of the day. Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow. */}}
-{{with $r.Tables.Day}}<h2>{{.Day}}</h2>
-{{end}}{{template "metric" framed (metric $r "recall.hit_rate") $d $.Loc}}
-{{template "metric" framed (metric $r "used.turn_rate") $d $.Loc}}
-{{template "metric" framed (metric $r "verdict.wrong_rate") $d $.Loc}}
-{{template "metric" framed (metric $r "context.per_session") $d $.Loc}}
-{{template "metric" framed (metric $r "recall.latency") $d $.Loc}}
-{{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}
-
-{{/* widget: sessions of the day. Reads .V.days.Tables.Day.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent). */}}
-{{with $r.Tables.Day}}<section>
-<h2>Sessions</h2>
-{{if not .Sessions}}<p>No sessions that day.</p>
-{{else}}<table>
-<tr><th>When</th><th>Session</th><th>Project</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
-{{range .Sessions}}<tr><td>{{when $.Loc .Start}}</td><td><a href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{if .Project}}<a href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{end}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{sent .Sent}}</td></tr>
-{{end}}</table>
-{{end}}{{template "paging" pager $.Frame.Path $r.Tables.Page}}
-</section>
-{{end}}
+{{/* widgets: the page of one day through daypage (DayPage: Tiles, Note, Prev, Next, Sessions; Ref: Text, Full, Href; Sessions: Head, Table, Note). Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow, and .V.days.Tables.Day.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent) and .Page. */}}
+{{with daypage .}}{{$pg := .}}{{if or .Prev.Href .Next.Href}}<div class="row day-nav">{{with .Prev.Href}}<a class="btn" href="{{.}}">{{$pg.Prev.Text}}</a>{{end}}{{with .Next.Href}}<a class="btn" href="{{.}}">{{$pg.Next.Text}}</a>{{end}}</div>
+{{end}}{{template "tilegroups" .Tiles}}
+<p class="small muted">{{.Note}}</p>
+{{with .Sessions}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Table.Rows}}{{template "sessions" .Table}}{{end}}{{template "card-close" .Head}}{{end}}{{end}}
 {{template "foot" .}}

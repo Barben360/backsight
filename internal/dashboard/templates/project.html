@@ -1,43 +1,27 @@
 {{/* views: projects */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.projects}}
 
-{{/* widget: tiles. Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow. */}}
-{{template "metric" framed (metric $r "recall.hit_rate") $d $.Loc}}
-{{template "metric" framed (metric $r "used.turn_rate") $d $.Loc}}
-{{template "metric" framed (metric $r "verdict.wrong_rate") $d $.Loc}}
-{{template "metric" framed (metric $r "context.per_session") $d $.Loc}}
-{{template "metric" framed (metric $r "recall.latency") $d $.Loc}}
-{{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}
-
-{{with $r.Tables.Project}}<section>
-<h2 title="{{.Project}}">Project {{clip .Project}}</h2>
-{{if .NoMemories}}<p>This project has no memories yet. Import its past sessions: <code>{{.Command}}</code></p>
-{{end}}{{if .AttributionDisagreements}}<p>{{n .AttributionDisagreements}} memories are attributed to another project by the server.</p>
-{{end}}</section>
-
-{{/* widget: top used and never used. Reads .V.projects.Tables.Project.TopUsed and .NeverUsed (ID, Project, Shown, LastShown, Command). */}}
-<section>
-<h2>Most used</h2>
-<table>
-<tr><th>Memory</th><th>Shown</th><th>Last shown</th></tr>
-{{range .TopUsed}}<tr><td><a href="/memories/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{n .Shown}}</td><td>{{when $.Loc .LastShown}}</td></tr>
-{{end}}</table>
-<h2>Often shown, never used</h2>
-<table>
-<tr><th>Memory</th><th>Shown</th><th>Last shown</th><th>Look at it</th></tr>
-{{range .NeverUsed}}<tr><td><a href="/memories/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{n .Shown}}</td><td>{{when $.Loc .LastShown}}</td><td><code>{{.Command}}</code></td></tr>
-{{end}}</table>
-</section>
-
-{{/* widget: sessions of the project. Reads .V.projects.Tables.Project.Sessions (ID, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent). */}}
-<section>
-<h2>Sessions</h2>
-<table>
-<tr><th>Session</th><th>Started</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
-{{range .Sessions}}<tr><td><a href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{when $.Loc .Start}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{sent .Sent}}</td></tr>
-{{end}}</table>
-{{template "paging" pager $.Frame.Path $.V.projects.Tables.Page}}
-</section>
-{{end}}
+{{/* widgets: the page of one project through projectpage (ProjectPage: Name, Tiles, NoMemories, Command, Attribution, TopUsed, NeverUsed, Sessions; Ref: Text, Full, Href; MemoryListCard: Head, Rows, Note, HasCommand; Rows: ID, Shown, Last, Command; Sessions: Head, Table, Note). Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow, and .V.projects.Tables.Project (TopUsed, NeverUsed, Sessions, AttributionDisagreements, NoMemories, Command) and .Page. */}}
+{{with projectpage .}}<p class="small">Project <b class="trunc" title="{{.Name.Full}}">{{.Name.Text}}</b> <a href="/projects">All projects</a></p>
+{{template "tilegroups" .Tiles}}
+{{if .NoMemories}}<div class="empty"><span>This project has no memories yet. Import its past sessions:</span>{{template "cmd" .Command}}</div>
+{{end}}{{if or (not .NoMemories) .TopUsed.Rows .NeverUsed.Rows}}<div class="grid-2">
+{{with .TopUsed}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Memory</th><th class="r">Shown</th><th>Last shown</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td class="r">{{.Shown}}</td><td>{{template "reltime" .Last}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
+{{with .NeverUsed}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Memory</th><th class="r">Shown</th><th>Last shown</th><th>Look at it</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td class="r">{{.Shown}}</td><td>{{template "reltime" .Last}}</td><td>{{with .Command}}{{template "cmd" .}}{{end}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
+</div>
+{{end}}{{with .Attribution}}<p class="small muted">{{.}}</p>
+{{end}}{{with .Sessions}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Table.Rows}}{{template "sessions" .Table}}{{end}}{{template "card-close" .Head}}{{end}}{{end}}
 {{template "foot" .}}

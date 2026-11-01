@@ -321,6 +321,7 @@ details.why > div { font-size: var(--fs-sm); color: var(--fg-2); padding: 4px 0 
 .tbl tr.total td { font-weight: var(--fw-bold); border-top: 2px solid var(--border); }
 .tbl tr.hl td { background: var(--bad-bg); }
 .tbl td.wrapok { white-space: normal; }
+.tbl .spark { width: 120px; height: 20px; }
 .pager { display: flex; gap: 8px; align-items: center; font-size: var(--fs-sm); color: var(--fg-3); }
 
 /* tabs in a card */

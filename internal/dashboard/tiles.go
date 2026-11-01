@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"html/template"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,7 +144,7 @@ func tileOf(r *metrics.Result, s tileSpec, p views.Params, l format.Locale, loc 
 	}
 
 	t.Note = tileNote(r, s, l, loc, m, learning, tooFew, cause)
-	t.Spark = sparkOf(v, s.name+" per day, last 7 days", l)
+	t.Spark = sparkOf(v, s.name+" "+sparkSpan(r, v), l)
 	return t
 }
 
@@ -293,4 +294,17 @@ func tileNote(r *metrics.Result, s tileSpec, l format.Locale, loc *time.Location
 		return judged28Note
 	}
 	return ""
+}
+
+// sparkSpan says what a tile's spark spans: the hours of a day, or the
+// days of the window (7 when the result does not say).
+func sparkSpan(r *metrics.Result, v MetricView) string {
+	if len(v.M.Series) > 0 && v.M.Series[0].Hour != "" {
+		return "per hour, that day"
+	}
+	days := r.Window.Days
+	if days <= 0 {
+		days = 7
+	}
+	return "per day, last " + strconv.Itoa(days) + " days"
 }

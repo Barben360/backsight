@@ -1,20 +1,8 @@
 {{/* views: sessions */}}
 {{template "head" .}}{{template "top" .}}
-{{$r := .V.sessions}}
 
-{{/* widget: filter. Shows only the sessions that have what the link says. */}}
-<section>
-<h2>Show only sessions with</h2>
-{{template "choices" links $.Frame.Path "has"}}
-</section>
-
-{{/* widget: sessions. Reads .V.sessions.Tables.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent). */}}
-<section>
-<h2>Sessions</h2>
-<table>
-<tr><th>When</th><th>Session</th><th>Project</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
-{{range $r.Tables.Sessions}}<tr><td>{{when $.Loc .Start}}</td><td><a href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{if .Project}}<a href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{end}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{sent .Sent}}</td></tr>
-{{end}}</table>
-{{template "paging" pager $.Frame.Path $r.Tables.Page}}
-</section>
+{{/* widget: sessions. Reads .V.sessions.Tables.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent) and .Page, through sessionspage (SessionsCard: Head, Filter, Table, Note). The filter shows only the sessions that have what the link says. */}}
+{{with sessionspage .}}{{template "card-open" .Head}}
+<nav class="seg" aria-label="Show">{{range .Filter}}{{template "seglink" .}}{{end}}</nav>
+{{template "nodata" .Note}}{{if .Table.Rows}}{{template "sessions" .Table}}{{end}}{{template "card-close" .Head}}{{end}}
 {{template "foot" .}}

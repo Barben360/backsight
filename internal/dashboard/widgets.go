@@ -27,6 +27,7 @@ type Head struct {
 	Aside       string // a short muted note after the spacer, before the ⓘ; "" none
 	Chip        string // a chip after the scope ("developer"); "" none
 	Pill        Word   // the status of the card, a pill after the spacer; zero none
+	Pager       Pager  // the paging of a list card, under its table; zero none
 }
 
 // Info is the ⓘ popover of a widget.

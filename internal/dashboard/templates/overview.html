@@ -21,23 +21,7 @@
 {{end}}
 
 {{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow through tiles (TileGroup: Name, Tiles; Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev). */}}
-<div class="tgroups" aria-label="Key numbers">
-{{range tiles $r $.P $.L $.Loc $d}}<section class="tgroup"><h2 class="tgroup-h">{{.Name}}</h2><div class="tgroup-tiles">
-{{range .Tiles}}<article class="tile {{.Class}}" aria-label="{{.Name}}">
-<div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
-{{if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
-{{template "info" .Head}}</div>
-{{with .Dev}}<span class="devid">{{.}}</span>
-{{end}}<p class="tile-q">{{.Question}}</p>
-<div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{with .CI}}<span class="ci">{{.}}</span>{{end}}</div>
-{{with .Sub}}<p class="tile-sub">{{.}}</p>
-{{end}}<div class="tile-st"><span class="st {{.WordClass}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}</div>
-{{with .Note}}<p class="tile-note">{{.}}</p>
-{{end}}{{.Spark}}
-<div class="tile-foot">{{if .Link}}<a href="{{.Link}}">{{.LinkText}}</a>{{end}}<span class="spacer"></span>{{template "cli" .Head}}</div>
-</article>
-{{end}}</div></section>
-{{end}}</div>
+{{template "tilegroups" tiles $r $.P $.L $.Loc $d}}
 
 {{/* widget: What should I do?. Reads .V.overview.Attention and .AttentionMore through attention (AttentionCard: Head, Count, Items, Whys, Calm, More, MoreHref). */}}
 <div class="grid-main">

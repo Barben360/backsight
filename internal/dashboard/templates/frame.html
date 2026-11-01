@@ -160,7 +160,8 @@
 
 {{define "cmd"}}<div class="cmd"><code>{{.}}</code><button class="copy" type="button" hidden><span class="i i-sm i-copy"></span>Copy</button></div>{{end}}
 
-{{define "card-close"}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a></div>
+{{define "card-close"}}{{if .Pager.Total}}<div class="pager">{{with .Pager.Prev}}<a href="{{.}}" rel="prev" class="btn">← Previous</a>{{end}}<span>{{.Pager.From}}–{{.Pager.To}} of {{.Pager.Total}}</span>{{with .Pager.Next}}<a href="{{.}}" rel="next" class="btn">Next →</a>{{end}}</div>
+{{end}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a></div>
 {{end}}</section>
 {{end}}
 
@@ -250,4 +251,35 @@
 {{/* choices: dot is a list of Choice. */}}
 {{define "choices"}}<p>{{range .}}{{template "navlink" .}}
 {{end}}</p>
+{{end}}
+
+{{/* tilegroups: dot is a list of TileGroup (Name, Tiles); Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev. */}}
+{{define "tilegroups"}}<div class="tgroups" aria-label="Key numbers">
+{{range .}}<section class="tgroup"><h2 class="tgroup-h">{{.Name}}</h2><div class="tgroup-tiles">
+{{range .Tiles}}<article class="tile {{.Class}}" aria-label="{{.Name}}">
+<div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
+{{if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
+{{template "info" .Head}}</div>
+{{with .Dev}}<span class="devid">{{.}}</span>
+{{end}}<p class="tile-q">{{.Question}}</p>
+<div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{with .CI}}<span class="ci">{{.}}</span>{{end}}</div>
+{{with .Sub}}<p class="tile-sub">{{.}}</p>
+{{end}}<div class="tile-st"><span class="st {{.WordClass}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}</div>
+{{with .Note}}<p class="tile-note">{{.}}</p>
+{{end}}{{.Spark}}
+<div class="tile-foot">{{if .Link}}<a href="{{.Link}}">{{.LinkText}}</a>{{end}}<span class="spacer"></span>{{template "cli" .Head}}</div>
+</article>
+{{end}}</div></section>
+{{end}}</div>{{end}}
+
+{{/* idlink: dot is a Ref of an id; projlink: dot is a Ref of a project. */}}
+{{define "idlink"}}{{if .Href}}<a class="idc" href="{{.Href}}" title="{{.Full}}">{{.Text}}</a>{{else}}<span class="idc" title="{{.Full}}">{{.Text}}</span>{{end}}{{end}}
+{{define "projlink"}}{{if .None}}<span class="muted">no project</span>{{else if .Href}}<a class="trunc" href="{{.Href}}" title="{{.Full}}">{{.Text}}</a>{{else}}<span class="trunc" title="{{.Full}}">{{.Text}}</span>{{end}}{{end}}
+
+{{/* sessions: dot is a SessionsTable (WhenHead, Rows: When, ID, Project, Prompts, Got, Shown, Used, Wrong, WrongClass, Context, Sent). */}}
+{{define "sessions"}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>{{.WhenHead}}</th><th>Session</th><th>Project</th><th class="r">Prompts</th><th class="r">Got memory</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th><th class="r">Context added</th><th>Sent</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{template "reltime" .When}}</td><td>{{template "idlink" .ID}}</td><td>{{template "projlink" .Project}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Got}}</td><td class="r">{{.Shown}}</td><td class="r">{{.Used}}</td><td class="r">{{if .WrongClass}}<span class="st {{.WrongClass}}">{{.Wrong}}</span>{{else}}{{.Wrong}}{{end}}</td><td class="r">{{.Context}}</td><td>{{if .Sent.Class}}<span class="st {{.Sent.Class}}">{{.Sent.Word}}</span>{{else}}<span class="muted">{{.Sent.Word}}</span>{{end}}</td></tr>
+{{end}}</tbody></table></div>
 {{end}}
