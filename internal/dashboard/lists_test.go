@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -724,6 +725,112 @@ func TestListPagesNameNoMetricInPlainMode(t *testing.T) {
 			}
 			if (len(named) > 0) != (dev && (page == "project" || page == "day")) {
 				t.Errorf("%s, dev %v: ids named %q", page, dev, named)
+			}
+		}
+	}
+}
+
+func TestDayPageStatesItsDay(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	days := apiPath(t, h, "/api/v1/days").Tables.Days
+	past := days[len(days)-1].Day
+	_, b := pageGet(t, h, ck, "/days/"+past)
+	n := parseHTML(t, b)
+	head := n.first("main div.page-head")
+	if head == nil || !strings.Contains(head.text(), "window: "+past) || strings.Contains(head.text(), "last 24 h") {
+		t.Errorf("day page head %v", head)
+	}
+	if len(n.find("nav.seg[aria-label=Window]")) != 0 {
+		t.Error("a day page offers a window")
+	}
+	// Other pages keep theirs.
+	for _, p := range []string{"/", "/sessions", "/days", "/projects"} {
+		_, b = pageGet(t, h, ck, p)
+		n = parseHTML(t, b)
+		if len(n.find("nav.seg[aria-label=Window]")) == 0 || n.first("main div.page-head span.muted") == nil ||
+			!strings.Contains(n.first("main div.page-head").text(), "window: last 7 days") {
+			t.Errorf("%s lost its window", p)
+		}
+	}
+}
+
+func TestSparkSpanIsTheDayPagesAlone(t *testing.T) {
+	r := goldenResult(t, "day-page") // hourly series, as any window of two days or less
+	v, _ := metricOf(r, "recall.hit_rate")
+	if got := sparkSpan(r, v); got != "per hour, that day" {
+		t.Errorf("day page: %q", got)
+	}
+	r.Tables.Day = nil
+	for _, days := range []int{1, 2} {
+		r.Window.Days = days
+		want := "per day, last " + strconv.Itoa(days) + " days"
+		if got := sparkSpan(r, v); got != want {
+			t.Errorf("a %d-day window: %q, want %q", days, got, want)
+		}
+	}
+}
+
+func TestSessionCounts(t *testing.T) {
+	for _, c := range []struct{ page, card string }{{"sessions", "w-sessions"}, {"day", "w-day-sessions"}} {
+		n := pageNode(t, c.page, false, func(d *PageData) {
+			view := map[string]string{"sessions": "sessions", "day": "days"}[c.page]
+			d.V[view].Tables.Page = &metrics.Page{Limit: 2, Total: 34}
+		})
+		if a := cardOf(t, n, c.card).first("div.card-head span.small"); a == nil || a.text() != "34 sessions" {
+			t.Errorf("%s: count %v", c.page, a)
+		}
+	}
+	n := pageNode(t, "day", false, func(d *PageData) { d.V["days"].Tables.Page = &metrics.Page{Total: 1} })
+	if a := cardOf(t, n, "w-day-sessions").first("div.card-head span.small"); a == nil || a.text() != "1 session" {
+		t.Errorf("one session: %v", a)
+	}
+}
+
+func TestDaySessionsStartAtAClockTimeAndLinkProjectsToTheDay(t *testing.T) {
+	n := pageNode(t, "day", false, func(d *PageData) {
+		d.P.TZ = "Europe/Paris"
+		d.V["days"].Tables.Day.Day = "2026-10-08"
+		d.V["days"].Tables.Day.Sessions[0].Start = time.Date(2026, 10, 8, 3, 0, 0, 0, parisZone())
+		d.V["days"].Tables.Day.Sessions[0].Project = "p1"
+	})
+	table := listTable(t, n)
+	rows, _ := bodyRows(table)
+	when := rows[0].find("td")[colOf(t, table, "Started")]
+	if when.text() != "03:00" || when.first("time") == nil {
+		t.Errorf("started %q", when.text())
+	}
+	a := rows[0].find("td")[colOf(t, table, "Project")].first("a")
+	if a == nil || a.attr("href") != "/projects/p1?since=2026-10-08&tz=Europe%2FParis&until=2026-10-09" {
+		t.Errorf("project link %v", a)
+	}
+	// A page of sessions elsewhere keeps its own window.
+	n = pageNode(t, "sessions", false, nil)
+	table = listTable(t, n)
+	rows, _ = bodyRows(table)
+	if a := rows[0].find("td")[colOf(t, table, "Project")].first("a"); a == nil || a.attr("href") != "/projects/p1?days=30" {
+		t.Errorf("sessions project link %v", a)
+	}
+}
+
+func TestProjectSparkLeavesOutTheCutFirstDay(t *testing.T) {
+	n := pageNode(t, "projects", false, func(d *PageData) {
+		d.V["projects"].Tables.Projects[0].Series = []metrics.Point{
+			{Day: "2026-10-01", Value: fp(99), Partial: true}, {Day: "2026-10-02", Value: fp(1)}, {Day: "2026-10-03", Value: fp(2)},
+		}
+	})
+	table := listTable(t, n)
+	rows, _ := bodyRows(table)
+	if got := rows[0].first("svg.spark").attr("aria-label"); got != "Prompts per day, p1: 1, 2" {
+		t.Errorf("spark label %q", got)
+	}
+}
+
+func TestFilterLabelsAreCapitalised(t *testing.T) {
+	for _, key := range []string{"has", "sort", "state"} {
+		for _, l := range filterLinks("/memories", key) {
+			if l.Label[:1] != strings.ToUpper(l.Label[:1]) {
+				t.Errorf("%s label %q", key, l.Label)
 			}
 		}
 	}

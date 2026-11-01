@@ -480,6 +480,14 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		s.withResult(&data, head)
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)
+			if spec.Name == "day" {
+				// The page is about one day: it states that day and offers no window.
+				data.Frame.Windows = nil
+				data.Frame.Window = id
+				if !head.Window.Since.IsZero() {
+					data.Frame.Window = head.Window.Since.In(zoneOr(head.Window.Loc)).Format("2006-01-02")
+				}
+			}
 		}
 		var buf bytes.Buffer
 		if err := s.tpl.pages[spec.Name].ExecuteTemplate(&buf, spec.File, data); err != nil {

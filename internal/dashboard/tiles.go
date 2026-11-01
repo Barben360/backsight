@@ -299,7 +299,7 @@ func tileNote(r *metrics.Result, s tileSpec, l format.Locale, loc *time.Location
 // sparkSpan says what a tile's spark spans: the hours of a day, or the
 // days of the window (7 when the result does not say).
 func sparkSpan(r *metrics.Result, v MetricView) string {
-	if len(v.M.Series) > 0 && v.M.Series[0].Hour != "" {
+	if r.Tables.Day != nil && len(v.M.Series) > 0 && v.M.Series[0].Hour != "" {
 		return "per hour, that day"
 	}
 	days := r.Window.Days

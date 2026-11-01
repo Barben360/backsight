@@ -550,7 +550,11 @@ func TestEmptyDayAndProjectLinks(t *testing.T) {
 				d.V["days"].Tables.Day.Sessions[0].Project = "my project"
 			}
 		})
-		if !strings.Contains(b, `<a class="trunc" href="/projects/my%20project" title="my project">my project</a>`) {
+		query := "" // the day page's links keep that day
+		if name == "day" {
+			query = "?since=2026-10-08&amp;until=2026-10-09"
+		}
+		if !strings.Contains(b, `<a class="trunc" href="/projects/my%20project`+query+`" title="my project">my project</a>`) {
 			t.Errorf("%s: project name not linked", name)
 		}
 	}

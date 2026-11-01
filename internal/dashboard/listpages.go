@@ -136,6 +136,14 @@ func (d PageData) sessionTable(now time.Time, rows []metrics.SessionRow, started
 	return t
 }
 
+// sessionCount is "34 sessions" from the view's page total; "" without one.
+func (d PageData) sessionCount(p *metrics.Page) string {
+	if p == nil {
+		return ""
+	}
+	return format.Count(d.L, int64(p.Total), "session", "sessions")
+}
+
 // SessionsCard is a card of sessions; Note says why there are none.
 type SessionsCard struct {
 	Head   Head
@@ -259,6 +267,7 @@ func sessionsOf(d PageData) SessionsPage {
 	c := SessionsCard{Head: fixedHead("sessions", "Sessions", "machine", d.CLI), Filter: filterLinks(d.Frame.Path, "has")}
 	c.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
 	c.Table = d.sessionTable(r.GeneratedAt, r.Tables.Sessions, false)
+	c.Head.Aside = d.sessionCount(r.Tables.Page)
 	if len(c.Table.Rows) == 0 {
 		c.Note = NoData{Text: "No session in this window."}
 		if d.P.Has != "" {
@@ -522,8 +531,12 @@ func dayOf(d PageData) DayPage {
 
 	pg.Sessions = SessionsCard{Head: fixedHead("day-sessions", "Sessions that day", "machine", d.CLI)}
 	pg.Sessions.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
+	pg.Sessions.Head.Aside = d.sessionCount(r.Tables.Page)
 	if t != nil {
-		pg.Sessions.Table = d.sessionTable(r.GeneratedAt, t.Sessions, true)
+		// Links to projects from here keep the day, not the page's window.
+		dd := d
+		dd.P = p
+		pg.Sessions.Table = dd.sessionTable(r.GeneratedAt, t.Sessions, true)
 	}
 	if len(pg.Sessions.Table.Rows) == 0 {
 		pg.Sessions.Note = NoData{Text: "No sessions that day."}
