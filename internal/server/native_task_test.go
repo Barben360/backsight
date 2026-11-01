@@ -841,6 +841,33 @@ func TestDeleteDropsPg0sEmptySkeleton(t *testing.T) {
 	}
 }
 
+// An aside the first install could move but not remove in pg0's own
+// installation\ (dropExtracted across volumes) goes with Delete, and the
+// skeleton with it; a directory of another name there stays.
+func TestDeleteDropsALeftDropAside(t *testing.T) {
+	for _, other := range []bool{false, true} {
+		h, f := taskFixture(t)
+		withHost(t, h)
+		pg0, _ := pg0Home()
+		aside := filepath.Join(pg0, "installation", ".backsight-drop-0123abcd")
+		touch(t, filepath.Join(aside, "bin", "postgres.exe"), 0o600)
+		mine := filepath.Join(pg0, "installation", "17.0.0")
+		if other {
+			touch(t, filepath.Join(mine, "bin", "postgres.exe"), 0o600)
+		}
+		f.registered = true
+		if err := h.n.Delete(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if exists(aside) {
+			t.Errorf("other installation %v: the aside %s stays", other, aside)
+		}
+		if other != exists(mine) || other != exists(pg0) {
+			t.Errorf("other installation %v: kept %v, .pg0 kept %v", other, exists(mine), exists(pg0))
+		}
+	}
+}
+
 // A retried delete (the files gone after a failed /Delete), or files
 // removed by hand: the task is still disabled, the supervisor stopped and
 // the task unregistered before Root goes, never orphaned.

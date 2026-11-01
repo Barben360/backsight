@@ -385,6 +385,8 @@ func TestFirstInstallCopiesPostgresAndForgetsPg0sInstance(t *testing.T) {
 		n, tools, pg0dir := winInstall(t)
 		pgInstallation(t, n.installation())
 		touch(t, filepath.Join(n.installation(), pgUnpacked), 0o644)
+		// An earlier run's aside it could move but not remove goes too.
+		touch(t, filepath.Join(pg0dir, "installation", ".backsight-drop-0123abcd", "bin", "postgres.exe"), 0o644)
 		old := renameDir
 		renameDir = func(from, to string) error {
 			if strings.HasPrefix(from, pg0dir) != strings.HasPrefix(to, pg0dir) {

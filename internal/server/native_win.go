@@ -36,9 +36,26 @@ func (n Native) dropPg0Skeleton() {
 	if err != nil {
 		return
 	}
+	n.dropAsides(dir)
 	for _, d := range []string{n.join(dir, "installation"), n.join(dir, "instances"), dir} {
 		if ents, err := os.ReadDir(d); err == nil && len(ents) == 0 {
 			_ = os.Remove(d)
+		}
+	}
+}
+
+// dropAside starts the name of an installation dropExtracted moved aside
+// in pg0's installation\ (across volumes): backsight's by that name.
+const dropAside = ".backsight-drop-"
+
+// dropAsides removes the asides an earlier dropExtracted moved but could
+// not remove (a file still held): the next first install and Delete try
+// again, so none stays in the user's .pg0.
+func (n Native) dropAsides(pg0dir string) {
+	ents, _ := os.ReadDir(n.join(pg0dir, "installation"))
+	for _, e := range ents {
+		if e.IsDir() && strings.HasPrefix(e.Name(), dropAside) {
+			_ = removeAllRetry(n.join(pg0dir, "installation", e.Name()))
 		}
 	}
 }
@@ -318,8 +335,9 @@ func (n Native) finishInstance(pg0dir, inst, v string) error {
 // Root() is on another volume than the user's profile (BACKSIGHT_HOME on
 // D:, which no rename reaches), beside it in pg0's installation\.
 func (n Native) dropExtracted(pg0dir string) {
+	n.dropAsides(pg0dir)
 	src := n.join(pg0dir, "installation", nativelock.PGInstallation)
-	for _, aside := range []string{n.join(n.Root(), "tmp", "pg0-installation-"+randHex()), n.join(pg0dir, "installation", ".backsight-drop-"+randHex())} {
+	for _, aside := range []string{n.join(n.Root(), "tmp", "pg0-installation-"+randHex()), n.join(pg0dir, "installation", dropAside+randHex())} {
 		err := renameDir(src, aside)
 		if err == nil {
 			_ = removeAllRetry(aside)
