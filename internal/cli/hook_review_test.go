@@ -242,8 +242,15 @@ func TestHooksUpdateStateWhileAFlushHoldsTheSession(t *testing.T) {
 	}
 }
 
+// Parallel PostToolUse hooks never lose an update: each waits its turn of
+// the session lock. The wait's bound is the test's own, far past the queue:
+// how many fsync'd writes fit in the product's 1 s is the disk's speed
+// (windows-latest once kept 7 of 8).
 func TestParallelToolHooksKeepEveryStore(t *testing.T) {
 	home := hookHome(t)
+	old := postToolUseLockWait
+	postToolUseLockWait = time.Minute
+	t.Cleanup(func() { postToolUseLockWait = old })
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
