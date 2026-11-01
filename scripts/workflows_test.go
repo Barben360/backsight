@@ -5,8 +5,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // workflow is one file of .github/workflows, cut along its YAML indent:
@@ -126,8 +129,14 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 			for _, m := range runsOn.FindAllStringSubmatch(j.raw, -1) {
 				on = append(on, m[1])
 			}
-			if len(on) != 1 || on[0] != "ubuntu-latest" {
-				t.Errorf("%s job %s: runs-on %q, want ubuntu-latest only", w.name, j.name, on)
+			// The unit tests and the native chain run on Windows too (M7
+			// block 2); every other job is Linux's.
+			want := "ubuntu-latest"
+			if w.name == "ci.yml" && (j.name == "test-windows" || j.name == "native-chain-windows") {
+				want = "windows-latest"
+			}
+			if len(on) != 1 || on[0] != want {
+				t.Errorf("%s job %s: runs-on %q, want %s only", w.name, j.name, on, want)
 			}
 			for _, u := range uses.FindAllStringSubmatch(j.raw, -1) {
 				actions++
@@ -406,6 +415,7 @@ func releaseNotesStep(t *testing.T) (check, goreleaser string, order []int) {
 // goreleaser's list of commit subjects, and a tag without them, or without
 // its row in docs/compatibility.md, stops before anything is built.
 func TestReleasePublishesHandWrittenNotes(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	check, goreleaser, order := releaseNotesStep(t)
 	if len(order) != 2 || order[0] > order[1] {
 		t.Errorf("release.yml: the notes check must come before goreleaser (steps %v)", order)
@@ -467,6 +477,7 @@ func TestReleasePublishesHandWrittenNotes(t *testing.T) {
 // run replaced the first's draft under its uploads), nor touch a release
 // already published.
 func TestReleaseRunsOnceATag(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	raw, err := os.ReadFile("../.github/workflows/release.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -535,4 +546,39 @@ func TestWorkflowsBoundEveryJob(t *testing.T) {
 	if jobs < 7 || minisign < 4 {
 		t.Errorf("%d jobs and %d ci-minisign.sh steps found, want the 7 jobs and the 4 minisign installs: the check proves nothing", jobs, minisign)
 	}
+}
+
+// ci.yml runs the whole unit-test suite on Windows (M7 block 2): the job
+// exists and runs `go test ./...` uncached, whatever else it does, with
+// the time budgets' files on the runner's local disk (Task 12b).
+func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
+	for _, w := range workflows(t) {
+		if w.name != "ci.yml" {
+			continue
+		}
+		for _, j := range w.jobs {
+			if j.name != "test-windows" {
+				continue
+			}
+			if !strings.Contains(j.raw, "runs-on: windows-latest") || !strings.Contains(j.raw, "- run: go test ./... -count=1") {
+				t.Errorf("ci.yml job test-windows does not run go test ./... -count=1 on windows-latest:\n%s", j.raw)
+			}
+			// internal/cli runs about 10 minutes there: go test's default
+			// bound per package would cut it.
+			if m := regexp.MustCompile(`go test \./\.\.\. -count=1 -timeout (\d+)m\b`).FindStringSubmatch(j.raw); m == nil || atoi(m[1]) < 15 {
+				t.Errorf("ci.yml job test-windows does not give go test a timeout of 15 minutes or more (-timeout <n>m):\n%s", j.raw)
+			}
+			if !strings.Contains(j.raw, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
+				t.Errorf("ci.yml job test-windows does not put the time budgets' files on the runner's local disk (BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}):\n%s", j.raw)
+			}
+			return
+		}
+	}
+	t.Error("ci.yml has no test-windows job")
+}
+
+// atoi is s as a number, 0 when it is not one.
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }

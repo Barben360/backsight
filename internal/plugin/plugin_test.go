@@ -302,6 +302,7 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 // skills carry the shim as one single-quoted shell word, in their commands
 // and in allowed-tools alike.
 func TestSkillsQuoteAShimThatNeedsIt(t *testing.T) {
+	withTarget(t, "linux") // Windows' forward slashes: skills_shim_test.go
 	for shim, word := range map[string]string{
 		"/Users/a/Library/Application Support/backsight/bin/current": "'/Users/a/Library/Application Support/backsight/bin/current'",
 		`C:\Users\a\AppData\Local\backsight\bin\current.exe`:         `'C:\Users\a\AppData\Local\backsight\bin\current.exe'`,

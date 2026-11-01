@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/report"
 	"github.com/Barben360/backsight/internal/target"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // reportPlant is what a report must never show, planted where a real
@@ -64,7 +66,7 @@ func plantedMachine(t *testing.T) reportPlant {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 
 	d := pathsOf(home)
 	now := time.Now().UTC()
@@ -92,7 +94,8 @@ func plantedMachine(t *testing.T) reportPlant {
 	_ = os.MkdirAll(d.SessionsDir(), 0o700)
 	_ = os.WriteFile(filepath.Join(d.SessionsDir(), "s1.json"), []byte(`{"last_prompt":"`+p.prompt+`"}`), 0o600)
 	// A failed update check that quotes the home and the secret.
-	_ = os.WriteFile(d.StateFile(), []byte(`{"schema_version":1,"plugin_version":"0.9.1","update_check":{"checked_at":"`+now.Format(time.RFC3339)+`","error":"reading `+home+`/.config/gh/hosts.yml: oauth_token: `+p.secret+`"}}`), 0o600)
+	checkErr, _ := json.Marshal("reading " + home + "/.config/gh/hosts.yml: oauth_token: " + p.secret) // a Windows home holds backslashes
+	_ = os.WriteFile(d.StateFile(), []byte(`{"schema_version":1,"plugin_version":"0.9.1","update_check":{"checked_at":"`+now.Format(time.RFC3339)+`","error":`+string(checkErr)+`}}`), 0o600)
 	return p
 }
 
@@ -158,7 +161,7 @@ func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
 	p := plantedMachine(t)
 	assertScrubbed(t, map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
 		"host": "annsbox", "project": "ann-secret-project"},
-		[]string{"[redacted:", "~/backsight/config/config.toml", "~/work/<host>/state.json", "worker backsight-<host>", "[server answer omitted]",
+		[]string{"[redacted:", testtool.JSONPath(filepath.Join("~", "backsight", "config", "config.toml")), "~/work/<host>/state.json", "worker backsight-<host>", "[server answer omitted]",
 			"doctor/server/error", "hook_failure/prompt/timeout", "recall/scope_failed", "session_state_error", "job/tick/partial"})
 }
 
@@ -219,7 +222,10 @@ func TestReportJSONLinksAndSendsNothing(t *testing.T) {
 	}
 }
 
-// tree lists every file under dir with its size and modification time.
+// tree lists every file under dir with its size and modification time,
+// and every directory. A directory's time is left out: NTFS updates it in
+// its parent's listing lazily, after the files made in it, so it moves on
+// Windows with nobody writing.
 func tree(t *testing.T, dir string) string {
 	t.Helper()
 	var b strings.Builder
@@ -231,10 +237,11 @@ func tree(t *testing.T, dir string) string {
 		if err != nil {
 			return err
 		}
-		b.WriteString(p + " " + fi.Mode().String() + " " + fi.ModTime().String() + "\n")
-		if !d.IsDir() {
-			b.WriteString(itoa(int(fi.Size())) + "\n")
+		if d.IsDir() {
+			b.WriteString(p + " " + fi.Mode().String() + "\n")
+			return nil
 		}
+		b.WriteString(p + " " + fi.Mode().String() + " " + fi.ModTime().String() + "\n" + itoa(int(fi.Size())) + "\n")
 		return nil
 	})
 	return b.String()
@@ -255,7 +262,7 @@ func TestReportHidesTheBankName(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"ann-private-notes\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"ann-private-notes\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 	code, out, _ := run(t, "report")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -376,7 +383,7 @@ func TestReportHidesTheEscapedBankAndAMultiLineAnswer(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 	assertScrubbed(t, map[string]string{"bank": "coding-agent::memoire", "memory": memory, "memory word": "quokkatrellis"},
 		[]string{"/v1/default/banks/<bank>/stats: HTTP 500", "cannot read bank <bank>"})
 	if c := reportCheck(reportJSON(t), "bank"); !strings.HasSuffix(c.Detail, "HTTP 500 (server_error): [server answer omitted]") {
@@ -391,7 +398,7 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 	ext := t.TempDir()
 	bs := filepath.Join(ext, "run", "media", "annuser", "bs")
 	t.Setenv("BACKSIGHT_HOME", bs)
-	d, err := paths.Resolve("linux", home, os.Getenv)
+	d, err := paths.Resolve(runtime.GOOS, home, os.Getenv)
 	if err != nil || d.Data != filepath.Join(bs, "data") {
 		t.Fatalf("dirs %+v, %v", d, err)
 	}
@@ -402,8 +409,8 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 
 	_ = os.MkdirAll(d.Config, 0o700)
 	_ = os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
-		"\n[backup]\ndir = \""+vault+"\"\n"), 0o600)
-	_ = os.WriteFile(d.SecretsFile(), []byte("api_key = \""+tomlKey+"\"\nllm_api_key = \""+phrase+"\"\n"), 0o600)
+		"\n[backup]\ndir = "+testtool.TOMLStr(vault)+"\n"), 0o600)
+	_ = os.WriteFile(d.SecretsFile(), []byte("api_key = "+testtool.TOMLStr(tomlKey)+"\nllm_api_key = "+testtool.TOMLStr(phrase)+"\n"), 0o600)
 	_ = os.MkdirAll(filepath.Join(d.Data, "server"), 0o700)
 	_ = os.WriteFile(filepath.Join(d.Data, "server", ".env"), []byte("# old render\nHINDSIGHT_API_TENANT_API_KEY='"+envKey+"'\nHINDSIGHT_API_LLM_PROVIDER=openai\n"), 0o600)
 
@@ -425,7 +432,7 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 
 	assertScrubbed(t, map[string]string{"user": "annuser", "temp dir": ext, "BACKSIGHT_HOME": bs, "backup dir": vault,
 		"secrets.toml key": tomlKey, "secrets.toml phrase": phrase, ".env key": envKey},
-		[]string{"<config>/config.toml", "no backup in <backups>", "/run/media/<user>/usb/notes.json on <user>-laptop", "<state>/sessions/a.json and <bin>/backsight",
+		[]string{testtool.JSONPath(filepath.Join("<config>", "config.toml")), "no backup in <backups>", "/run/media/<user>/usb/notes.json on <user>-laptop", "<state>/sessions/a.json and <bin>/backsight",
 			"copy to <backups>/x.tar", "dial [redacted:secret]: refused", "lookup [redacted:secret]: no such host", "stat [redacted:secret]: gone"})
 }
 
@@ -520,7 +527,7 @@ func localProjects(t *testing.T, home string, serverOnly ...string) []string {
 	put(filepath.Join(d.SessionsDir(), "s1.json"), `{"project":"brambleway","injected":[{"id":"m1","project":"fernhollow"}]}`)
 	repo := filepath.Join(home, "work", "mg")
 	put(filepath.Join(repo, ".backsight.toml"), "project = \"mossgarden\"\nrelated = [\"tidewater\"]\n")
-	put(filepath.Join(d.SessionsDir(), "by-pid", "4242.json"), `{"session_id":"s1","cwd":"`+repo+`","project":"brambleway"}`)
+	put(filepath.Join(d.SessionsDir(), "by-pid", "4242.json"), `{"session_id":"s1","cwd":"`+testtool.JSONPath(repo)+`","project":"brambleway"}`)
 	put(filepath.Join(d.CursorsDir(), "s9.json"), `{"transcript":"","document":"conversation:s9@cinderfield","home":"emberlane","segments":{"cinderfield":1,"emberlane":2}}`)
 	names := []string{"brambleway", "fernhollow", "mossgarden", "tidewater", "cinderfield", "emberlane", "quillpond"}
 	ts := time.Now().UTC().Add(-time.Hour)
@@ -585,7 +592,7 @@ func TestReportHidesEveryKnownProjectName(t *testing.T) {
 	withClaude(t)
 	url := projectBank(t, "ann-memory", "project:workspace", "project:.claude", "project:lanternfish", "project:saltmarsh", "project:ops")
 	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+url+"\"\nbank = \"ann-memory\"\nui_port = "+itoa(closedPort(t))+
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(url)+"\nbank = \"ann-memory\"\nui_port = "+itoa(closedPort(t))+
 		"\n[projects]\ntransverse = [\"workspace\", \".claude\"]\n"), 0o600)
 	names := localProjects(t, home, "saltmarsh", "--project ops")
 	// doctor's remotes check names a short project: two repositories share api.
@@ -648,7 +655,7 @@ func TestReportHidesLiveRecordProjectsWithoutTransverse(t *testing.T) {
 	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
 		"\n[projects]\ntransverse = []\n"), 0o600)
 	localProjects(t, home)
-	_ = os.WriteFile(filepath.Join(pathsOf(home).SessionsDir(), "by-pid", "4343.json"), []byte(`{"session_id":"s2","cwd":"`+home+`"}`), 0o600)
+	_ = os.WriteFile(filepath.Join(pathsOf(home).SessionsDir(), "by-pid", "4343.json"), []byte(`{"session_id":"s2","cwd":"`+testtool.JSONPath(home)+`"}`), 0o600)
 	assertScrubbed(t, map[string]string{"project from .backsight.toml": "mossgarden", "related from .backsight.toml": "tidewater"},
 		[]string{"flush of <project>, <project>, <project>, <project>,"})
 }

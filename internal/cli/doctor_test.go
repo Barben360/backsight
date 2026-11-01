@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +25,8 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // isolatedEnv are the variables of the shell running the tests (a hook,
@@ -30,7 +34,7 @@ import (
 // the real machine; isolate unsets them.
 var isolatedEnv = []string{
 	"BACKSIGHT_STATE_DIR", "BACKSIGHT_SESSION", "BACKSIGHT_PROJECT", "CLAUDE_ENV_FILE", "DOCKER_HOST", claudePIDEnv,
-	updateLockEnv, "BACKSIGHT_HOOK_CHAOS", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+	updateLockEnv, "BACKSIGHT_HOOK_CHAOS", "BACKSIGHT_HOOK_KILL_AT", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
 }
 
 // unsetMachineEnv unsets isolatedEnv for the test (t.Setenv restores it).
@@ -49,7 +53,7 @@ func isolate(t *testing.T) string {
 	home := t.TempDir()
 	unsetMachineEnv(t)
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
-	t.Setenv("HOME", home)
+	testtool.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	old := probes
 	probes = func(e *doctor.Env) {
@@ -352,6 +356,7 @@ func doctorChecks(t *testing.T) (int, map[string]doctor.Check) {
 // only reads: no unit started or stopped, no stray stopped, nothing
 // written under the native directory.
 func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	_, n, tools, _, _ := nativeHost(t)
 	sys := &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
 	nativeSys = sys
@@ -530,4 +535,156 @@ func TestDoctorUsesTheSwitchsKeptSize(t *testing.T) {
 			t.Errorf("not the switch's size:\n%s", out)
 		}
 	})
+}
+
+// taskSys answers schtasks /Query /XML with a task enabled or not (its
+// XML, never the localized text) and records every call.
+type taskSys struct {
+	calls    []string
+	disabled bool
+	missing  bool
+}
+
+func (s *taskSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	line := name + " " + strings.Join(args, " ")
+	s.calls = append(s.calls, line)
+	if strings.HasPrefix(line, "schtasks /Query ") {
+		if s.missing {
+			return []byte("ERROR: The system cannot find the file specified."), errors.New("exit status 1")
+		}
+		enabled := map[bool]string{true: "false", false: "true"}[s.disabled]
+		return []byte("<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>" +
+			"<Settings><StartWhenAvailable>true</StartWhenAvailable><Enabled>" + enabled + "</Enabled></Settings></Task>\n"), nil
+	}
+	return nil, fmt.Errorf("doctor ran %s", line)
+}
+
+// Doctor on a native Windows install (decision 0080) reads the task from
+// its XML, the supervisor from its pipe and the DACLs of what holds the
+// secrets, and asks neither systemd nor loginctl; read-only: schtasks
+// /Query alone, and status alone on the pipe.
+func TestDoctorOnWindowsReadsTheTaskAndTheSupervisor(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	raw, _ := os.ReadFile(d.ConfigFile())
+	raw, _ = config.SetRuntime(raw, "native")
+	if err := os.WriteFile(d.ConfigFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(d.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sys := &taskSys{disabled: true}
+	var ops []string
+	oldOS, oldSys, oldAsk, oldReaders, oldProc := nativeGOOS, nativeSys, nativeAsk, otherReaders, nativeProc
+	nativeGOOS, nativeSys, nativeProc = "windows", sys, t.TempDir()
+	nativeAsk = func(_ context.Context, project, op string) (supervise.Status, error) {
+		ops = append(ops, project+" "+op)
+		return supervise.Status{}, supervise.ErrNotRunning
+	}
+	read := map[string]bool{}
+	otherReaders = func(p string) ([]string, error) {
+		read[p] = true
+		if p == d.SecretsFile() {
+			return []string{`BUILTIN\Users`}, nil
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		nativeGOOS, nativeSys, nativeAsk, otherReaders, nativeProc = oldOS, oldSys, oldAsk, oldReaders, oldProc
+	})
+	// The last supervisor's refusal, which doctor reads with none answering.
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := runtimeFor(cfg).(server.Native).Root()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "refused"), []byte("the instance is empty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, c := doctorChecks(t)
+	if c["native-task"].Status != doctor.Info || !strings.Contains(c["native-task"].Summary, `\backsight\server is disabled`) {
+		t.Errorf("native-task: %+v", c["native-task"])
+	}
+	if c["supervisor"].Status != doctor.Info || !strings.Contains(c["supervisor"].Summary, "stopped") ||
+		!strings.Contains(c["supervisor"].Summary, "refused to start the database: the instance is empty") {
+		t.Errorf("supervisor: %+v, want stopped and the last run's refusal", c["supervisor"])
+	}
+	if c["native-private"].Status != doctor.Error || !strings.Contains(c["native-private"].Summary, d.SecretsFile()+` can be read by BUILTIN\Users`) {
+		t.Errorf("native-private: %+v", c["native-private"])
+	}
+	for _, p := range []string{d.Data, d.Config, d.SecretsFile()} {
+		if !read[p] {
+			t.Errorf("the DACL of %s was not read: %v", p, read)
+		}
+	}
+	if !strings.Contains(c["native-dlls"].Summary, "dlls.json") {
+		t.Errorf("native-dlls: %+v", c["native-dlls"])
+	}
+	for _, id := range []string{"native-unit", "native-linger"} {
+		if _, ok := c[id]; ok {
+			t.Errorf("%s on Windows: %+v", id, c[id])
+		}
+	}
+	for _, call := range sys.calls {
+		if !strings.HasPrefix(call, "schtasks /Query /TN \\backsight\\server /XML") {
+			t.Errorf("doctor ran %q", call)
+		}
+	}
+	if len(sys.calls) == 0 {
+		t.Error("doctor never read the task")
+	}
+	for _, op := range ops {
+		if op != "backsight status" {
+			t.Errorf("doctor asked the supervisor %q", op)
+		}
+	}
+
+	// The task enabled and the supervisor answering: both ok.
+	sys.disabled = false
+	nativeAsk = func(context.Context, string, string) (supervise.Status, error) {
+		return supervise.Status{Proto: supervise.Proto, Version: "dev", PID: 77, DB: "running", API: "running"}, nil
+	}
+	_, c = doctorChecks(t)
+	if c["native-task"].Status != doctor.OK || c["supervisor"].Status != doctor.OK || !strings.Contains(c["supervisor"].Summary, "pid 77") {
+		t.Errorf("native-task %+v\nsupervisor %+v", c["native-task"], c["supervisor"])
+	}
+	// The task gone: an error with its fix.
+	sys.missing = true
+	if _, c = doctorChecks(t); c["native-task"].Status != doctor.Error || c["native-task"].Fix != "backsight server start" {
+		t.Errorf("native-task missing: %+v", c["native-task"])
+	}
+}
+
+// Doctor on Windows counts the shim's current.exe.old-<n> a swap left
+// (decision 0080): information, never a fault; another name beside the
+// shim is not one of them. Elsewhere there is no such check (the Linux
+// check list is unchanged).
+func TestDoctorCountsTheShimsEarlierCopiesOnWindows(t *testing.T) {
+	home := devInstall(t, true)
+	bin := filepath.Join(pathsOf(home).Data, "bin")
+	_ = os.MkdirAll(bin, 0o700)
+	for _, n := range []string{"current.exe", "current.exe.old-1", "current.exe.old-12", "current.exe.old-x", "current.exe.old-"} {
+		if err := os.WriteFile(filepath.Join(bin, n), []byte("MZ"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, c := doctorChecks(t); runtime.GOOS != "windows" {
+		if _, ok := c["shim-copies"]; ok {
+			t.Errorf("a shim-copies check on %s: %+v", runtime.GOOS, c["shim-copies"])
+		}
+	}
+	old := doctorGOOS
+	doctorGOOS = "windows"
+	t.Cleanup(func() { doctorGOOS = old })
+	_, c := doctorChecks(t)
+	got := c["shim-copies"]
+	if got.Status != doctor.Info || !strings.HasPrefix(got.Summary, "2 earlier copies") ||
+		got.Detail != filepath.Join(bin, "current.exe.old-1")+", "+filepath.Join(bin, "current.exe.old-12") {
+		t.Errorf("shim-copies %+v", got)
+	}
 }

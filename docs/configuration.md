@@ -4,11 +4,11 @@ Every key of `config.toml`, its default and what it does. Setup writes the file;
 
 ## The file
 
-`config.toml` lives in backsight's config directory (`~/.config/backsight` on Linux; `backsight paths` prints it). Keys you leave out take their default. Unknown keys and invalid values are refused with the key's name, so a typo never goes unnoticed: `backsight doctor` reports it on its `config` line.
+`config.toml` lives in backsight's config directory (`~/.config/backsight` on Linux, `%LOCALAPPDATA%\backsight\config` on Windows; `backsight paths` prints it). Keys you leave out take their default. Unknown keys and invalid values are refused with the key's name, so a typo never goes unnoticed: `backsight doctor` reports it on its `config` line.
 
 Secrets are not in this file: they live in `secrets.toml` next to it, set with `backsight secret set <name>` (see [install.md](install.md#secrets)).
 
-Defaults below are written in TOML. `<data>` stands for backsight's data directory (`~/.local/share/backsight` on Linux) and `<user>` for the name of your home directory.
+Defaults below are written in TOML. `<data>` stands for backsight's data directory (`~/.local/share/backsight` on Linux, `%LOCALAPPDATA%\backsight` on Windows) and `<user>` for the name of your home directory.
 
 ## When a change applies
 
@@ -31,13 +31,14 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 |---|---|---|
 | `server.url` | `"http://127.0.0.1:8888"` | The server's API address. With `server.mode = "local"`, its port is the API port the server publishes, and it must be explicit. |
 | `server.bank` | `"claude-memory"` | The [bank](glossary.md#bank) that holds your memory. Setup writes `"backsight"` for a new install; without the key the bank is `claude-memory`, the name of installs before v0.1.4-m5, which `backsight bank rename` moves to `backsight` (the update to v0.1.4-m5 does it). backsight also uses `<bank>-docs` for these docs and `<bank>-control` for its own records. |
-| `server.mode` | `"local"` | `"local"`: backsight runs the server in Docker on this machine and manages it. `"remote"`: you run the server elsewhere; backsight only talks to `server.url`, and the commands that manage a local server or write its banks refuse ([the list](commands.md#server)). `backsight connect` sets it, with `server.url` and `server.bank`, from the token of the server's host ([several PCs](several-pcs.md)). |
+| `server.mode` | `"local"` | `"local"`: backsight runs the server on this machine, in Docker or natively (`server.runtime`), and manages it. `"remote"`: you run the server elsewhere; backsight only talks to `server.url`, and the commands that manage a local server or write its banks refuse ([the list](commands.md#server)). `backsight connect` sets it, with `server.url` and `server.bank`, from the token of the server's host ([several PCs](several-pcs.md)). |
 | `server.role` | `"both"` | `"both"`: this PC runs Claude Code, and its server too when `server.mode = "local"`. `"server"`: a host that only serves the memory, without Claude Code; `backsight setup --role server` sets it (see [install](install.md#a-server-only-host) and [several PCs](several-pcs.md#choose-the-host)); it needs `server.mode = "local"`. |
 | `server.ui_port` | `9999` | Port of the Hindsight web UI, on the same address as the API. Must differ from the API port. |
 | `server.compose_dir` | `"<data>/server"` | Where the server's `compose.yaml`, `.env` and your own `compose.override.yaml` live. An absolute path. |
-| `server.project` | `"backsight"` | The Docker Compose project name, and the prefix of the server's volumes. Another name runs a second install beside the first (lowercase letters, digits, `-` and `_`). |
+| `server.project` | `"backsight"` | The Docker Compose project name, and the prefix of the server's volumes; on the native runtime, the prefix of its units (Linux), of its scheduled tasks' folder `\<project>` and of its log files (Windows). Another name runs a second install beside the first (lowercase letters, digits, `-` and `_`). |
 | `server.digest` | `""` | Empty: the Hindsight image this release pins ([compatibility.md](compatibility.md)). A `sha256:…` digest holds another image of `ghcr.io/vectorize-io/hindsight`; you then own that choice. |
-| `server.runtime` | `""` | What runs the server when `server.mode = "local"`. Empty (or `"docker"`): Docker Compose, the default. `"native"`: Hindsight from PyPI on pg0's Postgres, under two systemd user units (`<project>-db.service` and `<project>-server.service`), everything else under `<server.compose_dir>/native`. Native runs on Linux x86_64 (linux-amd64) only, and serves this PC only (loopback: `network.exposure = "private"` and `server.role = "server"` are refused with it). Setup sets it, or switching the runtime of an existing install, which moves the memory across; never set it by hand. |
+| `server.runtime` | `""` | What runs the server when `server.mode = "local"`. Empty (or `"docker"`): Docker Compose, the default (setup writes `"native"` on Windows x86_64, where native is its default). `"native"`: Hindsight from PyPI on pg0's Postgres, under two systemd user units (`<project>-db.service` and `<project>-server.service`), everything else under `<server.compose_dir>/native`. Native runs on Linux x86_64 and Windows x86_64 only (on Windows, a scheduled task and backsight's supervisor instead of the units: [backsight on Windows](windows.md)), and serves this PC only (loopback: `network.exposure = "private"` and `server.role = "server"` are refused with it). Setup sets it, or switching the runtime of an existing install, which moves the memory across; never set it by hand. |
+| `server.start_on_session` | `false` | Windows, native runtime: each Claude Code session (its SessionStart hook) starts the server's supervisor when none answers, without waiting for it. Setup sets it only when Task Scheduler refused the server's scheduled task (its `task` pre-flight check), and removes it when a later setup's probe passes; the task otherwise starts the server at logon. With it, `backsight server start` starts the supervisor without the task; after `backsight server stop`, sessions leave the server down until `backsight server start`. Ignored elsewhere. |
 
 ## `[client]`: Claude Code's own settings
 

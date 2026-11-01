@@ -58,22 +58,39 @@ type creditArgs struct {
 
 // live is the session and project of the Claude Code session this server
 // belongs to, from the record its hooks keep under its parent pid
-// (decision 0056), and how it was found: "record", "stale" (written before
-// the parent started: a reused pid) or "none". Without a current record,
-// the start directory and no session.
+// (decision 0056), else, when Claude Code's process tree does not pair
+// them (decision 0080), from the record they keep under the session id
+// Claude Code gave this server; and how it was found: "record", "session"
+// (by the session id), "stale" (written before the parent started: a
+// reused pid, a previous run) or "none". Without a current record, the
+// start directory and no session.
 func (d mcpDeps) live() (session.Live, string) {
 	found := "none"
+	current := func(l session.Live) bool { return d.parentStart.IsZero() || !l.At.Before(d.parentStart) }
 	if d.parentPID > 1 {
 		if l, ok := session.ReadLive(d.dirs.SessionsDir(), d.parentPID); ok {
-			if d.parentStart.IsZero() || !l.At.Before(d.parentStart) {
+			if current(l) {
 				return l, "record"
 			}
 			found = "stale"
 		}
 	}
+	if l, ok := session.ReadLiveSession(d.dirs.SessionsDir(), d.sessionID); ok {
+		if current(l) {
+			return l, "session"
+		}
+		found = "stale"
+	}
 	cwd, _ := os.Getwd()
 	return session.Live{Cwd: cwd, Project: d.current}, found
 }
+
+// paired: live found this server's session, by its parent pid or by the
+// session id. The id is the one of the session the server was spawned
+// for: after a /clear it names the previous one. Only what is bounded to
+// that session's own shows takes it (memory_credit, memory_read's short
+// ids); a pause and the recall audit trust the pid record alone.
+func paired(found string) bool { return found == "record" || found == "session" }
 
 // freshPrivacy is the server's config with the privacy and components
 // sections read again: a pause --project or an opt-out taken during the
@@ -181,6 +198,10 @@ type mcpDeps struct {
 	parentPID   int       // the Claude Code process that started this server
 	parentStart time.Time // when it started; zero when the system cannot tell
 	generation  int       // the sends generation, read before cfg (sendsGeneration)
+	// sessionID is the session Claude Code started this server for
+	// (CLAUDE_CODE_SESSION_ID), the fallback key when no record is
+	// under parentPID; "" when not given.
+	sessionID string
 }
 
 func textResult(s string) *mcp.CallToolResult {
@@ -269,7 +290,10 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			err := checkNote(deps.dirs, deps.home, cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text)
 			if err == nil && found != "record" && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
 				// Without its session this server cannot honour a pause:
-				// while one is on, it fails closed.
+				// while one is on, it fails closed. A pairing by the
+				// session id is no proof either: the id is the one Claude
+				// Code gave at spawn, and after a /clear the session that
+				// runs (and may be paused) is another.
 				err = errors.New("not stored: a session is paused and this server cannot tell which session it belongs to (no current hook record); resume it, or store from the shell with backsight store")
 			}
 			var proj string
@@ -379,7 +403,7 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 		return "", errors.New(`verdict: "used", "none", "wrong" or "outdated"`)
 	}
 	live, found := d.live()
-	if found != "record" {
+	if !paired(found) {
 		return "", errors.New("memory session not ready: call memory_credit again")
 	}
 	if verdict == "none" {
@@ -536,7 +560,7 @@ func retirementsInSession(d paths.Dirs, sess string) int {
 // else the ref itself (a full id needs no show).
 func (d mcpDeps) readID(ref string) (string, error) {
 	live, found := d.live()
-	if found != "record" || fullUUIDRE.MatchString(ref) {
+	if !paired(found) || fullUUIDRE.MatchString(ref) {
 		return ref, nil
 	}
 	id, err := feedback.Resolve(ref, shownInSession(d.dirs, live.SessionID))
@@ -608,7 +632,8 @@ func newMCPCmd() *cobra.Command {
 			tw := telemetry.New(d.State, telemetry.Common{V: instructions.Version, Project: current, BinaryVersion: buildinfo.Version})
 			ppid := os.Getppid()
 			pstart, _ := session.ProcessStart(ppid)
-			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation})
+			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation,
+				sessionID: os.Getenv("CLAUDE_CODE_SESSION_ID")})
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}

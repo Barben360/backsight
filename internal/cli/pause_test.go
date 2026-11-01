@@ -10,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestHooksRecordTheLiveSessionUnderClaudesPID(t *testing.T) {
@@ -64,7 +65,7 @@ func TestPauseProjectEditsTheExcludePaths(t *testing.T) {
 	}
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
-	if !strings.Contains(string(raw), `exclude_paths = ["`+dir+`"]`) {
+	if !strings.Contains(string(raw), `exclude_paths = [`+testtool.TOMLStr(dir)+`]`) {
 		t.Fatalf("config:\n%s", raw)
 	}
 	if code, _, errOut := run(t, "store", "--kind", "decision", "secret plan"); code != output.Blocked || !strings.Contains(errOut, "excluded from memory") {
@@ -83,6 +84,7 @@ func TestPauseProjectKeepsTheListAndUsesTheRepoRoot(t *testing.T) {
 	home := devInstall(t, true)
 	repo := filepath.Join(home, "work", "billing")
 	_ = os.MkdirAll(filepath.Join(repo, "internal"), 0o700)
+	testtool.RequireGit(t)
 	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
@@ -103,7 +105,7 @@ func TestPauseProjectKeepsTheListAndUsesTheRepoRoot(t *testing.T) {
 	}
 	got, _ := os.ReadFile(cfg)
 	root, _ := filepath.EvalSymlinks(repo)
-	if !strings.Contains(string(got), `exclude_paths = ["/srv/a # b", "`) || strings.Count(string(got), root) != 1 {
+	if !strings.Contains(string(got), `exclude_paths = ["/srv/a # b", "`) || strings.Count(string(got), testtool.TOMLStr(root)) != 1 {
 		t.Errorf("config:\n%s\nroot %s", got, root)
 	}
 	if code, _, _ := run(t, "pause", "--plan"); code != output.Usage {
@@ -119,7 +121,7 @@ func TestResumeProjectSaysWhenStillExcluded(t *testing.T) {
 	_ = os.MkdirAll(dir, 0o700)
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
-	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = [\"~/clients\", \""+dir+"\"]\n")...), 0o600)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = [\"~/clients\", "+testtool.TOMLStr(dir)+"]\n")...), 0o600)
 	t.Chdir(dir)
 	code, out, _ := run(t, "resume", "--project")
 	if code != output.OK || !strings.Contains(out, "still not recorded") || !strings.Contains(out, "contains "+filepath.Join(home, "clients")+" (") {

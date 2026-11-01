@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/token"
 	"github.com/Barben360/backsight/internal/transcript"
 )
@@ -823,7 +824,7 @@ func TestConnectResumesAFailedBinding(t *testing.T) {
 	withConnectFault(t, "binding")
 	code, out, errOut := run(t, "connect", "--token-file", file, "--answer", "consent=yes", "--non-interactive", "--json")
 	env := parseConnect(t, out)
-	if code != output.Partial || env.Error == nil || env.Error.Resume != "backsight connect --token-file "+shellWord(file)+" --answer consent=yes" {
+	if code != output.Partial || env.Error == nil || env.Error.Resume != "backsight connect --token-file "+resumeWord(file)+" --answer consent=yes" {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	d := pathsOf(home)
@@ -1664,7 +1665,7 @@ func TestConnectOwnServerLockTakenAfterTheBackup(t *testing.T) {
 	old := connectFault
 	connectFault = func(step string) error {
 		if step == "backed-up" {
-			return os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1,"command":"jobs maintain"}`), 0o600)
+			return os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`,"command":"jobs maintain"}`), 0o600)
 		}
 		return nil
 	}

@@ -18,6 +18,8 @@ import (
 // turn, when feedback is on; ids and numbers only. A failure is logged,
 // never fails the search.
 func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Result) {
+	// Not under a session found by its id: after a /clear it is the
+	// previous session, whose audit this search is not part of.
 	if !d.cfg.Feedback.Enabled || found != "record" || len(res.Hits) == 0 {
 		return
 	}

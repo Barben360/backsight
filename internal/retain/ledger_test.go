@@ -16,11 +16,13 @@ import (
 
 	"github.com/Barben360/backsight/internal/attribution"
 	"github.com/Barben360/backsight/internal/project"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // ownRepo is e.repo with an origin remote: owner me unless given.
 func (e *env) ownRepo(name, remote string) string {
 	e.t.Helper()
+	testtool.RequireGit(e.t)
 	dir := e.repo(name)
 	if remote == "" {
 		remote = "git@github.com:me/" + name + ".git"
@@ -257,6 +259,7 @@ func TestSubagentReportsFollowTheirWork(t *testing.T) {
 // rebuilt the same from the session's own worktree command.
 func TestARebuiltReportKeepsItsProject(t *testing.T) {
 	e, billing, shop, _ := subagentEnv(t)
+	testtool.RequireGit(t)
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t", "GIT_CONFIG_GLOBAL=/dev/null")
@@ -291,7 +294,7 @@ func TestARebuiltReportKeepsItsProject(t *testing.T) {
 	// The restore lost the report, and nothing on disk names the worktree
 	// any more (the command gone too): the rebuilt report keeps the
 	// project SubagentStop gave it, from the ledger.
-	if err := os.WriteFile(sess, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"`+billing+`","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"Fix the cart."}}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(sess, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"`+testtool.JSONPath(billing)+`","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"Fix the cart."}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if lost := fresh; true {
@@ -312,7 +315,7 @@ func TestARebuiltReportKeepsItsProject(t *testing.T) {
 // subagentReply appends the subagent's final report to its transcript.
 func (e *env) subagentReply(sid, agent, cwd, reply string) {
 	file := filepath.Join(e.dir, sid, "subagents", "agent-"+agent+".jsonl")
-	line := `{"type":"assistant","isSidechain":true,"uuid":"` + agent + `-end","timestamp":"2026-10-24T12:50:00Z","cwd":"` + cwd + `","message":{"role":"assistant","content":[{"type":"text","text":` + quote(reply) + `}]}}` + "\n"
+	line := `{"type":"assistant","isSidechain":true,"uuid":"` + agent + `-end","timestamp":"2026-10-24T12:50:00Z","cwd":"` + testtool.JSONPath(cwd) + `","message":{"role":"assistant","content":[{"type":"text","text":` + quote(reply) + `}]}}` + "\n"
 	fh, _ := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	_, _ = fh.WriteString(line)
 	_ = fh.Close()
@@ -403,6 +406,13 @@ func TestALaggingOrUnreadableTranscriptIsDecidedLater(t *testing.T) {
 	if got, _ := a.Subagent("s1", "ag3", sess, filepath.Join(e.dir, "s1", "subagents", "agent-ag3.jsonl"), "billing", "", clockAt(10, 5)); got.Source != SourceTimeout || !got.Provisional {
 		t.Errorf("past the budget: %+v", got)
 	}
+	// Past it the transcript is not even read (a SubagentStop that started
+	// late has no time to): a lagging one times out, never found
+	// incomplete, which only its read tells.
+	p4 := e.agent("s1", "ag4", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	if got, _ := a.Subagent("s1", "ag4", sess, p4, "billing", "Fixed the cart.", clockAt(10, 5)); got.Source != SourceTimeout || !got.Provisional {
+		t.Errorf("past the budget, a lagging transcript: %+v, want timeout (not read)", got)
+	}
 }
 
 // The hook and a rebuild may decide the same report at once: one decision
@@ -439,6 +449,7 @@ func TestOneDecisionPerReportUnderConcurrentWriters(t *testing.T) {
 // user.email set to me@example.org (the identity backsight reads).
 func commitAs(t *testing.T, dir, email string) {
 	t.Helper()
+	testtool.RequireGit(t)
 	for _, args := range [][]string{{"config", "user.email", "me@example.org"}, {"config", "user.name", "u"},
 		{"-c", "user.email=" + email, "commit", "-q", "--allow-empty", "-m", "x"}} {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

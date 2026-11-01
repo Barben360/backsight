@@ -1,13 +1,19 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // nativeProc is the /proc the native guard reads; nativeStrayWait bounds
@@ -47,24 +53,9 @@ func newServerNativeCheckCmd(e *env) *cobra.Command {
 			}
 			// Built whatever server.runtime says: a switch to native starts
 			// the units before config.toml names native.
-			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, StrayWait: nativeStrayWait}
-			ctx := cmd.Context()
-			res := nativeCheckResult{Instance: n.InstanceDir(), Status: "recorded"}
-			if err := n.CheckInstance(ctx); err != nil {
-				return blocked(err)
-			}
-			if _, err := os.Lstat(n.InstanceDir()); err != nil {
-				res.Status = "first-install"
-			}
-			strays, err := n.Strays()
+			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, StrayWait: nativeStrayWait}
+			res, err := nativeGuard(cmd.Context(), n, e.stderr)
 			if err != nil {
-				return blocked(fmt.Errorf("looking for a postgres on %s outside %s: %w", n.DataDir(), n.DBUnit(), err))
-			}
-			for _, s := range strays {
-				fmt.Fprintf(e.stderr, "a postgres (pid %d) runs on %s outside %s: stopping it, never adopting it\n", s.PID, n.DataDir(), n.DBUnit())
-				res.Stopped = append(res.Stopped, s.PID)
-			}
-			if err := n.StopStrays(ctx, strays); err != nil {
 				return blocked(err)
 			}
 			return e.emit("server native-check", res, func() string {
@@ -75,4 +66,116 @@ func newServerNativeCheckCmd(e *env) *cobra.Command {
 			})
 		},
 	}
+}
+
+// nativeGuard is native-check's guard, which the supervisor also runs
+// before every start of the database: the identity check (a refusal is a
+// *server.GuardError, final for the supervisor), then the strays on the
+// instance's data stopped, never adopted. Its errors are raw: the caller
+// wraps them.
+func nativeGuard(ctx context.Context, n server.Native, stderr io.Writer) (nativeCheckResult, error) {
+	res := nativeCheckResult{Instance: n.InstanceDir(), Status: "recorded"}
+	if err := n.CheckInstance(ctx); err != nil {
+		return res, err
+	}
+	if _, err := os.Lstat(n.InstanceDir()); err != nil {
+		res.Status = "first-install"
+	}
+	strays, err := n.Strays()
+	if err != nil {
+		return res, fmt.Errorf("looking for a postgres on %s outside %s: %w", n.DataDir(), n.DBOwner(), err)
+	}
+	for _, s := range strays {
+		fmt.Fprintf(stderr, "a postgres (pid %d) runs on %s outside %s: stopping it, never adopting it\n", s.PID, n.DataDir(), n.DBOwner())
+		res.Stopped = append(res.Stopped, s.PID)
+	}
+	return res, n.StopStrays(ctx, strays)
+}
+
+// superviseGuard is the supervisor's guard before every start of the
+// database: supervise.json's postgres must run with fsync on (final
+// refusal), then native-check's guard, its strays reported on log (the
+// supervisor's log).
+func superviseGuard(ctx context.Context, n server.Native, sc supervise.Config, log io.Writer) error {
+	if err := server.CheckFsyncArgs(n.SuperviseFile(), sc.Postgres); err != nil {
+		return err
+	}
+	_, err := nativeGuard(ctx, n, log)
+	return err
+}
+
+// newServerSuperviseCmd is the Windows task's action (decision 0080):
+// conhost.exe --headless <shim> server supervise. It runs the native
+// server from <Root>\supervise.json until a stop on its pipe; a second
+// one of the project exits 0 at once. The root's --backsight-home carries
+// BACKSIGHT_HOME, which a task cannot set.
+func newServerSuperviseCmd(*env) *cobra.Command {
+	var noAPI bool
+	cmd := &cobra.Command{
+		Use:    "supervise",
+		Short:  "Run the native server's processes (the Windows task's action)",
+		Args:   usageArgs(cobra.NoArgs),
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadServerConfig()
+			if err != nil {
+				logSuperviseFailure("", err)
+				return err
+			}
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, StrayWait: nativeStrayWait}
+			want := cfg.Server.Project
+			if want == "" {
+				want = server.Project
+			}
+			refuse := func(err error) error {
+				logSuperviseFailure(want, err)
+				return blocked(err)
+			}
+			path := n.SuperviseFile()
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return refuse(fmt.Errorf("the supervisor's configuration: %w (run backsight server render)", err))
+			}
+			var sc supervise.Config
+			if err := json.Unmarshal(raw, &sc); err != nil {
+				return refuse(fmt.Errorf("%s: %w (run backsight server render)", path, err))
+			}
+			if sc.Project != want {
+				return refuse(fmt.Errorf("%s supervises project %q, config.toml names %q: run backsight server render", path, sc.Project, want))
+			}
+			opts := supervise.Options{
+				Check:   func(ctx context.Context, log io.Writer) error { return superviseGuard(ctx, n, sc, log) },
+				NoAPI:   noAPI,
+				Secrets: localSecretValues(),
+				Version: buildinfo.Version,
+			}
+			if err := supervise.Run(cmd.Context(), sc, opts); err != nil {
+				return blocked(err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&noAPI, "no-api", false, "start the database alone (the API on api-start)")
+	return cmd
+}
+
+// logSuperviseFailure appends what stopped server supervise before the
+// supervisor ran to <state>/logs/<project>-supervisor.log, the log doctor
+// and server status point at, redacted: the task's conhost has no stderr
+// anyone reads. A config.toml that does not load names no project: the
+// default one's log gets it, the one a default install reads. Without a
+// state directory there is nowhere to write: stderr alone has it.
+func logSuperviseFailure(project string, err error) {
+	if project == "" {
+		project = server.Project
+	}
+	d, _, derr := machine()
+	if derr != nil {
+		return
+	}
+	_ = supervise.LogFailure(filepath.Join(d.State, "logs"), project, localSecretValues(), err)
 }

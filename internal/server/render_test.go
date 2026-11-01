@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -248,13 +249,11 @@ func TestWriteTightensALooseEnvFile(t *testing.T) {
 	if _, err := Write(dir, f); err != nil {
 		t.Fatal(err)
 	}
-	_ = os.Chmod(filepath.Join(dir, ".env"), 0o644)
+	testtool.ShareWithOthers(t, filepath.Join(dir, ".env"))
 	if _, err := Write(dir, f); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(filepath.Join(dir, ".env")); fi.Mode().Perm() != 0o600 {
-		t.Errorf(".env mode %v", fi.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, filepath.Join(dir, ".env"))
 }
 
 func TestRenderAndComposeUseTheConfiguredProject(t *testing.T) {

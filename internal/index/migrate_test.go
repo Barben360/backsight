@@ -920,6 +920,7 @@ func TestMigrationAppliedMeanwhileIsNotAnError(t *testing.T) {
 	d := tempDirs(t)
 	o := opts(t, d, nil)
 	ix := mustOpen(t, o)
+	defer mustClose(t, ix)
 	reg, err := registry(o)
 	if err != nil {
 		t.Fatal(err)

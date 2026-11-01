@@ -342,7 +342,8 @@ func (ix *Index) migrate(ctx context.Context, t target) ([]string, error) {
 // waits for another process's batch (a tick catching up holds the lock
 // for a whole batch, past the busy timeout on a slow machine). A
 // migration half way in another process is not seen; each migration reads
-// the version again under the lock (applyOne), and a write transaction
+// the version again under the lock (applyOne, which without the lock after
+// a busy timeout reads it once more), and a write transaction
 // that finds it changed since the open stops with ErrSchemaChanged
 // (beginWrite).
 func writerVersion(ctx context.Context, w *sql.DB) (int, error) {
@@ -374,9 +375,21 @@ func applyPending(ctx context.Context, w *sql.DB, pending []Migration, head int,
 func applyOne(ctx context.Context, w *sql.DB, m Migration, head int, o Options) (bool, error) {
 	tx, err := w.BeginTx(ctx, nil) // BEGIN IMMEDIATE: the writer DSN's _txlock
 	if err != nil {
-		// Another process may have applied it, then held the lock for its
-		// first batch past the busy timeout: the committed version says.
-		if v, verr := writerVersion(ctx, w); isBusy(err) && verr == nil && v >= m.Num && v <= head {
+		if !isBusy(err) {
+			return false, err
+		}
+		// The lock stayed held past the busy timeout (the process that
+		// holds it runs batches back to back, and SQLite's busy handler
+		// sleeps between its retries, so a waiter can starve). If that
+		// process committed this migration meanwhile, there is nothing
+		// left to wait for.
+		v, verr := writerVersion(ctx, w)
+		switch {
+		case verr != nil:
+			return false, err
+		case v > head:
+			return false, errNewer
+		case v >= m.Num:
 			return false, nil
 		}
 		return false, err

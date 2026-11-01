@@ -3,9 +3,32 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// makeShim makes the shim as the platform does: a symlink to target, on
+// Windows a copy named current.exe (a symlink needs a privilege a standard
+// user lacks).
+func makeShim(t *testing.T, data, target string) string {
+	t.Helper()
+	shim := filepath.Join(data, "bin", ShimName(runtime.GOOS))
+	if runtime.GOOS == "windows" {
+		raw, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(shim, raw, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return shim
+	}
+	if err := os.Symlink(target, shim); err != nil {
+		t.Skip("no symlinks")
+	}
+	return shim
+}
 
 func TestDrift(t *testing.T) {
 	data := t.TempDir()
@@ -13,10 +36,7 @@ func TestDrift(t *testing.T) {
 	target := filepath.Join(data, "bin", "v1", "backsight")
 	_ = os.MkdirAll(filepath.Dir(target), 0o755)
 	_ = os.WriteFile(target, []byte("bin"), 0o755)
-	shim := filepath.Join(data, "bin", "current")
-	if err := os.Symlink(target, shim); err != nil {
-		t.Skip("no symlinks")
-	}
+	shim := makeShim(t, data, target)
 	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+strings.Join(ToolNames, `","`)+`"]}}`), 0o600)
 	installed := Installed{Version: Version("1.2.3", shim), ShimTarget: target}
 	if got := Drift(data, settings, installed, "1.2.3"); len(got) != 0 {
@@ -47,26 +67,32 @@ func TestDriftShimTargetsAndSettingsFiles(t *testing.T) {
 		return p
 	}
 	v1, v2 := mk("v1"), mk("v2")
-	shim := filepath.Join(data, "bin", "current")
-	if err := os.Symlink(v2, shim); err != nil {
-		t.Skip("no symlinks")
-	}
+	shim := makeShim(t, data, v2)
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+strings.Join(ToolNames, `","`)+`"]}}`), 0o600)
 	in := Installed{Version: Version("1.2.3", shim), ShimTarget: v1}
-	if got := Drift(data, settings, in, "1.2.3"); len(got) != 1 || !strings.Contains(got[0], "shim points to") {
-		t.Errorf("shim on another version: %v", got)
-	}
-	in.ShimTarget = ""
-	if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
-		t.Errorf("no recorded target: %v", got)
-	}
-	// a data directory reached through a symlink resolves to the same target
-	link := filepath.Join(t.TempDir(), "data-link")
-	_ = os.Symlink(data, link)
-	in.ShimTarget = filepath.Join(link, "bin", "v2", "backsight")
-	if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
-		t.Errorf("symlinked data dir: %v", got)
+	got := Drift(data, settings, in, "1.2.3")
+	if runtime.GOOS == "windows" {
+		// the shim is a copy: only its presence is checked, hashing two
+		// binaries would blow the SessionStart budget
+		if len(got) != 0 {
+			t.Errorf("a present shim copy is no drift: %v", got)
+		}
+	} else {
+		if len(got) != 1 || !strings.Contains(got[0], "shim points to") {
+			t.Errorf("shim on another version: %v", got)
+		}
+		in.ShimTarget = ""
+		if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
+			t.Errorf("no recorded target: %v", got)
+		}
+		// a data directory reached through a symlink resolves to the same target
+		link := filepath.Join(t.TempDir(), "data-link")
+		_ = os.Symlink(data, link)
+		in.ShimTarget = filepath.Join(link, "bin", "v2", "backsight")
+		if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
+			t.Errorf("symlinked data dir: %v", got)
+		}
 	}
 	for _, doc := range []string{"", "{not json"} {
 		_ = os.WriteFile(settings, []byte(doc), 0o600)

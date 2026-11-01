@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -50,7 +51,15 @@ func LoadSecrets(path string) (Secrets, error) {
 		return s, err
 	}
 	defer func() { _ = f.Close() }()
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS == "windows" {
+		who, err := fsutil.OtherReaders(path)
+		if err != nil {
+			return s, err
+		}
+		if len(who) > 0 {
+			return s, fmt.Errorf("%s is readable by %s: run %s", path, strings.Join(who, ", "), fsutil.PrivateFix(path, false, fsutil.CurrentUserSID(), who))
+		}
+	} else {
 		fi, err := f.Stat()
 		if err != nil {
 			return s, err
@@ -158,7 +167,17 @@ func UpdateSecrets(path string, fn func(*Secrets) error) error {
 	if err != nil {
 		return err
 	}
-	return fsutil.ReplaceIfUnchanged(path, raw, 0o600, hash)
+	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if err := fsutil.ReplaceIfUnchanged(path, raw, 0o600, hash); err != nil {
+		return err
+	}
+	// A config directory that was there already may grant others read.
+	if runtime.GOOS == "windows" {
+		return fsutil.MakePrivate(path)
+	}
+	return nil
 }
 
 // KeylessProviders run without an LLM API key.

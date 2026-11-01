@@ -389,7 +389,12 @@ func rebuildFixture(t *testing.T, bigLines int) (home string, d paths.Dirs, lost
 	old := time.Now().Add(-40 * 24 * time.Hour)
 	lostMonth = monthOf(old)
 	writeIndexLines(t, d, lostMonth, 3, old)
-	writeIndexLines(t, d, monthOf(time.Now()), max(bigLines, 2), time.Now().Add(-time.Hour))
+	// The big month's lines share one time, cut to the second: their size
+	// does not depend on the clock's resolution (RFC 3339 drops a
+	// fraction's trailing zeros, and Windows' clock ticks every 100 ns, so
+	// a time read there has two digits fewer than on Linux, sometimes
+	// more), which once took the 1 MiB fixture under 1 MiB.
+	writeIndexLines(t, d, monthOf(time.Now()), max(bigLines, 2), time.Now().Add(-time.Hour).Truncate(time.Second))
 	catchUpIndex(t, home)
 	if err := os.Remove(filepath.Join(d.TelemetryDir(), "events-"+lostMonth+".jsonl")); err != nil {
 		t.Fatal(err)
@@ -455,12 +460,18 @@ func TestStatsIndexRebuildNeedsYesWhenMonthsWouldBeLost(t *testing.T) {
 }
 
 func TestStatsIndexRebuildYes(t *testing.T) {
-	home, d, lost := rebuildFixture(t, 9000) // over 1 MiB: the rebuild reports its progress
+	home, d, lost := rebuildFixture(t, 10_000) // over 1 MiB: the rebuild reports its progress
+	big := filepath.Join(d.TelemetryDir(), "events-"+monthOf(time.Now())+".jsonl")
+	if fi, err := os.Stat(big); err != nil {
+		t.Fatal(err)
+	} else if fi.Size() <= 1<<20 {
+		t.Fatalf("the fixture is %d bytes: it must be over 1 MiB, the index's progress threshold", fi.Size())
+	}
 	code, out, errOut := run(t, "stats", "index", "rebuild", "--yes")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if !regexp.MustCompile(`(?m)^metrics index rebuilt: 9000 lines in \d+\.\d s$`).MatchString(out) {
+	if !regexp.MustCompile(`(?m)^metrics index rebuilt: 10000 lines in \d+\.\d s$`).MatchString(out) {
 		t.Errorf("stdout:\n%s", out)
 	}
 	if !strings.Contains(errOut, "metrics index: ") || !strings.Contains(errOut, "MB") {
@@ -469,13 +480,12 @@ func TestStatsIndexRebuildYes(t *testing.T) {
 	if strings.Contains(out, "metrics index: ready") {
 		t.Errorf("progress on stdout:\n%s", out)
 	}
-	if got := indexCount(t, home, `SELECT count(*) FROM tel_prompt`); got != 9000 {
-		t.Errorf("%d rows after the rebuild, want the 9000 of the file that is left", got)
+	if got := indexCount(t, home, `SELECT count(*) FROM tel_prompt`); got != 10_000 {
+		t.Errorf("%d rows after the rebuild, want the 10000 of the file that is left", got)
 	}
 	if code, out, _ = run(t, "stats", "index", "rebuild", "--plan"); code != output.OK || !strings.Contains(out, "no month would be lost") || strings.Contains(out, lost) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
-	_ = d
 }
 
 func TestStatsIndexRebuildWithNothingLostNeedsNoYes(t *testing.T) {

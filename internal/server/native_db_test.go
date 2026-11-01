@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // argOf is the value after flag in args ("" without it).
@@ -230,8 +231,8 @@ func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
 					}
 					if !exists(home) {
 						t.Errorf("the throwaway's HOME %s does not exist when its unit starts", home)
-					} else if fi, _ := os.Stat(home); fi.Mode().Perm() != 0o700 {
-						t.Errorf("HOME mode %v", fi.Mode().Perm())
+					} else {
+						testtool.RequirePrivate(t, home)
 					}
 				}
 			}
@@ -313,6 +314,7 @@ func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
 // password file then postgres, on the free port, on loopback only, with no
 // Unix socket; a unit that stops ends the wait at once.
 func TestNativeVerifyDumpRunsItsOwnCluster(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the throwaway cluster's systemd-run script over / paths (Windows: TestVerifyDumpLeavesNothingRunning)")
 	n, _, tools := nativeFixture(t, secrets)
 	installed(t, n, secrets)
 	withFreePort(t, 18890)

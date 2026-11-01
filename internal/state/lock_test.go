@@ -253,8 +253,8 @@ func TestLockOwner(t *testing.T) {
 // owner: the owner died and its PID was reused (issue 285). The same PID
 // with a Since after its start is a live owner.
 func TestReusedPIDIsStale(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("start times are read from /proc")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("start times are read from /proc, or GetProcessTimes")
 	}
 	p := filepath.Join(t.TempDir(), "maintenance.lock")
 	start, ok := processStart(os.Getpid())

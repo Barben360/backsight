@@ -57,7 +57,7 @@ func WriteRestoreMarker(d paths.Dirs, m RestoreMarker) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(d.State, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(d.State); err != nil {
 		return err
 	}
 	return fsutil.WriteAtomic(d.RestoreMarker(), append(raw, '\n'), 0o600)
@@ -67,7 +67,7 @@ func WriteRestoreMarker(d paths.Dirs, m RestoreMarker) error {
 // cannot be read or parsed is returned (empty) with the error: it still
 // counts as a restore that did not finish.
 func ReadRestoreMarker(d paths.Dirs) (*RestoreMarker, error) {
-	raw, err := os.ReadFile(d.RestoreMarker())
+	raw, err := fsutil.ReadFileShared(d.RestoreMarker())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

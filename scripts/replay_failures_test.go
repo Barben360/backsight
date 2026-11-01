@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func transcriptLine(t *testing.T, content []map[string]any, role string) string {
@@ -31,6 +33,7 @@ func result(id, text string, isErr bool) map[string]any {
 // The replay counts failures and signatures from transcripts without a
 // server, and in live mode counts the signatures that would inject.
 func TestReplayFailuresCountsAndSearches(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed")
 	}

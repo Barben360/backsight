@@ -195,7 +195,8 @@ func TestGeneratedFilesNameNoPrivateReference(t *testing.T) {
 	checkPublic(t, "the rendered .env", string(f.Env))
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		p, err := scheduler.For(goos, scheduler.Options{Shim: "/home/u/.local/bin/backsight", Home: "/home/u",
-			UnitDir: "/home/u/.config/systemd/user", UID: 1000, LogDir: "/home/u/.local/state/backsight/logs", Env: map[string]string{"PATH": "/usr/bin"}})
+			UnitDir: "/home/u/.config/systemd/user", UID: 1000, LogDir: "/home/u/.local/state/backsight/logs", Env: map[string]string{"PATH": "/usr/bin"},
+			State: "/home/u/.local/state/backsight", UserSID: fakeUserSID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +204,11 @@ func TestGeneratedFilesNameNoPrivateReference(t *testing.T) {
 			t.Fatalf("%s: no scheduler file or command: the scan proves nothing", goos)
 		}
 		for _, file := range p.Files {
-			checkPublic(t, goos+" scheduler entry "+filepath.Base(file.Path), file.Content)
+			content := file.Content
+			if goos == "windows" { // a task's XML is UTF-16
+				content = utf16Text(t, []byte(content))
+			}
+			checkPublic(t, goos+" scheduler entry "+filepath.Base(file.Path), content)
 		}
 		for _, c := range p.Activate { // schtasks takes the task's definition as arguments
 			checkPublic(t, goos+" scheduler command", strings.Join(c, " "))

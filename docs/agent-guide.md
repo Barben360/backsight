@@ -2,7 +2,7 @@
 
 backsight gives Claude Code a long-term memory: one Go binary that runs a memory server in Docker on the user's machine and wires it into Claude Code. You are a coding agent (Claude Code or another) asked to install it. This page is all you need: do not browse the repository.
 
-Quick start: if `backsight version` fails, install the binary with `curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh`; then run `backsight setup --questions --json` and go on at step 2. Ask the user before every choice.
+Quick start: if `backsight version` fails, install the binary with `curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh` (on Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"`); then run `backsight setup --questions --json` and go on at step 2. Ask the user before every choice.
 
 Follow these steps in order. Everything goes through `backsight` commands with `--json`; never edit backsight's files or Claude Code's settings by hand. Once installed, this page is also `backsight guide agent-guide`.
 
@@ -35,6 +35,14 @@ The script checks the release's minisign signature (with `minisign`, or `openssl
 
 To install one given release, add `BACKSIGHT_RELEASE_URL=https://github.com/Barben360/backsight/releases/download/<tag>` before `sh`. From release files already downloaded into a directory: `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
 
+On Windows (x86_64; Claude Code's own shell there is Git Bash, and no step needs admin rights), install with:
+
+```sh
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"
+```
+
+It checks the signature and checksum as `install.sh` does (in PowerShell: nothing else to install), installs the binary under `%LOCALAPPDATA%\backsight`, the command as `%LOCALAPPDATA%\Programs\backsight\backsight.exe`, and adds that directory to the user `PATH`. A shell started before reads the old `PATH`: until the user opens a new terminal, run backsight by its full path (`"$LOCALAPPDATA/Programs/backsight/backsight.exe"` in Git Bash). It honours `BACKSIGHT_RELEASE_URL` and `BACKSIGHT_RELEASE_DIR` as environment variables (see [Windows](windows.md)).
+
 ## 2. List the questions
 
 ```sh
@@ -45,7 +53,7 @@ Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `defa
 
 Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a machine without a systemd user session, such as a container: setup's pre-flight stops with exit 10 and asks for it; it also removes the entries an earlier run wrote, and `backsight setup --resume --answer scheduler=off` goes on from the earlier run without asking for consent again).
 
-The native runtime, only when the user asks for it (no Docker, Linux x86_64, this PC only, no web UI): add `--runtime native` to every setup command (the same as the hidden answer `runtime=native`; see [the native runtime](native-runtime.md)). Its pre-flight exits 10 when lingering is off, with the action `loginctl enable-linger` for the user to run, or when no systemd user session is reachable (an ssh login as that user is the way; `scheduler=off` does not help there).
+The native runtime (no Docker, this PC only, no web UI; see [the native runtime](native-runtime.md)) is the default on Windows x86_64: nothing to add there. Its pre-flight there checks the path length and `%` in backsight's paths (the fix for both: the user sets `BACKSIGHT_HOME` to a short directory such as `C:\bs` and runs setup from that shell), the API port, `conhost --headless` and Task Scheduler; a `task` warning means a policy refused the server's scheduled task, and setup goes on without it (`server.start_on_session`: tell the user the server then runs until they log off and each Claude Code session starts it; see [Windows](windows.md#when-task-scheduler-refuses-the-task)). On Linux x86_64, only when the user asks for it: add `--runtime native` to every setup command (the same as the hidden answer `runtime=native`). Its pre-flight exits 10 when lingering is off, with the action `loginctl enable-linger` for the user to run, or when no systemd user session is reachable (an ssh login as that user is the way; `scheduler=off` does not help there).
 
 A machine without Claude Code that only holds the memory for the user's other PCs: add `--role server` to every setup command (the same as the hidden answer `role=server`). It skips the Claude Code questions and steps; then the user opens the server with `backsight server expose --private <address>` in a terminal of their own, since the connection token it hands out holds the API key.
 

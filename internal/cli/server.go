@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/target"
 )
 
@@ -42,10 +43,15 @@ func composeFor(cfg config.Config) server.Compose {
 }
 
 // nativeSys runs the native runtime's systemctl, journalctl and
-// systemd-run; nativeTools its own programs. Tests replace both.
+// systemd-run (Windows: schtasks); nativeTools its own programs;
+// nativeAsk asks the Windows supervisor's pipe; nativeDetach starts the
+// Windows supervisor under conhost (nil: the real start). Tests replace
+// them.
 var (
-	nativeSys   server.SysRunner  = execSys{}
-	nativeTools server.ToolRunner = execTools{}
+	nativeSys    server.SysRunner  = execSys{}
+	nativeTools  server.ToolRunner = execTools{}
+	nativeAsk                      = supervise.Ask
+	nativeDetach func(args ...string) error
 )
 
 // execTools runs a native tool with exactly the environment it is given
@@ -84,6 +90,14 @@ func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path 
 	return out, err
 }
 
+// RunStep runs a Windows transient step in job (server.RunInJob): the
+// step's own Job Object, not a process group, holds what it starts.
+func (execTools) RunStep(ctx context.Context, job *supervise.Job, env []string, stdin io.Reader, out *os.File, path string, args ...string) ([]byte, error) {
+	return server.RunInJob(ctx, job, env, stdin, out, path, args...)
+}
+
+var _ server.StepRunner = execTools{}
+
 // runtimeWith is the server runtime of cfg (decisions 0070, 0078): Docker
 // Compose, or the native runtime's two systemd user units. ownGroup runs
 // its children in their own process group: a Ctrl-C at the terminal must
@@ -91,7 +105,7 @@ func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path 
 var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	if cfg.RuntimeKind() == "native" {
 		d, home, err := machine()
-		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, Err: err}
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Detach: nativeDetach, Proc: nativeProc, Err: err, Note: printNote}
 		if err == nil {
 			// A user manager that never answers must not hang the command.
 			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
@@ -113,6 +127,10 @@ var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	}
 	return server.Docker{Compose: c, Cfg: cfg}
 }
+
+// printNote prints what the runtime tells the user beside a command's
+// result (server.NoLogonNote) on stderr: JSON output stays on stdout.
+var printNote = func(s string) { fmt.Fprintln(os.Stderr, "note: "+s) }
 
 // runtimeFor is the server runtime of cfg.
 func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }
@@ -145,7 +163,7 @@ func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec 
 					logs, _ := rt.Logs(ctx, "hindsight", 20)
 					what := "the hindsight container"
 					if n, ok := rt.(server.Native); ok {
-						what = "the server unit " + n.ServerUnit()
+						what = n.ServerName()
 					}
 					return hindsight.Version{}, fmt.Errorf("%s is %s; last log lines:\n%s", what, ct.State, strings.TrimSpace(logs))
 				}
@@ -155,7 +173,7 @@ func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec 
 		case <-ctx.Done():
 			logs := "docker compose logs"
 			if n, ok := rt.(server.Native); ok {
-				logs = "journalctl --user -u " + n.ServerUnit()
+				logs = n.LogsHint()
 			}
 			return hindsight.Version{}, fmt.Errorf("the server did not report health at %s within %s: check backsight server status and %s", cfg.Server.URL, healthTimeout, logs)
 		case <-time.After(healthPoll):
@@ -344,6 +362,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				}
 				add("config", "planned", "would write "+d.ConfigFile())
 			case errors.Is(err, fs.ErrNotExist):
+				if err := fsutil.MkdirPrivate(d.Config); err != nil {
+					return blocked(err)
+				}
 				if err := fsutil.ReplaceIfUnchanged(d.ConfigFile(), initialConfig(f), 0o600, fsutil.Absent); err != nil {
 					return blocked(err)
 				}
@@ -495,7 +516,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 			detail := "project " + cfg.Server.Project
 			if n, ok := rt.(server.Native); ok {
-				detail = "units " + n.DBUnit() + " and " + n.ServerUnit()
+				detail = n.Started()
 			} else if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
 				detail += ", with your compose.override.yaml"
 			}
@@ -642,7 +663,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return e.emit("server start", map[string]any{"project": cfg.Server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
 					func() string {
 						if n, ok := rt.(server.Native); ok {
-							return renderText(nativeRender(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}, n)) + "would start " + n.DBUnit() + " and " + n.ServerUnit() + "\n"
+							return renderText(nativeRender(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}, n)) + "would start " + n.Services() + "\n"
 						}
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
@@ -727,9 +748,18 @@ func newServerStopCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg, "server stop"); err != nil {
 				return err
 			}
+			rt := runtimeFor(cfg)
+			text := func(plan bool, generic string) func() string {
+				return func() string {
+					if n, ok := rt.(server.Native); ok && n.StopText(plan) != "" {
+						return n.StopText(plan)
+					}
+					return generic
+				}
+			}
 			if plan {
 				return e.emit("server stop", map[string]any{"project": cfg.Server.Project, "plan": true},
-					func() string { return "would stop the containers of project " + cfg.Server.Project + " (data kept)\n" })
+					text(true, "would stop the containers of project "+cfg.Server.Project+" (data kept)\n"))
 			}
 			d, _, err := machine()
 			if err != nil {
@@ -740,10 +770,14 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			if err := runtimeFor(cfg).Stop(cmd.Context()); err != nil {
+			stop := rt.Stop
+			if n, ok := rt.(server.Native); ok {
+				stop = n.StopOnPurpose // marked first: the SessionStart fallback leaves it down
+			}
+			if err := stop(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
-			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, func() string { return "stopped\n" })
+			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, text(false, "stopped\n"))
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be stopped without doing it")
@@ -758,6 +792,10 @@ type statusResult struct {
 		Version string `json:"version,omitempty"`
 		Error   string `json:"error,omitempty"`
 	} `json:"api"`
+	// Refusal: why the native server on Windows refuses to run (the
+	// supervisor's refusal, the identity check's), shown when the API is
+	// not healthy.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 func newServerStatusCmd(e *env) *cobra.Command {
@@ -788,7 +826,14 @@ func newServerStatusCmd(e *env) *cobra.Command {
 			}
 			var failed error
 			if !res.API.Healthy {
-				failed = &output.Error{Code: output.Blocked, Message: "the server is not running or not healthy"}
+				msg := "the server is not running or not healthy"
+				if n, ok := runtimeFor(cfg).(server.Native); ok {
+					res.Refusal = server.Redact(n.Refusal(cmd.Context()), sec)
+				}
+				if res.Refusal != "" {
+					msg += ": " + res.Refusal
+				}
+				failed = &output.Error{Code: output.Blocked, Message: msg}
 			}
 			return e.report("server status", res, func() string { return statusText(res) }, failed)
 		},
@@ -808,12 +853,15 @@ func statusText(r statusResult) string {
 	} else {
 		fmt.Fprintf(&b, "API %s not running or not healthy\n", r.API.URL)
 	}
+	if r.Refusal != "" {
+		fmt.Fprintf(&b, "refused: %s\n", r.Refusal)
+	}
 	return b.String()
 }
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e), newServerNativeCheckCmd(e), newServerRuntimeCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e), newServerNativeCheckCmd(e), newServerSuperviseCmd(e), newServerRuntimeCmd(e))
 	return cmd
 }
 
@@ -924,7 +972,7 @@ type renderResult struct {
 // nativeRender is r naming the native runtime's files.
 func nativeRender(r renderResult, n server.Native) renderResult {
 	r.envFile = n.EnvFile()
-	r.units = []string{filepath.Join(n.UnitDir, n.DBUnit()), filepath.Join(n.UnitDir, n.ServerUnit())}
+	r.units = n.ServiceFiles()
 	return r
 }
 

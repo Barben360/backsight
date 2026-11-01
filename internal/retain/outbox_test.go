@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func outbox(t *testing.T) Outbox {
@@ -137,19 +138,104 @@ func TestOutboxSizeLimits(t *testing.T) {
 	}
 }
 
+// Appenders queue for the lock, each holding it for one fsync'd write. A
+// queue longer than a second (eight appends of 200 ms) loses none: each
+// waits its turn (windows-latest once kept 15 of 20, the others refused
+// after 50 tries of the lock, about 1 s). The wait's bound is the test's
+// own, far past the queue: how long a queue the default 3 s drains is the
+// disk's speed (on windows-latest under the other packages' tests a turn
+// took over 600 ms, 200 ms of it the sleep, and the sixth of six appends
+// was refused at 3 s); TestOutboxAppendWaitsPastASecondByDefault holds the
+// default wait to its 1.5 s.
 func TestOutboxConcurrentAppends(t *testing.T) {
 	o := outbox(t)
+	o.LockDeadline = time.Now().Add(time.Minute)
+	old := whileAppending
+	whileAppending = func() { time.Sleep(200 * time.Millisecond) }
+	t.Cleanup(func() { whileAppending = old })
+	const n = 8
+	errs := make(chan error, n)
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, _ = o.Append(NewNote("b", "lesson", "p", strings.Repeat("y", i+1), at))
+			_, err := o.Append(NewNote("b", "lesson", "p", strings.Repeat("y", i+1), at))
+			errs <- err
 		}(i)
 	}
 	wg.Wait()
-	if n, _ := o.Pending(); n != 20 {
-		t.Errorf("%d of 20 notes", n)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("an append was refused: %v", err)
+		}
+	}
+	if got, _ := o.Pending(); got != n {
+		t.Errorf("%d of %d notes", got, n)
+	}
+}
+
+// holdLock takes o's lock as another live holder would, until release.
+func holdLock(t *testing.T, o Outbox) (release func()) {
+	t.Helper()
+	l, err := state.TryAcquire(o.LockPath, "test holder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = l.Release() }) }
+	t.Cleanup(release)
+	return release
+}
+
+// By default an append waits for a lock held 1.5 s, past the old 50 tries
+// (about 1 s), and goes in once it is free.
+func TestOutboxAppendWaitsPastASecondByDefault(t *testing.T) {
+	o := outbox(t)
+	release := holdLock(t, o)
+	time.AfterFunc(1500*time.Millisecond, release)
+	if _, err := o.Append(NewNote("b", "lesson", "p", "waited", at)); err != nil {
+		t.Fatalf("refused while the lock was held 1.5 s: %v", err)
+	}
+	if got, _ := o.Pending(); got != 1 {
+		t.Errorf("%d notes, want the one", got)
+	}
+}
+
+// LockDeadline is the caller's bound on the wait: a lock still held then
+// refuses the append at that time, the outbox untouched.
+func TestOutboxLockDeadlineBoundsTheWait(t *testing.T) {
+	o := outbox(t)
+	holdLock(t, o)
+	start := time.Now()
+	o.LockDeadline = start.Add(300 * time.Millisecond)
+	_, err := o.Append(NewNote("b", "lesson", "p", "refused", at))
+	took := time.Since(start)
+	var held *state.HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("err %v, want the lock's holder", err)
+	}
+	if took < 300*time.Millisecond || took > 800*time.Millisecond {
+		t.Errorf("refused after %v, want at its 300 ms deadline", took.Round(time.Millisecond))
+	}
+	if got, _ := o.Pending(); got != 0 {
+		t.Errorf("%d notes queued by a refused append", got)
+	}
+}
+
+// Flush's wait for the lock ends with its context.
+func TestOutboxFlushWaitEndsWithItsContext(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+	holdLock(t, o)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := o.Flush(ctx, e.f.Client, "b", "m1")
+	if took := time.Since(start); err == nil || took > 800*time.Millisecond {
+		t.Errorf("flush under a held lock: %v after %v, want an error by its 300 ms deadline", err, took.Round(time.Millisecond))
 	}
 }
 

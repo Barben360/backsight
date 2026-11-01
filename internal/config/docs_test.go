@@ -3,12 +3,15 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 
 	"github.com/Barben360/backsight/internal/paths"
 )
@@ -52,7 +55,7 @@ func tomlKeys(prefix string, v reflect.Value) map[string]reflect.Value {
 func literal(v reflect.Value) string {
 	switch v.Kind() {
 	case reflect.String:
-		return strconv.Quote(v.String())
+		return strconv.Quote(filepath.ToSlash(v.String())) // the reference writes "<data>/backups" on every OS
 	case reflect.Bool:
 		return strconv.FormatBool(v.Bool())
 	case reflect.Int, reflect.Int64:
@@ -175,6 +178,7 @@ func TestCheckReferenceReportsDrift(t *testing.T) {
 
 // Every TOML example in the reference is a valid config.toml.
 func TestConfigReferenceExamplesParse(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: docs/configuration.md examples hold POSIX paths, not absolute on Windows")
 	raw, err := os.ReadFile(configDoc)
 	if err != nil {
 		t.Fatal(err)

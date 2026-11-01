@@ -30,12 +30,42 @@ jobs:
       - run: make test
       # The license texts shipped with the binary cover the current go.mod.
       - run: scripts/third-party-licenses.sh --check
+      # The Windows lock keeps the Linux lock's versions (offline compare of
+      # the two committed locks; M7 block 2).
+      - run: scripts/native-lock.sh --platform windows --check-shared
       # The testhooks build's own code (CI's update proof, the hook chaos
       # switch), never in a release.
       - run: make test-hooks
       # The metrics index's time budgets (first build, 15-minute catch-up).
       - run: make bench-index
       - run: make cross
+  test-windows:
+    # The unit tests on Windows (M7 block 2, decision 0080): the fakes are
+    # the test binary itself (internal/testtool), the POSIX scripts' tests
+    # skip. Nothing here needs admin; TestTaskStartStopForReal registers a
+    # per-user scheduled task and removes it.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          cache: true
+      # internal/cli alone runs 9 to 10 minutes on the runner (each test
+      # binary run is a process start, slow on Windows): go test's default
+      # 10-minute bound per package would cut it.
+      - run: go test ./... -count=1 -timeout 20m
+        env:
+          # The runner has a console logon: the server task runs there
+          # (TestTaskStartStopForReal checks it came up through the task).
+          BACKSIGHT_TEST_CONSOLE_LOGON: "1"
+          # The time budgets' files on the runner's local disk (D:): its
+          # C: flushes about 340 random 4 KiB writes a second, 30 times
+          # fewer than D: or the Windows VM (testtool.BenchTempDir).
+          BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
   snapshot:
     # The release build, signed by minisign with a throwaway key: the
     # pre-publish key check passes, every signature verifies, and the Go
@@ -342,6 +372,53 @@ jobs:
         with:
           path: ${{ runner.temp }}/hf-cache/hf_cache.tar
           key: ${{ steps.hf-cache.outputs.cache-primary-key }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always() && steps.hf-saved.outputs.native == 'true'
+        with:
+          path: ${{ runner.temp }}/hf-native
+          key: ${{ steps.hf-native.outputs.cache-primary-key }}
+  native-chain-windows:
+    # M7 block 2 (decision 0080): the native runtime end to end on Windows
+    # (scripts/native-chain-windows.ps1): install.ps1 from a release signed
+    # by a throwaway key, setup from nothing, store and recall, backup and
+    # restore, a rolled-back upgrade, the supervisor's restart of a killed
+    # postgres, a killed supervisor leaving nothing, the identity, stray
+    # and fsync refusals, and uninstall leaving no task, process or data.
+    # The runner's user is an admin with a console logon and the VC++
+    # runtime in System32: the chain logs which start path came up and
+    # checks that the server loads the runtime's app-local copies.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          cache: true
+      # Native's models, keyed on the Windows lock (as native-chain's
+      # hf-native on the Linux one): a miss only means setup downloads them.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: hf-native
+        with:
+          path: ${{ runner.temp }}/hf-native
+          key: hf-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/server/nativelock/requirements-windows-amd64.txt') }}
+      - name: The native chain
+        shell: powershell
+        env:
+          BACKSIGHT_NATIVE_HF: ${{ runner.temp }}\hf-native
+        run: |
+          $env:PROJECT = "bs-native-chain-$env:BACKSIGHT_CI_SLOT"
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-chain-windows.ps1
+      - name: Keep the model cache for the next runs
+        id: hf-saved
+        if: always()
+        shell: bash
+        env:
+          NATIVE_HIT: ${{ steps.hf-native.outputs.cache-hit }}
+        run: |
+          if [ "$NATIVE_HIT" != true ] && test -f "$RUNNER_TEMP/hf-native/.backsight-models"; then echo "native=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always() && steps.hf-saved.outputs.native == 'true'
         with:

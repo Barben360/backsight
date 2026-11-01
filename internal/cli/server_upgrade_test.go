@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The image a newer binary pins in these tests.
@@ -501,6 +502,7 @@ func (h nativeUpgradeHost) venvs(t *testing.T) []string {
 // names the old, then the unit is pointed at it and the server restarted;
 // venvs older than the previous one are removed.
 func TestNativeUpgradeInstallsBesideAndSwitches(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' upgrade orchestration is covered by Task 14's chain")
 	h := nativeUpgradeSetup(t)
 	pin := h.n.Version()
 	code, out, errOut := run(t, "server", "upgrade", "--allow-unordered", "--json")
@@ -538,6 +540,7 @@ func TestNativeUpgradeInstallsBesideAndSwitches(t *testing.T) {
 // epoch, exit 30 as on Docker); the new venv and the safety archive stay,
 // nothing is pruned.
 func TestNativeUpgradeRollsBackToTheOldVenv(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' upgrade orchestration is covered by Task 14's chain")
 	h := nativeUpgradeSetup(t)
 	pin := h.n.Version()
 	recallStatus.Store(500)
@@ -574,6 +577,7 @@ func TestNativeUpgradeRollsBackToTheOldVenv(t *testing.T) {
 // A venv that does not install changes nothing: no backup, nothing
 // stopped, the unit and the venvs as they were.
 func TestNativeUpgradeFetchFailureChangesNothing(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' upgrade orchestration is covered by Task 14's chain")
 	h := nativeUpgradeSetup(t)
 	h.tools.failPip = true
 	unitPath := filepath.Join(h.n.UnitDir, h.n.ServerUnit())
@@ -602,6 +606,7 @@ func TestNativeUpgradeFetchFailureChangesNothing(t *testing.T) {
 // The plan names what native does, and a native host without its server
 // unit is told so, not about compose.yaml (ruling R26).
 func TestNativeUpgradePlanAndNoServer(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' upgrade orchestration is covered by Task 14's chain")
 	h := nativeUpgradeSetup(t)
 	pin := h.n.Version()
 	code, out, _ := run(t, "server", "upgrade", "--allow-unordered", "--plan", "--json")

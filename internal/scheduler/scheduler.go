@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Job is one scheduled entry.
@@ -67,6 +68,10 @@ type Entry struct {
 	// that were: one the user disabled stays disabled.
 	Enabled []string
 	Reload  [][]string // loads the rewritten entry, when it was enabled
+	// Lock is the job's own lock file (a task): the job runs while a
+	// live process holds it. A refresh leaves that entry for later, since
+	// registering the task again could end the running instance.
+	Lock string
 }
 
 // Reloaded is what a refresh runs after the entries' own reloads, once
@@ -125,9 +130,14 @@ type Options struct {
 	Name string
 	// Env is carried into the job: the directories the install resolved
 	// (BACKSIGHT_HOME, XDG_*_HOME) and PATH, so that the job finds the same
-	// config, state and docker as the shell that installed it (not on
-	// Windows yet: see schtasks).
+	// config, state and docker as the shell that installed it (Windows:
+	// BACKSIGHT_HOME alone, as an argument; see schtasks).
 	Env map[string]string
+	// State is backsight's state directory (Windows: the tasks' XML
+	// files under tasks\, the jobs' locks under locks\).
+	State string
+	// UserSID is the tasks' principal (Windows).
+	UserSID string
 }
 
 // For builds the plan for goos.
@@ -138,7 +148,7 @@ func For(goos string, o Options) (Plan, error) {
 	case "darwin":
 		return launchd(o), nil
 	case "windows":
-		return schtasks(o), nil
+		return schtasks(o)
 	}
 	return Plan{}, fmt.Errorf("no scheduler support on %s", goos)
 }
@@ -265,6 +275,7 @@ type Installed struct {
 	Timers   []string // systemd timers (name.timer)
 	Services []string // systemd services (name.service)
 	Labels   []string // launchd labels
+	Tasks    []string // Task Scheduler names (project\job)
 }
 
 // InstalledFrom reads the names from the files' own names; a file that is
@@ -280,6 +291,12 @@ func InstalledFrom(files []string) Installed {
 			in.Services = append(in.Services, base)
 		case strings.HasSuffix(base, ".plist"):
 			in.Labels = append(in.Labels, strings.TrimSuffix(base, ".plist"))
+		case strings.HasSuffix(base, ".xml"):
+			// <state>\tasks\<project>\<job>.xml
+			project := filepath.Dir(f)
+			if filepath.Base(filepath.Dir(project)) == "tasks" {
+				in.Tasks = append(in.Tasks, filepath.Base(project)+`\`+strings.TrimSuffix(base, ".xml"))
+			}
 		}
 	}
 	return in
@@ -302,8 +319,7 @@ func TimersEnabled(files []string) bool {
 	return false
 }
 
-// Remove deactivates the entries for kind (none for tasks: they have no
-// files to name them; their plan's Remove does).
+// Remove deactivates the entries for kind.
 func (in Installed) Remove(kind string, uid int) [][]string {
 	var out [][]string
 	switch kind {
@@ -314,6 +330,10 @@ func (in Installed) Remove(kind string, uid int) [][]string {
 	case "launchd":
 		for _, l := range in.Labels {
 			out = append(out, []string{"launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, l)})
+		}
+	case "schtasks":
+		for _, t := range in.Tasks {
+			out = append(out, []string{"schtasks", "/Delete", "/F", "/TN", t})
 		}
 	}
 	return out
@@ -372,29 +392,70 @@ func xmlEscape(s string) string {
 // TaskName is the Task Scheduler name of job j.
 func (o Options) TaskName(j Job) string { return o.name() + `\` + j.Name }
 
-// schtasks does not carry o.Env yet: the task runs with the user's own
-// environment, so a BACKSIGHT_HOME, XDG_*_HOME or PATH set only in the
-// installing shell is lost (systemd and launchd get them). /TR is capped
-// at 261 characters, too short for PATH inline; the fix is a generated
-// .cmd wrapper (set "K=V" lines, % doubled), deferred to M7 (Windows),
-// where it can be tried on Task Scheduler.
-func schtasks(o Options) Plan {
-	shim := o.Shim
+// Job tasks' triggers (decision 0080): tick every 15 minutes from a fixed
+// local epoch, maintain every day at 04:00. A start missed while the PC
+// slept or was off runs as soon as it can (StartWhenAvailable, in the
+// tasks' shared settings).
+const (
+	tickEpoch     = "2026-01-01T00:00:00"
+	maintainEpoch = "2026-01-01T04:00:00"
+)
+
+// TaskDirArgs are the hidden flags that carry env's BACKSIGHT_HOME and
+// BACKSIGHT_STATE_DIR to a task's program: a task cannot carry
+// environment variables.
+func TaskDirArgs(env map[string]string) []string {
+	var args []string
+	for _, f := range [][2]string{{"BACKSIGHT_HOME", "--backsight-home"}, {"BACKSIGHT_STATE_DIR", "--backsight-state-dir"}} {
+		if v := env[f[0]]; v != "" {
+			args = append(args, f[1], v)
+		}
+	}
+	return args
+}
+
+// TaskEnv adds to env, on Windows only (goos), what a task must carry
+// beyond the directories every scheduler gets: BACKSIGHT_STATE_DIR, which
+// moves the state (the jobs' locks, the server's logs). Linux's units stay
+// as they are.
+func TaskEnv(goos string, env map[string]string, getenv func(string) string) map[string]string {
+	if v := getenv("BACKSIGHT_STATE_DIR"); goos == "windows" && v != "" {
+		env["BACKSIGHT_STATE_DIR"] = v
+	}
+	return env
+}
+
+// schtasks registers each job as a task from XML (TaskXML, the server
+// task's principal and settings): a hidden console, no battery stop, no
+// time limit. A task cannot carry environment variables: a BACKSIGHT_HOME
+// or BACKSIGHT_STATE_DIR the install resolved reaches the job as a hidden
+// flag (TaskDirArgs); the rest of o.Env (XDG_*, PATH) means nothing on
+// Windows. Whether a job runs is its
+// own lock file held, never schtasks' text (localized).
+func schtasks(o Options) (Plan, error) {
 	p := Plan{Kind: "schtasks", Start: map[string][]string{}}
 	for _, j := range Jobs {
-		run := `"` + shim + `" jobs ` + j.Name
-		sched := []string{"/SC", "MINUTE", "/MO", "15"}
+		trigger := Trigger{Kind: TriggerTime, Start: tickEpoch, Every: time.Duration(j.Minutes) * time.Minute}
 		if j.Name == "maintain" {
-			sched = []string{"/SC", "DAILY", "/ST", "04:00"}
+			trigger = Trigger{Kind: TriggerDaily, Start: maintainEpoch}
 		}
-		create := append([]string{"schtasks", "/Create", "/F", "/TN", o.TaskName(j), "/TR", run}, sched...)
+		args := append([]string{"jobs", j.Name}, TaskDirArgs(o.Env)...)
+		task, err := TaskXML(TaskSpec{Description: "backsight jobs " + j.Name + " (" + o.name() + ")", UserSID: o.UserSID,
+			Triggers: []Trigger{trigger}, Program: o.Shim, Args: args, NoRestart: true})
+		if err != nil {
+			return Plan{}, fmt.Errorf("the %s task: %w", j.Name, err)
+		}
+		// Under the project's name, so that the recorded files name the
+		// tasks (InstalledFrom), whatever the project is called later.
+		file := filepath.Join(o.State, "tasks", o.name(), j.Name+".xml")
+		p.Files = append(p.Files, File{file, string(task)})
+		create := []string{"schtasks", "/Create", "/F", "/XML", file, "/TN", o.TaskName(j)}
 		p.Activate = append(p.Activate, create)
 		p.Start[j.Name] = []string{"schtasks", "/Run", "/TN", o.TaskName(j)}
-		// Not tried on Windows yet (M7): a refresh leaves a running task
-		// alone rather than rely on /Create /F keeping its instance.
-		p.Entries = append(p.Entries, Entry{Job: j.Name, Running: []string{"schtasks", "/Query", "/TN", o.TaskName(j), "/FO", "LIST"},
-			RunningMark: "Running", Reload: [][]string{create}})
-		p.Remove = append(p.Remove, []string{"schtasks", "/Delete", "/F", "/TN", o.TaskName(j)})
+		// The lock jobs tick and jobs maintain take (job-<name>.lock).
+		p.Entries = append(p.Entries, Entry{Job: j.Name, Files: []string{file}, Lock: filepath.Join(o.State, "locks", "job-"+j.Name+".lock"),
+			Reload: [][]string{create}})
 	}
-	return p
+	p.Remove = InstalledFrom(p.Paths()).Remove(p.Kind, o.UID)
+	return p, nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
@@ -26,8 +27,13 @@ const (
 	// subagentAttributionBudget bounds the path rule in SubagentStop (3 s
 	// for the whole hook): past it the report keeps its session's project.
 	subagentAttributionBudget = 1500 * time.Millisecond
-	gateHits                  = 2
-	lastReplyChars            = 1000 // the end of the last reply, for the detector and outcomes
+	// subagentAppendMargin is what SubagentStop keeps of its child's
+	// deadline once the wait for the outbox lock ends: the append itself
+	// (a write and its fsync, up to about 100 ms on a slow disk), the
+	// telemetry and the end-of-turn check.
+	subagentAppendMargin = 500 * time.Millisecond
+	gateHits             = 2
+	lastReplyChars       = 1000 // the end of the last reply, for the detector and outcomes
 )
 
 // spawnDetached starts `backsight <args>` outside the hook's process group,
@@ -49,12 +55,16 @@ func init() {
 		}
 		return h.stop(), nil
 	}
-	handlers["subagent-stop"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
+	handlers["subagent-stop"] = func(ctx context.Context, event string, input []byte) ([]byte, error) {
+		start := hookChildStart
+		if start.IsZero() {
+			start = time.Now()
+		}
 		h, ok := newHookEnv(ctx, input, "")
 		if !ok {
 			return nil, nil
 		}
-		return h.subagentStop(), nil
+		return h.subagentStop(hook.KillAt(start, event, input, os.Getenv).Add(-subagentAppendMargin)), nil
 	}
 	handlers["session-end"] = sessionEnd
 }
@@ -168,14 +178,15 @@ func (h *hookEnv) stop() []byte {
 	return h.creditCheck("")
 }
 
-// subagentStop queues the subagent's final report, then runs the
-// end-of-turn check for the subagent, whose block is its answer.
-func (h *hookEnv) subagentStop() []byte {
+// subagentStop queues the subagent's final report (waiting for the outbox
+// lock until lockDeadline at most), then runs the end-of-turn check for
+// the subagent, whose block is its answer.
+func (h *hookEnv) subagentStop(lockDeadline time.Time) []byte {
 	if !subagentRan(h.in) {
 		return nil // an internal helper agent (a tool-call summary): no transcript, no result, no report
 	}
 	h.updateSession(func(s *session.State) error { s.SubagentDone = true; return nil }) // the approval detector (read side)
-	h.queueSubagentReport()
+	h.queueSubagentReport(lockDeadline)
 	if paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID); paused || h.in.AgentID == "" {
 		return nil
 	}
@@ -185,7 +196,7 @@ func (h *hookEnv) subagentStop() []byte {
 // queueSubagentReport queues the subagent's final report as a document
 // (SPEC §6.2), redacted and capped, honouring the session pause and
 // opt-outs.
-func (h *hookEnv) queueSubagentReport() {
+func (h *hookEnv) queueSubagentReport(lockDeadline time.Time) {
 	text := strings.TrimSpace(h.in.LastAssistantMessage)
 	if !h.cfg.Components.Write || text == "" || h.in.AgentID == "" {
 		return
@@ -206,7 +217,14 @@ func (h *hookEnv) queueSubagentReport() {
 	source := ""
 	if p := agentTranscriptPath(h.in); p != "" {
 		a := attributor(h.dirs, h.cfg, h.resolver)
+		// Its budget, cut to the lock deadline: a hook that started late
+		// (a spawn slowed by a scan) has its kill close, and the append
+		// must come before it. Past the deadline nothing is resolved: the
+		// report keeps its session's project, provisional.
 		a.Deadline = time.Now().Add(subagentAttributionBudget)
+		if lockDeadline.Before(a.Deadline) {
+			a.Deadline = lockDeadline
+		}
 		e, err := a.Subagent(h.in.SessionID, h.in.AgentID, h.in.TranscriptPath, p, proj, h.in.LastAssistantMessage, now())
 		if err != nil {
 			h.tw.Emit(telemetry.Raw{Name: "attribution_error", Fields: map[string]any{"error": err.Error()}})
@@ -216,7 +234,9 @@ func (h *hookEnv) queueSubagentReport() {
 	}
 	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, proj, text, now())
 	n.Attribution = source
-	if _, err := notesOutboxFor(h.dirs, h.cfg).Append(n); err != nil {
+	ob := notesOutboxFor(h.dirs, h.cfg)
+	ob.LockDeadline = lockDeadline // a lock held past it refuses the note before the kill
+	if _, err := ob.Append(n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})
 		return
 	}

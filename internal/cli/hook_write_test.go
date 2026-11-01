@@ -6,11 +6,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 type gateOut struct {
@@ -189,6 +195,7 @@ func TestSubagentStopIgnoresInternalHelperAgents(t *testing.T) {
 // gitRepo makes dir a git repository with origin remote.
 func gitRepo(t *testing.T, dir, remote string) {
 	t.Helper()
+	testtool.RequireGit(t)
 	_ = os.MkdirAll(dir, 0o700)
 	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", remote}} {
 		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
@@ -210,16 +217,16 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 	// evidence may be partial and the report keeps its session's project.
 	for _, c := range []struct{ sid, edits, want string }{{"s1", shop, "shop"}, {"s2", vendor, "billing"}, {"s3", shop, "billing"}} {
 		parent := subagentTranscript(t, c.sid, "ag1")
-		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+billing+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+testtool.JSONPath(billing)+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
 		agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
 		line := func(uuid, file string) string {
-			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + filepath.Join(file, "x.go") + `"}}]}}` + "\n"
+			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(file, "x.go")) + `"}}]}}` + "\n"
 		}
-		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
+		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
 		if c.sid == "s3" {
 			reply = ""
 		}
-		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+billing+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)+reply), 0o600)
+		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+testtool.JSONPath(billing)+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)+reply), 0o600)
 		fire(t, "subagent-stop", map[string]any{"session_id": c.sid, "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
 			"transcript_path": parent, "last_assistant_message": "Fixed in " + c.sid})
 	}
@@ -243,5 +250,121 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 	tel := telemetryText(t, home)
 	if !strings.Contains(tel, `"event":"attribution"`) || !strings.Contains(tel, `"path_rule":"shop"`) || !strings.Contains(tel, `"base":"billing"`) {
 		t.Errorf("the decision was not recorded:\n%s", tel)
+	}
+}
+
+// A SubagentStop that started late (a spawn slowed by a scan, a loaded
+// disk) has its kill close: the path rule's 1.5 s budget is cut to the
+// time left before the lock deadline (the kill less
+// subagentAppendMargin), so the append still comes before the kill. Past
+// that deadline the rule resolves nothing: the report keeps its session's
+// project, provisional ("timeout"), and is queued.
+func TestSubagentStopBoundsItsAttributionByTheKill(t *testing.T) {
+	home := hookHome(t)
+	billing, shop := filepath.Join(home, "billing"), filepath.Join(home, "src", "shop")
+	gitRepo(t, billing, "git@github.com:me/billing.git")
+	gitRepo(t, shop, "git@github.com:me/shop.git")
+	parent := subagentTranscript(t, "s1", "ag1")
+	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"`+testtool.JSONPath(billing)+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+	agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
+	edit := func(uuid string) string {
+		return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(shop, "x.go")) + `"}}]}}` + "\n"
+	}
+	reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed it"}]}}` + "\n"
+	_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+testtool.JSONPath(billing)+`","message":{"role":"user","content":"Fix it."}}`+"\n"+edit("e1")+edit("e2")+reply), 0o600)
+	// The kill is due within the append margin: the lock deadline passed.
+	t.Setenv(hook.KillAtEnv, strconv.FormatInt(time.Now().Add(subagentAppendMargin-time.Millisecond).UnixNano(), 10))
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
+		"transcript_path": parent, "last_assistant_message": "Fixed it"})
+	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
+	var n struct {
+		DocumentID  string `json:"document_id"`
+		Project     string `json:"project"`
+		Attribution string `json:"attribution"`
+	}
+	_ = json.Unmarshal(raw, &n)
+	if n.DocumentID != "subagent:s1:ag1" || n.Project != "billing" || n.Attribution != "timeout" {
+		t.Errorf("queued %+v (outbox %q), want the report under its session's project, its attribution timed out", n, raw)
+	}
+}
+
+// SubagentStop's child is killed at hook.KillAt: the time its supervisor
+// passed, else its own start plus hook.ChildDeadline. With the outbox lock
+// held by someone else the whole time, its append is refused before then
+// (a "failed" retain event), never cut by the kill (a torn line, a stale
+// lock), and not before its lock deadline (the kill time less
+// subagentAppendMargin): it waits the budget it has. The times are its
+// telemetry's, so the work before the lock and after the refusal (files a
+// loaded runner's disk can stall for most of a second) is not what is
+// timed.
+func TestSubagentStopGivesUpTheLockBeforeTheChildDeadline(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		passed time.Duration // the kill time the supervisor passed, after the child's start; 0: none
+	}{
+		{"its own clock", 0},
+		// The spawn took 1.8 s of the 3 s (a fresh exe Defender scans):
+		// the child's own clock would wait 1.8 s past its kill.
+		{"the supervisor's kill time", 1200 * time.Millisecond},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := hookHome(t)
+			l, err := state.TryAcquire(retain.NotesOutbox(pathsOf(home)).LockPath, "test holder")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = l.Release() }()
+			start := time.Now()
+			old := hookChildStart
+			hookChildStart = start
+			t.Cleanup(func() { hookChildStart = old })
+			killAt := start.Add(hook.ChildDeadline("subagent-stop", nil))
+			t.Setenv(hook.KillAtEnv, "")
+			if c.passed > 0 {
+				killAt = start.Add(c.passed)
+				t.Setenv(hook.KillAtEnv, strconv.FormatInt(killAt.UnixNano(), 10))
+			}
+			fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
+				"transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": "report"})
+			if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
+				t.Errorf("queued under a held lock:\n%s", raw)
+			}
+			// When it reached the lock (its attribution event, just
+			// before the append) and when the append was refused.
+			var reached, refused time.Time
+			for _, line := range strings.Split(telemetryText(t, home), "\n") {
+				var e struct{ Event, Status, TS string }
+				if json.Unmarshal([]byte(line), &e) != nil {
+					continue
+				}
+				ts, _ := time.Parse("2006-01-02T15:04:05.000Z", e.TS)
+				switch {
+				case e.Event == "attribution":
+					reached = ts.Add(time.Millisecond) // the stamp is cut to the millisecond
+				case e.Event == "retain" && e.Status == "failed":
+					refused = ts
+				}
+			}
+			if reached.IsZero() || refused.IsZero() {
+				t.Fatalf("no attribution or failed retain event:\n%s", telemetryText(t, home))
+			}
+			lockDeadline := killAt.Add(-subagentAppendMargin)
+			if refused.Before(lockDeadline.Truncate(time.Millisecond)) {
+				t.Errorf("the append was refused %v after the child's start, before its lock deadline (%v)", refused.Sub(start).Round(time.Millisecond), lockDeadline.Sub(start))
+			}
+			// Due at the lock deadline, or at once when the hook's setup
+			// (the config, the project, the session's files: up to 760 ms
+			// on the loaded VM) reached the lock past it; one try of the
+			// lock fits in the margin, so a wait cut by the deadline is
+			// refused before the kill.
+			due := lockDeadline
+			if reached.After(due) {
+				due = reached
+			}
+			if late := refused.Sub(due); late >= subagentAppendMargin {
+				t.Errorf("the append was refused %v after the child's start, %v past its due time (%v; kill at %v)",
+					refused.Sub(start).Round(time.Millisecond), late.Round(time.Millisecond), due.Sub(start).Round(time.Millisecond), killAt.Sub(start))
+			}
+		})
 	}
 }

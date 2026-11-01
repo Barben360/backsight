@@ -40,23 +40,56 @@ func WriteLive(dir string, pid int, l Live) error {
 // ReadLive returns the record of Claude Code process pid, if any.
 func ReadLive(dir string, pid int) (Live, bool) {
 	var l Live
-	raw, err := os.ReadFile(byPIDPath(dir, pid))
+	raw, err := fsutil.ReadFileShared(byPIDPath(dir, pid))
 	if err != nil || json.Unmarshal(raw, &l) != nil || !ValidID(l.SessionID) {
 		return Live{}, false
 	}
 	return l, true
 }
 
-// PruneLive removes records older than maxAge (Claude Code processes that
-// ended long ago).
-func PruneLive(dir string, maxAge time.Duration, now time.Time) {
-	ents, err := os.ReadDir(filepath.Join(dir, "by-pid"))
-	if err != nil {
-		return
+func bySessionPath(dir, id string) string {
+	return filepath.Join(dir, "by-session", id+".json")
+}
+
+// WriteLiveSession records what the hooks of session l.SessionID see now,
+// under that id: the MCP server's fallback when no record is under its
+// parent pid (Claude Code's process tree on Windows, decision 0080).
+func WriteLiveSession(dir string, l Live) error {
+	if !ValidID(l.SessionID) {
+		return nil
 	}
-	for _, e := range ents {
-		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > maxAge {
-			_ = os.Remove(filepath.Join(dir, "by-pid", e.Name()))
+	raw, err := json.Marshal(l)
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(bySessionPath(dir, l.SessionID), raw, 0o600)
+}
+
+// ReadLiveSession returns the record of session id, if any.
+func ReadLiveSession(dir, id string) (Live, bool) {
+	var l Live
+	if !ValidID(id) {
+		return l, false
+	}
+	raw, err := fsutil.ReadFileShared(bySessionPath(dir, id))
+	if err != nil || json.Unmarshal(raw, &l) != nil || l.SessionID != id {
+		return Live{}, false
+	}
+	return l, true
+}
+
+// PruneLive removes records older than maxAge (Claude Code processes that
+// ended long ago), under pids and session ids alike.
+func PruneLive(dir string, maxAge time.Duration, now time.Time) {
+	for _, sub := range []string{"by-pid", "by-session"} {
+		ents, err := os.ReadDir(filepath.Join(dir, sub))
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > maxAge {
+				_ = os.Remove(filepath.Join(dir, sub, e.Name()))
+			}
 		}
 	}
 }

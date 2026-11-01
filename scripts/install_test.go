@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/blake2b"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 type key struct {
@@ -173,6 +175,7 @@ func pathEntry(t *testing.T, link, data, binary string) {
 }
 
 func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	home, out, err := install(t, dir, k.pub, toolsWithout(t))
@@ -192,6 +195,7 @@ func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
 }
 
 func TestInstallWithMinisign(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	if _, err := exec.LookPath("minisign"); err != nil {
 		// On CI a skip would silently drop install.sh's minisign path, the
 		// one its users take when they have minisign.
@@ -217,6 +221,7 @@ func TestInstallWithMinisign(t *testing.T) {
 }
 
 func TestInstallRefusesWhatDoesNotVerify(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	path := toolsWithout(t)
 	cases := []struct {
 		name   string
@@ -295,6 +300,7 @@ func TestInstallRefusesWhatDoesNotVerify(t *testing.T) {
 }
 
 func TestInstallUnderBackSightHomeAndUpgrade(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	path := toolsWithout(t)
@@ -324,6 +330,7 @@ func TestInstallUnderBackSightHomeAndUpgrade(t *testing.T) {
 
 // A newer release that does not verify leaves the working install alone.
 func TestARefusedUpgradeKeepsTheWorkingInstall(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	path := toolsWithout(t)
@@ -355,6 +362,7 @@ func TestARefusedUpgradeKeepsTheWorkingInstall(t *testing.T) {
 // The verified checksums.txt and its signature stay next to the binary:
 // the binary checks itself against them on its first run (SPEC §11.1).
 func TestInstallKeepsTheSignedChecksums(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	home, out, err := install(t, dir, k.pub, toolsWithout(t))
@@ -373,6 +381,7 @@ func TestInstallKeepsTheSignedChecksums(t *testing.T) {
 // An install.sh from before decision 0067's block review linked the PATH
 // command to a versioned binary: a new install points it at the shim.
 func TestInstallPointsAnOlderPathLinkAtTheShim(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	home := t.TempDir()
@@ -488,6 +497,7 @@ func releaseJSON(tag string, pretty bool) string {
 // pre-releases included (GitHub's /releases/latest skips them), and still
 // verifies it.
 func TestInstallFindsTheNewestReleaseIncludingPreReleases(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, pretty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "compact", true: "pretty"}[pretty], func(t *testing.T) {
 			k := newKey(t)
@@ -521,6 +531,7 @@ func TestInstallFindsTheNewestReleaseIncludingPreReleases(t *testing.T) {
 
 // The release found is verified as any other: a tampered archive is refused.
 func TestInstallRefusesAFoundReleaseThatDoesNotVerify(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, archive := release(t, k)
 	_ = os.WriteFile(filepath.Join(dir, archive), []byte("not the signed archive"), 0o644)
@@ -537,6 +548,7 @@ func TestInstallRefusesAFoundReleaseThatDoesNotVerify(t *testing.T) {
 // A failed lookup stops before any download, says why, and names the way
 // around it.
 func TestInstallLookupFailureNamesTheReleaseURL(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	cases := []struct {
 		name   string
 		status int
@@ -576,6 +588,7 @@ func TestInstallLookupFailureNamesTheReleaseURL(t *testing.T) {
 
 // BACKSIGHT_RELEASE_URL names the release: no lookup.
 func TestInstallWithAReleaseURLSkipsTheLookup(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	g := newGitHub(t, http.StatusInternalServerError, "", "v9.9.8", dir)
@@ -596,6 +609,7 @@ func TestInstallWithAReleaseURLSkipsTheLookup(t *testing.T) {
 // install outside <data>/bin/<version>, so it is refused before anything
 // is written.
 func TestInstallRefusesAnUnexpectedVersion(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, v := range []string{"..", "", ".9", "9.9.9~1"} {
 		t.Run("version "+v, func(t *testing.T) {
 			old := version
@@ -622,6 +636,7 @@ func TestInstallRefusesAnUnexpectedVersion(t *testing.T) {
 // (security review L3: a user sent looking for "install.ps1" may find an
 // unofficial one).
 func TestInstallRefusesAnUnsupportedSystemWithThePlatformPage(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, system := range []string{"MINGW64_NT-10.0-26100", "MSYS_NT-10.0", "CYGWIN_NT-10.0", "FreeBSD"} {
 		t.Run(system, func(t *testing.T) {
 			path := toolsWithout(t)
@@ -651,6 +666,7 @@ func TestInstallRefusesAnUnsupportedSystemWithThePlatformPage(t *testing.T) {
 // an agent told to set one sees the install is not checked against
 // backsight's release key or GitHub (security review L3).
 func TestInstallSaysWhenItsTrustIsOverridden(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	warnKey, warnHost := "BACKSIGHT_INSTALL_PUBKEY is set", "BACKSIGHT_INSTALL_GITHUB is set"
 	k := newKey(t)
 	dir, _ := release(t, k)

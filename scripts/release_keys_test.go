@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 const pkg = "github.com/Barben360/backsight"
@@ -131,6 +133,7 @@ func versionOf(t *testing.T, bin string) versionData {
 // test hooks or pins another Hindsight image, and passes one that trusts
 // the two published keys only (decision 0067 and its block review).
 func TestVerifyKeysRefusesATestBuild(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	needTools(t)
 	version := "-X " + pkg + "/internal/buildinfo.Version=9.9.9"
 	release := t.TempDir()
@@ -168,6 +171,7 @@ func TestVerifyKeysRefusesATestBuild(t *testing.T) {
 // Another machine's binary cannot run here: its build settings are still
 // checked, in the hook form and in dist.
 func TestVerifyKeysChecksEveryTarget(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	needTools(t)
 	goos, goarch := "windows", "arm64"
 	if runtime.GOOS == goos {
@@ -200,6 +204,7 @@ func TestVerifyKeysChecksEveryTarget(t *testing.T) {
 // the testkey or testhooks tag, which go version -m shows for every
 // target, opens them.
 func TestLinkerFlagsAloneCannotChangeTrustOrPin(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	needTools(t)
 	dist := t.TempDir()
 	bin := buildInto(t, dist, "-X "+pkg+"/internal/signing.TestKey="+newKey(t).pub+" -X "+pkg+"/internal/signing.Current="+newKey(t).pub+

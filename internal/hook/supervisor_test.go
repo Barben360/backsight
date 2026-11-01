@@ -3,8 +3,10 @@ package hook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,12 +30,16 @@ func TestMain(m *testing.M) {
 				return []byte(`{"systemMessage":` + string(msg) + `}`), nil
 			case "echo":
 				return []byte(`{"hookSpecificOutput":{"hookEventName":"` + event + `","additionalContext":"ok"}}`), nil
+			case "kill-at":
+				return []byte(`{"systemMessage":"` + os.Getenv(KillAtEnv) + `"}`), nil
 			case "empty":
 				return nil, nil
 			case "garbage":
 				return []byte("not json"), nil
 			case "array":
 				return []byte(`[1,2]`), nil
+			case "fail":
+				return nil, errors.New("handler failed")
 			case "slow":
 				time.Sleep(300 * time.Millisecond)
 				return []byte(`{"systemMessage":"late but in time"}`), nil
@@ -89,6 +95,7 @@ func TestEveryChildFailurePrintsNothing(t *testing.T) {
 		{"fault-hang", "timeout", 400 * time.Millisecond},
 		{"fault-kill", "killed", 5 * time.Second},
 		{"fault-exit2", "exit", 5 * time.Second},
+		{"fail", "exit", 5 * time.Second}, // the handler's own failure is no kill, on Windows too
 		{"garbage", "invalid_output", 5 * time.Second},
 		{"array", "invalid_output", 5 * time.Second},
 	} {
@@ -100,6 +107,31 @@ func TestEveryChildFailurePrintsNothing(t *testing.T) {
 		if c.behaviour == "fault-hang" && time.Since(start) > 3*time.Second {
 			t.Errorf("hang not cut at the deadline: %s", time.Since(start))
 		}
+	}
+}
+
+// A child the supervisor ends because its caller gave up was killed, not
+// timed out and not a failure of its own, on every OS (Windows has no
+// signal to tell it by).
+func TestAChildEndedForItsCallerIsKilled(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Supervisor{
+		Command: func(ctx context.Context, event string) *exec.Cmd {
+			c := exec.CommandContext(ctx, exe, "-test.run=^$", event)
+			c.Env = append(os.Environ(), "HOOK_TEST_CHILD=1", "HOOK_TEST_BEHAVIOUR=fault-hang")
+			return c
+		},
+		Deadline: func(string, []byte) time.Duration { return time.Minute },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { time.Sleep(500 * time.Millisecond); cancel() }()
+	out, f := s.Run(ctx, "stop", []byte(`{}`))
+	if len(out) != 0 || f == nil || f.Kind != "killed" {
+		t.Errorf("out %q failure %+v", out, f)
 	}
 }
 
@@ -167,5 +199,54 @@ func TestTheChildReceivesTheEvent(t *testing.T) {
 	out, f := super(t, "echo-input", "", 5*time.Second)
 	if f != nil || !strings.Contains(string(out), `session_id`) || !strings.Contains(string(out), `s1`) {
 		t.Errorf("out %q failure %+v", out, f)
+	}
+}
+
+// The child learns when its supervisor kills it, a time fixed before the
+// spawn: its own clock starts after its process started, which on Windows
+// can take over a second (final review, M7 block 2).
+func TestTheChildReceivesItsKillTime(t *testing.T) {
+	before := time.Now()
+	out, f := super(t, "kill-at", "", 5*time.Second)
+	after := time.Now()
+	var msg struct {
+		SystemMessage string `json:"systemMessage"`
+	}
+	if f != nil || json.Unmarshal(out, &msg) != nil {
+		t.Fatalf("out %q failure %+v", out, f)
+	}
+	ns, err := strconv.ParseInt(msg.SystemMessage, 10, 64)
+	if err != nil {
+		t.Fatalf("%s = %q, want Unix nanoseconds", KillAtEnv, msg.SystemMessage)
+	}
+	if at := time.Unix(0, ns); at.Before(before.Add(5*time.Second)) || at.After(after.Add(5*time.Second)) {
+		t.Errorf("kill time %v, want the run's start plus its 5 s deadline (between %v and %v)", at, before.Add(5*time.Second), after.Add(5*time.Second))
+	}
+}
+
+// KillAt takes the supervisor's time when it is earlier than the child's
+// own start plus its deadline, never a later one or garbage.
+func TestKillAt(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	own := start.Add(3 * time.Second)
+	early := start.Add(1200 * time.Millisecond)
+	for _, c := range []struct {
+		name, env string
+		want      time.Time
+	}{
+		{"absent", "", own},
+		{"earlier", strconv.FormatInt(early.UnixNano(), 10), early},
+		{"later", strconv.FormatInt(start.Add(time.Minute).UnixNano(), 10), own},
+		{"garbage", "soon", own},
+	} {
+		got := KillAt(start, "subagent-stop", nil, func(k string) string {
+			if k != KillAtEnv {
+				return ""
+			}
+			return c.env
+		})
+		if !got.Equal(c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }

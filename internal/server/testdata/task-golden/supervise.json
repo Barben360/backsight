@@ -1,0 +1,63 @@
+{
+  "project": "bs",
+  "data_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\db",
+  "postgres": [
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\pg\\18.1.0\\bin\\postgres.exe",
+    "-D",
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\db",
+    "-p",
+    "8890",
+    "-c",
+    "fsync=on",
+    "-c",
+    "listen_addresses=127.0.0.1",
+    "-c",
+    "shared_buffers=256MB",
+    "-c",
+    "work_mem=64MB",
+    "-c",
+    "maintenance_work_mem=512MB",
+    "-c",
+    "effective_cache_size=1GB",
+    "-c",
+    "max_parallel_maintenance_workers=4",
+    "-c",
+    "timezone=UTC",
+    "-c",
+    "log_timezone=UTC"
+  ],
+  "pg_isready": [
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\pg\\18.1.0\\bin\\pg_isready.exe",
+    "-q",
+    "-h",
+    "127.0.0.1",
+    "-p",
+    "8890"
+  ],
+  "pg_ctl_stop": [
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\pg\\18.1.0\\bin\\pg_ctl.exe",
+    "stop",
+    "-m",
+    "fast",
+    "-D",
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\db"
+  ],
+  "api": [
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\venv\\1.1.0-0123456789ab\\Scripts\\hindsight-api.exe"
+  ],
+  "env": [
+    "SYSTEMROOT=C:\\Windows",
+    "SystemDrive=C:",
+    "TEMP=C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\tmp",
+    "TMP=C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\tmp",
+    "USERPROFILE=C:\\Users\\u",
+    "LOCALAPPDATA=C:\\Users\\u\\AppData\\Local",
+    "APPDATA=C:\\Users\\u\\AppData\\Roaming",
+    "COMSPEC=C:\\Windows\\system32\\cmd.exe",
+    "PATH=C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\pg\\18.1.0\\bin;C:\\Windows\\System32"
+  ],
+  "env_file": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\server.env",
+  "work_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native",
+  "log_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\state\\logs",
+  "venv": "1.1.0-0123456789ab"
+}

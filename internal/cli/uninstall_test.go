@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // installed is a whole install as setup leaves it: client install's
@@ -54,7 +56,11 @@ func installMachine(t *testing.T) installed {
 		}
 	}
 	// client install made the command on PATH, as install.sh does.
-	if got, err := os.Readlink(filepath.Join(d.Bin, "backsight")); err != nil || got != filepath.Join(d.Data, "bin", "current") {
+	if runtime.GOOS == "windows" { // a copy of the shim, not a link
+		if !shimRuns(filepath.Join(d.Bin, "backsight.exe"), filepath.Join(d.Data, "bin", "current.exe")) {
+			t.Fatal("no PATH copy of the shim")
+		}
+	} else if got, err := os.Readlink(filepath.Join(d.Bin, "backsight")); err != nil || got != filepath.Join(d.Data, "bin", "current") {
 		t.Fatalf("no PATH link to the shim: %q %v", got, err)
 	}
 	m.dk = withCompose(t)
@@ -182,7 +188,7 @@ func TestUninstallRemovesEachPieceAndKeepsTheRest(t *testing.T) {
 	for _, p := range []string{
 		filepath.Join(m.home, "xdg", "systemd", "user", "backsight-tick.timer"),
 		filepath.Join(m.home, "xdg", "systemd", "user", "backsight-maintain.timer"),
-		filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace"), filepath.Join(d.Bin, "backsight"),
+		filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace"), pathCommand(d.Bin),
 	} {
 		if onDisk(p) {
 			t.Errorf("still there: %s", p)
@@ -418,6 +424,7 @@ func TestUninstallPurgeLocalKeepsBackupsAndTheirKey(t *testing.T) {
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func TestUninstallLeavesAPathEntryThatIsNotOurs(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a symlink needs a privilege a standard Windows user lacks, and Windows' PATH command is a copy (TestUninstallRemovesOnlyItsPathEntry)")
 	m := installMachine(t)
 	link := filepath.Join(pathsOf(m.home).Bin, "backsight")
 	_ = os.Remove(link)

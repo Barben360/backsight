@@ -84,3 +84,34 @@ func TestDSNsOpenADoubleSlashPath(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestWriterCheckpointPolicy: on Windows the writer keeps 64 MiB of pages
+// and checkpoints once the WAL holds 256 MiB (65536 pages) instead of 1000
+// pages: a first build's batch each dirties thousands of pages, and each
+// checkpoint flushes them with FlushFileBuffers (Task 12b). Elsewhere the
+// writer keeps SQLite's defaults (Linux unchanged), and the reader keeps
+// them everywhere.
+func TestWriterCheckpointPolicy(t *testing.T) {
+	ix := mustOpen(t, opts(t, tempDirs(t), nil))
+	defer mustClose(t, ix)
+	read := func(db *sql.DB) (ckpt, cache int) {
+		t.Helper()
+		if err := db.QueryRow("PRAGMA wal_autocheckpoint").Scan(&ckpt); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow("PRAGMA cache_size").Scan(&cache); err != nil {
+			t.Fatal(err)
+		}
+		return ckpt, cache
+	}
+	wantCkpt, wantCache := 1000, -2000
+	if runtime.GOOS == "windows" {
+		wantCkpt, wantCache = 65536, -65536
+	}
+	if ckpt, cache := read(ix.sh.w); ckpt != wantCkpt || cache != wantCache {
+		t.Errorf("writer: wal_autocheckpoint %d, cache_size %d; want %d, %d", ckpt, cache, wantCkpt, wantCache)
+	}
+	if ckpt, cache := read(ix.sh.r); ckpt != 1000 || cache != -2000 {
+		t.Errorf("reader: wal_autocheckpoint %d, cache_size %d; want SQLite's 1000, -2000", ckpt, cache)
+	}
+}

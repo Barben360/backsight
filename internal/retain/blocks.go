@@ -423,16 +423,17 @@ func (s *SentIndex) Add(uuids ...string) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(s.path)); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
-	// A torn entry from a crash would shift every later key: cut it first.
+	// A torn entry from a crash would shift every later key: cut it first,
+	// through the path (an append handle on Windows may not truncate).
 	if fi, err := f.Stat(); err == nil && fi.Size()%8 != 0 {
-		if err := f.Truncate(fi.Size() - fi.Size()%8); err != nil {
+		if err := os.Truncate(s.path, fi.Size()-fi.Size()%8); err != nil {
 			_ = f.Close()
 			return err
 		}

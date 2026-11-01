@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -933,7 +934,7 @@ func TestServerStartStop(t *testing.T) {
 }
 
 func pathsOf(home string) paths.Dirs {
-	d, _ := paths.Resolve("linux", home, func(k string) string {
+	d, _ := paths.Resolve(runtime.GOOS, home, func(k string) string {
 		if k == "BACKSIGHT_HOME" {
 			return filepath.Join(home, "backsight")
 		}

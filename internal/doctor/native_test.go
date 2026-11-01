@@ -15,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // goodFacts is a healthy native install's guards.
@@ -117,7 +118,7 @@ func TestDoctorNativeChecks(t *testing.T) {
 		{"venv of another lock", func(n *NativeFacts) { n.VenvDiff = []string{"fastmcp==3.2.0"} },
 			want{"native-venv", "fastmcp==3.2.0", "backsight server upgrade --allow-unordered"}, Error},
 		{"the pinned venv changed", func(n *NativeFacts) { n.Pin = n.Venv; n.VenvDiff = []string{"fastmcp==3.2.0"} },
-			want{"native-venv", "fastmcp==3.2.0", "rm '/n/venv/0.6.2-abc/.backsight-complete'; backsight server install"}, Error},
+			want{"native-venv", "fastmcp==3.2.0", "rm " + shellQuote(filepath.Join("/n/venv/0.6.2-abc", ".backsight-complete")) + "; backsight server install"}, Error},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -275,7 +276,7 @@ func TestDoctorShowsTheSwitchOverlapBeyondNearTies(t *testing.T) {
 func venvWith(t *testing.T, pkgs map[string]string) string {
 	t.Helper()
 	venv := t.TempDir()
-	sp := filepath.Join(venv, "lib", "python3.11", "site-packages")
+	sp := sitePackages(venv) // the venv's layout on this OS
 	for name, v := range pkgs {
 		if err := os.MkdirAll(filepath.Join(sp, name+"-"+v+".dist-info"), 0o755); err != nil {
 			t.Fatal(err)
@@ -317,6 +318,7 @@ func TestNativeVenvDiff(t *testing.T) {
 // compose_dir holds: a space or a quote never turns them into another
 // command.
 func TestDoctorNativeQuotesPathsInCommands(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX shell words for Linux paths, read back by sh")
 	root := "/srv/my data/it's"
 	f := newFixture(t)
 	nativeInstall(f, func() NativeFacts {

@@ -74,7 +74,7 @@ type Tool struct {
 	MS   int    `json:"ms"`
 	Hits int    `json:"hits"`
 	OK   bool   `json:"ok"`
-	Live string `json:"live,omitempty"` // MCP: record | stale | none (how the server found its session)
+	Live string `json:"live,omitempty"` // MCP: record | session | stale | none (how the server found its session: by its parent pid, by the session id)
 }
 
 // Credit is one memory_credit call: its verdict, how many ids it named

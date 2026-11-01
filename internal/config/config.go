@@ -59,6 +59,11 @@ type Server struct {
 	// Runtime runs the server: "" (docker, so a Docker install's file
 	// never holds the key) or "native" (decision 0078).
 	Runtime string `toml:"runtime" json:"runtime"`
+	// StartOnSession: the SessionStart hook starts the native server's
+	// supervisor when none runs. Setup sets it on Windows only when Task
+	// Scheduler refused the server's task (decision 0080); elsewhere it
+	// does nothing.
+	StartOnSession bool `toml:"start_on_session" json:"start_on_session,omitempty"`
 }
 
 // RuntimeKind is the server's runtime: "docker" or "native".
@@ -318,8 +323,13 @@ func Parse(raw []byte, path string, d paths.Dirs, home string) (Config, error) {
 func (c Config) Validate() error { return c.ValidateOn(runtime.GOOS, runtime.GOARCH) }
 
 // NativeRefusal is why the native runtime refuses a platform other than
-// linux-amd64.
-const NativeRefusal = "the native runtime runs on Linux x86_64 (linux-amd64) only in this release"
+// linux-amd64 and windows-amd64 (decision 0080).
+const NativeRefusal = "the native runtime runs on Linux x86_64 and Windows x86_64 only in this release"
+
+// NativeOn reports whether the native runtime runs on goos/goarch.
+func NativeOn(goos, goarch string) bool {
+	return goarch == "amd64" && (goos == "linux" || goos == "windows")
+}
 
 // NativeServerOnly refuses the native runtime on a server-only host: such a
 // host serves other PCs, and the native runtime is loopback only in this
@@ -377,7 +387,7 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	}
 	oneOf("server.runtime", c.Server.Runtime, "", "docker", "native")
 	if c.Server.Runtime == "native" {
-		if goos != "linux" || goarch != "amd64" {
+		if !NativeOn(goos, goarch) {
 			bad("server.runtime", NativeRefusal)
 		}
 		if c.Network.Exposure == "private" {

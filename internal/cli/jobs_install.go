@@ -51,6 +51,10 @@ var sysRunner sysCLI = execSys{}
 // schedulerGOOS is the system the entries are built for; tests replace it.
 var schedulerGOOS = runtime.GOOS
 
+// jobsUserSID is the user's SID, the jobs' tasks' principal (Windows);
+// tests replace it.
+var jobsUserSID = setup.UserSID
+
 type jobsInstallResult struct {
 	Kind     string                 `json:"kind"`
 	Files    []claudecfg.FileResult `json:"files"`
@@ -73,12 +77,18 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 		return scheduler.Plan{}, &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	o := scheduler.Options{Shim: filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS)), Home: home, UID: os.Getuid(),
-		LogDir: filepath.Join(d.State, "logs"), Env: directoryEnv(), Name: cfg.Server.Project}
+		LogDir: filepath.Join(d.State, "logs"), Env: scheduler.TaskEnv(schedulerGOOS, directoryEnv(), os.Getenv), Name: cfg.Server.Project}
 	if v := os.Getenv("PATH"); v != "" {
 		o.Env["PATH"] = v
 	}
 	if schedulerGOOS == "linux" {
 		o.UnitDir = userUnitDir(ctx, home)
+	}
+	if schedulerGOOS == "windows" {
+		o.State = d.State
+		if o.UserSID, err = jobsUserSID(); err != nil {
+			return scheduler.Plan{}, &output.Error{Code: output.Blocked, Message: "the jobs' tasks need your user's SID: " + err.Error()}
+		}
 	}
 	for _, f := range tweak {
 		f(&o)
@@ -120,7 +130,7 @@ func userUnitDir(ctx context.Context, home string) string {
 // unitDirAndEnv are the scheduler's unit directory and directories, which
 // the native runtime's units share.
 func unitDirAndEnv(ctx context.Context, home string) (string, map[string]string) {
-	return userUnitDir(ctx, home), directoryEnv()
+	return userUnitDir(ctx, home), scheduler.TaskEnv(runtime.GOOS, directoryEnv(), os.Getenv)
 }
 
 func cmdLine(c []string) string { return strings.Join(c, " ") }
@@ -300,6 +310,14 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 				for _, f := range files {
 					if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 						return blocked(err)
+					}
+				}
+				if p.Kind == "schtasks" { // their directories, <state>\tasks\<project>, once empty
+					for _, f := range files {
+						if dir := filepath.Dir(f); filepath.Base(filepath.Dir(dir)) == "tasks" {
+							removeIfEmpty(dir)
+							removeIfEmpty(filepath.Dir(dir))
+						}
 					}
 				}
 				if p.Kind == "systemd" {

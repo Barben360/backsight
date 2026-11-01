@@ -99,7 +99,8 @@ func TestCheck(t *testing.T) {
 		exe := r.install(t, t.TempDir(), body, archive+binaryLine(body))
 		got := Check(exe, version, runtime.GOOS, runtime.GOARCH, now)
 		fi, _ := os.Stat(exe)
-		if got.Status != Verified || got.KeyID != signing.Keys()[2].ID || got.Version != version || got.Exe != exe ||
+		real, _ := filepath.EvalSymlinks(exe) // the record names the long, resolved path (Windows short names: RUNNER~1)
+		if got.Status != Verified || got.KeyID != signing.Keys()[2].ID || got.Version != version || got.Exe != real ||
 			got.Size != fi.Size() || !got.ModTime.Equal(fi.ModTime()) || !got.CheckedAt.Equal(now) {
 			t.Errorf("%+v", got)
 		}

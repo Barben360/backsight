@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // A native config gets the native runtime, with the units where the user
@@ -48,11 +49,18 @@ func TestRuntimeForPicksNative(t *testing.T) {
 	if n.Dirs != d || n.Proc != "/proc" || n.Cfg.Server.Runtime != "native" {
 		t.Errorf("Dirs %+v Proc %q", n.Dirs, n.Proc)
 	}
-	// TestMain's refusing runners: no test reaches systemd or a tool.
-	if err := n.Stop(context.Background()); err != nil {
+	// TestMain's refusing runners: no test reaches systemd, schtasks, the
+	// supervisor's pipe or a tool. Linux: no unit, nothing to stop.
+	// Windows: Stop asks the pipe, and the refusal answers (never a real
+	// supervisor of the default project's).
+	err := n.Stop(context.Background())
+	switch {
+	case runtime.GOOS == "windows" && (err == nil || !strings.Contains(err.Error(), "without a fake runner")):
+		t.Errorf("Stop on Windows: %v, want the refusing runners' error", err)
+	case runtime.GOOS != "windows" && err != nil:
 		t.Errorf("Stop without units: %v", err)
 	}
-	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir()}).StopAPI(context.Background()); err != nil {
+	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir(), GOOS: "linux"}).StopAPI(context.Background()); err != nil {
 		t.Errorf("StopAPI without units: %v", err)
 	}
 	if _, err := n.Sys.Run(context.Background(), "systemctl", "--user", "daemon-reload"); err == nil || !strings.Contains(err.Error(), "without a fake") {
@@ -66,23 +74,37 @@ func TestRuntimeForPicksNative(t *testing.T) {
 	}
 }
 
-// execTools runs a tool with exactly the environment it is given.
+// execTools runs a tool with exactly the environment it is given: none
+// of ours (a PYTHONPATH of the user's never reaches it), its stdin, and
+// its stderr's tail in the error.
 func TestExecToolsGivesExactlyItsEnvironment(t *testing.T) {
 	t.Setenv("PYTHONPATH", "/evil")
-	out, err := execTools{}.Run(context.Background(), []string{"A=1"}, strings.NewReader("in"), "/usr/bin/env")
+	dir := t.TempDir()
+	envTool := testtool.Write(t, dir, "envtool", testtool.Fake{Script: "env A unset\nenv PYTHONPATH unset\nstdin"})
+	out, err := execTools{}.Run(context.Background(), []string{"A=1"}, strings.NewReader("in"), envTool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(out)); got != "A=1" {
-		t.Errorf("env %q, want only A=1", got)
+	if got := string(out); got != "1\nunset\nin" {
+		t.Errorf("A, PYTHONPATH and stdin %q, want 1, unset and in", got)
 	}
-	out, err = execTools{}.Run(context.Background(), nil, nil, "/usr/bin/env")
-	if err != nil || strings.TrimSpace(string(out)) != "" {
+	out, err = execTools{}.Run(context.Background(), nil, nil, envTool)
+	if err != nil || string(out) != "unset\nunset\n" {
 		t.Errorf("nil env inherited: %q %v", out, err)
 	}
-	_, err = execTools{}.Run(context.Background(), nil, nil, "/bin/sh", "-c", "echo boom >&2; exit 3")
+	boom := testtool.Write(t, dir, "boom", testtool.Fake{Stderr: "boom", Code: 3})
+	_, err = execTools{}.Run(context.Background(), nil, nil, boom)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Errorf("stderr's tail missing from %v", err)
+	}
+	// Linux: nothing else at all reaches it (Windows' CreateProcess adds
+	// SYSTEMROOT to any environment Go passes).
+	if runtime.GOOS != "linux" {
+		return
+	}
+	out, err = execTools{}.Run(context.Background(), []string{"A=1"}, nil, "/usr/bin/env")
+	if err != nil || strings.TrimSpace(string(out)) != "A=1" {
+		t.Errorf("env %q %v, want only A=1", out, err)
 	}
 }
 

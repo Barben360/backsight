@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeSys records each systemctl, journalctl or systemd-run call; Out
@@ -63,7 +64,8 @@ func withFreePort(t *testing.T, ports ...int) *[][]int {
 }
 
 // nativeFixture is a native runtime on temporary directories, with sec in
-// its secrets.toml and fakes for the system and the tools.
+// its secrets.toml and fakes for the system and the tools, on the systemd
+// host whatever the test host (as newNative).
 func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeTools) {
 	t.Helper()
 	base := t.TempDir()
@@ -76,7 +78,7 @@ func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeToo
 	sys, tools := &fakeSys{}, &fakeTools{}
 	n := Native{Cfg: cfg, Dirs: d, UnitDir: filepath.Join(base, "units"),
 		Env: map[string]string{"BACKSIGHT_HOME": base, "XDG_STATE_HOME": filepath.Join(base, "xs")},
-		Sys: sys, Tools: tools, Proc: "/proc"}
+		Sys: sys, Tools: tools, Proc: "/proc", GOOS: "linux"}
 	withFreePort(t, 8889)
 	withAPIHealth(t, func(context.Context, string) (string, error) { return "connected", nil })
 	tools.Out = dbToolsOut("on")
@@ -182,6 +184,7 @@ func TestNativeLockHonoursPythonDotenvDisabled(t *testing.T) {
 // unit's environment, must still resolve the user's config (the live
 // switch to native failed with "no config at <native>/home/.config").
 func TestNativeCheckResolvesTheUsersDirectoriesNotTheUnitsHome(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the units' POSIX HOME and the user's directories read through /usr/bin/env")
 	withFreePort(t, 8889)
 	home := filepath.Join(t.TempDir(), "u")
 	d, err := paths.Resolve("linux", home, func(string) string { return "" })
@@ -240,6 +243,7 @@ func TestNativeCheckResolvesTheUsersDirectoriesNotTheUnitsHome(t *testing.T) {
 // The golden files pin what a native install runs, and the assertions
 // name each E29 requirement they carry.
 func TestNativeRenderMeetsTheRequirements(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the rendered systemd units and their / paths (Windows: TestTaskXMLGolden, TestSuperviseJSONHasNoSecret)")
 	withFreePort(t, 8889)
 	cfg := config.Default(paths.Dirs{Data: "/srv/bs/data"}, "/home/u")
 	cfg.Server.Runtime = "native"
@@ -368,6 +372,7 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 
 // A path with a space, a quote, a % or a $ stays one word in a unit.
 func TestNativeUnitsQuoteTheirPaths(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: systemd's quoting of the units' / paths (Windows: TestTaskXMLCarriesAnyPathExactly)")
 	withFreePort(t, 8889)
 	cfg := config.Default(paths.Dirs{Data: "/srv/my data"}, "/home/u")
 	cfg.Server.ComposeDir = `/srv/my data/100% "$x"`
@@ -384,7 +389,7 @@ func TestNativeUnitsQuoteTheirPaths(t *testing.T) {
 	if got, want := unitLine(f.Units["backsight-db.service"], "ExecStart"), `"/srv/my data/100%% \"$x\"/native/home/.pg0/installation/18.1.0/bin/postgres" -D "/srv/my data/100%% \"$$x\"/native/home/.pg0/instances/hindsight/data" -p `; !strings.HasPrefix(got, want) {
 		t.Errorf("db ExecStart=%s, want it to start %s", got, want)
 	}
-	if v, err := (Native{Cfg: cfg, UnitDir: t.TempDir()}).deployedFrom(srv); err != nil || v != n.Version() {
+	if v, err := (systemdHost{n: Native{Cfg: cfg, UnitDir: t.TempDir()}}).deployedFrom(srv); err != nil || v != n.Version() {
 		t.Errorf("Deployed of a quoted path: %q %v", v, err)
 	}
 	if got, want := unitLine(f.Units["backsight-db.service"], "ExecStartPre"), `"/srv/my data/bin/current" server native-check`; got != want {
@@ -432,12 +437,8 @@ func TestNativeNeverPutsASecretOnArgvOrInAUnit(t *testing.T) {
 			}
 		}
 	}
-	if st, err := os.Stat(n.EnvFile()); err != nil || st.Mode().Perm() != 0o600 {
-		t.Errorf("server.env: %v", err)
-	}
-	if st, err := os.Stat(n.Home()); err != nil || st.Mode().Perm() != 0o700 {
-		t.Errorf("home/: %v %v", st.Mode(), err)
-	}
+	testtool.RequirePrivate(t, n.EnvFile())
+	testtool.RequirePrivate(t, n.Home())
 
 	for _, step := range []func() error{
 		func() error { return n.Start(ctx) },
@@ -872,6 +873,7 @@ func TestNativeWriteOnlyWhatChanged(t *testing.T) {
 }
 
 func TestNativeIsARuntime(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the Linux host's shell commands (systemctl, rm -rf) over / paths and its orchestrator")
 	var rt Runtime = Native{}
 	if rt.Kind() != "native" {
 		t.Error(rt.Kind())
@@ -958,6 +960,7 @@ func TestNativeRenameBankRunsTheVenvsAdmin(t *testing.T) {
 // transient unit, TMPDIR under the private home, then the real password
 // goes in through psql's stdin.
 func TestNativeCreatesTheInstanceWithThePasswordOnStdin(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the creation through systemd-run and /bin/sh, and TMPDIR's mode bits (Windows: TestWindowsInstanceCreationNeverPutsThePasswordOnArgv)")
 	n, _, tools := nativeFixture(t, config.Secrets{DBPassword: "dbpw-XYZ", APIKey: "a", UIKey: "u", LLMAPIKey: "l"})
 	installed(t, n, config.Secrets{DBPassword: "dbpw-XYZ", APIKey: "a", UIKey: "u", LLMAPIKey: "l"})
 	tmp := filepath.Join(n.Home(), "tmp")
@@ -1191,14 +1194,10 @@ func TestNativeWriteMakesTheRootPrivate(t *testing.T) {
 			if err := os.MkdirAll(n.Root(), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Chmod(n.Root(), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			testtool.ShareWithOthers(t, n.Root())
 		}
 		rendered(t, n, secrets)
-		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
-			t.Errorf("existing %v: the native root %v %v, want 0700", existing, st.Mode(), err)
-		}
+		testtool.RequirePrivate(t, n.Root())
 	}
 }
 

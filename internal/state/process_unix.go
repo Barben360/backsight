@@ -11,3 +11,7 @@ func processAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
+
+// createRefused: Unix removes a name at once, so an exclusive create
+// never meets a file being deleted.
+func createRefused(error) bool { return false }

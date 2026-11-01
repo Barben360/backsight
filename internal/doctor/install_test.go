@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func (f *fixture) session(id, project, remote string) {
@@ -156,7 +158,8 @@ func (f *fixture) journal(lines ...string) {
 }
 
 func jl(action, command, target, status, run, restores string) string {
-	return `{"step":"claude-config","action":"` + action + `","command":"` + command + `","target":"` + target + `","status":"` + status + `","run":"` + run + `","restores":"` + restores + `"}`
+	raw, _ := json.Marshal(map[string]string{"step": "claude-config", "action": action, "command": command, "target": target, "status": status, "run": run, "restores": restores})
+	return string(raw) // escaped: a Windows target holds backslashes
 }
 
 func (f *fixture) wired(profile string) {
@@ -289,7 +292,7 @@ func TestPendingRestoreWarnsOnARestoreThatNeverFinished(t *testing.T) {
 // install pointing at refURL.
 func (f *fixture) refConfig(refURL string) (*reference.Install, string) {
 	dir := filepath.Join(f.home, "bk")
-	put(f.t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:18888\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	put(f.t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:18888\"\n[backup]\ndir = "+testtool.TOMLStr(dir)+"\n", 0o600)
 	f.reference(refURL)
 	ref, err := reference.Discover(f.home, claudecode.Locate(f.home, f.env.Getenv))
 	if err != nil || ref == nil {

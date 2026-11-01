@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -27,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
+	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/report"
 	"github.com/Barben360/backsight/internal/retain"
@@ -370,9 +370,6 @@ func localSecretValues() []string {
 	return secretValues(d.SecretsFile(), runtimeFor(cfg).SecretFiles(), false)
 }
 
-// envSecretKey names the .env entries that hold a secret even unquoted.
-var envSecretKey = regexp.MustCompile(`(?i)(key|pass|secret|token)`)
-
 // secretValues reads every value of secrets.toml (whatever its mode or
 // keys: reading is not showing) and the secrets of each of envFiles, the
 // server's files holding its keys (secret-named keys, and with quoted
@@ -404,7 +401,7 @@ func secretValues(secretsFile string, envFiles []string, quoted bool) []string {
 			}
 			v = strings.TrimSpace(v)
 			isQuoted := len(v) >= 2 && (v[0] == '\'' || v[0] == '"') && v[len(v)-1] == v[0]
-			if quoted && isQuoted || envSecretKey.MatchString(k) {
+			if quoted && isQuoted || redact.EnvSecretKey.MatchString(k) {
 				out = append(out, strings.Trim(v, `"'`))
 			}
 		}

@@ -28,8 +28,10 @@ func TestResolve(t *testing.T) {
 			Data: "/Users/u/Library/Application Support/backsight", Config: "/Users/u/Library/Application Support/backsight/config",
 			State: "/Users/u/Library/Application Support/backsight/state", Bin: "/Users/u/.local/bin"}},
 		{"windows", "windows", `C:\Users\u`, map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}, Dirs{
-			Data: filepath.Join(`C:\Users\u\AppData\Local`, "backsight"), Config: filepath.Join(`C:\Users\u\AppData\Local`, "backsight", "config"),
-			State: filepath.Join(`C:\Users\u\AppData\Local`, "backsight", "state"), Bin: filepath.Join(`C:\Users\u\AppData\Local`, "Programs", "backsight")}},
+			Data: `C:\Users\u\AppData\Local\backsight`, Config: `C:\Users\u\AppData\Local\backsight\config`,
+			State: `C:\Users\u\AppData\Local\backsight\state`, Bin: `C:\Users\u\AppData\Local\Programs\backsight`}},
+		{"windows BACKSIGHT_HOME", "windows", `C:\Users\u`, map[string]string{"BACKSIGHT_HOME": `D:/bs`, "BACKSIGHT_STATE_DIR": `\\nas\s\st`}, Dirs{
+			Data: `D:\bs\data`, Config: `D:\bs\config`, State: `\\nas\s\st`, Bin: `D:\bs\bin`}},
 		{"BACKSIGHT_HOME wins everywhere", "darwin", "/Users/u", map[string]string{"BACKSIGHT_HOME": "/t/bs"}, Dirs{
 			Data: "/t/bs/data", Config: "/t/bs/config", State: "/t/bs/state", Bin: "/t/bs/bin"}},
 	}
@@ -55,6 +57,16 @@ func TestResolveRefusesMissingBase(t *testing.T) {
 	}
 	if _, err := Resolve("linux", "/home/u", env(map[string]string{"BACKSIGHT_HOME": "relative"})); err == nil {
 		t.Error("a relative BACKSIGHT_HOME must be refused")
+	}
+	// Absolute is judged by the target OS's rules, whatever the host.
+	if _, err := Resolve("linux", `C:\Users\u`, env(nil)); err == nil {
+		t.Error(`a home of C:\Users\u is not absolute on linux`)
+	}
+	if _, err := Resolve("windows", `C:\Users\u`, env(map[string]string{"BACKSIGHT_HOME": "/t/bs"})); err == nil {
+		t.Error("a BACKSIGHT_HOME of /t/bs is not absolute on windows")
+	}
+	if d, err := Resolve("windows", `C:\Users\u`, env(map[string]string{"BACKSIGHT_HOME": `C:\bs`, "BACKSIGHT_STATE_DIR": "/s"})); err != nil || d.State != `C:\bs\state` {
+		t.Errorf("a BACKSIGHT_STATE_DIR of /s is not absolute on windows: %+v %v", d, err)
 	}
 }
 

@@ -177,6 +177,18 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		}
 		add("path", did(true), link+" → "+shim)
 	}
+	if runtime.GOOS == "windows" && c.dirs.Bin != "" {
+		// The PATH copy is found through the user's PATH (HKCU, no admin).
+		added := false
+		if !plan {
+			if added, err = ensureUserPath(c.dirs.Bin); err != nil {
+				return res, blocked(fmt.Errorf("adding %s to the user PATH: %w", c.dirs.Bin, err))
+			}
+		} else {
+			added = true // planned: reported as a possible change
+		}
+		add("userpath", did(added), c.dirs.Bin+" (user PATH, takes effect in new terminals)")
+	}
 	if !plan {
 		pruneBinaries(c.dirs.Data, c.dirs.Bin, target, before.ShimTarget)
 	}
@@ -427,17 +439,11 @@ func installShim(target, shim string) error {
 }
 
 // pointShim makes the shim run target: a symlink swapped atomically, or
-// on Windows a copy, the running one renamed aside first.
+// on Windows a copy, the running one renamed aside under a unique name
+// (pointShimWindows).
 func pointShim(target, shim string) error {
 	if runtime.GOOS == "windows" {
-		old := shim + ".old"
-		_ = os.Remove(old) // fails while a previous session still runs it: fine
-		if _, err := os.Stat(shim); err == nil {
-			if err := os.Rename(shim, old); err != nil {
-				return err
-			}
-		}
-		return copyFile(target, shim, 0o755)
+		return pointShimWindows(target, shim)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(shim), ".current-*")
 	if err != nil {
@@ -458,6 +464,14 @@ func pointShim(target, shim string) error {
 
 // copyFile copies src to dst durably: unique temp file, fsync, rename.
 func copyFile(src, dst string, mode os.FileMode) error {
+	// The same file under two names (an 8.3 short path and its long one, a
+	// link) is already copied: replacing it with itself fails on Windows
+	// (it is open for reading) and is a no-op elsewhere.
+	if si, err := os.Stat(src); err == nil {
+		if di, err := os.Stat(dst); err == nil && os.SameFile(si, di) {
+			return nil
+		}
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -496,17 +510,33 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
+// pathCommand is the command on PATH: <bin>/backsight, on Windows the
+// copy <bin>\backsight.exe (a symlink needs a privilege a standard user
+// lacks, and a PATH lookup finds .exe files).
+func pathCommand(bin string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(bin, "backsight.exe")
+	}
+	return filepath.Join(bin, "backsight")
+}
+
 // olderPathLink reports the command on PATH (<bin>/backsight) when it is
 // a link to one of this install's versioned binaries, as install.sh made
 // it before decision 0067's block review: it then runs that version
 // whatever update apply installs, and dangles once pruning removes it.
 // Anything else there (none, a file, a link elsewhere: a developer's
-// build) is the user's and stays. Windows has no such link.
+// build) is the user's and stays. On Windows the command is a copy of the
+// shim that every install and update swaps, so one that exists is always
+// ours to refresh.
 func olderPathLink(d paths.Dirs, shim string) (string, bool) {
-	if runtime.GOOS == "windows" || d.Bin == "" {
+	if d.Bin == "" {
 		return "", false
 	}
-	link := filepath.Join(d.Bin, "backsight")
+	link := pathCommand(d.Bin)
+	if runtime.GOOS == "windows" {
+		fi, err := os.Lstat(link)
+		return link, err == nil && fi.Mode().IsRegular()
+	}
 	dest, err := os.Readlink(link)
 	if err != nil {
 		return link, false
@@ -520,12 +550,12 @@ func olderPathLink(d paths.Dirs, shim string) (string, bool) {
 
 // absentPathLink reports that nothing is at <bin>/backsight (not even a
 // dangling link): client install then makes the PATH command, a link to
-// the shim. Windows has no such link.
+// the shim, on Windows a copy of it.
 func absentPathLink(d paths.Dirs) bool {
-	if runtime.GOOS == "windows" || d.Bin == "" {
+	if d.Bin == "" {
 		return false
 	}
-	_, err := os.Lstat(filepath.Join(d.Bin, "backsight"))
+	_, err := os.Lstat(pathCommand(d.Bin))
 	return errors.Is(err, fs.ErrNotExist)
 }
 
@@ -542,7 +572,7 @@ func pruneBinaries(data, bin, current, previous string) {
 		return
 	}
 	keep := []string{current, previous}
-	if p, err := filepath.EvalSymlinks(filepath.Join(bin, "backsight")); err == nil {
+	if p, err := filepath.EvalSymlinks(pathCommand(bin)); err == nil {
 		keep = append(keep, p)
 		// the same directory reached through a symlinked data directory
 		if real, err := filepath.EvalSymlinks(dir); err == nil {

@@ -11,11 +11,24 @@ import (
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
-// viewLimit is the dashboard's page budget (300 ms p95, spec §7) with a
-// margin of 3 for a slower runner, as block 1's index budgets.
-const viewLimit = 900 * time.Millisecond
+// baseViewLimit is the dashboard's page budget (300 ms p95, spec §7) with
+// a margin of 3 for a slower runner, as block 1's index budgets.
+const baseViewLimit = 900 * time.Millisecond
+
+// viewLimit is baseViewLimit, doubled on GitHub's Windows runner, as the
+// dashboard's pageLimit: there the slowest view (projects <name>) took
+// 901 ms and the overview 674 ms, where the Windows test VM's slowest
+// takes 494 ms and its overview 423 ms, so the runner, not Windows, is
+// slow; the VM and every other host keep the base limit.
+var viewLimit = func() time.Duration {
+	if runtime.GOOS == "windows" && os.Getenv("GITHUB_ACTIONS") == "true" {
+		return 2 * baseViewLimit
+	}
+	return baseViewLimit
+}()
 
 // TestViewBudgets times the page views on block 1's generated 13 months
 // (indexgen.Budget), the default 7-day window, a server that answers at
@@ -27,7 +40,7 @@ func TestViewBudgets(t *testing.T) {
 	if raceEnabled || testing.Short() {
 		t.Skip("time budgets are measured without -race and -short")
 	}
-	home := t.TempDir()
+	home := testtool.BenchTempDir(t)
 	t.Setenv("BACKSIGHT_HOME", home)
 	t.Setenv("BACKSIGHT_STATE_DIR", "")
 	dirs, err := paths.Resolve(runtime.GOOS, home, os.Getenv)

@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // indexCanary is the session of the telemetry lines written before a
@@ -95,7 +96,8 @@ func TestTickIngestsOnEveryExitPath(t *testing.T) {
 		{"maintenance in progress", func(t *testing.T, home string) {
 			d := pathsOf(home)
 			_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
-			_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1}`), 0o600)
+			// a live owner that is not this process (pid 1 is one on Linux only)
+			_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+itoa(testtool.OtherPID())+`}`), 0o600)
 		}, output.OK, "skipped"},
 		{"components.write is off", func(t *testing.T, home string) {
 			appendConfig(t, home, "[components]\nwrite = false")

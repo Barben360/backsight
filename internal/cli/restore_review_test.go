@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 const epochDocPath = "/v1/default/banks/claude-memory-control/documents/backsight:epoch"
@@ -370,7 +371,7 @@ func TestRestoreWithoutSafety(t *testing.T) {
 func TestRestorePlanRefuses(t *testing.T) {
 	for name, prep := range map[string]func(t *testing.T, home, archive string) (string, string){
 		"lock held": func(t *testing.T, home, archive string) (string, string) {
-			_ = os.WriteFile(pathsOf(home).MaintenanceLock(), []byte(`{"pid":1,"command":"update"}`), 0o600)
+			_ = os.WriteFile(pathsOf(home).MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`,"command":"update"}`), 0o600)
 			return archive, "maintenance in progress"
 		},
 		"newer image": func(t *testing.T, home, _ string) (string, string) {
@@ -461,7 +462,7 @@ func TestServerCommandsRefuseDuringARestore(t *testing.T) {
 		},
 		"maintenance": func(home string) {
 			_ = os.MkdirAll(pathsOf(home).State, 0o700)
-			_ = os.WriteFile(pathsOf(home).MaintenanceLock(), []byte(`{"pid":1,"command":"restore"}`), 0o600)
+			_ = os.WriteFile(pathsOf(home).MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`,"command":"restore"}`), 0o600)
 		},
 	} {
 		for _, args := range [][]string{{"server", "start"}, {"server", "stop"}, {"server", "install"}, {"bank", "apply"}} {

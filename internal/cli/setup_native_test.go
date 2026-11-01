@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/setup"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // nativeFresh is a machine with nothing of a server yet, where a native
@@ -80,6 +81,7 @@ func hasCall(calls []string, want string) bool { return slices.Contains(calls, w
 // step builds the native runtime's files, creates its database (ruling
 // R35) and starts both units.
 func TestSetupRuntimeNativeWritesTheConfig(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	home, f := setupMachine(t)
 	f.real["server install"] = true
 	n, sys, port := nativeFresh(t, home)
@@ -131,6 +133,7 @@ func TestSetupRuntimeNativeWritesTheConfig(t *testing.T) {
 // on a machine without one refuses and enables nothing; server install
 // creates it and starts both units.
 func TestNativeServerInstallCreatesWhatServerStartRefuses(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	home := isolate(t)
 	withSys(t, "linux")
 	n, sys, port := nativeFresh(t, home)
@@ -168,6 +171,7 @@ func TestNativeServerInstallCreatesWhatServerStartRefuses(t *testing.T) {
 // first real run: 203/EXEC). A shim already there is the client's to
 // point, and is left alone; a dangling one is installed again.
 func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	for _, c := range []struct {
 		name               string
 		existing, dangling bool
@@ -239,12 +243,13 @@ func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
 // with a Unix socket under it, postgres would refuse (sun_path's 107
 // bytes), as the native chain's first real run showed.
 func TestNativeServerInstallStartsUnderALongDataDirectory(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	isolate(t)
 	home := filepath.Join(t.TempDir(), strings.Repeat("h", 150))
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	testtool.SetHome(t, home)
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
 	withSys(t, "linux")
 	n, sys, port := nativeFresh(t, home)
@@ -275,6 +280,7 @@ func TestNativeServerInstallStartsUnderALongDataDirectory(t *testing.T) {
 // install with no BACKSIGHT_HOME, native-check found no config.toml
 // under home/ and the live switch to native failed at its target step.
 func TestNativeServerInstallRunsNativeCheckWithTheUsersHome(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	home := isolate(t)
 	withSys(t, "linux")
 	n, _, port := nativeFresh(t, home)
@@ -341,7 +347,7 @@ func TestSetupRuntimeNativePreflight(t *testing.T) {
 		not   string   // never in the message
 		cmd   string   // the action's command
 	}{
-		{name: "arm64", probe: func(p *setup.Probes) { p.GOARCH = "arm64" }, code: output.Blocked, want: []string{"linux-amd64"}},
+		{name: "arm64", probe: func(p *setup.Probes) { p.GOARCH = "arm64" }, code: output.Blocked, want: []string{config.NativeRefusal}},
 		{name: "linger off", probe: func(p *setup.Probes) { p.Linger = func() (string, error) { return "no", nil } },
 			code: output.NeedsUser, want: []string{"loginctl enable-linger"}, cmd: "loginctl enable-linger"},
 		{name: "no user manager", noBus: true, code: output.NeedsUser,
@@ -431,5 +437,177 @@ func TestSetupRuntimeAnswerRules(t *testing.T) {
 	_ = os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nurl = \"http://127.0.0.1:18888\"\nui_port = 19999\n"), 0o600)
 	if code, _, errOut := run(t, "setup", "--runtime", "native", "--answer", "consent=yes", "--non-interactive"); code != output.Usage || !strings.Contains(errOut, "backsight server runtime switch native") {
 		t.Errorf("native over a Docker config: exit %d %s", code, errOut)
+	}
+}
+
+// windowsMachine is setupMachine on Windows x86_64 (decision 0080): its
+// pre-flight passes the Windows native checks; task is the Task Scheduler
+// probe's answer.
+func windowsMachine(t *testing.T, task error) (string, *fakeSteps) {
+	t.Helper()
+	home, f := setupMachine(t)
+	setupGOOS, setupGOARCH = "windows", "amd64"
+	inner := preflightProbes
+	preflightProbes = func(ctx context.Context, s setupEnv, x map[string]string) setup.Probes {
+		p := inner(ctx, s, x)
+		p.GOOS = "windows"
+		p.VenvRoot = `C:\Users\jo\AppData\Local\backsight\data\server\native\venv\1.1.0-14d79a0a7914`
+		p.NativePaths = []string{`C:\Users\jo\AppData\Local\backsight\data`}
+		p.Conhost = func(context.Context) error { return nil }
+		p.Task = func(context.Context) error { return task }
+		return p
+	}
+	return home, f
+}
+
+// Setup on Windows x86_64 defaults to the native runtime and the role
+// both (decision 0080), and its plan names the scheduled task, not
+// systemd units; --runtime docker is still taken.
+func TestSetupDefaultsToNativeOnWindows(t *testing.T) {
+	home, f := windowsMachine(t, nil)
+	code, out, _ := run(t, "setup", "--plan", "--answer", "provider=deepseek", "--json")
+	env := parseSetup(t, out)
+	if code != output.OK || env.Data.Answers["runtime"] != "native" || env.Data.Answers["role"] != config.RoleBoth {
+		t.Fatalf("exit %d, answers %v\n%s", code, env.Data.Answers, out)
+	}
+	var server setup.Step
+	for _, st := range env.Data.Steps {
+		if st.Name == "server" {
+			server = st
+		}
+	}
+	if !strings.Contains(server.Detail, `under the scheduled task \backsight\server`) || strings.Contains(server.Detail, "systemd") {
+		t.Errorf("server step %q", server.Detail)
+	}
+	ids := map[string]bool{}
+	for _, c := range env.Data.Preflight {
+		ids[c.ID] = true
+	}
+	for _, id := range []string{"path-length", "path-chars", "conhost", "task"} {
+		if !ids[id] {
+			t.Errorf("the plan's pre-flight lacks %s: %v", id, ids)
+		}
+	}
+	if ids["systemd"] || ids["linger"] {
+		t.Errorf("systemd checks on Windows: %v", ids)
+	}
+	if onDisk(pathsOf(home).ConfigFile()) || len(f.calls) > 0 {
+		t.Error("--plan changed something")
+	}
+	if _, out, _ := run(t, "setup", "--plan", "--runtime", "docker", "--answer", "provider=deepseek", "--json"); parseSetup(t, out).Data.Answers["runtime"] != "" {
+		t.Errorf("--runtime docker on Windows: %v", parseSetup(t, out).Data.Answers)
+	}
+	// Elsewhere the default stays Docker.
+	setupGOOS = "linux"
+	if _, out, _ := run(t, "setup", "--plan", "--answer", "provider=deepseek", "--json"); parseSetup(t, out).Data.Answers["runtime"] != "" {
+		t.Errorf("linux default: %v", parseSetup(t, out).Data.Answers)
+	}
+	setupGOOS, setupGOARCH = "windows", "arm64"
+	if _, out, _ := run(t, "setup", "--plan", "--answer", "provider=deepseek", "--json"); parseSetup(t, out).Data.Answers["runtime"] != "" {
+		t.Errorf("windows/arm64 default: %v", parseSetup(t, out).Data.Answers)
+	}
+}
+
+// noDownloads is a runtime with nothing to download (no Downloader).
+type noDownloads struct{ server.Runtime }
+
+// Task Scheduler refusing the server's task does not stop setup: it warns
+// with the fallback and writes server.start_on_session = true; an
+// accepted task writes no such key.
+func TestSetupSetsStartOnSessionWhenTheTaskIsRefused(t *testing.T) {
+	for _, refused := range []bool{true, false} {
+		t.Run(map[bool]string{true: "refused", false: "accepted"}[refused], func(t *testing.T) {
+			var task error
+			if refused {
+				task = errors.New("ERROR: Access is denied.")
+			}
+			home, _ := windowsMachine(t, task)
+			withLLMKey(t, home)
+			old := runtimeWith // nothing to download: the server step is faked
+			runtimeWith = func(cfg config.Config, g bool) server.Runtime { return noDownloads{old(cfg, g)} }
+			t.Cleanup(func() { runtimeWith = old })
+			code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+			env := parseSetup(t, out)
+			if code != output.OK {
+				t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+			}
+			raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+			if got := strings.Contains(string(raw), "\nstart_on_session = true\n"); got != refused {
+				t.Errorf("start_on_session written %v, want %v:\n%s", got, refused, raw)
+			}
+			cfg, err := config.Load(pathsOf(home).ConfigFile(), pathsOf(home), home)
+			if err != nil || cfg.Server.StartOnSession != refused || cfg.RuntimeKind() != "native" {
+				t.Errorf("config: %v start_on_session %v runtime %q", err, cfg.Server.StartOnSession, cfg.Server.Runtime)
+			}
+			var check setup.Check
+			for _, c := range env.Data.Preflight {
+				if c.ID == "task" {
+					check = c
+				}
+			}
+			if refused && (check.Status != setup.Warn || check.Fix != setup.TaskFallback) {
+				t.Errorf("task check %+v", check)
+			}
+			if refused && !hasStep(env.Data.Steps, "config", "done", "server.start_on_session = true") {
+				t.Errorf("the config step does not say so:\n%s", out)
+			}
+		})
+	}
+}
+
+// Fix round 1 (Task 11): a later setup whose probe task passes removes the
+// server.start_on_session an earlier one set, through the config editor,
+// and setup --undo puts it back.
+func TestSetupClearsStartOnSessionWhenTheTaskPasses(t *testing.T) {
+	home, _ := windowsMachine(t, nil)
+	withLLMKey(t, home)
+	task := errors.New("ERROR: Access is denied.")
+	inner := preflightProbes
+	preflightProbes = func(ctx context.Context, s setupEnv, x map[string]string) setup.Probes {
+		p := inner(ctx, s, x)
+		p.Task = func(context.Context) error { return task }
+		return p
+	}
+	old := runtimeWith // nothing to download: the server step is faked
+	runtimeWith = func(cfg config.Config, g bool) server.Runtime { return noDownloads{old(cfg, g)} }
+	t.Cleanup(func() { runtimeWith = old })
+	file := pathsOf(home).ConfigFile()
+	setupRun := func() setupEnvelope {
+		t.Helper()
+		code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+		if code != output.OK {
+			t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+		}
+		return parseSetup(t, out)
+	}
+	setupRun()
+	refused, _ := os.ReadFile(file)
+	if !strings.Contains(string(refused), "\nstart_on_session = true\n") {
+		t.Fatalf("the refusal did not set start_on_session:\n%s", refused)
+	}
+
+	task = nil
+	env := setupRun()
+	accepted, _ := os.ReadFile(file)
+	if strings.Contains(string(accepted), "start_on_session") {
+		t.Errorf("the task passed, start_on_session kept:\n%s", accepted)
+	}
+	if want := strings.Replace(string(refused), "start_on_session = true\n", "", 1); string(accepted) != want {
+		t.Errorf("config.toml beyond the flag changed:\n%s\nwant\n%s", accepted, want)
+	}
+	if !hasStep(env.Data.Steps, "config", "done", "server.start_on_session removed") {
+		t.Errorf("the config step does not say so: %+v", env.Data.Steps)
+	}
+	// Nothing to change: the step changes nothing.
+	if env := setupRun(); !hasStep(env.Data.Steps, "config", "skipped", "adopted") {
+		t.Errorf("a third setup: %+v", env.Data.Steps)
+	}
+
+	code, out, errOut := run(t, "setup", "--undo", "--json")
+	if code != output.OK {
+		t.Fatalf("undo: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if back, _ := os.ReadFile(file); !strings.Contains(string(back), "\nstart_on_session = true\n") {
+		t.Errorf("setup --undo did not put start_on_session back:\n%s\n%s", back, out)
 	}
 }

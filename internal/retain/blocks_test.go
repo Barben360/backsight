@@ -181,7 +181,9 @@ func TestSentIndexTornEntry(t *testing.T) {
 	if err != nil || !idx.Has("u1") {
 		t.Fatalf("%v", err)
 	}
-	_ = idx.Add("u2")
+	if err := idx.Add("u2"); err != nil {
+		t.Fatalf("adding after a torn entry: %v", err)
+	}
 	again, _ := LoadSentIndex(dir)
 	if !again.Has("u1") || !again.Has("u2") {
 		t.Error("an entry written after a torn one was misaligned")

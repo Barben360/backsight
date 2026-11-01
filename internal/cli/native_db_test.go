@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // nativeDBTools plays the native runtime's tools on a database of rows
@@ -328,6 +329,7 @@ func sidecar(t *testing.T, archive string) (backup.Manifest, map[string]any) {
 // (ruling R4); a native archive names pg0's Postgres and holds no compose
 // file (ruling R26).
 func TestManifestRecordsTheRuntime(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' restore orchestration is covered by Task 14's chain")
 	t.Run("docker", func(t *testing.T) {
 		home, _, _, _ := restoreSetup(t)
 		m, keys := sidecar(t, filepath.Join(pathsOf(home).Data, "backups", "backsight-20261025T040000Z.tar.gz.age"))
@@ -436,6 +438,7 @@ func TestRestoreAcrossRuntimesComparesHindsightVersions(t *testing.T) {
 // the new epoch is above this machine's and the archive's, though the
 // refused database and the API it served cannot be read.
 func TestRestoreAfterARefusedStartAdoptsTheArchive(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' restore orchestration is covered by Task 14's chain")
 	home, n, tools, sys, port := nativeHost(t)
 	archive := nativeArchive(t, home)
 	// The archive's epoch is 3, this machine last reconciled with 5.
@@ -530,6 +533,7 @@ func TestRestoreAfterARefusedStartAdoptsTheArchive(t *testing.T) {
 // the new one (never served empty or half restored) and keeps the refused
 // one; the marker holds every client; restore again adopts the archive.
 func TestRestoreAfterARefusedStartRemovesTheNewDatabaseOnFailure(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' restore orchestration is covered by Task 14's chain")
 	home, n, tools, sys, port := nativeHost(t)
 	archive := nativeArchive(t, home)
 	if err := os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("222\n"), 0o600); err != nil {
@@ -604,6 +608,7 @@ func identityTime(t *testing.T, n server.Native) time.Time {
 // dump, only the API stopped, the archive restored into the database, its
 // identity recorded again, a new epoch.
 func TestRestoreOnNativeReplacesTheDatabase(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' restore orchestration is covered by Task 14's chain")
 	home, n, tools, sys, port := nativeHost(t)
 	archive := nativeArchive(t, home)
 	tools.rows, tools.calls, sys.calls = 25, nil, nil
@@ -660,6 +665,7 @@ func TestRestoreOnNativeReplacesTheDatabase(t *testing.T) {
 // safety dump back (exit 30, as on Docker): the database as it was, its
 // identity unchanged and accepted.
 func TestRestoreOnNativeRollsBackFromTheSafetyDump(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' restore orchestration is covered by Task 14's chain")
 	home, n, tools, _, port := nativeHost(t)
 	archive := nativeArchive(t, home)
 	tools.rows, tools.failLoad = 25, 1
@@ -688,6 +694,7 @@ func TestRestoreOnNativeRollsBackFromTheSafetyDump(t *testing.T) {
 // restore on native stops a stray postgres on the database's data first
 // (requirement 3), before anything touches the database, and says so.
 func TestRestoreOnNativeStopsAStrayFirst(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a fake /proc (TestStraysOnWindows covers Windows' scan)")
 	home, n, tools, _, _ := nativeHost(t)
 	archive := nativeArchive(t, home)
 	pg := filepath.Join(n.Home(), ".pg0", "installation", "18.1.0", "bin", "postgres")
@@ -714,6 +721,7 @@ func TestRestoreOnNativeStopsAStrayFirst(t *testing.T) {
 // backup verify on native stops a stray postgres on the database's data
 // first (requirement 3), then verifies in a throwaway database.
 func TestBackupVerifyOnNativeStopsAStrayFirst(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a fake /proc (TestStraysOnWindows covers Windows' scan)")
 	home, n, tools, _, _ := nativeHost(t)
 	archive := nativeArchive(t, home)
 	pg := filepath.Join(n.Home(), ".pg0", "installation", "18.1.0", "bin", "postgres")
@@ -760,6 +768,7 @@ func testUnitFile(unit string) string {
 // between the check and the lock) must not see it moved aside: restore
 // stops with nothing changed, and its rerun takes the normal path.
 func TestRestoreRechecksTheNativeRefusalUnderTheLock(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' restore orchestration is covered by Task 14's chain")
 	home, n, tools, sys, _ := nativeHost(t)
 	archive := nativeArchive(t, home)
 	if err := os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("222\n"), 0o600); err != nil {

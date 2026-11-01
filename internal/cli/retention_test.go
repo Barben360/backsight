@@ -9,6 +9,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func cfgFile(home string) string { return filepath.Join(home, "backsight", "config", "config.toml") }
@@ -97,9 +98,7 @@ func TestRetentionCreatesAMinimalConfig(t *testing.T) {
 	if got := readFile(t, cfgFile(home)); got != "schema_version = 1\n\n[client]\nretention_days = 3650\n" {
 		t.Errorf("config:\n%s", got)
 	}
-	if fi, _ := os.Stat(cfgFile(home)); fi.Mode().Perm() != 0o600 {
-		t.Errorf("config mode %v", fi.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, cfgFile(home))
 }
 
 func TestRetentionReportsAManagedValueAndWritesNothing(t *testing.T) {

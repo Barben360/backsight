@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/token"
 )
 
@@ -383,6 +384,7 @@ func TestExposeFlags(t *testing.T) {
 // readOnlyAtFirstUp makes dir read-only (no file can be written into it)
 // once the command starts the server the first time, then runs inner.
 type readOnlyAtFirstUp struct {
+	t     *testing.T
 	inner server.Runner
 	dir   string
 	done  bool
@@ -391,9 +393,7 @@ type readOnlyAtFirstUp struct {
 func (r *readOnlyAtFirstUp) Run(ctx context.Context, args ...string) ([]byte, error) {
 	if !r.done && strings.HasSuffix(strings.Join(args, " "), "up -d --wait") {
 		r.done = true
-		if err := os.Chmod(r.dir, 0o500); err != nil {
-			return nil, err
-		}
+		testtool.DenyWrite(r.t, r.dir)
 	}
 	return r.inner.Run(ctx, args...)
 }
@@ -407,8 +407,8 @@ func configLockedAtFirstUp(t *testing.T, home string) {
 	}
 	dir := filepath.Join(home, "backsight", "config")
 	old := composeRunner
-	composeRunner = &readOnlyAtFirstUp{inner: old, dir: dir}
-	t.Cleanup(func() { composeRunner = old; _ = os.Chmod(dir, 0o700) })
+	composeRunner = &readOnlyAtFirstUp{t: t, inner: old, dir: dir}
+	t.Cleanup(func() { composeRunner = old })
 }
 
 // The new exposure does not run, and config.toml cannot be put back:
@@ -485,11 +485,13 @@ func TestExposeRefusesASymlinkOut(t *testing.T) {
 
 // The native runtime serves this PC only (loopback, 0078's non-goal):
 // expose --private refuses before anything is written, naming the way
-// to private exposure; config.toml, server.env and both units stay
-// byte-identical and the units are left alone.
+// to private exposure; config.toml, server.env and the service files
+// (both units; Windows: supervise.json and task.xml) stay byte-identical
+// and nothing runs.
 func TestServerExposeRefusedOnNative(t *testing.T) {
 	home, n, _, sys, _ := nativeHost(t)
-	files := []string{pathsOf(home).ConfigFile(), n.EnvFile(), unitPath(home, n.DBUnit()), unitPath(home, n.ServerUnit())}
+	n.UnitDir = filepath.Dir(unitPath(home, n.DBUnit())) // where the user manager reads the units
+	files := append([]string{pathsOf(home).ConfigFile(), n.EnvFile()}, n.ServiceFiles()...)
 	before := map[string]string{}
 	for _, p := range files {
 		raw, err := os.ReadFile(p)

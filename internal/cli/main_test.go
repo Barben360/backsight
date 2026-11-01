@@ -6,10 +6,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // refuseDocker stands in for the real runner: a test that reaches Docker
@@ -35,6 +41,17 @@ func (refuseTools) Run(_ context.Context, _ []string, _ io.Reader, path string, 
 	return nil, fmt.Errorf("test reached %s %v without a fake tool runner", path, args)
 }
 
+// refuseAsk: no test asks a real supervisor's pipe (a developer's own
+// server would answer, and stop).
+func refuseAsk(_ context.Context, project, op string) (supervise.Status, error) {
+	return supervise.Status{}, fmt.Errorf("test reached the supervisor of %s (%s) without a fake runner", project, op)
+}
+
+// refuseDetach: no test starts a real supervisor.
+func refuseDetach(args ...string) error {
+	return fmt.Errorf("test reached a real supervisor start %q without a fake", args)
+}
+
 type refuseClaude struct{}
 
 func (refuseClaude) Run(_ context.Context, _ []string, args ...string) ([]byte, error) {
@@ -52,6 +69,11 @@ type refuseSSH struct{}
 
 func (refuseSSH) Run(_ context.Context, args []string, _ io.Reader, _, _ io.Writer) (int, error) {
 	return -1, fmt.Errorf("test reached ssh %v without a fake runner", args)
+}
+
+// refuseCleaner: no test starts a real trash cleaner without a fake.
+func refuseCleaner(trash string) error {
+	return fmt.Errorf("test reached a real trash cleaner of %s without a fake", trash)
 }
 
 // testHookFault makes the test binary, run as `hook-child`, fail before
@@ -83,6 +105,10 @@ func hookChildFault(mode string) {
 var goraceSet bool
 
 func TestMain(m *testing.M) {
+	testtool.Main() // started as a fake program: behave as it and exit
+	// Before any child branch: a re-executed test binary writes the same
+	// throwaway PATH key, never the real one of the user running the tests.
+	cleanup := isolateUserPath()
 	// The race runtime sleeps 1 s at exit while other threads live: twice
 	// per hook (the shim and its child) under -race, past SessionEnd's
 	// 800 ms child deadline. The children inherit this (issue #281).
@@ -97,14 +123,25 @@ func TestMain(m *testing.M) {
 		if len(args) > 0 && args[0] == "hook-child" {
 			hookChildFault(os.Getenv(testHookFault))
 		}
-		os.Exit(Execute(args, os.Stdout, os.Stderr))
+		code := Execute(args, os.Stdout, os.Stderr)
+		cleanup()
+		os.Exit(code)
 	}
 	composeRunner = refuseDocker{}
-	nativeSys, nativeTools = refuseSys{}, refuseTools{}
+	nativeSys, nativeTools, nativeAsk, nativeDetach = refuseSys{}, refuseTools{}, refuseAsk, refuseDetach
+	// A Native built without Ask (setup's, doctor's) asks server's own
+	// client: refused too, so no test asks, or stops, a developer's real
+	// supervisor on Windows.
+	server.SetSuperviseAsk(refuseAsk)
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
+	// Windows: no test deletes a real Task Scheduler folder (a no-op that
+	// succeeds), nor starts a real trash cleaner.
+	deleteTaskFolder, startCleaner = func(string) (bool, error) { return false, nil }, refuseCleaner
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 // The race runtime's exit sleep (1 s per process with live threads) made
@@ -130,4 +167,20 @@ func liveProcess(t *testing.T) int {
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	return cmd.Process.Pid
+}
+
+// No test reaches a real supervisor's pipe, even through a Native built
+// without Ask: server's default client is refused as nativeAsk is (a
+// developer's Windows PC runs a real supervisor, which a status would
+// reach and a stop would stop).
+func TestTestsNeverAskTheRealSupervisor(t *testing.T) {
+	home := isolate(t)
+	d := pathsOf(home)
+	cfg := config.Default(d, home)
+	cfg.Server.Runtime, cfg.Server.Project = "native", "bs-test-"+strconv.Itoa(os.Getpid())+"-realpipe"
+	n := server.Native{Cfg: cfg, Dirs: d, GOOS: "windows"} // no Ask
+	_, err := n.SupervisorStatus(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "test reached the supervisor") {
+		t.Errorf("a Native without Ask asked %v, want the tests' refusal", err)
+	}
 }

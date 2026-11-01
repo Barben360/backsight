@@ -7,20 +7,28 @@ import (
 	"time"
 )
 
-// manualTicks makes Serve's idle checks run only when the test sends a
-// tick on the channel returned, for the harnesses started after it.
-func manualTicks(t *testing.T) chan time.Time {
-	t.Helper()
-	ticks := make(chan time.Time)
-	t.Cleanup(func() { idleTicks = defaultIdleTicks })
-	idleTicks = func() (<-chan time.Time, func()) { return ticks, func() {} }
-	return ticks
+// idleTicker drives Serve's idle checks: a check runs only when the test
+// sends a tick, and its verdict comes back once the check is over.
+type idleTicker struct {
+	ticks   chan time.Time
+	checked chan bool
 }
 
-// checkIdle has Serve judge the idle time at the clock's time: true when
-// that stopped the dashboard. The second tick is taken only once the
-// first check is over without a stop.
-func (h *harness) checkIdle(ticks chan time.Time) bool {
+// manualTicks makes Serve's idle checks run only when the test sends a
+// tick, for the harnesses started after it.
+func manualTicks(t *testing.T) idleTicker {
+	t.Helper()
+	it := idleTicker{ticks: make(chan time.Time), checked: make(chan bool, 1)}
+	t.Cleanup(func() { idleTicks, idleChecked = defaultIdleTicks, nil })
+	idleTicks = func() (<-chan time.Time, func()) { return it.ticks, func() {} }
+	idleChecked = func(stop bool) { it.checked <- stop }
+	return it
+}
+
+// checkIdle has Serve judge the idle time at the clock's time and waits
+// for the verdict: true when that stopped the dashboard. The check is over
+// when checkIdle returns, so the test's next clock move cannot reach it.
+func (h *harness) checkIdle(it idleTicker) bool {
 	h.t.Helper()
 	ctx := context.Background()
 	if d, ok := h.t.Deadline(); ok {
@@ -28,14 +36,25 @@ func (h *harness) checkIdle(ticks chan time.Time) bool {
 		ctx, cancel = context.WithDeadline(ctx, d)
 		defer cancel()
 	}
-	for range 2 {
-		select {
-		case ticks <- time.Time{}:
-		case <-h.done:
-			return true
-		case <-ctx.Done():
-			h.t.Fatal("Serve neither took a tick nor returned before the test's deadline")
+	select {
+	case it.ticks <- time.Time{}:
+	case <-h.done:
+		return true
+	case <-ctx.Done():
+		h.t.Fatal("Serve neither took a tick nor returned before the test's deadline")
+	}
+	select {
+	case stop := <-it.checked:
+		if stop {
+			select {
+			case <-h.done:
+			case <-ctx.Done():
+				h.t.Fatal("Serve judged the dashboard idle but did not return before the test's deadline")
+			}
 		}
+		return stop
+	case <-ctx.Done():
+		h.t.Fatal("Serve took a tick but gave no verdict before the test's deadline")
 	}
 	return false
 }

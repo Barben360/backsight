@@ -37,6 +37,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // update apply (SPEC §11.7, decision 0067 block 2) is driven by the
@@ -471,7 +472,7 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	}
 	add("check", "done", fmt.Sprintf("%s → %s on %s", res.Installed, rel.Version, res.Source))
 
-	if err := os.MkdirAll(d.State, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(d.State); err != nil {
 		return blocked(err)
 	}
 	work, err := os.MkdirTemp(d.State, "update-")
@@ -810,6 +811,7 @@ func (a *applyRun) steps(ctx context.Context) error {
 		a.bank(ctx)
 		a.docs(ctx)
 		a.metricsIndex(ctx)
+		a.supervisor(ctx)
 	}
 
 	// 8. Recorded: the shim's target and the one to roll back to.
@@ -1057,6 +1059,93 @@ func (a *applyRun) server(ctx context.Context) error {
 	return nil
 }
 
+// restartSupervisor restarts the native server's supervisor (Windows);
+// tests replace it.
+var restartSupervisor = func(ctx context.Context, n server.Native) error { return n.RestartSupervisor(ctx) }
+
+// supervisor is the native server's supervisor on Windows (decision 0080,
+// "Updates"): it keeps running the backsight it started from, now the
+// shim's current.exe.old-<n>. It is restarted, a short outage while hooks
+// queue, only when it speaks another protocol than the new binary, or
+// when it still runs another backsight after the new binary's server
+// upgrade (which restarts it itself): otherwise it runs on until its next
+// restart, and the step says so. A failure is a warning: the update stays.
+// After the commit point; nothing on Linux, where the units run no
+// backsight.
+func (a *applyRun) supervisor(ctx context.Context) {
+	if nativeGOOS != "windows" || a.cfg.Server.Mode != "local" || a.cfg.RuntimeKind() != "native" {
+		return
+	}
+	n, ok := runtimeFor(a.cfg).(server.Native)
+	if !ok {
+		return
+	}
+	st, err := n.SupervisorStatus(ctx)
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor did not answer ("+err.Error()+"): it runs the previous backsight until its next restart ("+restartCmd+")")
+		a.add("supervisor", "failed", err.Error())
+		return
+	}
+	if st == nil {
+		a.add("supervisor", "skipped", "the native server is not running: its next start runs backsight "+a.res.Target)
+		return
+	}
+	keeps := "the server keeps running backsight " + st.Version + " until its next restart"
+	// The new binary's protocol (0, another one, when it does not say). A
+	// binary that cannot say is no reason to stop the server.
+	var v versionInfo
+	env, err := runChild(ctx, a.target, "version")
+	if err == nil {
+		err = json.Unmarshal(env.Data, &v)
+	}
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "backsight "+a.res.Target+" did not report its supervisor protocol ("+err.Error()+"): "+keeps+" ("+restartCmd+")")
+		a.add("supervisor", "kept", keeps+": the new binary's protocol is unknown")
+		return
+	}
+	upgraded := a.res.Server != nil && a.res.Server.Upgraded
+	restart, why := supervisorRestart(*st, v.SuperviseProto, upgraded, a.res.Target)
+	if !restart {
+		a.add("supervisor", "kept", why)
+		return
+	}
+	// server.lock, as server start and stop take it (update apply holds the
+	// maintenance lock already): no other command stops or starts the
+	// server meanwhile.
+	sl, _, err := state.Acquire(filepath.Join(a.d.LocksDir(), "server.lock"), "update apply")
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor was not restarted ("+err.Error()+"): "+restartCmd)
+		a.add("supervisor", "failed", err.Error())
+		return
+	}
+	defer func() { _ = sl.Release() }()
+	if err := restartSupervisor(ctx, n); err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor was not restarted ("+err.Error()+"): "+restartCmd)
+		a.add("supervisor", "failed", err.Error())
+		return
+	}
+	a.add("supervisor", "done", why)
+}
+
+// restartCmd restarts the native server on Windows: there is no server
+// restart command.
+const restartCmd = "backsight server stop, then backsight server start"
+
+// supervisorRestart is update apply's rule for the supervisor st that
+// runs, the new binary (target) speaking proto: restart only on another
+// protocol, or after a server upgrade that left the old backsight running.
+func supervisorRestart(st supervise.Status, proto int, upgraded bool, target string) (restart bool, why string) {
+	switch {
+	case st.Proto != proto:
+		return true, fmt.Sprintf("restarted: it spoke protocol %d, backsight %s speaks %d", st.Proto, target, proto)
+	case upgraded && strings.TrimPrefix(st.Version, "v") != target: // a binary may report v<version>
+		return true, "restarted: it still ran backsight " + st.Version + " after the server upgrade"
+	case upgraded:
+		return false, "the server upgrade restarted it: it runs backsight " + target
+	}
+	return false, "the server keeps running backsight " + st.Version + " until its next restart"
+}
+
 // upgradePassed: no upgrade is marked in progress (the child clears its
 // restore marker once it passed, or once its rollback finished) and the
 // server's files name the new pin (a finished rollback names the old one).
@@ -1277,7 +1366,7 @@ var maxBinary int64 = 512 << 20
 // (.tar.gz, or .zip on Windows) to dst.
 func unpackBinary(archive, dst string) error {
 	want := binaryName()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(dst)); err != nil {
 		return err
 	}
 	write := func(r io.Reader) error {
@@ -1407,6 +1496,11 @@ func (r *updateRollback) run(ctx context.Context, cause error) error {
 	}
 	if err := pointShim(r.previous, r.shim); err != nil {
 		errs = append(errs, "switching the shim back: "+err.Error())
+	} else if link, ours := olderPathLink(r.d, r.shim); runtime.GOOS == "windows" && ours {
+		// the PATH command is a copy there, not a link following the shim
+		if err := pointShim(r.shim, link); err != nil {
+			errs = append(errs, "switching the PATH command back: "+err.Error())
+		}
 	}
 	if r.pluginTouched {
 		cctx, cancel := context.WithTimeout(base, 5*time.Minute)

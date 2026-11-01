@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/hook"
@@ -65,8 +66,14 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	return 0
 }
 
+// hookChildStart is when this process began as a hook child (zero when a
+// handler runs in-process): its supervisor kills it at hook.KillAt, the
+// time it passed or hook.ChildDeadline after this.
+var hookChildStart time.Time
+
 // runHookChild is the hidden `backsight hook-child <event>`.
 func runHookChild(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) int {
+	hookChildStart = time.Now()
 	event := ""
 	if len(args) > 0 {
 		event = args[0]

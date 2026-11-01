@@ -6,7 +6,7 @@ What backsight does at each step of a Claude Code session, what it adds to Claud
 
 ```text
 your session ──hooks──▶ redaction ──▶ Hindsight server ──▶ LLM provider
-   (Claude Code)          (local)       (Docker, local)     extraction, consolidation
+   (Claude Code)          (local)     (Docker or native)    extraction, consolidation
         ▲                                     │
         └──── recall: briefing, prompt memories, memory_search ◀┘
 ```

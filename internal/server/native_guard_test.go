@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // dbToolsOut answers as the bundled Postgres tools would: pg_controldata
@@ -17,7 +19,7 @@ import (
 // no identifier without it), psql answers SHOW fsync with fsync.
 func dbToolsOut(fsync string) func(c toolCall) []byte {
 	return func(c toolCall) []byte {
-		switch filepath.Base(c.Path) {
+		switch strings.TrimSuffix(filepath.Base(c.Path), ".exe") {
 		case "pg_controldata":
 			i := slices.Index(c.Args, "-D")
 			if i < 0 || i+1 >= len(c.Args) {
@@ -149,9 +151,7 @@ func TestNativeReadsAndRecordsTheIdentity(t *testing.T) {
 	if err != nil || string(raw) != "7702339718603615110\n" {
 		t.Errorf("identity %q %v", raw, err)
 	}
-	if st, _ := os.Stat(n.IdentityFile()); st.Mode().Perm() != 0o600 {
-		t.Errorf("identity mode %v, want 0600", st.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, n.IdentityFile())
 	c := tools.Calls[len(tools.Calls)-1]
 	inst := n.installation()
 	if c.Path != filepath.Join(inst, "bin", "pg_controldata") || !reflect.DeepEqual(c.Args, []string{"-D", n.DataDir()}) {
@@ -216,6 +216,7 @@ const scope = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
 // the db unit's cgroup is a stray; one inside it, one on another data
 // directory and the postmaster's own children are not.
 func TestNativeStraysAreFoundByDataDirectoryAndCgroup(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a fake /proc with symlinked cwds and cgroups (Windows: TestStraysOnWindows)")
 	n, _, _ := nativeFixture(t, secrets)
 	data := n.DataDir()
 	pg := filepath.Join(n.installation(), "bin", "postgres")
@@ -245,6 +246,7 @@ func TestNativeStraysAreFoundByDataDirectoryAndCgroup(t *testing.T) {
 // A stray is stopped with the bundled pg_ctl (ruling R22), never pg0,
 // and must be gone; one still alive after the wait is an error naming it.
 func TestNativeStopStraysStopsThemWithPgCtl(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a fake /proc with symlinked cwds and cgroups (Windows: TestStraysOnWindows)")
 	ctx := context.Background()
 	n, _, tools := nativeFixture(t, secrets)
 	data := n.DataDir()
@@ -350,6 +352,7 @@ func TestNativeStartRefusesFsyncOff(t *testing.T) {
 // R29: the first start creates the instance and records its identity
 // before the db unit starts, so native-check passes on it.
 func TestNativeFirstStartRecordsTheIdentity(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the identity file's 0600 mode bits (Windows keeps access in DACLs: TestNativeRootIsCreatedPrivate)")
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
 	n.MayCreate = true
@@ -490,6 +493,7 @@ func TestNativeStartCreatesOnlyWhereAllowed(t *testing.T) {
 // (ENOENT): an empty identity file, or an instance path that cannot be
 // read, never creates.
 func TestNativeCreationNeedsBothAbsent(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a path under a regular file is ENOTDIR on POSIX; Windows reports it as not found")
 	ctx := context.Background()
 	t.Run("an empty identity file", func(t *testing.T) {
 		n, _, tools := nativeFixture(t, secrets)
@@ -616,5 +620,46 @@ func TestNativeRefusalOnADockerInstallPointsAtClean(t *testing.T) {
 	setups["identity"](t, n)
 	if err := n.CheckInstance(context.Background()); err == nil || !strings.Contains(err.Error(), "backsight restore <archive>") || strings.Contains(err.Error(), "runtime clean") {
 		t.Errorf("on native: %v", err)
+	}
+}
+
+// Requirement 1 for the Windows supervisor (Task 10's ruling): the
+// postgres command line in supervise.json must end with fsync on, however
+// it sets it; anything else is a final refusal naming the file.
+func TestCheckFsyncArgs(t *testing.T) {
+	base := []string{`C:\pg\bin\postgres.exe`, "-D", `C:\db`, "-p", "5433"}
+	for _, tc := range []struct {
+		name string
+		args []string
+		ok   bool
+		got  string
+	}{
+		{"-c fsync=on", []string{"-c", "fsync=on", "-c", "listen_addresses=127.0.0.1"}, true, ""},
+		{"on, then off", []string{"-c", "fsync=on", "-c", "fsync=off"}, false, "off"},
+		{"off, then on", []string{"-c", "fsync=off", "-c", "fsync=on"}, true, ""},
+		{"none", []string{"-c", "listen_addresses=127.0.0.1"}, false, ""},
+		{"-cfsync=off", []string{"-c", "fsync=on", "-cfsync=off"}, false, "off"},
+		{"--fsync=off", []string{"-c", "fsync=on", "--fsync=off"}, false, "off"},
+		{"-F", []string{"-c", "fsync=on", "-F"}, false, "off"},
+		{"FSYNC = on", []string{"-c", "FSYNC = on"}, true, ""},
+		{"fsync=true is not on", []string{"-c", "fsync=true"}, false, "true"},
+		{"a dangling -c", []string{"-c", "fsync=on", "-c"}, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckFsyncArgs(`C:\bs\supervise.json`, append(slices.Clone(base), tc.args...))
+			if tc.ok {
+				if err != nil {
+					t.Errorf("CheckFsyncArgs = %v, want nil", err)
+				}
+				return
+			}
+			var fe *FsyncArgsError
+			if !errors.As(err, &fe) || fe.Got != tc.got || !fe.Final() {
+				t.Fatalf("CheckFsyncArgs = %#v, want a final refusal reading %q", err, tc.got)
+			}
+			if !strings.Contains(err.Error(), `C:\bs\supervise.json`) || !strings.Contains(err.Error(), "not fsync=on") {
+				t.Errorf("refusal %q does not name the file and fsync=on", err)
+			}
+		})
 	}
 }

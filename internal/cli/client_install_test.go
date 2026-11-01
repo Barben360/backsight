@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeClaude records claude CLI calls and answers the list commands.
@@ -119,16 +121,17 @@ func TestClientInstallFirstTime(t *testing.T) {
 	if len(got) != 2 || got[0] != "plugin marketplace add "+mkt || got[1] != "plugin install "+plugin.PluginID()+" --scope user" {
 		t.Errorf("claude calls %q", got)
 	}
-	shim := filepath.Join(d.Data, "bin", "current")
+	shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
 	target, err := filepath.EvalSymlinks(shim)
-	if err != nil || !strings.HasPrefix(target, filepath.Join(d.Data, "bin")) {
+	// EvalSymlinks gives long names; a TEMP in 8.3 form (RUNNER~1) spells d.Data short
+	if err != nil || !strings.HasPrefix(fsutil.Normal(target), fsutil.Normal(filepath.Join(d.Data, "bin"))) {
 		t.Fatalf("shim %s -> %s %v", shim, target, err)
 	}
-	if fi, err := os.Stat(target); err != nil || fi.Mode()&0o111 == 0 {
-		t.Errorf("shim target not executable: %v", err)
+	if !fsutil.Executable(target) {
+		t.Errorf("shim target not executable: %s", target)
 	}
 	hooks, _ := os.ReadFile(filepath.Join(mkt, "plugins", "backsight", "hooks", "hooks.json"))
-	if !strings.Contains(string(hooks), `"command": "`+shim+`"`) {
+	if !strings.Contains(string(hooks), `"command": "`+testtool.JSONPath(shim)+`"`) {
 		t.Errorf("hooks do not exec the shim:\n%.300s", hooks)
 	}
 	s, _ := os.ReadFile(settings)
@@ -141,7 +144,7 @@ func TestClientInstallFirstTime(t *testing.T) {
 		t.Errorf("existing rules must stay:\n%s", s)
 	}
 	st, _ := state.Load(d.StateFile())
-	if st.PluginVersion == "" || st.ShimTarget != target {
+	if st.PluginVersion == "" || !shimRuns(target, st.ShimTarget) {
 		t.Errorf("state %+v", st)
 	}
 }
@@ -151,7 +154,7 @@ func TestClientInstallAgainUpdatesInsteadOfAdding(t *testing.T) {
 	f := withClaude(t)
 	run(t, "client", "install")
 	f.calls = nil
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
 	f.plugins = `[{"id":"backsight@backsight","version":"x","scope":"user","enabled":true}]`
 	if code, out, _ := run(t, "client", "install"); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -293,6 +296,16 @@ func TestClientInstallShimTargetIsAVerifiedCopy(t *testing.T) {
 	}
 }
 
+// shimRuns: the shim (resolved) is the target, or on Windows a copy of it.
+func shimRuns(shim, target string) bool {
+	if runtime.GOOS != "windows" {
+		return shim == target
+	}
+	a, err1 := os.ReadFile(shim)
+	b, err2 := os.ReadFile(target)
+	return err1 == nil && err2 == nil && bytes.Equal(a, b)
+}
+
 func TestClientInstallOnANewVersionSwitchesTheShim(t *testing.T) {
 	home := devInstall(t, true)
 	withClaude(t)
@@ -303,9 +316,9 @@ func TestClientInstallOnANewVersionSwitchesTheShim(t *testing.T) {
 	setBuild(t, "1.1.0", "b")
 	run(t, "client", "install")
 	st, _ := state.Load(d.StateFile())
-	got, _ := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", "current"))
+	got, _ := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS)))
 	want, _ := filepath.EvalSymlinks(st.ShimTarget)
-	if st.ShimTarget == first.ShimTarget || got != want || !strings.HasPrefix(st.PluginVersion, "1.1.0+") ||
+	if st.ShimTarget == first.ShimTarget || !shimRuns(got, want) || !strings.HasPrefix(st.PluginVersion, "1.1.0+") ||
 		st.Client == nil || st.Client.ShimPrevious != first.ShimTarget {
 		t.Errorf("state %+v (client %+v), shim -> %s", st, st.Client, got)
 	}
@@ -329,7 +342,7 @@ func TestClientInstallMovedDataDirReaddsTheMarketplace(t *testing.T) {
 func TestClientInstallMarketplaceKnownPluginNot(t *testing.T) {
 	home := devInstall(t, true)
 	f := withClaude(t)
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
 	run(t, "client", "install")
 	if got := mutating(f); len(got) != 2 || got[0] != "plugin marketplace update backsight" || got[1] != "plugin install backsight@backsight --scope user" {
 		t.Errorf("calls %q", got)
@@ -344,7 +357,7 @@ func TestClientInstallHalfwayFailureThenRerun(t *testing.T) {
 		t.Fatalf("exit %d, want 40", code)
 	}
 	f.failOn, f.calls = "", nil
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
 	if code, out, _ := run(t, "client", "install"); code != output.OK {
 		t.Fatalf("rerun: exit %d\n%s", code, out)
 	}
@@ -415,14 +428,8 @@ func TestClientInstallRefusesUnreadableClaudeOutputAndConcurrency(t *testing.T) 
 // The real runner parses stdout only: a warning on stderr must not break
 // the JSON (block-3 review, proven).
 func TestExecClaudeIgnoresStderrWarnings(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script")
-	}
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho 'Warning: something' >&2\nif [ \"$1\" = --version ]; then echo '2.1.310 (Claude Code)'; else echo '[]'; fi\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testtool.Write(t, bin, "claude", testtool.Fake{Script: "stderr Warning: something\n1=--version stdout 2.1.310 (Claude Code)\n1!=--version stdout []"})
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := execClaude{}.Run(context.Background(), nil, "plugin", "list", "--json")
 	if err != nil || strings.TrimSpace(string(out)) != "[]" {
@@ -437,14 +444,8 @@ func TestExecClaudeIgnoresStderrWarnings(t *testing.T) {
 // The real runner never passes on the shell's CLAUDE_CONFIG_DIR: the
 // caller names the profile, and none means ~/.claude (block 3 review).
 func TestExecClaudeTakesTheProfileFromTheCallerOnly(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script")
-	}
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho \"${CLAUDE_CONFIG_DIR-unset}\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testtool.Write(t, bin, "claude", testtool.Fake{Script: "env CLAUDE_CONFIG_DIR unset"})
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("CLAUDE_CONFIG_DIR", "/home/u/.claude-work")
 	if out, err := (execClaude{}).Run(context.Background(), nil, "plugin", "list"); err != nil || strings.TrimSpace(string(out)) != "unset" {
@@ -486,7 +487,7 @@ func TestClientInstallRefusesAProfileWiredToAnotherInstall(t *testing.T) {
 	f := withClaude(t)
 	other := filepath.Join(home, "other-install", "marketplace")
 	_ = os.MkdirAll(filepath.Join(other, ".claude-plugin"), 0o700)
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + other + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(other) + `"}]`
 	code, out, _ := run(t, "client", "install", "--json")
 	if code != output.Blocked || !strings.Contains(out, "another backsight install") || len(mutating(f)) > 0 {
 		t.Fatalf("exit %d, claude %v\n%s", code, mutating(f), out)

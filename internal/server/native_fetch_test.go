@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +24,8 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // toolCall is one ToolRunner call as Fetch made it.
@@ -34,6 +37,10 @@ type toolCall struct {
 	// Req is the content of the -r file of a pip install, read during the
 	// call (Fetch removes the file afterwards).
 	Req []byte
+	// Step: a Windows transient step (StepRunner), InJob in a job object,
+	// OutFile the file its stdout and stderr went to ("" for a pipe).
+	Step, InJob bool
+	OutFile     string
 }
 
 // fakeTools records each call; Fail makes a call fail, Effect does what the
@@ -46,7 +53,21 @@ type fakeTools struct {
 }
 
 func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path string, args ...string) ([]byte, error) {
-	c := toolCall{Env: env, Path: path, Args: args}
+	return f.call(toolCall{Env: env, Path: path, Args: args}, stdin, nil)
+}
+
+// RunStep records a Windows transient step; what Out prints goes to out
+// when the step has a file (its log), as the real step's would.
+func (f *fakeTools) RunStep(_ context.Context, job *supervise.Job, env []string, stdin io.Reader, out *os.File, path string, args ...string) ([]byte, error) {
+	c := toolCall{Env: env, Path: path, Args: args, Step: true, InJob: job != nil}
+	if out != nil {
+		c.OutFile = out.Name()
+	}
+	return f.call(c, stdin, out)
+}
+
+func (f *fakeTools) call(c toolCall, stdin io.Reader, out *os.File) ([]byte, error) {
+	args := c.Args
 	if stdin != nil {
 		c.Stdin, _ = io.ReadAll(stdin)
 	}
@@ -54,6 +75,14 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 		c.Req, _ = os.ReadFile(args[i+1])
 	}
 	f.Calls = append(f.Calls, c)
+	var printed []byte
+	if f.Out != nil {
+		printed = f.Out(c)
+	}
+	if out != nil {
+		_, _ = out.Write(printed)
+		printed = nil
+	}
 	if f.Fail != nil {
 		if err := f.Fail(c); err != nil {
 			return nil, err
@@ -62,16 +91,15 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 	if f.Effect != nil {
 		f.Effect(c)
 	}
-	if f.Out != nil {
-		return f.Out(c), nil
-	}
-	return nil, nil
+	return printed, nil
 }
 
+// newNative runs on the systemd host on any test host: the shared code's
+// tests keep running on Windows, whose own host is Task 9's.
 func newNative(t *testing.T, tools ToolRunner) Native {
 	t.Helper()
 	cfg := config.Default(paths.Dirs{Data: t.TempDir()}, "/home/u")
-	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}}
+	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}, GOOS: "linux"}
 }
 
 func touch(t *testing.T, path string, mode fs.FileMode) {
@@ -125,11 +153,17 @@ func TestNativeLockMatchesThePin(t *testing.T) {
 	if nativelock.Hindsight() != PinnedVersion() {
 		t.Errorf("the lock installs hindsight-api-slim %q, the pin is %q", nativelock.Hindsight(), PinnedVersion())
 	}
-	if want := "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"; uvURL() != want {
-		t.Errorf("uv is fetched from %q, want %q", uvURL(), want)
-	}
-	if uvSHA256 != nativelock.UVSHA256 {
-		t.Errorf("Fetch checks uv against %q, not the pin %q", uvSHA256, nativelock.UVSHA256)
+	for _, tc := range []struct{ goos, url, sum string }{
+		{"linux", "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz", nativelock.UVSHA256},
+		{"windows", "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-pc-windows-msvc.zip", nativelock.UVWindowsSHA256},
+	} {
+		n := Native{GOOS: tc.goos}
+		if got := n.uvURL(); got != tc.url {
+			t.Errorf("%s: uv is fetched from %q, want %q", tc.goos, got, tc.url)
+		}
+		if got := uvSHA256(n.pins()); got != tc.sum {
+			t.Errorf("%s: Fetch checks uv against %q, not the pin %q", tc.goos, got, tc.sum)
+		}
 	}
 }
 
@@ -175,12 +209,17 @@ func TestNativeVersionAndOrder(t *testing.T) {
 
 func TestNativePathsAreUnderComposeDir(t *testing.T) {
 	n := newNative(t, nil)
+	n.GOOS = "" // this host's layout: uv.exe on Windows
 	root := filepath.Join(n.Cfg.Server.ComposeDir, "native")
+	pythonBin := filepath.Join(root, "python", "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")
+	if runtime.GOOS == "windows" { // uv's Windows layout
+		pythonBin = filepath.Join(root, "python", "cpython-"+nativelock.Python()+"-windows-x86_64-none", "python.exe")
+	}
 	for name, got := range map[string][2]string{
 		"Root":         {n.Root(), root},
-		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv")},
+		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv"+exeSuffix())},
 		"Python":       {n.Python(), filepath.Join(root, "python")},
-		"PythonBin":    {n.PythonBin(), filepath.Join(root, "python", "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")},
+		"PythonBin":    {n.PythonBin(), pythonBin},
 		"VenvDir":      {n.VenvDir("1.1.0-0123456789ab"), filepath.Join(root, "venv", "1.1.0-0123456789ab")},
 		"Home":         {n.Home(), filepath.Join(root, "home")},
 		"HF":           {n.HF(), filepath.Join(root, "hf")},
@@ -259,7 +298,7 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 	t.Run("the pinned bytes give uv alone, 0755", func(t *testing.T) {
 		got := serveUV(t, tarball)
 		sum := sha256.Sum256(tarball)
-		uvSHA256 = hex.EncodeToString(sum[:])
+		uvSHA256 = func(nativelock.Platform) string { return hex.EncodeToString(sum[:]) }
 		tools := &fakeTools{}
 		n := newNative(t, tools)
 		tools.Effect = realEffects(t, n)
@@ -269,17 +308,12 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 		if want := "/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"; len(*got) != 1 || (*got)[0] != want {
 			t.Errorf("requests %v, want one GET of %s", *got, want)
 		}
-		st, err := os.Stat(n.UV())
-		if err != nil {
+		if _, err := os.Stat(n.UV()); err != nil {
 			t.Fatal(err)
 		}
-		if st.Mode().Perm() != 0o755 {
-			t.Errorf("uv mode %v, want 0755", st.Mode().Perm())
-		}
+		testtool.RequireUnixMode(t, n.UV(), 0o755)
 		// Final review 8: the native root is the user's alone, as home/.
-		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
-			t.Errorf("the native root %s: %v %v, want 0700", n.Root(), st.Mode(), err)
-		}
+		testtool.RequirePrivate(t, n.Root())
 		if b, _ := os.ReadFile(n.UV()); !bytes.Equal(b, uvBin) {
 			t.Errorf("uv holds %q, want the archive's uv", b)
 		}
@@ -319,8 +353,9 @@ func TestNativeFetchInstallsTheLockedVenv(t *testing.T) {
 	if c[2].Path != n.UV() || len(pip) != 8 || !slices.Equal(pip[:7], []string{"pip", "install", "--require-hashes", "--no-deps", "--python", filepath.Join(venv, "bin", "python"), "-r"}) {
 		t.Errorf("call 3: %s %q, want uv pip install --require-hashes --no-deps --python <venv>/bin/python -r <file>", c[2].Path, pip)
 	}
-	if !bytes.Equal(c[2].Req, nativelock.Requirements) {
-		t.Errorf("pip install read %d bytes, not the embedded lock (%d bytes)", len(c[2].Req), len(nativelock.Requirements))
+	// n is laid out for Linux (newNative) on any test host: Linux's lock.
+	if lock := nativelock.For(n.goos()).Requirements; !bytes.Equal(c[2].Req, lock) {
+		t.Errorf("pip install read %d bytes, not the embedded %s lock (%d bytes)", len(c[2].Req), n.goos(), len(lock))
 	}
 	for i, m := range [][2]string{
 		{"cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", "1427fd652930e4ba29e8149678df786c240d8825"},
@@ -456,8 +491,17 @@ func TestNativeFetchInstallsTheLockedVenv(t *testing.T) {
 }
 
 // execTools runs each tool for real with exactly env, as the CLI's runner
-// does, and records the call.
+// does, and records the call; RunStep is the CLI's too (RunInJob).
 type execTools struct{ Calls []toolCall }
+
+func (e *execTools) RunStep(ctx context.Context, job *supervise.Job, env []string, stdin io.Reader, out *os.File, path string, args ...string) ([]byte, error) {
+	c := toolCall{Env: env, Path: path, Args: args, Step: true, InJob: job != nil}
+	if out != nil {
+		c.OutFile = out.Name()
+	}
+	e.Calls = append(e.Calls, c)
+	return RunInJob(ctx, job, env, stdin, out, path, args...)
+}
 
 func (e *execTools) Run(ctx context.Context, env []string, stdin io.Reader, path string, args ...string) ([]byte, error) {
 	e.Calls = append(e.Calls, toolCall{Env: env, Path: path, Args: args})
@@ -476,6 +520,7 @@ func (e *execTools) Run(ctx context.Context, env []string, stdin io.Reader, path
 // RF 4: the user's Python and Hugging Face settings never reach the
 // install; uv is the pinned one, by absolute path, never PATH's.
 func TestNativeFetchIgnoresTheUsersPythonEnvironment(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: shell-script fakes of uv and hf and the Linux tool environment (Windows: TestFetchUVFromTheZipChecksTheHash, TestWindowsVenvLayout)")
 	fakeDir := t.TempDir()
 	ranMarker := filepath.Join(fakeDir, "ran")
 	touch(t, filepath.Join(fakeDir, "uv"), 0o755)
@@ -591,6 +636,7 @@ esac
 }
 
 func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: Linux's uv and unpack; Windows' Fetch (uv.exe, copyPostgres) has its own tests")
 	tools := &fakeTools{}
 	n := newNative(t, tools)
 	items, models, err := n.Downloads(context.Background())
@@ -700,4 +746,12 @@ func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
 	if err := n.PruneVersions(); err == nil || !exists(n.VenvDir("1.1.0-aaaaaaaaaaaa")) {
 		t.Errorf("with Err: %v", err)
 	}
+}
+
+// exeSuffix is what the OS adds to a program's name.
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }

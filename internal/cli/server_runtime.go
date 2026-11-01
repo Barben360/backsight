@@ -56,10 +56,7 @@ func nativeShim(d paths.Dirs) string {
 // shimMissing: no executable file behind the shim (none, a dangling link,
 // or not executable), which systemd would fail with 203/EXEC; server
 // install and the switch install it again.
-func shimMissing(shim string) bool {
-	fi, err := os.Stat(shim)
-	return err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0
-}
+func shimMissing(shim string) bool { return !fsutil.Executable(shim) }
 
 // shimProbeWait bounds the shim's --help.
 const shimProbeWait = 15 * time.Second
@@ -235,11 +232,18 @@ func otherRuntime(kind string) string {
 	return "native"
 }
 
+// switchRefusedOnWindows: native is Windows' only runtime in this
+// release (decision 0080).
+const switchRefusedOnWindows = "the runtime switch is not available on Windows in this release: Docker on Windows is untested"
+
 func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchResult, error) {
 	res := switchResult{To: to, Plan: f.plan, Steps: []step{}}
 	add := streamStep(e, "server runtime switch", &res.Steps)
 	if to != "docker" && to != "native" {
 		return res, &output.Error{Code: output.Usage, Message: fmt.Sprintf("server runtime switch: %q is not docker or native", to)}
+	}
+	if switchProbes.goos == "windows" {
+		return res, nothingChanged("%s", switchRefusedOnWindows)
 	}
 	agreed, err := consentAnswer(f.answers, "server runtime switch")
 	if err != nil {
@@ -951,7 +955,7 @@ func recallAgain(ctx context.Context, cl *hindsight.Client, bank string, probes 
 // appendSwitchLog records a passed switch, one JSON line.
 func appendSwitchLog(stateDir string, rs state.RuntimeSwitch) error {
 	p := switchLog(stateDir)
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(p)); err != nil {
 		return err
 	}
 	line, err := json.Marshal(map[string]any{"from": rs.From, "to": rs.To, "at": rs.At, "backup": rs.Backup, "overlap": rs.Overlap, "overlap_beyond_near_ties": rs.OverlapBeyondTies, "gate_ok": true})

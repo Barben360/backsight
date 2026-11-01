@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The CI chain re-runs the VM bench's dedup and key-rotation proofs on
@@ -100,6 +102,7 @@ func runScript(step string) []string {
 }
 
 func TestM6ChainRunsTheDedupAndRotationProofs(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	cmd := exec.Command("bash", mustAbs(t, "m6-chain.sh"))
 	cmd.Env = append(os.Environ(), "M6_DRY=1", "BACKSIGHT_CI_SLOT=1", "CI=")
 	out, err := cmd.Output()
@@ -113,6 +116,7 @@ func TestM6ChainRunsTheDedupAndRotationProofs(t *testing.T) {
 }
 
 func TestM6ChainRefusesTheMachinesOwnProject(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	cmd := exec.Command("bash", mustAbs(t, "m6-chain.sh"))
 	cmd.Env = append(os.Environ(), "M6_DRY=1", "BACKSIGHT_CI_SLOT=1", "PROJECT=backsight")
 	out, err := cmd.CombinedOutput()
@@ -124,6 +128,7 @@ func TestM6ChainRefusesTheMachinesOwnProject(t *testing.T) {
 // Client homes only ever run client commands: a server command, or an ssh
 // install, belongs to the srv home.
 func TestM6ChainClientsNeverRunAServerCommand(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, c := range []struct{ who, args string }{
 		{"b", "server token --out /x"}, {"a", "--json server install"}, {"b", "connect --ssh=bs@h"}, {"a", "connect --ssh bs@h"},
 	} {
@@ -158,6 +163,7 @@ func TestM6ChainShowsItsFilesScrubbed(t *testing.T) {
 // the chain fails on CI (CI or GITHUB_ACTIONS set: a skip would be a green
 // job with no coverage) and is skipped elsewhere, exit 0 with a skip line.
 func TestM6ChainWithoutAPrivateIPFailsOnCIAndSkipsElsewhere(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, c := range []struct {
 		name string
 		env  []string

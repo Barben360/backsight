@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // thirdPartyLicenses runs scripts/third-party-licenses.sh in dir (its
@@ -65,6 +67,7 @@ var licenseEnv = []string{"PKG=./cmd/app", "TARGETS=linux/amd64 windows/amd64"}
 // A dependency without a license file cannot ship: the script names it and
 // writes nothing.
 func TestThirdPartyLicensesRefuseAModuleWithoutItsText(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	d := licenseModule(t, map[string]string{"dep/README.md": "no license here\n"})
 	out, err := thirdPartyLicenses(t, d, licenseEnv, "OUT")
 	if err == nil || !strings.Contains(out, "example.com/dep") || !strings.Contains(out, "no license file") {
@@ -86,6 +89,7 @@ func TestThirdPartyLicensesRefuseAModuleWithoutItsText(t *testing.T) {
 // whole (both texts of a dual-licensed module), the Go standard library's
 // license is included, and source files are not.
 func TestThirdPartyLicensesCopyEveryTextWhole(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	dual := "Part of this code is MIT, part Apache-2.0.\n\nMIT TEXT\n\n---\n\nAPACHE TEXT" // no final newline
 	d := licenseModule(t, map[string]string{
 		"dep/LICENSE":         dual,
@@ -137,6 +141,7 @@ func TestThirdPartyLicensesCopyEveryTextWhole(t *testing.T) {
 // A module only one release target links (as cobra's Windows helper) is
 // listed: the file covers every archive.
 func TestThirdPartyLicensesCoverEveryTarget(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	d := licenseModule(t, map[string]string{
 		"dep/LICENSE":          "dep license\n",
 		"cmd/app/main.go":      "package main\n\nfunc main() { f() }\n",
@@ -160,6 +165,7 @@ func TestThirdPartyLicensesCoverEveryTarget(t *testing.T) {
 // The committed file is what go.mod gives today: a new dependency without
 // its text fails the tests (and CI's check) before it ships.
 func TestThirdPartyLicensesAreCurrent(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	if out, err := thirdPartyLicenses(t, "..", nil, "--check"); err != nil {
 		t.Errorf("%v\n%s", err, out)
 	}

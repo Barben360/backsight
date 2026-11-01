@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -22,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // otherProfile is a Claude Code profile backsight did not wire, holding
@@ -216,9 +216,7 @@ func TestUninstallResumeKeepsEveryFlag(t *testing.T) {
 // The local files go before the binaries; a failure on the binaries is no
 // longer resumable (the state may be gone): exit 20 with what is left.
 func TestUninstallBinariesLastAndTheirFailureListsWhatIsLeft(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a read-only directory mode does not stop removals on Windows")
-	}
+	testtool.SkipWindows(t, "linux-only: a read-only directory keeps its entries on Linux; on Windows a file that cannot go is moved to the trash (TestUninstallWithTheShimHeldOpen)")
 	if os.Geteuid() == 0 {
 		t.Skip("root removes read-only directories' entries")
 	}
@@ -414,9 +412,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 // A backup directory reached through a symlink into the state directory
 // is kept.
 func TestUninstallPurgeLocalFollowsASymlinkedBackupDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a symlink needs a privilege or developer mode on Windows")
-	}
+	testtool.SkipWindows(t, "linux-only: a symlink needs a privilege a standard Windows user lacks")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	real := filepath.Join(d.State, "logs", "archives")
@@ -565,6 +561,7 @@ func TestUninstallRemoteServerRefusesStop(t *testing.T) {
 }
 
 func TestUninstallWarnsAboutAPathEntryThatIsNotOurs(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: on Windows every file at <bin>\\backsight.exe is backsight's copy (install refuses any other), so none is foreign")
 	m := installMachine(t)
 	link := filepath.Join(pathsOf(m.home).Bin, "backsight")
 	_ = os.Remove(link)
@@ -581,9 +578,7 @@ func TestUninstallWarnsAboutAPathEntryThatIsNotOurs(t *testing.T) {
 }
 
 func TestUninstallRemovesARelativeLinkOfOurs(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a symlink needs a privilege or developer mode on Windows")
-	}
+	testtool.SkipWindows(t, "linux-only: the PATH command is a copy of the shim on Windows, never a link (TestUninstallRemovesOnlyItsPathEntry)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	link := filepath.Join(d.Bin, "backsight")

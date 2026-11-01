@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // childFromTestBinary makes the supervisor's child this test binary, which
@@ -84,7 +85,7 @@ func TestHookWithoutAnEventOrWithJunkArgsExitsZero(t *testing.T) {
 func TestHookPrintsTheChildAnswerAndCutsAHang(t *testing.T) {
 	home := hookHome(t)
 	childFromTestBinary(t, "")
-	code, out := runHookCmd(t, `{"session_id":"s1","source":"resume","cwd":"`+home+`"}`, "session-start")
+	code, out := runHookCmd(t, `{"session_id":"s1","source":"resume","cwd":"`+testtool.JSONPath(home)+`"}`, "session-start")
 	if code != 0 || !strings.Contains(out, `"hookEventName":"SessionStart"`) || !strings.Contains(out, "memory_search") {
 		t.Fatalf("exit %d: %q", code, out)
 	}

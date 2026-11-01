@@ -536,7 +536,7 @@ func TestParamsCoverEveryViewFlag(t *testing.T) {
 		have := map[string]bool{}
 		for _, fs := range []*pflag.FlagSet{cmd.LocalFlags(), cmd.InheritedFlags()} {
 			fs.VisitAll(func(f *pflag.Flag) {
-				if f.Name != "json" && f.Name != "help" && f.Name != "text" {
+				if f.Name != "json" && f.Name != "help" && f.Name != "text" && !f.Hidden {
 					have[f.Name] = true
 				}
 			})

@@ -405,6 +405,30 @@ func TestRuntimeAnswer(t *testing.T) {
 	}
 }
 
+// On Windows the runtime defaults to native (decision 0080): an answer,
+// a saved answer or an installed server's config still wins, and the role
+// stays both.
+func TestRuntimeDefaultIsTheCallers(t *testing.T) {
+	base := map[string]string{"provider": "deepseek"}
+	in := Inputs{Answers: base, DefaultRuntime: "native"}
+	if _, extra, err := Resolve(in); err != nil || extra["runtime"] != "native" || extra["role"] != config.RoleBoth {
+		t.Errorf("default native: %v %v", extra, err)
+	}
+	in.Answers = map[string]string{"provider": "deepseek", "runtime": "docker"}
+	if _, extra, err := Resolve(in); err != nil || extra["runtime"] != "" {
+		t.Errorf("docker answered: %q %v", extra["runtime"], err)
+	}
+	in.Answers, in.Saved = base, map[string]string{"runtime": "docker"}
+	if _, extra, err := Resolve(in); err != nil || extra["runtime"] != "" {
+		t.Errorf("docker saved: %q %v", extra["runtime"], err)
+	}
+	cfg := config.Default(paths.Dirs{Data: "/d", Config: "/c", State: "/s"}, "/home/u") // a Docker install
+	in.Saved, in.Config = nil, &cfg
+	if _, extra, err := Resolve(in); err != nil || extra["runtime"] != "" {
+		t.Errorf("an installed Docker server: %q %v", extra["runtime"], err)
+	}
+}
+
 // An installed server's runtime is config.toml's: another answer is
 // refused with the command that moves the memory.
 func TestRuntimeAnswerAgainstAConfig(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -38,6 +39,9 @@ func (e *env) emit(command string, data any, text func() string) error {
 func machine() (paths.Dirs, string, error) {
 	d, err := paths.Default()
 	if err != nil {
+		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	if err := d.EnsurePrivate(); err != nil {
 		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	home, err := os.UserHomeDir()
@@ -92,9 +96,31 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
-	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e), newDashboardCmd(e))
+	// What a scheduled task passes instead of the variables it cannot carry.
+	root.PersistentFlags().Var(dirFlag("BACKSIGHT_HOME"), "backsight-home", "backsight's directory (BACKSIGHT_HOME), which a scheduled task cannot set")
+	root.PersistentFlags().Var(dirFlag("BACKSIGHT_STATE_DIR"), "backsight-state-dir", "backsight's state directory (BACKSIGHT_STATE_DIR), which a scheduled task cannot set")
+	_ = root.PersistentFlags().MarkHidden("backsight-home")
+	_ = root.PersistentFlags().MarkHidden("backsight-state-dir")
+	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e), newInstallShimCmd(e), newDashboardCmd(e))
 	requireSubcommands(root)
 	return root
+}
+
+// dirFlag is a hidden directory flag that sets its variable: what a
+// scheduled task passes instead of the BACKSIGHT_HOME or
+// BACKSIGHT_STATE_DIR it cannot carry (decision 0080). It sets the
+// variable as the flag is parsed, before any command resolves a path; a
+// relative directory is a usage error.
+type dirFlag string
+
+func (dirFlag) String() string { return "" }
+func (dirFlag) Type() string   { return "dir" }
+
+func (f dirFlag) Set(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("must be absolute, got %q", dir)
+	}
+	return os.Setenv(string(f), dir)
 }
 
 // requireSubcommands makes every group a usage error (exit 2) when called

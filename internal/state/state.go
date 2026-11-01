@@ -410,7 +410,7 @@ type Backfill struct {
 // Load then Save is not safe against concurrent writers: use Update.
 func Load(path string) (State, error) {
 	s := State{SchemaVersion: SchemaVersion, AppliedMigrations: []string{}}
-	raw, err := os.ReadFile(path)
+	raw, err := fsutil.ReadFileShared(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return s, nil
 	}

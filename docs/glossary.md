@@ -4,7 +4,7 @@ The words these docs, `backsight doctor` and `--help` use, in one or two lines e
 
 ## Hindsight
 
-The open-source memory server backsight installs and runs for you, in Docker: [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight). It stores what your sessions taught, turns it into memories with an LLM, and searches them.
+The open-source memory server backsight installs and runs for you, in Docker or natively ([the native runtime](native-runtime.md), the default on Windows): [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight). It stores what your sessions taught, turns it into memories with an LLM, and searches them.
 
 ## Bank
 
@@ -100,7 +100,7 @@ A session resumed on two PCs from a copied transcript. Each PC sends the turns t
 
 ## Shim
 
-The small program `~/.local/bin/backsight` points to. It always starts the current version of backsight, so an update or a rollback changes one link, and Claude Code's hooks never call a stale binary.
+The small program `~/.local/bin/backsight` points to. It always starts the current version of backsight, so an update or a rollback changes one link, and Claude Code's hooks never call a stale binary. On Windows it is `current.exe`, a copy of the current version, and the command on PATH (`%LOCALAPPDATA%\Programs\backsight\backsight.exe`) is a copy of it: an update renames a running copy aside (`.old-<n>`) and puts the new one in its place ([Windows](windows.md#updates-and-uninstall-while-claude-code-runs)).
 
 ## Hooks, plugin, memory tools, skills
 

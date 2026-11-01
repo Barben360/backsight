@@ -53,7 +53,7 @@ To encrypt to a key you already keep elsewhere, set `backup.recipient` in `confi
 
 While a backup runs (a few seconds), hooks and jobs queue their writes; nothing is lost.
 
-On the native runtime the throwaway database is a new Postgres cluster of pg0's own binaries under backsight's state directory, on a free loopback port with a password of its own, run in a transient systemd user unit (`<project>-verify-<id>.service`) that systemd stops after an hour at most. It is stopped and deleted after the check, also when the check fails or is interrupted. Before verifying, a postgres found running on the native database's files outside its unit is stopped, never adopted, and reported.
+On the native runtime the throwaway database is a new Postgres cluster of pg0's own binaries under backsight's state directory, on a free loopback port with a password of its own, run in a transient systemd user unit (`<project>-verify-<id>.service`) that systemd stops after an hour at most. It is stopped and deleted after the check, also when the check fails or is interrupted. On Windows it runs under `server\native\tmp\verify-<id>`, in a Job Object of the command itself, so it ends with the command whatever happens. Before verifying, a postgres found running on the native database's files outside its unit is stopped, never adopted, and reported.
 
 ## Restoring a backup
 

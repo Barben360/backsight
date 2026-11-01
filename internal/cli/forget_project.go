@@ -20,15 +20,15 @@ type forgetProjectFlags struct {
 
 // resume is the command that runs this selection again, the answers kept.
 func (f forgetProjectFlags) resume() string {
-	cmd := "backsight forget --project " + shellWord(f.project)
+	cmd := "backsight forget --project " + resumeWord(f.project)
 	if f.source != "" {
-		cmd += " --source " + shellWord(f.source)
+		cmd += " --source " + resumeWord(f.source)
 	}
 	if f.purge {
 		cmd += " --purge"
 	}
 	for _, a := range f.answers {
-		cmd += " --answer " + shellWord(a)
+		cmd += " --answer " + resumeWord(a)
 	}
 	return cmd
 }
