@@ -3,7 +3,12 @@
 package fsutil
 
 import (
+	"errors"
+	"math/rand/v2"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -53,16 +58,7 @@ func MakePrivate(path string) error {
 	if err != nil {
 		return err
 	}
-	me, err := userSID()
-	if err != nil {
-		return err
-	}
-	inherit := ""
-	if st.IsDir() {
-		inherit = "OICI"
-	}
-	sddl := "D:P(A;" + inherit + ";FA;;;" + me.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)"
-	sd, err := windows.SecurityDescriptorFromString(sddl)
+	sd, err := privateSD(st.IsDir())
 	if err != nil {
 		return err
 	}
@@ -136,4 +132,55 @@ func OtherReaders(path string) ([]string, error) {
 		}
 	}
 	return who, nil
+}
+
+// createPrivateTemp creates a new temp file in dir, named as
+// os.CreateTemp names it from pattern (its last "*" replaced by a random
+// number), already private: CreateFile with CREATE_NEW and the private
+// security descriptor (MakePrivate's, for a file), so no other user can
+// open it at any moment, not even empty (a handle opened before a DACL
+// change keeps its access).
+func createPrivateTemp(dir, pattern string) (*os.File, error) {
+	sd, err := privateSD(false)
+	if err != nil {
+		return nil, err
+	}
+	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	prefix, suffix := pattern, ""
+	if i := strings.LastIndex(pattern, "*"); i >= 0 {
+		prefix, suffix = pattern[:i], pattern[i+1:]
+	}
+	for try := 0; try < 10000; try++ {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(uint64(rand.Uint32()), 10)+suffix)
+		p, err := windows.UTF16PtrFromString(name)
+		if err != nil {
+			return nil, err
+		}
+		h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, sa,
+			windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		if errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+			continue
+		}
+		if err != nil {
+			return nil, &os.PathError{Op: "createtemp", Path: name, Err: err}
+		}
+		return os.NewFile(uintptr(h), name), nil
+	}
+	return nil, &os.PathError{Op: "createtemp", Path: filepath.Join(dir, pattern), Err: os.ErrExist}
+}
+
+// privateSD is the security descriptor MakePrivate gives: a protected DACL
+// granting full control to the current user, SYSTEM and Administrators,
+// inherited by what a directory holds.
+func privateSD(dir bool) (*windows.SECURITY_DESCRIPTOR, error) {
+	me, err := userSID()
+	if err != nil {
+		return nil, err
+	}
+	inherit := ""
+	if dir {
+		inherit = "OICI"
+	}
+	return windows.SecurityDescriptorFromString("D:P(A;" + inherit + ";FA;;;" + me.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
 }

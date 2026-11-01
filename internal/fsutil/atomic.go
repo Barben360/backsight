@@ -77,9 +77,9 @@ func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 
 // WritePrivate is WriteAtomic for a secret written where the user chose
 // (a connection token's --out, a keys export), whose folder may be open
-// to others: the temp file is made private (MakePrivate: mode 0600; on
-// Windows you, SYSTEM and Administrators only, inheritance off) before a
-// byte is written, and the rename keeps that DACL.
+// to others: the temp file is created private (mode 0600; on Windows you,
+// SYSTEM and Administrators only, inheritance off, set by CreateFile
+// itself), and the rename keeps that DACL.
 func WritePrivate(path string, data []byte) error {
 	target, err := resolve(path)
 	if err != nil {
@@ -130,14 +130,19 @@ func WriteAtomicNoFollow(path string, data []byte, perm fs.FileMode) error {
 }
 
 // write puts data at path through a synced temp file; check, when set, runs
-// right before the rename and aborts it with its error. private makes the
-// empty temp file private (MakePrivate) before data is written.
+// right before the rename and aborts it with its error. private creates
+// the temp file private (createPrivateTemp): on Windows its DACL is set
+// at creation, so no other user ever holds a handle to it.
 func write(path string, data []byte, perm fs.FileMode, check func() error, private bool) error {
 	dir := filepath.Dir(path)
 	if err := MkdirPrivate(dir); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	create := os.CreateTemp
+	if private {
+		create = createPrivateTemp
+	}
+	tmp, err := create(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -150,11 +155,6 @@ func write(path string, data []byte, perm fs.FileMode, check func() error, priva
 	}()
 	if err := tmp.Chmod(perm); err != nil {
 		return err
-	}
-	if private {
-		if err := MakePrivate(tmp.Name()); err != nil {
-			return err
-		}
 	}
 	if _, err := tmp.Write(data); err != nil {
 		return err

@@ -221,3 +221,30 @@ func TestWritePrivateInAnOpenFolder(t *testing.T) {
 		}
 	}
 }
+
+// The temp file a private write fills is private from its creation: no
+// other user can open it, even empty, and keep a handle that reads the
+// secret once written (a DACL change does not revoke an open handle).
+func TestPrivateTempIsPrivateAtCreation(t *testing.T) {
+	root := openRoot(t)
+	f, err := createPrivateTemp(root, ".join.token.tmp-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
+	if fi, err := f.Stat(); err != nil || fi.Size() != 0 {
+		t.Fatalf("not a new empty file: %v %v", fi, err)
+	}
+	if r, err := OtherReaders(f.Name()); err != nil || len(r) != 0 {
+		t.Errorf("readable by %v at creation (%v)", r, err)
+	}
+	if !protected(t, f.Name()) {
+		t.Error("its DACL inherits from the folder at creation")
+	}
+	if !strings.HasPrefix(filepath.Base(f.Name()), ".join.token.tmp-") || filepath.Dir(f.Name()) != root {
+		t.Errorf("name %s", f.Name())
+	}
+	if _, err := f.WriteString("bst1.secret"); err != nil {
+		t.Errorf("the owner writes: %v", err)
+	}
+}
