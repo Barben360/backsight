@@ -40,6 +40,7 @@
 {{end}}</div>
 
 {{/* widget: What should I do?. Reads .V.overview.Attention and .AttentionMore through attention (AttentionCard: Head, Count, Items, Whys, Calm, More, MoreHref). */}}
+<div class="grid-main">
 {{with attention $r $.L $.CLI}}{{template "card-open" .Head}}
 {{if .Items}}{{$whys := .Whys}}<ul class="att">
 {{range $i, $it := .Items}}<li class="att-item"><span class="pill st {{$it.Class}}">{{$it.Word}}</span>
@@ -52,21 +53,38 @@
 {{end}}{{if .More}}<p class="small"><a href="{{.MoreHref}}">{{.More}}</a></p>
 {{end}}{{template "card-close" .Head}}{{end}}
 
-{{/* widget: lately. Reads .V.overview.Tables.Lately (ID, Project, Last, Shown, Used, Wrong). */}}
-<section>
-<h2>Lately</h2>
-<table>
-<tr><th>Project</th><th>Last prompt</th><th>Shown</th><th>Used</th><th>Reported wrong</th></tr>
-{{range $r.Tables.Lately}}<tr><td><a href="/sessions/{{esc .ID}}">{{clip .Project}}</a></td><td>{{when $.Loc .Last}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td></tr>
-{{end}}</table>
-</section>
+{{/* widget: lately. Reads .V.overview.Tables.Lately (ID, Project, Last, Shown, Used, Wrong) and GeneratedAt (the times are told against it). */}}
+{{with latelyhead}}{{template "card-open" .}}{{end}}
+{{if $r.Tables.Lately}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
+<tbody>
+{{range $r.Tables.Lately}}<tr><td><a class="idc" href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td>
+<td>{{if .Project}}<a class="trunc" href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{else}}{{dash}}{{end}}</td>
+<td>{{with rel $r.GeneratedAt .Last $.Loc}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{end}}</td>
+<td class="r">{{n .Shown}}</td><td class="r">{{n .Used}}</td><td class="r">{{if gt .Wrong 0}}<span class="st st-watch">{{n .Wrong}}</span>{{else}}{{n .Wrong}}{{end}}</td></tr>
+{{end}}</tbody></table></div>
+{{else}}<div class="empty"><span>No sessions in this window.</span></div>
+{{end}}{{with latelyhead}}{{template "card-close" .}}{{end}}
+</div>
 
-{{/* widget: memory at a glance. Reads the metrics bank.size, bank.growth and .V.overview.Info (Metric, Count, Command). */}}
-<section>
-<h2>Memory at a glance</h2>
-{{template "metric" framed (metric $r "bank.size") $d $.Loc}}
-{{template "metric" framed (metric $r "bank.growth") $d $.Loc}}
-{{range $r.Info}}<p>{{n .Count}} {{(metric $r .Metric).Def.Label}} <code>{{.Command}}</code></p>
-{{end}}<p><a href="/bank">Memory in detail</a></p>
+{{/* widget: memory at a glance. Reads the metrics bank.size (extras observation, world, experience, documents), bank.growth and .V.overview.Info through glance (Glance: Head, Total, Growth, Kinds, Aria, Down, Badges, Nothing). */}}
+{{with glance $r $.L $.Loc $.P}}<section class="card" aria-labelledby="{{.Head.ID}}">
+{{template "card-head" .Head}}
+{{with .Down}}<div class="state st-watch"><span class="i i-server"></span><span>{{.}}</span></div>
+{{end}}<div class="glance">
+<div class="glance-total"><span class="muted small">Memories</span><span class="v">{{.Total}}</span>{{with .Growth}}<span class="small sub">{{.}}</span>{{end}}</div>
+{{if .Kinds}}<div class="glance-kinds">
+<svg class="kbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{.Aria}}">
+{{range .Kinds}}<rect class="{{.Class}}" x="{{.X}}" y="0" width="{{.W}}" height="10"></rect>
+{{end}}</svg>
+<div class="legend">{{range .Kinds}}<span><i class="sw {{.Class}}"></i>{{.Name}} <b class="num">{{.Count}}</b></span>
+{{end}}</div>
+</div>
+{{end}}<div class="glance-look"><span class="muted small">Worth a look</span>
+{{if .Badges}}<div class="badges">{{range .Badges}}<a class="badge" href="{{.Href}}"><span class="i i-info"></span><b>{{.Count}}</b> {{.Label}}</a>
+{{end}}</div>
+{{end}}{{if .Nothing}}<span class="small sub">Nothing to review.</span>{{end}}</div>
+</div>
 </section>
+{{end}}
 {{template "foot" .}}

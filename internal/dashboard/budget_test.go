@@ -131,9 +131,9 @@ func TestPageBudgets(t *testing.T) {
 	if first == 0 || first > firstByteLimit {
 		t.Errorf("first byte %v, limit %v", first, firstByteLimit)
 	}
-	bank, _ := metrics.DefOf("bank.size")
-	if sec := sectionOf(b, bank.Question); !strings.Contains(visibleText(sec), "memory server not answering") {
-		t.Errorf("the bank widget does not say the server is not answering: %q", visibleText(sec))
+	sec := parseHTML(t, b).first("section.card[aria-labelledby=w-glance]")
+	if sec == nil || !strings.Contains(sec.text(), "Memory server not answering") {
+		t.Errorf("the memory-size card does not say the server is not answering: %v", sec)
 	}
 	hit, _ := metrics.DefOf("recall.hit_rate")
 	res := apiResult(t, h, "overview")

@@ -56,7 +56,7 @@ func TestVisibleText(t *testing.T) {
 
 // pageMetrics are the metrics each page shows to everyone, by page.
 var pageMetrics = map[string][]string{
-	"overview": {"bank.size", "bank.growth"}, // the six tiles have their own checks (tileTexts)
+	"overview": {"bank.size"}, // the six tiles have their own checks (tileTexts); the growth and the kinds are TestGlance's
 	"quality":  {"used.turn_rate", "declare.coverage", "recall.hit_rate", "recall.empty_reasons", "search.rate", "search.empty_rate"},
 	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens", "extraction.cost"},
 	"bank":     {"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "notes.stored", "bank.churn", "stale.never_used", "stale.hidden", "stale.reported"},
@@ -100,11 +100,18 @@ func TestPagesShowTheViewsNumbers(t *testing.T) {
 			if !ok {
 				t.Fatalf("no metric %s", id)
 			}
-			if !strings.Contains(text, def.Question) {
-				t.Errorf("%s lacks the question of %s: %q", page, id, def.Question)
+			question := def.Question
+			if page == "overview" { // the card asks its own question
+				question = "How big is the memory?"
+			}
+			if !strings.Contains(text, question) {
+				t.Errorf("%s lacks the question of %s: %q", page, id, question)
 			}
 			m, found := res.Metrics[id]
 			want := views.FormatValue(def, m)
+			if page == "overview" {
+				want = en.Value(def, m)
+			}
 			if id == "jobs.last_run" && m.Value != nil { // shown as how long ago
 				want = views.Age(int64(*m.Value)) + " ago"
 			}
@@ -144,7 +151,7 @@ func TestOverviewSkeleton(t *testing.T) {
 			t.Errorf("overview lacks %q followed by %q", a.Name, word)
 		}
 	}
-	for _, want := range []string{"last 7 days", "What should I do?", "Lately", "Memory at a glance"} {
+	for _, want := range []string{"last 7 days", "What should I do?", "What happened lately?", "How big is the memory?"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("overview lacks %q", want)
 		}
@@ -175,8 +182,8 @@ func TestOverviewSkeleton(t *testing.T) {
 	if len(res.Tables.Lately) == 0 {
 		t.Fatal("no lately rows in the API")
 	}
-	if got := strings.Count(b, `href="/sessions/`); got != len(res.Tables.Lately) {
-		t.Errorf("%d session links, want one per lately row (%d)", got, len(res.Tables.Lately))
+	if got := len(parseHTML(t, b).find("table.tbl a.idc")); got != len(res.Tables.Lately) {
+		t.Errorf("%d session links in the Lately table, want one per row (%d)", got, len(res.Tables.Lately))
 	}
 }
 
