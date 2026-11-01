@@ -46,7 +46,7 @@ A client joins with a connection token. It holds the server's address on your pr
 backsight server token --out <file>
 ```
 
-The file is readable by you only (mode 0600; an existing file is replaced). Without `--out`, the token goes to a terminal only: `--json` or a piped output needs `--out`. The server must be exposed and running.
+The file is readable by you only (mode 0600; on Windows an access list: you, SYSTEM and Administrators only, set before the token is written, whatever the folder allows; an existing file is replaced). Without `--out`, the token goes to a terminal only: `--json` or a piped output needs `--out`. The server must be exposed and running.
 
 - Carry the file to the other PC yourself (`scp` over your own ssh, a USB stick), never through a chat or a shared folder.
 - Once `connect` is done, delete it on both machines: the host keeps the file it wrote, and connect reminds you but never deletes it itself.

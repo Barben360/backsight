@@ -401,7 +401,7 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			return pause("budget", fmt.Sprintf("budget reached (%.4f %s, %d tokens); rerun with a higher --max-cost or --max-tokens", b.SpentCost, b.Currency, b.SpentTokens))
 		}
 		r := f.FlushFile(ctx, path, retain.Options{Force: true, IgnoreSince: true})
-		reportUnconfirmed(d.State, os.Stderr, r)
+		reportUnconfirmed(d.State, noteOut, r)
 		res.Results = append(res.Results, r)
 		switch r.Status {
 		case retain.Sent, retain.Nothing, retain.OptedOut, retain.Quarantined, retain.Held:

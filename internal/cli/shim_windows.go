@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -38,6 +39,18 @@ func pointShimWindows(target, shim string) error {
 		if prev, err = readChecksums(filepath.Dir(shim)); err != nil {
 			return err
 		}
+	}
+	if sameContent(shim, target) {
+		// Already target's bytes (a repeat client install): renaming it
+		// aside would move a supervisor or a session running it onto a
+		// .old-<n> for nothing. Only the checksums may need to follow.
+		if prev != nil && !prev.equal(sums) {
+			if err := writeChecksums(filepath.Dir(shim), sums); err != nil {
+				return errors.Join(err, writeChecksums(filepath.Dir(shim), prev))
+			}
+		}
+		cleanOld(shim)
+		return nil
 	}
 	old := ""
 	if _, err := os.Lstat(shim); err == nil {
@@ -110,6 +123,15 @@ func escapeGlob(p string) string {
 // directory; a nil entry is a file that is not there.
 type checksumSet map[string][]byte
 
+func (c checksumSet) equal(o checksumSet) bool {
+	for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
+		if (c[name] == nil) != (o[name] == nil) || !bytes.Equal(c[name], o[name]) {
+			return false
+		}
+	}
+	return true
+}
+
 func readChecksums(dir string) (checksumSet, error) {
 	set := checksumSet{}
 	for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
@@ -143,4 +165,14 @@ func writeChecksums(dir string, set checksumSet) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sameContent reports that a and b both exist with the same bytes.
+func sameContent(a, b string) bool {
+	ha, err := fsutil.HashFile(a)
+	if err != nil || ha == fsutil.Absent {
+		return false
+	}
+	hb, err := fsutil.HashFile(b)
+	return err == nil && ha == hb
 }

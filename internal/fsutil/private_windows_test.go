@@ -189,3 +189,93 @@ func TestMkdirPrivateNestedIsPrivateAtEveryLevel(t *testing.T) {
 		}
 	}
 }
+
+// A secret written where the user chose (a token --out, a keys export)
+// is private even in a folder other users can read: you, SYSTEM and
+// Administrators only, inheritance off.
+func TestWritePrivateInAnOpenFolder(t *testing.T) {
+	root := openRoot(t)
+	plain := filepath.Join(root, "plain.txt")
+	if err := WriteAtomic(plain, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := OtherReaders(plain); len(r) == 0 {
+		t.Fatal("a plain write there is private already: the fixture proves nothing")
+	}
+	for name, write := range map[string]func(string, []byte) error{"WritePrivate": WritePrivate, "WritePrivateNoFollow": WritePrivateNoFollow} {
+		f := filepath.Join(root, name+".token")
+		if err := os.WriteFile(f, []byte("an older one"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := write(f, []byte("bst1.secret\n")); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if r, err := OtherReaders(f); err != nil || len(r) != 0 {
+			t.Errorf("%s: readable by %v (%v)", name, r, err)
+		}
+		if !protected(t, f) {
+			t.Errorf("%s: the DACL inherits from the folder", name)
+		}
+		if b, err := os.ReadFile(f); err != nil || string(b) != "bst1.secret\n" {
+			t.Errorf("%s: the owner reads %q, %v", name, b, err)
+		}
+	}
+}
+
+// The temp file a private write fills is private from its creation: no
+// other user can open it, even empty, and keep a handle that reads the
+// secret once written (a DACL change does not revoke an open handle).
+func TestPrivateTempIsPrivateAtCreation(t *testing.T) {
+	root := openRoot(t)
+	f, err := createPrivateTemp(root, ".join.token.tmp-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
+	if fi, err := f.Stat(); err != nil || fi.Size() != 0 {
+		t.Fatalf("not a new empty file: %v %v", fi, err)
+	}
+	if r, err := OtherReaders(f.Name()); err != nil || len(r) != 0 {
+		t.Errorf("readable by %v at creation (%v)", r, err)
+	}
+	if !protected(t, f.Name()) {
+		t.Error("its DACL inherits from the folder at creation")
+	}
+	if !strings.HasPrefix(filepath.Base(f.Name()), ".join.token.tmp-") || filepath.Dir(f.Name()) != root {
+		t.Errorf("name %s", f.Name())
+	}
+	if _, err := f.WriteString("bst1.secret"); err != nil {
+		t.Errorf("the owner writes: %v", err)
+	}
+}
+
+// The public private writers create their temp file private: looked at
+// right after its creation, before a byte or a permission change, it is
+// readable by no one else and its DACL is not inherited.
+func TestPrivateWritersCreateTheTempPrivate(t *testing.T) {
+	root := openRoot(t)
+	for name, write := range map[string]func(string, []byte) error{"WritePrivate": WritePrivate, "WritePrivateNoFollow": WritePrivateNoFollow} {
+		var seen []string
+		afterCreate = func(tmp string) {
+			fi, err := os.Stat(tmp)
+			if err != nil || fi.Size() != 0 {
+				t.Errorf("%s: %s at creation: %v %v", name, tmp, fi, err)
+			}
+			if r, err := OtherReaders(tmp); err != nil || len(r) != 0 {
+				t.Errorf("%s: the temp file is readable by %v at creation (%v)", name, r, err)
+			}
+			if !protected(t, tmp) {
+				t.Errorf("%s: the temp file's DACL inherits from the folder at creation", name)
+			}
+			seen = append(seen, tmp)
+		}
+		if err := write(filepath.Join(root, name+".token"), []byte("bst1.secret\n")); err != nil {
+			t.Fatal(err)
+		}
+		afterCreate = nil
+		if len(seen) != 1 {
+			t.Errorf("%s: temp files seen %v", name, seen)
+		}
+	}
+	t.Cleanup(func() { afterCreate = nil })
+}

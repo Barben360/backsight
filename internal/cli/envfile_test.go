@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -94,5 +95,35 @@ func TestSessionStartEnvFileSourcesUnderBash(t *testing.T) {
 	}
 	if got := sourced(t, bash, envFile, "BACKSIGHT_PROJECT"); got != "billing" {
 		t.Errorf("BACKSIGHT_PROJECT = %q", got)
+	}
+}
+
+// plainAssignment matches a line Claude Code (2.1.296+) copies into
+// PowerShell commands: export NAME=value, the value made of unquoted
+// letters, digits and _ @ % + = : , . / -, single-quoted text, and
+// double-quoted text with $, ` and " escaped
+// (https://code.claude.com/docs/en/hooks.md#persisted-variables-in-powershell-commands).
+// One line of another kind and PowerShell commands get none of them.
+var plainAssignment = regexp.MustCompile(`^export [A-Za-z_][A-Za-z0-9_]*=(?:[A-Za-z0-9_@%+=:,./-]+|'[^']*'|"(?:[^"$` + "`" + `\\]|\\[$` + "`" + `"\\])*")*\n$`)
+
+// BACKSIGHT_PROJECT and BACKSIGHT_SESSION, for the project names
+// SessionStart writes (a directory's or a repository's basename, a
+// .backsight.toml name) and a session id, stay single-quoted plain
+// assignments with no / or \ in the value: PowerShell commands on Windows
+// get them (a value with / or \ is dropped there).
+func TestEnvFileLinesStayPlainForPowerShell(t *testing.T) {
+	for _, c := range []struct{ key, value string }{
+		{"BACKSIGHT_PROJECT", "orchid"},
+		{"BACKSIGHT_PROJECT", "billing-api_v2"},
+		{"BACKSIGHT_PROJECT", "Jé & Co"},
+		{"BACKSIGHT_PROJECT", "transverse"},
+		{"BACKSIGHT_SESSION", "0f3c9a5e-7b1d-4c2a-9e8f-1a2b3c4d5e6f"},
+	} {
+		for _, goos := range []string{"windows", "linux"} {
+			line := envFileLine(goos, c.key, c.value)
+			if line != "export "+c.key+"='"+c.value+"'\n" || !plainAssignment.MatchString(line) || strings.ContainsAny(c.value, `/\`) {
+				t.Errorf("%s %s=%q: %q is not a single-quoted plain assignment", goos, c.key, c.value, line)
+			}
+		}
 	}
 }

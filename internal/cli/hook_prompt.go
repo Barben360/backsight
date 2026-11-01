@@ -519,6 +519,13 @@ var (
 	noteRE       = regexp.MustCompile(`\bnote:[0-9a-f-]{36}\b`)
 )
 
+// postToolUseLockWait is how long PostToolUse waits for the session lock.
+// Parallel tool calls run their PostToolUse hooks at once, each with an
+// fsync'd write under that lock: this hook (deadline 1.5 s) waits up to
+// 1 s rather than the prompt path's 100 ms. A variable so a test can bound
+// the wait by itself rather than by its disk's speed.
+var postToolUseLockWait = time.Second
+
 // postToolUse marks that a memory tool ran during this prompt (the gate's
 // flag), adds returned ids to the seen set and stores to the session, and
 // journals shows and credits.
@@ -539,10 +546,7 @@ func (h *hookEnv) postToolUse() {
 	}
 	subagent := h.in.AgentID != "" // a subagent's search is not the main thread's
 	n := -1
-	// Parallel tool calls run their PostToolUse hooks at once, each with
-	// an fsync'd write under the session lock: this hook (deadline 1.5 s)
-	// waits up to 1 s rather than the prompt path's 100 ms.
-	h.store.Retry = time.Second
+	h.store.Retry = postToolUseLockWait
 	var shownTexts map[string]string
 	if strings.HasSuffix(h.in.ToolName, "memory_search") {
 		shownTexts = searchTexts(text)

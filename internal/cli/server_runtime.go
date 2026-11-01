@@ -1167,7 +1167,7 @@ func newServerRuntimeFingerprintCmd(e *env) *cobra.Command {
 				}
 				if keysOut != "" {
 					raw, _ := json.Marshal(keys)
-					if err := fsutil.WriteAtomic(keysOut, raw, 0o600); err != nil {
+					if err := fsutil.WritePrivate(keysOut, raw); err != nil {
 						return blocked(err)
 					}
 					res.KeysFile = keysOut
@@ -1196,7 +1196,7 @@ func newServerRuntimeFingerprintCmd(e *env) *cobra.Command {
 			}, failed)
 		},
 	}
-	cmd.Flags().StringVar(&keysOut, "keys", "", "also write every table's keys to this file (mode 0600)")
+	cmd.Flags().StringVar(&keysOut, "keys", "", "also write every table's keys to this file "+privateNote(runtime.GOOS))
 	cmd.Flags().StringVar(&compare, "compare", "", "name the keys of this file (written by --keys) that are gone now; exit 20 when any is")
 	return cmd
 }

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -435,17 +436,38 @@ func putKeyBack(path string, was []byte, wasHash, written string) error {
 	return os.Remove(path)
 }
 
+// secretsAbsent, in a connect run's directory, says this PC had no
+// secrets.toml when connect left its own server (a server never deployed):
+// connect --undo then removes the one connect wrote.
+const secretsAbsent = "secrets.toml.absent"
+
 // keepOwnConfig copies config.toml (raw, as it was read under the lock)
-// and secrets.toml into keep (0600): connect --undo puts them back.
+// and secrets.toml into keep (0600), or records that there was no
+// secrets.toml (secretsAbsent): connect --undo puts them back.
 func keepOwnConfig(d paths.Dirs, keep string, raw []byte) error {
 	if err := fsutil.WriteAtomic(filepath.Join(keep, "config.toml"), raw, 0o600); err != nil {
 		return err
 	}
 	sec, err := os.ReadFile(d.SecretsFile())
+	if errors.Is(err, fs.ErrNotExist) {
+		return fsutil.WriteAtomic(filepath.Join(keep, secretsAbsent), []byte("this PC had no secrets.toml before connect: connect --undo removes the one connect wrote\n"), 0o600)
+	}
 	if err != nil {
 		return err
 	}
 	return fsutil.WriteAtomic(filepath.Join(keep, "secrets.toml"), sec, 0o600)
+}
+
+// keptSecrets reads the secrets.toml kept in pre: nil and no error when
+// pre records there was none (secretsAbsent).
+func keptSecrets(pre string) ([]byte, error) {
+	raw, err := os.ReadFile(filepath.Join(pre, "secrets.toml"))
+	if errors.Is(err, fs.ErrNotExist) {
+		if _, aerr := os.Stat(filepath.Join(pre, secretsAbsent)); aerr == nil {
+			return nil, nil
+		}
+	}
+	return raw, err
 }
 
 // ownPreImage is the newest directory connect left when it took this PC
@@ -500,7 +522,7 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 	}
 	raw, err := os.ReadFile(filepath.Join(pre, "config.toml"))
 	if err == nil {
-		_, err = os.Stat(filepath.Join(pre, "secrets.toml"))
+		_, err = keptSecrets(pre)
 	}
 	if err != nil {
 		return res, &output.Error{Code: output.Blocked, Message: pre + " does not hold this PC's config.toml and secrets.toml as they were (" + err.Error() + "): nothing was changed"}
@@ -556,10 +578,14 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 	}
 	defer release()
 	var keptCfg, keptSec, curCfg, curSec []byte
-	for p, dst := range map[string]*[]byte{filepath.Join(pre, "config.toml"): &keptCfg, filepath.Join(pre, "secrets.toml"): &keptSec, d.ConfigFile(): &curCfg, d.SecretsFile(): &curSec} {
+	for p, dst := range map[string]*[]byte{filepath.Join(pre, "config.toml"): &keptCfg, d.ConfigFile(): &curCfg, d.SecretsFile(): &curSec} {
 		if *dst, err = os.ReadFile(p); err != nil {
 			return blocked(err)
 		}
+	}
+	// nil: this PC had no secrets.toml before connect.
+	if keptSec, err = keptSecrets(pre); err != nil {
+		return blocked(err)
 	}
 	shared := keepDir(d, at, "-shared")
 	rollback := func(cause error) error {
@@ -594,7 +620,11 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 	if err := connectFault("undo-secrets"); err != nil {
 		return rollback(err)
 	}
-	if err := fsutil.WriteAtomic(d.SecretsFile(), keptSec, 0o600); err != nil {
+	if keptSec == nil {
+		if err := os.Remove(d.SecretsFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return rollback(err)
+		}
+	} else if err := fsutil.WriteAtomic(d.SecretsFile(), keptSec, 0o600); err != nil {
 		return rollback(err)
 	}
 	if err := undoRetainReset(d, pre, true, false); err != nil {
@@ -926,6 +956,19 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	return res, err
 }
 
+// connectGOOS is the OS connect's messages describe; tests replace it.
+var connectGOOS = runtime.GOOS
+
+// privateNote says how a secret file backsight keeps private is protected:
+// its mode where mode bits apply, its access list (fsutil.MakePrivate) on
+// Windows.
+func privateNote(goos string) string {
+	if goos == "windows" {
+		return "(private: you, SYSTEM and Administrators only)"
+	}
+	return "(mode 0600)"
+}
+
 // connectPlan lists what connect will do, in order, and counts the past
 // sessions setup offers to send.
 func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, situation string, cfg config.Config) ([]step, int) {
@@ -938,7 +981,7 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 		llm = "the host's LLM (" + tok.LLM.Provider + "/" + tok.LLM.Model + ") for cost estimates"
 	}
 	steps := []step{{Name: "config", Status: "planned", Detail: verb + d.ConfigFile() + ": [server] url " + tok.URL + ", bank " + tok.Bank + ", mode remote; [llm] " + llm + ", never a key"}}
-	steps = append(steps, step{Name: "secrets", Status: "planned", Detail: "api_key in " + d.SecretsFile() + " (mode 0600)"})
+	steps = append(steps, step{Name: "secrets", Status: "planned", Detail: "api_key in " + d.SecretsFile() + " " + privateNote(connectGOOS)})
 	since, idx := now().UTC(), (*retain.SentIndex)(nil)
 	restart := situation == joinOther || situation == joinOwn
 	switch situation {

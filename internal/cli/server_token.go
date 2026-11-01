@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -69,7 +70,8 @@ func tokenFileRefusal(out string) error {
 // onTerminal is writeToken's where for a token printed to the terminal.
 const onTerminal = "the terminal"
 
-// writeToken writes the encoded token to out (atomically, mode 0600, an
+// writeToken writes the encoded token to out (atomically, private from
+// its first byte: fsutil.WritePrivateNoFollow; an
 // existing regular file replaced, a symlink refused) or, with no out, prints it to a terminal; where
 // says which.
 func writeToken(e *env, tok token.Token, out string) (where string, err error) {
@@ -85,7 +87,7 @@ func writeToken(e *env, tok token.Token, out string) (where string, err error) {
 	if abs, err := filepath.Abs(out); err == nil {
 		out = abs
 	}
-	if err := fsutil.WriteAtomicNoFollow(out, []byte(token.Encode(tok)+"\n"), 0o600); errors.Is(err, fsutil.ErrNotRegular) {
+	if err := fsutil.WritePrivateNoFollow(out, []byte(token.Encode(tok)+"\n")); errors.Is(err, fsutil.ErrNotRegular) {
 		return "", tokenFileRefusal(out)
 	} else if err != nil {
 		return "", blocked(err)
@@ -180,7 +182,7 @@ func newServerTokenCmd(e *env) *cobra.Command {
 			return e.emit("server token", res, func() string { return tokenText(res, rotate) })
 		},
 	}
-	cmd.Flags().StringVar(&out, "out", "", "write the token to this file (mode 0600) instead of the terminal")
+	cmd.Flags().StringVar(&out, "out", "", "write the token to this file "+privateNote(runtime.GOOS)+" instead of the terminal")
 	cmd.Flags().BoolVar(&rotate, "rotate", false, "give the server a new API key first: every token handed out before stops working")
 	cmd.Flags().BoolVar(&plan, "plan", false, "with --rotate: say what the rotation would do, changing nothing")
 	return cmd
@@ -211,7 +213,7 @@ type tokenPlan struct {
 func rotatePlan(cfg config.Config, url, out string) tokenPlan {
 	dest := "print the new token to this terminal"
 	if out != "" {
-		dest = "write the new token to " + out + " (mode 0600)"
+		dest = "write the new token to " + out + " " + privateNote(runtime.GOOS)
 	}
 	return tokenPlan{Plan: true, URL: url, Bank: cfg.Server.Bank, Note: "every token handed out before would stop working", Steps: []string{
 		"give the server a new API key in secrets.toml",

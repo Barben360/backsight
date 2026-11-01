@@ -112,6 +112,8 @@ type Env struct {
 	// ShimCopies lists the earlier copies of the shim a swap renamed and
 	// could not delete yet, current.exe.old-<n> (Windows; nil: not asked).
 	ShimCopies func() []string
+	// GitBash reads what the git-bash check needs (Windows; nil: no check).
+	GitBash *GitBashProbe
 	InstallProbes
 }
 
@@ -228,6 +230,9 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkRetention(loc, env.ManagedDir))
 	if !serverOnly { // it asks Claude Code
 		add(checkClient(env, loc))
+		if env.GitBash != nil {
+			add(checkGitBash(*env.GitBash))
+		}
 	}
 	add(checkGPU(env.GPUs()))
 	writeOff := cfgErr == nil && !cfg.Components.Write

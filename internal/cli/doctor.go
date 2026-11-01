@@ -99,6 +99,10 @@ func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	denv.MetricsIndex = func() (doctor.IndexFacts, error) { return indexFacts(context.Background(), d, home) }
 	if doctorGOOS == "windows" {
 		denv.ShimCopies = func() []string { return shimCopies(filepath.Join(d.Data, "bin", plugin.ShimName("windows"))) }
+		denv.GitBash = &doctor.GitBashProbe{Getenv: os.Getenv, LookPath: exec.LookPath, Exists: func(p string) bool {
+			fi, err := os.Stat(p)
+			return err == nil && fi.Mode().IsRegular()
+		}}
 	}
 	probes(&denv)
 	return denv

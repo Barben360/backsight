@@ -78,14 +78,16 @@ func ChildDeadline(event string, input []byte) time.Duration {
 // KillAt is when the child that began at start is killed: the time its
 // supervisor passed (KillAtEnv), else start plus ChildDeadline. A passed
 // time later than that (a clock step, a stray variable) counts as absent:
-// it never lengthens the child's budget.
+// it never lengthens the child's budget. So does one before start (0, a
+// negative, a value inherited from an earlier run): no supervisor set it
+// for this child, which would otherwise give up at once.
 func KillAt(start time.Time, event string, input []byte, getenv func(string) string) time.Time {
 	own := start.Add(ChildDeadline(event, input))
 	ns, err := strconv.ParseInt(getenv(KillAtEnv), 10, 64)
 	if err != nil {
 		return own
 	}
-	if at := time.Unix(0, ns); at.Before(own) {
+	if at := time.Unix(0, ns); at.Before(own) && !at.Before(start) {
 		return at
 	}
 	return own

@@ -1,11 +1,11 @@
 # backsight on Windows
 
-backsight runs on Windows 11 x86_64 (amd64), for a standard user: no step asks for administrator rights or writes outside your user profile. Claude Code runs natively (its Bash tool uses Git for Windows' Git Bash), and the memory server runs as programs of your own user, without Docker. Words you may not know are in the [glossary](glossary.md).
+backsight runs on Windows 11 x86_64 (amd64), for a standard user: no step asks for administrator rights or writes outside your user profile. Claude Code runs natively (its main shell there is PowerShell; it runs backsight's hooks in Git Bash when it finds one), and the memory server runs as programs of your own user, without Docker. Words you may not know are in the [glossary](glossary.md).
 
 ## What you need
 
 - Windows 11 on x86_64. Windows on Arm has no backsight yet.
-- [Claude Code](https://code.claude.com/docs/en/setup) 2.1.309 or newer, installed natively (WSL is not tested), with Git for Windows, which its Bash tool needs.
+- [Claude Code](https://code.claude.com/docs/en/setup) 2.1.309 or newer, installed natively (WSL is not tested). Claude Code on Windows uses PowerShell as its main shell, and offers its Bash tool and runs hooks in Git Bash only when it finds Git for Windows. backsight needs that Git Bash: without it Claude Code runs backsight's hooks in PowerShell, where SessionStart gets no environment file, so the commands Claude runs get no `BACKSIGHT_PROJECT` or `BACKSIGHT_SESSION` (the CLI then names the project from the directory it runs in). Claude Code finds Git for Windows installed in its usual places; a portable Git (PortableGit) or one in another directory needs the user environment variable `CLAUDE_CODE_GIT_BASH_PATH` set to its `bin\bash.exe`, in PowerShell: `[Environment]::SetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', '<Git>\bin\bash.exe', 'User')`, then restart Claude Code from a new terminal. Doctor's `git-bash` check says which case you are in.
 - Windows PowerShell 5.1 (Windows ships it) or PowerShell 7, for the install script.
 - About **3.5 GB of free disk** for the server: Python, its packages, the models and the first months of data.
 - An LLM provider, as on Linux ([install](install.md#requirements)).
@@ -63,7 +63,7 @@ On Windows x86_64, setup runs the server natively (`--runtime native` is the def
 - `conhost.exe --headless` runs (Windows 10 version 1809 and later);
 - Task Scheduler accepts your task: setup registers a probe task, `\<project>\probe`, which never runs, and deletes it at once.
 
-Each check, and what to do when it fails: [setup on the native runtime stops at its pre-flight](troubleshooting.md#setup-on-the-native-runtime-stops-at-its-pre-flight). The rest of setup is as on Linux ([install](install.md#run-setup)); then restart Claude Code.
+Each check, and what to do when it fails: [setup on the native runtime stops at its pre-flight](troubleshooting.md#setup-on-the-native-runtime-stops-at-its-pre-flight). The rest of setup is as on Linux ([install](install.md#run-setup)); then restart Claude Code. With backups on, save the backup identity in a password manager: `backsight backup identity show`, run at a terminal, shows it (`pass`, which the Linux hint names, does not exist on Windows).
 
 ## What runs on your PC
 
@@ -123,9 +123,10 @@ In the `logs` directory of backsight's state directory (`%LOCALAPPDATA%\backsigh
 
 - `<project>-supervisor.log`: what the supervisor did (starts, restarts, refusals, stops), and what kept it from starting at all (a `config.toml` that does not load, a missing `supervise.json`); a `config.toml` that does not load names no project, so that goes to `backsight-supervisor.log`;
 - `<project>-db.log`: the database's output;
-- `<project>-api.log`: the memory server's output.
+- `<project>-api.log`: the memory server's output;
+- `<project>-jobs-tick.log` and `<project>-jobs-maintain.log`: what each run of the scheduled jobs printed, between a `started` line and an `ended: exit <code>` line, with the reason of a failed run (the task itself keeps no output).
 
-Each is kept to 10 MiB, the previous one as `.1`. The server's keys are replaced in them. A server that fails to start shows the last lines of the API's log.
+Each is kept to 10 MiB, the previous one as `.1`. The server's keys, and every value of `secrets.toml`, are replaced in them. A server that fails to start shows the last lines of the API's log.
 
 ## The scheduled jobs
 
@@ -159,6 +160,7 @@ Every Claude Code session runs `current.exe`, the shim in `bin` under backsight'
 - The supervisor keeps running the backsight it started from. `update apply` restarts it only when the new backsight speaks another protocol to it, or when it still runs the old one after the update's own server upgrade (which restarts it); hooks queue their notes during that short outage. Otherwise its `supervisor` step says `the server keeps running backsight <old> until its next restart`, and doctor's `supervisor` check shows it as info.
 - A server upgrade installs the new Python environment beside the running one, writes `supervise.json` for it and restarts the supervisor; a failed upgrade puts the previous environment back ([update](update.md#server-upgrades)).
 - `backsight uninstall` stops the supervisor and deletes the server's task (its data stays in `server\native` unless `--delete-data`), deletes the jobs' tasks, then their folder `\<project>` in Task Scheduler, removes backsight's directory from your user `PATH` (no other entry), then deletes the files. A file a program still runs or holds is moved to `trash` under the data directory, and a cleaner (`cmd.exe`, without a window) tries to delete that directory every 5 seconds for 5 minutes after uninstall exits, then the data directory once nothing else is left in it.
+- Uninstalling (or `setup --undo` of) a backsight wired to its own Claude Code profile (`--config-dir`) keeps the default profile's plugin enabled: Claude Code 2.1.316 on Windows, removing the marketplace from one profile, also deletes `enabledPlugins` `backsight@backsight` from `%USERPROFILE%\.claude\settings.json`. backsight puts the entry back through its config editor and its `client` step says so. The editor's copy of `settings.json` as it was is kept in the state directory of the backsight being uninstalled, so `uninstall --purge-local` deletes it with the rest; `setup --undo` keeps it.
 
 What may be left to delete by hand:
 
@@ -177,12 +179,15 @@ Start with `backsight doctor`. On a native Windows install, these checks replace
 | `native-dlls` | Each copy of the VC++ runtime DLLs matches `dlls.json`. One missing or changed: `backsight server stop`, delete the `.backsight-complete` mark doctor names, then `backsight server install`. |
 | `native-private` | The data directory, the config directory, `secrets.toml` and `server.env` are readable by you, SYSTEM and Administrators only. Otherwise doctor gives the `icacls` command that puts it right, to run in PowerShell. |
 | `path-length` | The server's Python environment is within the path bound. Otherwise move backsight to a short `BACKSIGHT_HOME` (back up first). |
+| `git-bash` | Whether Claude Code will find Git Bash, judged conservatively: ok when `CLAUDE_CODE_GIT_BASH_PATH` names an existing `bash.exe` (Git's `bin\bash.exe`; `git-bash.exe`, the terminal launcher, is a warning), or Git for Windows is in `%ProgramFiles%\Git` or `%LOCALAPPDATA%\Programs\Git`; any other Git (a PortableGit, a `git` on `PATH` elsewhere) is a warning whose fix names the `bin\bash.exe` beside that `git.exe`. |
 | `shim-copies` | Earlier copies of the shim an update renamed, still run by a session or the supervisor (info: the next update deletes those no longer running). |
 
 Other things you may meet:
 
 - **`backsight` is not found** right after the install: the terminal started before `PATH` changed. Open a new one, or run `"$LOCALAPPDATA/Programs/backsight/backsight.exe"` in Git Bash.
 - **The server is down after a restart**: the task starts it at your logon. `backsight server status`, then the logs above. With `server.start_on_session`, the first Claude Code session starts it.
+- **`BACKSIGHT_PROJECT` empty in a PowerShell command** while Git Bash is found (doctor's `git-bash` ok): Claude Code copies the hooks' environment file into PowerShell commands only when every line is a plain assignment, and drops a value with `/` or `\` on Windows. backsight writes `export BACKSIGHT_PROJECT='<project>'` and `export BACKSIGHT_SESSION='<id>'`, which pass for project names made of letters, digits, spaces, `-`, `_` and the like. A project named with `/` (only a `.backsight.toml` `project` can) is dropped from PowerShell commands, and a name with a `'` (a directory named so) makes the whole file unusable there: both still reach Bash commands, and backsight's CLI otherwise names the project from the directory it runs in.
+- **A scheduled job that fails** (doctor's `jobs` check late, Task Scheduler's last run result not 0): `<project>-jobs-tick.log` or `<project>-jobs-maintain.log` in the logs above says what the run printed and why it stopped.
 - **A server that keeps restarting**: `<project>-supervisor.log` says which program stopped and when; `<project>-db.log` and `<project>-api.log` hold their own output.
 - **Over SSH**, `backsight server start` runs the server only until you log off (above): log on at the PC once for the task to take over.
 

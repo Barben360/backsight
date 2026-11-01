@@ -235,6 +235,29 @@ func TestConnectPlanChangesNothing(t *testing.T) {
 	sameTree(t, before, treeOf(t, home))
 }
 
+// The plan's secrets step says how secrets.toml is kept private: its mode
+// on Linux, its access list on Windows, where no mode bit applies.
+func TestConnectPlanSaysHowTheKeyIsKeptPrivate(t *testing.T) {
+	for goos, want := range map[string]string{"linux": "(mode 0600)", "windows": "(private: you, SYSTEM and Administrators only)"} {
+		t.Run(goos, func(t *testing.T) {
+			isolate(t)
+			old := connectGOOS
+			connectGOOS = goos
+			t.Cleanup(func() { connectGOOS = old })
+			code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, joinableHost(t)), "--plan", "--json")
+			var detail string
+			for _, s := range parseConnect(t, out).Data.Steps {
+				if s.Name == "secrets" {
+					detail = s.Detail
+				}
+			}
+			if code != output.OK || !strings.HasSuffix(detail, want) || (goos == "windows" && strings.Contains(detail, "0600")) {
+				t.Errorf("exit %d, secrets step %q, want it to end with %q\n%s", code, detail, want, errOut)
+			}
+		})
+	}
+}
+
 // Without a terminal, connect needs the consent as an answer: exit 10,
 // the resume naming a token file, nothing written.
 func TestConnectAsksForConsent(t *testing.T) {
@@ -1577,6 +1600,45 @@ func TestConnectUndoWithoutOwnServerRefused(t *testing.T) {
 	sameTree(t, before, treeOf(t, home))
 	if code, _, errOut := run(t, "connect", "--undo", "--token-file", tokenFile(t, tok)); code != output.Usage || !strings.Contains(errOut, "--undo") {
 		t.Errorf("--undo with a token: exit %d\n%s", code, errOut)
+	}
+}
+
+// A PC with its own config.toml and no secrets.toml yet (a server never
+// deployed, set up no further) joins: the missing secrets.toml is kept as
+// absent, and connect --undo removes the one connect wrote, leaving no
+// secrets.toml it did not find.
+func TestConnectOwnConfigWithoutSecrets(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.Config, 0o700)
+	pointAt(t, home, 1) // local mode, nothing deployed: no backup to make
+	before := contentsOf(t, []string{d.ConfigFile()})
+	if onDisk(d.SecretsFile()) {
+		t.Fatal("secrets.toml exists")
+	}
+	tok := joinableHost(t)
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.OK || env.Data.Situation != joinOwn {
+		t.Fatalf("connect: exit %d\n%s%s", code, out, errOut)
+	}
+	if sec, err := config.LoadSecrets(d.SecretsFile()); err != nil || sec.APIKey != hostKey {
+		t.Errorf("the host's key not written: %v", err)
+	}
+	runs, _ := filepath.Glob(filepath.Join(d.ConnectDir(), "*", "config.toml"))
+	if len(runs) != 1 {
+		t.Fatalf("config.toml kept: %v", runs)
+	}
+	if kept := filepath.Join(filepath.Dir(runs[0]), "secrets.toml"); onDisk(kept) {
+		t.Errorf("%s kept, though there was none", kept)
+	}
+
+	code, out, errOut = run(t, "connect", "--undo", "--json")
+	if code != output.OK {
+		t.Fatalf("undo: exit %d\n%s%s", code, out, errOut)
+	}
+	sameContents(t, before)
+	if onDisk(d.SecretsFile()) {
+		t.Error("connect --undo left a secrets.toml this PC did not have")
 	}
 }
 

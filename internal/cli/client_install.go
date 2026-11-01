@@ -157,25 +157,41 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	}
 	current, _ := filepath.EvalSymlinks(shim)
 	wantTarget, _ := filepath.EvalSymlinks(target)
-	shimChanged := runtime.GOOS == "windows" || current == "" || current != wantTarget
+	shimChanged := current == "" || current != wantTarget
+	exe, _ := selfExe()
+	exeHash, _ := fsutil.HashFile(exe) // hashed once for the copies below
+	if runtime.GOOS == "windows" {
+		// A copy: changed unless it already holds this binary's bytes, which
+		// pointShim then leaves in place (a supervisor or a session running
+		// it keeps running current.exe, not a .old-<n>), or the signed
+		// checksums beside it were written again.
+		shimChanged = !holds(shim, exeHash)
+	}
 	if !plan {
+		sumsBefore := checksumsIn(filepath.Dir(shim))
 		if err := installShim(target, shim); err != nil {
 			return res, blocked(err)
 		}
+		shimChanged = shimChanged || checksumsIn(filepath.Dir(shim)) != sumsBefore
 	}
 	add("shim", did(shimChanged), shim+" → "+target)
 	// The command on PATH runs the shim (decision 0067 block review), and
 	// is made when absent, as install.sh makes it (M5 review rules, PATH).
 	if link, older := olderPathLink(c.dirs, shim); older || absentPathLink(c.dirs) {
+		// On Windows the PATH command is a copy of the shim, always ours:
+		// unchanged when it already holds this binary's bytes.
+		pathChanged := runtime.GOOS != "windows" || !holds(link, exeHash)
 		if !plan {
 			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 				return res, blocked(err)
 			}
+			sumsBefore := checksumsIn(filepath.Dir(link))
 			if err := pointShim(shim, link); err != nil {
 				return res, blocked(err)
 			}
+			pathChanged = pathChanged || checksumsIn(filepath.Dir(link)) != sumsBefore
 		}
-		add("path", did(true), link+" → "+shim)
+		add("path", did(pathChanged), link+" → "+shim)
 	}
 	if runtime.GOOS == "windows" && c.dirs.Bin != "" {
 		// The PATH copy is found through the user's PATH (HKCU, no admin).
@@ -212,7 +228,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		}
 		return partialError(err)
 	}
-	known, err := pluginIDs(ctx, env)
+	known, err := pluginList(ctx, env)
 	if err != nil {
 		return res, failAfterWrites(err)
 	}
@@ -238,8 +254,13 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	default:
 		steps = append(steps, []string{"plugin", "marketplace", "update", plugin.Marketplace})
 	}
-	if known[plugin.PluginID()] {
+	if enabled, installed := known[plugin.PluginID()]; installed {
 		steps = append(steps, []string{"plugin", "update", plugin.PluginID()})
+		if !enabled {
+			// Disabled in Claude Code (/plugin, or by hand): doctor's
+			// client check sends here, and an update does not enable it.
+			steps = append(steps, []string{"plugin", "enable", plugin.PluginID(), "--scope", "user"})
+		}
 	} else {
 		steps = append(steps, []string{"plugin", "install", plugin.PluginID(), "--scope", "user"})
 	}
@@ -274,7 +295,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	// CLAUDE_CONFIG_DIR: a scheduled job has neither and reads the recorded
 	// one. "" is ~/.claude.
 	profile := ""
-	if filepath.Clean(c.loc.Dir) != filepath.Join(home, ".claude") {
+	if !isDefaultProfile(home, c.loc.Dir) {
 		profile, _ = filepath.Abs(c.loc.Dir)
 	}
 	if err := state.Update(c.dirs, "client install", func(s *state.State) error {
@@ -350,6 +371,20 @@ func needsClaude(msg string) error {
 
 // pluginIDs is the set of plugin ids `claude plugin list` reports.
 func pluginIDs(ctx context.Context, env []string) (map[string]bool, error) {
+	list, err := pluginList(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for id := range list {
+		out[id] = true
+	}
+	return out, nil
+}
+
+// pluginList maps the profile's installed plugins to whether Claude Code
+// has them enabled (an entry without "enabled" counts as enabled).
+func pluginList(ctx context.Context, env []string) (map[string]bool, error) {
 	args := []string{"plugin", "list", "--json"}
 	raw, err := claudeRunner.Run(ctx, env, args...)
 	if err != nil {
@@ -362,7 +397,8 @@ func pluginIDs(ctx context.Context, env []string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, it := range items {
 		if v, ok := it["id"].(string); ok {
-			out[v] = true
+			enabled, set := it["enabled"].(bool)
+			out[v] = enabled || !set
 		}
 	}
 	return out, nil
@@ -436,6 +472,23 @@ func installShim(target, shim string) error {
 		}
 	}
 	return pointShim(target, shim)
+}
+
+// holds reports that path exists with the bytes whose hash is want.
+func holds(path, want string) bool {
+	got, err := fsutil.HashFile(path)
+	return err == nil && want != fsutil.Absent && got == want
+}
+
+// checksumsIn is the state of the signed checksums in dir (their hashes),
+// which the Windows shim copies carry beside them.
+func checksumsIn(dir string) string {
+	var b strings.Builder
+	for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
+		h, _ := fsutil.HashFile(filepath.Join(dir, name))
+		b.WriteString(name + "=" + h + ";")
+	}
+	return b.String()
 }
 
 // pointShim makes the shim run target: a symlink swapped atomically, or

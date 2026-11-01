@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -100,7 +101,7 @@ func newServerExposeCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.loopback, "loopback", false, "close the server to other PCs: 127.0.0.1 only")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "show the config and server changes without making them")
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: cleartext_lan=yes (a LAN address carries the API key in clear)")
-	cmd.Flags().StringVar(&f.out, "out", "", "with --private: write the token to this file (mode 0600) instead of the terminal")
+	cmd.Flags().StringVar(&f.out, "out", "", "with --private: write the token to this file "+privateNote(runtime.GOOS)+" instead of the terminal")
 	return cmd
 }
 
@@ -369,7 +370,7 @@ func exposePlanText(r exposeResult, out string, giveToken bool) string {
 	case !giveToken:
 		b.WriteString("the connection token would not be shown here: " + tokenElsewhere + "\n")
 	case out != "":
-		b.WriteString("then write the connection token to " + out + " (mode 0600)\n")
+		b.WriteString("then write the connection token to " + out + " " + privateNote(runtime.GOOS) + "\n")
 	default:
 		b.WriteString("then print the connection token to this terminal\n")
 	}

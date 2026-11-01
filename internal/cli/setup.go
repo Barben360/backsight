@@ -119,7 +119,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: id=value (repeatable)")
 	cmd.Flags().StringVar(&f.answersFile, "answers-file", "", "answers as a JSON object or id=value lines (no secrets)")
-	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: take defaults, exit 10 when a required answer or secret is missing")
+	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: take the defaults, but provider (it decides where your data goes), consent and what the provider asks for (an unlisted one's model, ack_subscription) must be answered (--answer); exit 10 while one of them or a secret is missing")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "show the checks, answers and steps without changing anything")
 	cmd.Flags().BoolVar(&f.resume, "resume", false, "continue the last run with its saved answers")
 	cmd.Flags().BoolVar(&f.questions, "questions", false, "list the questions and exit")
@@ -1458,7 +1458,11 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 			"writes the connection token they join with (it holds the API key: carry it by hand, never through an agent; backsight server token writes it again)")
 	}
 	if answers["backups"] == "on" && (s.cfg == nil || s.cfg.Server.Mode == "local") { // a client's backups are its host's
-		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)")
+		hint := "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)"
+		if setupGOOS == "windows" { // no pass there
+			hint = "save the backup key somewhere safe, in a password manager: backsight backup identity show, run at a terminal, shows it"
+		}
+		res.NextSteps = append(res.NextSteps, hint)
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""

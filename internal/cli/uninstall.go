@@ -402,12 +402,17 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			add(undoAction{Name: name, Status: "skipped", Detail: "plugin not installed there"})
 			continue
 		}
+		detail := "plugin " + plugin.PluginID() + " and its marketplace removed"
 		if !f.plan {
-			if err := removePlugin(ctx, env); err != nil {
+			restored, err := removePlugin(ctx, d, home, env, "uninstall")
+			if err != nil {
 				return fail(name, err)
 			}
+			if restored {
+				detail += "; " + restoredNote(home)
+			}
 		}
-		add(undoAction{Name: name, Status: done(f.plan), Detail: "plugin " + plugin.PluginID() + " and its marketplace removed"})
+		add(undoAction{Name: name, Status: done(f.plan), Detail: detail})
 	}
 
 	// 3. Claude Code's settings, through the config editor (0042): the
@@ -616,7 +621,7 @@ func wiredProfiles(home string, st state.State, rec *setup.Record) []string {
 // profileGetenv locates a profile as Claude Code would with it.
 func profileGetenv(home, profile string) func(string) string {
 	return func(k string) string {
-		if k == "CLAUDE_CONFIG_DIR" && filepath.Clean(profile) != filepath.Join(home, ".claude") {
+		if k == "CLAUDE_CONFIG_DIR" && !isDefaultProfile(home, profile) {
 			return profile
 		}
 		return ""

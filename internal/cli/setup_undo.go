@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
+	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -175,9 +178,14 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 	}
 
 	for _, prof := range append([]string(nil), rec.Undo.ClientProfiles...) {
+		detail := "plugin " + plugin.PluginID() + " and its marketplace removed"
 		if !f.plan {
-			if err := removePlugin(ctx, profileEnv(home, prof)); err != nil {
+			restored, err := removePlugin(ctx, d, home, profileEnv(home, prof), "setup --undo")
+			if err != nil {
 				return fail("client "+prof, err)
+			}
+			if restored {
+				detail += "; " + restoredNote(home)
 			}
 			if err := state.Update(d, "setup --undo", func(s *state.State) error {
 				// Only when the state records this profile ("" is ~/.claude):
@@ -199,7 +207,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 			rec.Undo.ClientProfiles = without(rec.Undo.ClientProfiles, prof)
 			save()
 		}
-		add(undoAction{Name: "client " + prof, Status: done(f.plan), Detail: "plugin " + plugin.PluginID() + " and its marketplace removed"})
+		add(undoAction{Name: "client " + prof, Status: done(f.plan), Detail: detail})
 	}
 
 	if rec.Undo.ServerStarted {
@@ -334,7 +342,11 @@ func changedPaths(fr []claudecfg.FileResult) string {
 	var out []string
 	for _, f := range fr {
 		for _, ch := range f.Changes {
-			out = append(out, f.Target+": "+ch.Path)
+			// Removing several items of one list changes the same index
+			// each time: each path is listed once.
+			if p := f.Target + ": " + ch.Path; !slices.Contains(out, p) {
+				out = append(out, p)
+			}
 		}
 	}
 	if len(out) == 0 {
@@ -359,14 +371,101 @@ func done(plan bool) string { return map[bool]string{true: "planned", false: "do
 // none for the default ~/.claude (CLAUDE_CONFIG_DIR would move
 // .claude.json into it), and claudeEnviron drops the shell's.
 func profileEnv(home, profile string) []string {
-	if profile == "" || filepath.Clean(profile) == filepath.Join(home, ".claude") {
+	if isDefaultProfile(home, profile) {
 		return nil
 	}
 	return []string{"CLAUDE_CONFIG_DIR=" + profile}
 }
 
-// removePlugin uninstalls backsight's plugin and marketplace when present.
-func removePlugin(ctx context.Context, env []string) error {
+// isDefaultProfile reports that profile ("" included) is ~/.claude, also
+// when named another way (a symlink; on Windows another case or an 8.3
+// name): the same directory when both exist, else the same cleaned path
+// (case-insensitively on Windows).
+func isDefaultProfile(home, profile string) bool {
+	def := filepath.Join(home, ".claude")
+	if profile == "" {
+		return true
+	}
+	a, errA := os.Stat(profile)
+	b, errB := os.Stat(def)
+	if errA == nil && errB == nil {
+		return os.SameFile(a, b)
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(profile), def)
+	}
+	return filepath.Clean(profile) == def
+}
+
+// removePlugin uninstalls backsight's plugin and marketplace when present,
+// in the profile env names, and reports whether it had to put the default
+// profile's entry back. Claude Code 2.1.316 on Windows, removing the
+// marketplace from another profile (CLAUDE_CONFIG_DIR), also deletes the
+// plugin's enabledPlugins entry from ~/.claude/settings.json, disabling
+// the default profile's install (seen on the VM): an entry there before
+// and gone after is put back through the config editor (journal and
+// pre-image). Done on every OS: where Claude Code leaves the entry, there
+// is nothing to put back.
+func removePlugin(ctx context.Context, d paths.Dirs, home string, env []string, command string) (restored bool, err error) {
+	putBack := func() (bool, error) { return false, nil }
+	if env != nil {
+		putBack = keepDefaultEnabled(d, home, command)
+	}
+	err = removePluginFrom(ctx, env)
+	restored, perr := putBack()
+	return restored, errors.Join(err, perr)
+}
+
+// restoredNote says removePlugin put the default profile's entry back.
+func restoredNote(home string) string {
+	return "Claude Code also removed " + strings.Join(enabledKey, ".") + " from " + claudecode.Locate(home, func(string) string { return "" }).Settings +
+		" (the default profile's install) when it removed this profile's marketplace: backsight put it back"
+}
+
+// enabledKey is backsight's entry in a profile's settings.json.
+var enabledKey = []string{"enabledPlugins", plugin.PluginID()}
+
+// keepDefaultEnabled reads the default profile's enabledPlugins entry for
+// backsight's plugin and returns what puts it back if it is gone by then
+// (true when it did).
+func keepDefaultEnabled(d paths.Dirs, home, command string) func() (bool, error) {
+	settings := claudecode.Locate(home, func(string) string { return "" }).Settings
+	raw, err := os.ReadFile(settings)
+	if err != nil {
+		return func() (bool, error) { return false, nil }
+	}
+	was, had, err := claudecfg.Get(raw, enabledKey)
+	if err != nil || !had {
+		return func() (bool, error) { return false, nil }
+	}
+	return func() (bool, error) {
+		cur, err := os.ReadFile(settings)
+		if err != nil {
+			return false, nil // removed whole: not Claude Code's slip, nothing to put an entry in
+		}
+		if _, there, err := claudecfg.Get(cur, enabledKey); err != nil || there {
+			return false, nil
+		}
+		restored := false
+		_, _, err = claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: command, Now: now}.Apply([]claudecfg.Edit{{Target: settings,
+			Apply: func(doc []byte) ([]byte, []claudecfg.Change, error) {
+				if _, there, err := claudecfg.Get(doc, enabledKey); err != nil || there {
+					return doc, nil, err
+				}
+				out, ch, err := claudecfg.Set(doc, enabledKey, was)
+				restored = err == nil
+				return out, []claudecfg.Change{ch}, err
+			}}})
+		if err != nil {
+			return false, fmt.Errorf("putting back %s in %s, which Claude Code removed with this profile's marketplace: %w", strings.Join(enabledKey, "."), settings, err)
+		}
+		return restored, nil
+	}
+}
+
+// removePluginFrom uninstalls backsight's plugin and marketplace from the
+// profile env names, when present.
+func removePluginFrom(ctx context.Context, env []string) error {
 	known, err := pluginIDs(ctx, env)
 	if err != nil {
 		return err

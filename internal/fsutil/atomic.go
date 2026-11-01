@@ -22,6 +22,10 @@ var ErrConflict = errors.New("file changed since it was read")
 // syncFile is swapped by tests to simulate a failure before the rename.
 var syncFile = (*os.File).Sync
 
+// afterCreate, set by a test, sees each temp file right after its creation,
+// before anything is written to it or its permissions change.
+var afterCreate func(tmp string)
+
 // ReadHashed returns path's content and its hex SHA-256 from one read, so a
 // caller edits exactly the bytes it will later compare against. A missing
 // file is (nil, Absent, nil).
@@ -72,7 +76,28 @@ func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return write(target, data, perm, nil)
+	return write(target, data, perm, nil, false)
+}
+
+// WritePrivate is WriteAtomic for a secret written where the user chose
+// (a connection token's --out, a keys export), whose folder may be open
+// to others: the temp file is created private (mode 0600; on Windows you,
+// SYSTEM and Administrators only, inheritance off, set by CreateFile
+// itself), and the rename keeps that DACL.
+func WritePrivate(path string, data []byte) error {
+	target, err := resolve(path)
+	if err != nil {
+		return err
+	}
+	return write(target, data, 0o600, nil, true)
+}
+
+// WritePrivateNoFollow is WriteAtomicNoFollow made private as WritePrivate.
+func WritePrivateNoFollow(path string, data []byte) error {
+	if err := RegularOrAbsent(path); err != nil {
+		return err
+	}
+	return write(path, data, 0o600, func() error { return RegularOrAbsent(path) }, true)
 }
 
 // ErrNotRegular: a path that is a symlink or not a regular file, which
@@ -105,19 +130,28 @@ func WriteAtomicNoFollow(path string, data []byte, perm fs.FileMode) error {
 	if err := RegularOrAbsent(path); err != nil {
 		return err
 	}
-	return write(path, data, perm, func() error { return RegularOrAbsent(path) })
+	return write(path, data, perm, func() error { return RegularOrAbsent(path) }, false)
 }
 
 // write puts data at path through a synced temp file; check, when set, runs
-// right before the rename and aborts it with its error.
-func write(path string, data []byte, perm fs.FileMode, check func() error) error {
+// right before the rename and aborts it with its error. private creates
+// the temp file private (createPrivateTemp): on Windows its DACL is set
+// at creation, so no other user ever holds a handle to it.
+func write(path string, data []byte, perm fs.FileMode, check func() error, private bool) error {
 	dir := filepath.Dir(path)
 	if err := MkdirPrivate(dir); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	create := os.CreateTemp
+	if private {
+		create = createPrivateTemp
+	}
+	tmp, err := create(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
+	}
+	if afterCreate != nil {
+		afterCreate(tmp.Name())
 	}
 	ok := false
 	defer func() {
@@ -187,5 +221,5 @@ func ReplaceIfUnchanged(path string, data []byte, perm fs.FileMode, want string)
 			return fmt.Errorf("%s: %w", path, ErrConflict)
 		}
 		return nil
-	})
+	}, false)
 }

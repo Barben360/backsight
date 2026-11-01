@@ -130,7 +130,11 @@ var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 
 // printNote prints what the runtime tells the user beside a command's
 // result (server.NoLogonNote) on stderr: JSON output stays on stdout.
-var printNote = func(s string) { fmt.Fprintln(os.Stderr, "note: "+s) }
+// noteOut is where notes printed beside a result go: stderr, and during a
+// scheduled job on Windows its log too (jobLogged).
+var noteOut io.Writer = os.Stderr
+
+var printNote = func(s string) { fmt.Fprintln(noteOut, "note: "+s) }
 
 // runtimeFor is the server runtime of cfg.
 func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }

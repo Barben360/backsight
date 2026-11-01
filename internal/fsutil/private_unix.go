@@ -39,3 +39,7 @@ func OtherReaders(path string) ([]string, error) {
 
 // CurrentUserSID is "" outside Windows: no SIDs.
 func CurrentUserSID() string { return "" }
+
+// createPrivateTemp creates a new temp file in dir (os.CreateTemp's
+// pattern), mode 0600 from its creation as os.CreateTemp makes it.
+func createPrivateTemp(dir, pattern string) (*os.File, error) { return os.CreateTemp(dir, pattern) }
