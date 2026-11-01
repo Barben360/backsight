@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"image/png"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/metrics"
 )
 
 // The README's dashboard section shows the Overview in both themes: each
@@ -50,5 +53,38 @@ func TestReadmeShowsTheDashboard(t *testing.T) {
 		if cfg.Width != 1440 || cfg.Height != 900 {
 			t.Errorf("%s is %d x %d, want 1440 x 900", img.file, cfg.Width, cfg.Height)
 		}
+	}
+}
+
+// Every command and drill the metrics catalog suggests is one the command
+// tree has, flags included: users read them in Definitions, in `stats defs`
+// and on the pages' CLI lines.
+func TestCatalogCommandsExist(t *testing.T) {
+	root := docsRoot()
+	check := func(text string) error {
+		ms := mentions(text)
+		if len(ms) != 1 {
+			return fmt.Errorf("%q does not name one backsight command", text)
+		}
+		return checkMention(root, ms[0], nil)
+	}
+	// The check bites: the value this test replaced is refused.
+	if err := check("backsight config set recall.session_budget_chars <n>"); err == nil {
+		t.Fatal("checkMention accepts a command the tree does not have")
+	}
+	named := 0
+	for _, d := range metrics.Catalog {
+		for field, text := range map[string]string{"Command": d.Command, "Drill": d.Drill} {
+			if text == "" {
+				continue
+			}
+			named++
+			if err := check(text); err != nil {
+				t.Errorf("%s %s: %v", d.ID, field, err)
+			}
+		}
+	}
+	if named < 30 {
+		t.Errorf("only %d catalog commands checked", named)
 	}
 }

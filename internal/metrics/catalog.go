@@ -177,11 +177,11 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "context.per_session", Label: "Context added per session", Unit: "chars", Direction: "down", MinN: 100,
 		Absolute: Threshold{On: "p95"}, CI: "none", Scope: "machine", Source: "telemetry", Family: "cost", Series: "daily",
-		Command: "backsight config set recall.session_budget_chars <n>", Drill: "backsight stats sessions",
+		Command: "backsight stats cost", Drill: "backsight stats sessions",
 		Extra:      []string{"p50", "p95", "tokens_p50", "tokens_p95", "histogram"},
 		Question:   "How much does backsight add to Claude's context in a session?",
 		Definition: "Characters backsight added to Claude's context per session (prompt recall plus briefing), typical (median) and high (slowest 1 in 20), with approximate tokens (characters divided by 4). Watched when the high value passes 1.5 times the session budget.",
-		Action:     "Too much context per session. Lower the session budget.",
+		Action:     "Too much context per session. Lower recall.session_budget_chars under [recall] in config.toml.",
 	},
 	{
 		ID: "context.per_prompt", Label: "Context added per prompt that got memory", Unit: "chars", Direction: "down", MinN: 20,
