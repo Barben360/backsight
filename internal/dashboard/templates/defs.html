@@ -1,12 +1,16 @@
 {{/* views: defs */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widget: definitions. Reads .V.defs.Tables.Defs (ID, Label, Question, Definition, Unit, MinN, N, MDC, Scope) and .Page, through defspage (DefsPage: Head, Note, Rows; DefLine: ID, Label, Question, Definition, Limits, Unit, Where, MinN, N, Smallest). */}}
+{{/* widget: definitions. Reads .V.defs.Tables.Defs (ID, Label, Question, Definition, Unit, MinN, N, MDC, Scope, Family) through defspage (DefsPage: Head, Note, Tabs, Groups; AxisTab: Label, Href, Count; DefGroup: ID, Title, Rows; DefLine: ID, Label, Question, Definition, Limits, Unit, Where, MinN, N, Smallest). */}}
 {{with defspage .}}{{template "card-open" .Head}}
-{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Id</th><th>On the page</th><th>Question</th><th>Definition</th><th>When it is watched</th><th>Unit</th><th>Where from</th><th class="r">Fewest needed</th><th class="r">n now</th><th class="r">Smallest change it can show</th></tr></thead>
+{{template "nodata" .Note}}{{if .Groups}}<nav class="seg" aria-label="Axis">{{range .Tabs}}<a href="{{.Href}}">{{.Label}} <span class="count">{{.Count}}</span></a>{{end}}</nav>
+{{range .Groups}}<section id="{{.ID}}" aria-labelledby="{{.ID}}-h">
+<h3 id="{{.ID}}-h">{{.Title}}</h3>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Id</th><th>On the page</th><th>Question</th><th>Definition</th><th>When it is watched</th><th>Unit</th><th>Where from</th><th class="r">Fewest needed</th><th class="r">n now (7 days)</th><th class="r">Smallest change it can show</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr id="{{.ID}}"><td class="mono"><code>{{.ID}}</code></td><td>{{.Label}}</td><td class="wrapok">{{.Question}}</td><td class="wrapok">{{.Definition}}</td><td class="wrapok">{{.Limits}}</td><td>{{.Unit}}</td><td>{{.Where}}</td><td class="r">{{.MinN}}</td><td class="r">{{.N}}</td><td class="r">{{.Smallest}}</td></tr>
 {{end}}</tbody></table></div>
-{{end}}{{template "card-close" .Head}}{{end}}
+</section>
+{{end}}{{end}}{{template "card-close" .Head}}{{end}}
 {{template "foot" .}}

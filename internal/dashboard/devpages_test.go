@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // idsOf are the ids of the rows of the page's table body, in order.
@@ -48,13 +50,12 @@ func TestDefinitionAnchors(t *testing.T) {
 	ck := h.login()
 	_, defs := pageGet(t, h, ck, "/defs")
 	ids := idsOf(parseHTML(t, defs))
-	if len(ids) != len(metrics.Catalog) {
-		t.Fatalf("/defs has %d rows with an id, the catalog %d", len(ids), len(metrics.Catalog))
+	var want []string
+	for _, d := range metrics.Catalog {
+		want = append(want, d.ID)
 	}
-	for i, d := range metrics.Catalog {
-		if ids[i] != d.ID {
-			t.Errorf("row %d is %q, the catalog's is %q", i, ids[i], d.ID)
-		}
+	if len(ids) != len(want) || !slices.Equal(slices.Sorted(slices.Values(ids)), slices.Sorted(slices.Values(want))) {
+		t.Fatalf("/defs has the rows %q, the catalog %q", ids, want)
 	}
 	if !slices.Contains(ids, "recall.hit_rate") {
 		t.Error("/defs has no row recall.hit_rate")
@@ -77,45 +78,141 @@ func TestDefinitionAnchors(t *testing.T) {
 	}
 }
 
+func rowByID(doc *node, id string) *node {
+	for _, tr := range doc.find("main tbody tr") {
+		if tr.attr("id") == id {
+			return tr
+		}
+	}
+	return nil
+}
+
 func TestDefinitionRowsAreTheCatalog(t *testing.T) {
 	h := dataHarness(t)
 	res := apiPath(t, h, "/api/v1/defs")
 	_, b := pageGet(t, h, h.login(), "/defs")
 	doc := parseHTML(t, b)
-	rows := doc.find("main tbody tr")
-	if len(rows) != len(res.Tables.Defs) || len(rows) == 0 {
-		t.Fatalf("%d rows, the API has %d", len(rows), len(res.Tables.Defs))
+	if got := len(doc.find("main tbody tr")); got != len(res.Tables.Defs) || got == 0 {
+		t.Fatalf("%d rows, the API has %d", got, len(res.Tables.Defs))
 	}
-	for i, tr := range rows {
-		row := res.Tables.Defs[i]
+	var server, noMin, rates int
+	for _, row := range res.Tables.Defs {
+		tr := rowByID(doc, row.ID)
+		if tr == nil {
+			t.Fatalf("no row %s", row.ID)
+		}
 		cells := tr.find("td")
 		if len(cells) != 10 {
 			t.Fatalf("%s: %d cells", row.ID, len(cells))
 		}
-		want := []string{row.ID, row.Label, row.Question, row.Definition, limitsText(row.Def, en), "", "", "", "", ""}
+		definition := row.Definition
 		if row.ID == "hooks.failures" {
-			want[3] = hooksFailuresWhat
+			definition = hooksFailuresWhat
 		}
-		for _, c := range []int{0, 1, 2, 3, 4} {
+		unit := map[string]string{"ratio": "rate", "ms": "time"}[row.Unit]
+		if unit == "" {
+			unit = row.Unit
+		}
+		where := "this PC"
+		if row.Scope == "server" {
+			where, server = "server", server+1
+		}
+		minN := dash
+		if row.MinN > 0 {
+			minN = en.Int(int64(row.MinN))
+		} else {
+			noMin++
+		}
+		n, smallest := dash, dash
+		if row.Unit == "ratio" {
+			rates++
+			n, smallest = en.Int(row.N), "not yet measurable"
+			if row.MDC != nil {
+				smallest = "about " + en.Int(int64(math.Round(*row.MDC*100))) + " pts"
+			}
+		}
+		want := []string{row.ID, row.Label, row.Question, definition, limitsText(row.Def, en), unit, where, minN, n, smallest}
+		for c, w := range want {
 			got := cells[c].text()
 			if c == 0 {
 				got = innerCode(cells[c])
 			}
-			if got != want[c] {
-				t.Errorf("%s cell %d: %q, want %q", row.ID, c, got, want[c])
+			if got != w {
+				t.Errorf("%s cell %d: %q, want %q", row.ID, c, got, w)
 			}
 		}
-		// Rates carry their n and smallest change; the others dashes.
-		if row.Unit == "ratio" {
-			if cells[8].text() == dash {
-				t.Errorf("%s: a rate without its n", row.ID)
+	}
+	if server == 0 || noMin == 0 || rates == 0 {
+		t.Errorf("the catalog lacks a server metric (%d), a metric without a minimum (%d) or a rate (%d): the checks above are vacuous", server, noMin, rates)
+	}
+}
+
+func TestDefinitionSmallestChange(t *testing.T) {
+	b := pageHTML(t, "defs", func(d *PageData) {
+		rows := d.V["defs"].Tables.Defs
+		for i := range rows {
+			if rows[i].ID == "recall.hit_rate" {
+				rows[i].N, rows[i].MDC = 120, ptrF(0.142)
 			}
-		} else if cells[8].text() != dash || cells[9].text() != dash {
-			t.Errorf("%s: n %q, smallest %q, want dashes", row.ID, cells[8].text(), cells[9].text())
 		}
-		if row.MinN > 0 && cells[7].text() != en.Int(int64(row.MinN)) {
-			t.Errorf("%s: fewest needed %q, want %d", row.ID, cells[7].text(), row.MinN)
+	})
+	cells := rowByID(parseHTML(t, b), "recall.hit_rate").find("td")
+	if cells[8].text() != "120" || cells[9].text() != "about 14 pts" || cells[7].text() != "20" || cells[5].text() != "rate" {
+		t.Errorf("recall.hit_rate: fewest %q, n %q, smallest %q, unit %q", cells[7].text(), cells[8].text(), cells[9].text(), cells[5].text())
+	}
+	if h := parseHTML(t, b).find("main thead th"); len(h) == 0 || !strings.Contains(h[8].text(), "n now (7 days)") {
+		t.Error("the n heading does not name its window")
+	}
+}
+
+// The axis tabs link the sections, each holding the metrics of one axis,
+// and the catalog is on one page whatever the paging parameters say.
+func TestDefinitionAxisTabs(t *testing.T) {
+	h := dataHarness(t)
+	for _, path := range []string{"/defs", "/defs?limit=5&offset=5"} {
+		_, b := pageGet(t, h, h.login(), path)
+		doc := parseHTML(t, b)
+		if got := len(idsOf(doc)); got != len(metrics.Catalog) {
+			t.Fatalf("%s: %d rows, want the %d of the catalog", path, got, len(metrics.Catalog))
 		}
+		if doc.first("main .pager") != nil || doc.first("main a[rel=next]") != nil {
+			t.Errorf("%s pages the catalog", path)
+		}
+		var tabs []string
+		total := 0
+		inSection := map[string]string{} // metric id -> its section's id
+		for _, a := range doc.find("main nav.seg a") {
+			tabs = append(tabs, strings.Fields(a.text())[0])
+			sec := doc.first("main section" + a.attr("href"))
+			if sec == nil {
+				t.Fatalf("%s: tab %q links %q, which no section has", path, a.text(), a.attr("href"))
+			}
+			rows := sec.find("tbody tr")
+			if want := a.first("span").text(); want != en.Int(int64(len(rows))) {
+				t.Errorf("tab %q says %s, its section holds %d", a.text(), want, len(rows))
+			}
+			total += len(rows)
+			for _, tr := range rows {
+				inSection[tr.attr("id")] = sec.attr("id")
+			}
+			if head := sec.first("h3"); head == nil || !strings.HasPrefix(a.text(), head.text()) {
+				t.Errorf("section %s has the heading %v", a.attr("href"), head)
+			}
+		}
+		if got := strings.Join(tabs, ","); !strings.HasPrefix(got, "Found,Right,Cost,Bank,Flowing") {
+			t.Errorf("%s: tabs %q, want the canvas's order", path, got)
+		}
+		if total != len(metrics.Catalog) {
+			t.Errorf("%s: the sections hold %d rows, the catalog %d", path, total, len(metrics.Catalog))
+		}
+		for _, d := range metrics.Catalog {
+			if got, want := inSection[d.ID], "axis-"+views.Heading(d); got != want {
+				t.Errorf("%s is in section %q, want %q", d.ID, got, want)
+			}
+		}
+	}
+	if len(metrics.Catalog) > metrics.MaxLimit {
+		t.Errorf("the catalog (%d) no longer fits one page (%d)", len(metrics.Catalog), metrics.MaxLimit)
 	}
 }
 
@@ -175,23 +272,6 @@ func TestDefinitionIDIsEscaped(t *testing.T) {
 	}
 }
 
-func TestDefinitionsPageIsPaged(t *testing.T) {
-	h := dataHarness(t)
-	_, b := pageGet(t, h, h.login(), "/defs?limit=5&offset=5")
-	doc := parseHTML(t, b)
-	ids := idsOf(doc)
-	if len(ids) != 5 || ids[0] != metrics.Catalog[5].ID {
-		t.Fatalf("page 2 of 5: %q", ids)
-	}
-	var next string
-	if a := doc.first("main a[rel=next]"); a != nil {
-		next = a.attr("href")
-	}
-	if !strings.Contains(next, "offset=10") || !strings.Contains(next, "limit=5") {
-		t.Errorf("next link %q", next)
-	}
-}
-
 func TestReleaseAnchors(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
@@ -209,18 +289,26 @@ func TestReleaseAnchors(t *testing.T) {
 		t.Errorf("the page does not say it is observational: %q", visibleText(b))
 	}
 	pages := append([]string{"/", "/quality", "/cost", "/bank", "/pipeline", "/system", "/releases", "/defs"}, browsePaths(t, h)...)
-	seen := 0
 	for _, p := range pages {
 		_, body := pageGet(t, h, ck, p)
-		for _, f := range fragmentsOf(t, body, "/releases") {
-			seen++
-			if !slices.Contains(ids, f) {
-				t.Errorf("%s links /releases#%s, which has no row", p, f)
+		doc := parseHTML(t, body)
+		// The footer names the running version, which may have no row in the window.
+		foot := releaseLinks(doc, "footer.foot a")
+		if len(foot) != 1 {
+			t.Fatalf("%s: %d version links in the footer", p, len(foot))
+		}
+		if got := fragmentsOf(t, `<a href="`+foot[0].attr("href")+`">`, "/releases"); len(got) != 1 || got[0] != "test" || foot[0].text() != "test" {
+			t.Errorf("%s: the footer links %q for the version %q, want test", p, got, foot[0].text())
+		}
+		for _, a := range releaseLinks(doc, "main a") {
+			f := fragmentsOf(t, `<a href="`+a.attr("href")+`">`, "/releases")
+			if len(f) != 1 || !slices.Contains(ids, f[0]) {
+				t.Errorf("%s links %s, which has no row", p, a.attr("href"))
 			}
 		}
 	}
-	if seen < len(want) {
-		t.Errorf("%d links to a version across the pages, want one per row at least", seen)
+	if links := releaseLinks(parseHTML(t, b), "main tbody a"); len(links) != len(want) {
+		t.Errorf("%d version links in the table, want one per row (%d)", len(links), len(want))
 	}
 }
 
@@ -266,7 +354,7 @@ func TestReleaseRowsKeepTheViewsOrder(t *testing.T) {
 func TestReleaseLinkKeepsTheWindow(t *testing.T) {
 	b := pageHTML(t, "releases", nil)
 	if !strings.Contains(b, `href="/releases?days=30#v0.1.18"`) {
-		t.Errorf("a version link lacks the window: %s", section(b, "Per version"))
+		t.Errorf("a version link lacks the window: %q", linksIn(parseHTML(t, b), "main tbody"))
 	}
 }
 
@@ -285,7 +373,9 @@ func TestReleaseTableCells(t *testing.T) {
 		used := row.Flagship["used.turn_rate"]
 		used.Value, used.Num, used.Den = nil, ptrI(5), ptrI(7)
 		row.Flagship["used.turn_rate"] = used
-		delete(row.Flagship, "verdict.wrong_rate")
+		wrong := row.Flagship["verdict.wrong_rate"]
+		wrong.Value, wrong.Num, wrong.Den = nil, ptrI(0), ptrI(6)
+		row.Flagship["verdict.wrong_rate"] = wrong
 		lat := row.Flagship["recall.latency"]
 		lat.Value = ptrF(1600)
 		row.Flagship["recall.latency"] = lat
@@ -296,13 +386,16 @@ func TestReleaseTableCells(t *testing.T) {
 	for _, td := range tr.find("td") {
 		got = append(got, td.text())
 	}
-	want := []string{"v0.1.18", "Oct 3 → Oct 21", "1,234", "7", "29 % (18–42 %)", "5 of 7", "—", "—", "—", "1.6 s", "alpha 38 %", "24.5", "1,284"}
+	want := []string{"v0.1.18", "Oct 3 → Oct 21", "1,234", "7", "29 % (18–42 %)", "5 of 7", "—", "0 of 6", "—", "1.6 s", "alpha 38 %", "24.5", "1,284"}
 	if !slices.Equal(got, want) {
 		t.Errorf("cells\n got %q\nwant %q", got, want)
 	}
 	few := tr.find("td")[5].first("span")
 	if few == nil || !strings.Contains(few.attr("class"), "st-few") {
 		t.Errorf("a rate with too little behind it is not marked: %v", few)
+	}
+	if plain := tr.find("td")[7]; plain.first("span") != nil {
+		t.Errorf("0 of 6 is marked like a count that is too small: %q", plain.text())
 	}
 	// The hover names every project, the largest first, ties by name.
 	if title := tr.find("td")[10].attr("title"); title != "alpha 38 %; beta 38 %; zeta 25 %" {
@@ -380,4 +473,67 @@ func TestTopShareBreaksTiesByName(t *testing.T) {
 	if _, _, ok := topShare(nil); ok {
 		t.Error("a version with no project has a top project")
 	}
+}
+
+func TestReleaseSpanNamesYearsAndTheRunningVersion(t *testing.T) {
+	b := pageHTML(t, "releases", func(d *PageData) {
+		r := d.V["releases"]
+		r.GeneratedAt = time.Date(2027, 1, 5, 12, 0, 0, 0, time.UTC)
+		d.Loc = time.UTC
+		d.Frame.Version = r.Tables.Releases[1].Version
+		r.Tables.Releases[0].First = time.Date(2026, 12, 20, 9, 0, 0, 0, time.UTC)
+		r.Tables.Releases[0].Last = time.Date(2027, 1, 2, 9, 0, 0, 0, time.UTC)
+		r.Tables.Releases[1].First = time.Date(2027, 1, 3, 9, 0, 0, 0, time.UTC)
+		r.Tables.Releases[1].Last = time.Date(2027, 1, 4, 9, 0, 0, 0, time.UTC)
+	})
+	rows := parseHTML(t, b).find("main tbody tr")
+	if got := rows[0].find("td")[1].text(); got != "Dec 20, 2026 → Jan 2" {
+		t.Errorf("a span over a year: %q", got)
+	}
+	if got := rows[1].find("td")[1].text(); got != "Jan 3 → now" {
+		t.Errorf("the running version: %q", got)
+	}
+	if strings.Contains(rows[0].find("td")[1].text(), "now") {
+		t.Error("a version that is not the running one reads as in use")
+	}
+}
+
+func TestReleasePageSentences(t *testing.T) {
+	b := pageHTML(t, "releases", nil)
+	text := visibleText(b)
+	for _, w := range []string{
+		"Attributed per event to the binary that recorded it, not per day. Comparing two versions with matched projects comes later.",
+		"Replay recorded recalls with another learned-ranking setting, without touching memory or config.toml:",
+	} {
+		if !strings.Contains(text, w) {
+			t.Errorf("the page lacks %q", w)
+		}
+	}
+	var cmds []string
+	for _, c := range parseHTML(t, b).find("main div.cmd code") {
+		cmds = append(cmds, innerText(c))
+	}
+	if !slices.Contains(cmds, "backsight feedback replay --set boost_weight=0.15") {
+		t.Errorf("commands %q lack the replay command", cmds)
+	}
+}
+
+func innerText(n *node) string {
+	for _, it := range n.items {
+		if it.kid == nil {
+			return it.text
+		}
+	}
+	return ""
+}
+
+// releaseLinks are the links in sel that go to the Releases page.
+func releaseLinks(n *node, sel string) []*node {
+	var out []*node
+	for _, a := range n.find(sel) {
+		if strings.HasPrefix(a.attr("href"), "/releases") {
+			out = append(out, a)
+		}
+	}
+	return out
 }

@@ -124,7 +124,7 @@
 {{define "foot"}}</main>
 <footer class="foot">
 <div class="wrap">
-<span>backsight {{.Frame.Version}}</span>
+<span>backsight <a href="{{versionlink .Frame.Version}}">{{.Frame.Version}}</a></span>
 <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">Help: backsight guide dashboard</a>
 <a href="/defs">Definitions</a>
 <span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Frame.RenderedAt .Frame.RenderedAt .Loc}}</time> in {{.Frame.RenderMS}} ms</span>

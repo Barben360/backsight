@@ -62,11 +62,16 @@ type SettingsCard struct {
 // SettingLine is one setting and its value.
 type SettingLine struct{ Name, Value string }
 
+// versionHref is the link to a version's row on the Releases page. A
+// version without a row in the window opens the page at its top.
+func versionHref(version string) string {
+	return "/releases#" + (&url.URL{Fragment: version}).EscapedFragment()
+}
+
 // versionHref is the link to a version's row on the Releases page; the
 // page's window travels with it, as the row may be outside the default one.
 func (d PageData) versionHref(version string) string {
-	frag := (&url.URL{Fragment: version}).EscapedFragment()
-	return "/releases" + windowQuery(d.P, "days", "since", "until", "tz") + "#" + frag
+	return "/releases" + windowQuery(d.P, "days", "since", "until", "tz") + "#" + (&url.URL{Fragment: version}).EscapedFragment()
 }
 
 // dayText is a day as "Oct 8", with the year when it is not now's.
@@ -99,7 +104,11 @@ func flagshipCell(l format.Locale, d metrics.Def, row map[string]metrics.Metric)
 	case m.Value != nil:
 		return Cell{Text: l.Value(d, m)}
 	case d.Unit == "ratio" && m.Num != nil && m.Den != nil && *m.Den > 0:
-		return Cell{Text: l.Int(*m.Num) + " of " + l.Int(*m.Den), Class: "st-few"}
+		c := Cell{Text: l.Int(*m.Num) + " of " + l.Int(*m.Den)}
+		if *m.Num > 0 { // nothing found is a plain "0 of N", as the canvas has it
+			c.Class = "st-few"
+		}
+		return c
 	case m.Status == metrics.StatusTooFew:
 		return Cell{Text: dash, Class: "st-few"}
 	}
@@ -118,6 +127,9 @@ func releasesOf(d PageData) ReleasesPage {
 			Span:    dayText(row.First, r.GeneratedAt, d.Loc) + " → " + dayText(row.Last, r.GeneratedAt, d.Loc),
 			Prompts: l.Int(row.N), Judged: dash, Top: Ref{None: true}, TopShare: dash,
 			PerDay: l.Fixed(row.PromptsPerDay, 1), Bank: dash,
+		}
+		if row.Version == d.Frame.Version { // the running binary is in use now
+			ln.Span = dayText(row.First, r.GeneratedAt, d.Loc) + " → now"
 		}
 		// The turns judged are those that showed memory and said what they used.
 		if m, ok := row.Flagship["used.turn_rate"]; ok && m.Den != nil {
@@ -173,11 +185,22 @@ func settingValue(l format.Locale, v float64) string {
 	return l.Fixed(v, 0)
 }
 
-// DefsPage is the Definitions page: the catalog, one row per metric.
+// DefsPage is the Definitions page: the catalog, one row per metric, in a
+// section per axis.
 type DefsPage struct {
-	Head Head
-	Note NoData
-	Rows []DefLine
+	Head   Head
+	Note   NoData
+	Tabs   []AxisTab
+	Groups []DefGroup
+}
+
+// AxisTab is a link to an axis's section, with how many metrics it holds.
+type AxisTab struct{ Label, Href, Count string }
+
+// DefGroup is the metrics of one axis; ID is its section's anchor.
+type DefGroup struct {
+	ID, Title string
+	Rows      []DefLine
 }
 
 // DefLine is a row of the catalog table; ID is the raw metric id, the
@@ -187,12 +210,17 @@ type DefLine struct {
 	Where, MinN, N, Smallest                      string
 }
 
+// axisOrder are the axes of the catalog, in the order the page lists them.
+var axisOrder = []struct{ Family, Label string }{
+	{"reach", "Found"}, {"quality", "Right"}, {"cost", "Cost"}, {"bank", "Bank"}, {"pipeline", "Flowing"}, {"review", "To review"},
+}
+
 func defsOf(d PageData) DefsPage {
 	r := d.resultOf("defs")
 	l := d.L
 	p := DefsPage{Head: fixedHead("defs", "Catalog", "", d.CLI)}
 	p.Head.Chip = "developer"
-	p.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
+	byAxis := map[string][]DefLine{}
 	for _, row := range r.Tables.Defs {
 		def := row.Def
 		ln := DefLine{
@@ -213,9 +241,24 @@ func defsOf(d PageData) DefsPage {
 			ln.N = l.Int(row.N)
 			ln.Smallest = smallest(def, metrics.Metric{MDC: row.MDC}, l)
 		}
-		p.Rows = append(p.Rows, ln)
+		fam := views.Heading(def)
+		byAxis[fam] = append(byAxis[fam], ln)
 	}
-	if len(p.Rows) == 0 {
+	add := func(family, label string) {
+		if rows := byAxis[family]; len(rows) > 0 {
+			id := "axis-" + family
+			p.Groups = append(p.Groups, DefGroup{ID: id, Title: label, Rows: rows})
+			p.Tabs = append(p.Tabs, AxisTab{Label: label, Href: "#" + id, Count: l.Int(int64(len(rows)))})
+			delete(byAxis, family)
+		}
+	}
+	for _, a := range axisOrder {
+		add(a.Family, a.Label)
+	}
+	for _, fam := range slices.Sorted(maps.Keys(byAxis)) { // a family the page does not know yet
+		add(fam, strings.ToUpper(fam[:1])+fam[1:])
+	}
+	if len(p.Groups) == 0 {
 		p.Note = NoData{Text: "No metric is defined."}
 	}
 	return p

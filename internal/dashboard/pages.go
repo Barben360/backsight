@@ -459,6 +459,10 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		data := s.pageData(r, title, prefs, started)
 		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
 		data.CLI = cliFor(first, id, p)
+		if spec.Name == "defs" { // the catalog is read whole: its axis links are anchors on one page
+			p.Limit, p.Offset = metrics.MaxLimit, 0
+			data.P = p
+		}
 		for _, v := range spec.Views {
 			res, st, err := s.data.result(r.Context(), v, p, id)
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
