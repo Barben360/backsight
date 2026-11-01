@@ -793,6 +793,10 @@ type statusResult struct {
 		Version string `json:"version,omitempty"`
 		Error   string `json:"error,omitempty"`
 	} `json:"api"`
+	// Refusal: why the native server on Windows refuses to run (the
+	// supervisor's refusal, the identity check's), shown when the API is
+	// not healthy.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 func newServerStatusCmd(e *env) *cobra.Command {
@@ -823,7 +827,14 @@ func newServerStatusCmd(e *env) *cobra.Command {
 			}
 			var failed error
 			if !res.API.Healthy {
-				failed = &output.Error{Code: output.Blocked, Message: "the server is not running or not healthy"}
+				msg := "the server is not running or not healthy"
+				if n, ok := runtimeFor(cfg).(server.Native); ok {
+					res.Refusal = server.Redact(n.Refusal(cmd.Context()), sec)
+				}
+				if res.Refusal != "" {
+					msg += ": " + res.Refusal
+				}
+				failed = &output.Error{Code: output.Blocked, Message: msg}
 			}
 			return e.report("server status", res, func() string { return statusText(res) }, failed)
 		},
@@ -842,6 +853,9 @@ func statusText(r statusResult) string {
 		fmt.Fprintf(&b, "API %s healthy, Hindsight %s\n", r.API.URL, r.API.Version)
 	} else {
 		fmt.Fprintf(&b, "API %s not running or not healthy\n", r.API.URL)
+	}
+	if r.Refusal != "" {
+		fmt.Fprintf(&b, "refused: %s\n", r.Refusal)
 	}
 	return b.String()
 }

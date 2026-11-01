@@ -1158,3 +1158,45 @@ func TestRestartSupervisorStopsAndStartsItAgain(t *testing.T) {
 		t.Errorf("the systemd host: %v", err)
 	}
 }
+
+// server status's refusal on Windows (0080: the reason where server status
+// reads it): the supervisor's while it answers refused, none while it runs
+// unrefused, the identity check's when none answers (server start refused
+// before starting one); never on another host.
+func TestRefusalIsTheSupervisorsElseTheIdentityChecks(t *testing.T) {
+	h, f := taskFixture(t)
+	ctx := context.Background()
+	n := h.n
+	n.Tools = &fakeTools{Out: dbToolsOut("on")}
+	recordInstance(t, n, "111")
+	identity := func(id string) {
+		t.Helper()
+		if err := os.WriteFile(n.IdentityFile(), []byte(id+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refusal := n.SuperviseFile() + " runs postgres with fsync=off, not fsync=on: refusing to start it"
+	f.up, f.st = true, supervise.Status{DB: "refused", API: "stopped", Refusal: refusal}
+	if got := n.Refusal(ctx); got != refusal {
+		t.Errorf("a refused supervisor: %q, want its refusal %q", got, refusal)
+	}
+	identity("222")
+	f.st = supervise.Status{DB: "running", API: "running"}
+	if got := n.Refusal(ctx); got != "" {
+		t.Errorf("a supervisor running unrefused: %q, want none", got)
+	}
+	f.up = false
+	want := "the native database " + n.InstanceDir() + " is not the one backsight recorded (identifier 111, recorded 222)"
+	if got := n.Refusal(ctx); !strings.HasPrefix(got, want) {
+		t.Errorf("no supervisor, another identity recorded: %q, want %q…", got, want)
+	}
+	identity("111")
+	if got := n.Refusal(ctx); got != "" {
+		t.Errorf("no supervisor, the recorded instance: %q, want none", got)
+	}
+	identity("222")
+	withHost(t, &fakeHost{})
+	if got := n.Refusal(ctx); got != "" {
+		t.Errorf("another host than the task's: %q, want none (its journal says it)", got)
+	}
+}

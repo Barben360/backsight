@@ -49,6 +49,7 @@ Windows has no service manager a standard user can use, so backsight supervises 
 
 - `backsight server stop` disables the task first (its 5-minute check would start the server again), then stops the server. `backsight server start` enables it again.
 - The logs are `<project>-supervisor.log` (what the supervisor did), `<project>-db.log` and `<project>-api.log` in the `logs` directory of backsight's state directory, each kept to 10 MiB, the previous one as `.1`. A server that fails to start shows the last lines of the API's.
+- When the supervisor refuses to start the database (a database that is not the one backsight recorded, `supervise.json` running it without `fsync=on`), it starts nothing and stays refused, without retrying, until `backsight server stop`. `backsight server status` gives the reason (`refusal` in its JSON), and so it does when `backsight server start` refused the database before starting the supervisor. What each refusal means: [the native server does not start](troubleshooting.md#the-native-server-does-not-start).
 - With no one logged on at the PC's screen (over SSH, on a CI runner), the task cannot run. `backsight server start` then starts the supervisor itself and says so: `the server runs until you log off; it starts by itself at your next logon`.
 - A path with `%` cannot be in a task (Task Scheduler would replace `%NAME%` with a variable's value): if your profile path holds one, set `BACKSIGHT_HOME` to a directory without it.
 

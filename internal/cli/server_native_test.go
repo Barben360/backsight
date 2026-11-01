@@ -34,7 +34,7 @@ func (f *checkTools) Run(_ context.Context, env []string, _ io.Reader, path stri
 	if f.effect != nil {
 		f.effect(path, args)
 	}
-	if filepath.Base(path) == "pg_controldata" && len(args) == 2 {
+	if strings.TrimSuffix(filepath.Base(path), ".exe") == "pg_controldata" && len(args) == 2 {
 		id, err := os.ReadFile(filepath.Join(args[1], "fake-sysid"))
 		if err == nil {
 			return []byte("pg_control version number:            1800\nDatabase system identifier:           " + strings.TrimSpace(string(id)) + "\n"), nil

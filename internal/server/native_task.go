@@ -517,6 +517,32 @@ func tailLines(text string, n int) string {
 	return strings.Join(ls, "\n") + "\n"
 }
 
+// Refusal is why the native server on Windows refuses to run, "" when
+// nothing refuses it, and always on the systemd host (the db unit's
+// journal says it there): the supervisor's final refusal while it answers
+// refused (fsync, identity, at the task's start), else, with no supervisor
+// answering, the identity check's (server start refuses before starting
+// one). server status shows it: decision 0080's "the reason where server
+// status and doctor read it".
+func (n Native) Refusal(ctx context.Context) string {
+	if n.Err != nil {
+		return ""
+	}
+	h, ok := n.host().(taskHost)
+	if !ok {
+		return ""
+	}
+	st, err := h.ask(ctx, "status")
+	if err == nil {
+		return st.Refusal
+	}
+	var g *GuardError
+	if errors.As(n.CheckInstance(ctx), &g) {
+		return g.Error()
+	}
+	return ""
+}
+
 // DeployedVenv is supervise.json's venv.
 func (h taskHost) DeployedVenv(files map[string][]byte) (string, error) {
 	var cfg supervise.Config
