@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
 )
 
@@ -369,6 +370,11 @@ func (n Native) StartIfDown(ctx context.Context) (started bool, err error) {
 	if n.Stopped() { // backsight server stop: down on purpose
 		return false, nil
 	}
+	// A live server.lock holder (server stop, uninstall, server install,
+	// render) is acting on the server: left to it, as startLateServer does.
+	if h := state.Inspect(n.join(n.Dirs.LocksDir(), "server.lock")); h != nil && !h.Stale {
+		return false, nil
+	}
 	h := taskHost{n: n}
 	if _, err := h.ask(ctx, "status"); !errors.Is(err, supervise.ErrNotRunning) {
 		return false, err
@@ -436,6 +442,13 @@ func (n Native) Unregister(ctx context.Context) error {
 		return n.Err
 	}
 	if h, ok := n.host().(taskHost); ok {
+		// Marked stopped first: a SessionStart during the uninstall
+		// (server.start_on_session) starts no supervisor, which would
+		// hold the current.exe the uninstall removes. A later server
+		// start removes the marker.
+		if err := n.MarkStopped(); err != nil {
+			return err
+		}
 		return h.Remove(ctx)
 	}
 	return n.host().Stop(ctx)
@@ -593,14 +606,44 @@ func (n Native) StoppedFile() string { return n.join(n.Root(), stoppedFile) }
 // it since.
 func (n Native) Stopped() bool { return pathExists(n.StoppedFile()) }
 
-// MarkStopped writes the marker after backsight server stop on the task
+// MarkStopped writes the marker for backsight server stop on the task
 // host (Windows); systemd needs none (its units stay stopped). Nothing
 // installed, nothing to mark.
 func (n Native) MarkStopped() error {
+	_, err := n.markStopped()
+	return err
+}
+
+// markStopped is MarkStopped; wrote reports a marker this call created
+// (none was there).
+func (n Native) markStopped() (wrote bool, err error) {
 	if _, task := n.host().(taskHost); !task || !isDir(n.Root()) {
-		return nil
+		return false, nil
 	}
-	return os.WriteFile(n.StoppedFile(), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+	wrote = !n.Stopped()
+	return wrote, os.WriteFile(n.StoppedFile(), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+}
+
+// StopOnPurpose is backsight server stop: on the task host it marks the
+// server stopped before the stop, so a SessionStart during it
+// (server.start_on_session) does not start the supervisor again, and
+// takes the marker back if the stop fails (one a previous stop left
+// stays). Elsewhere it is Stop.
+func (n Native) StopOnPurpose(ctx context.Context) error {
+	if n.Err != nil {
+		return n.Err
+	}
+	wrote, err := n.markStopped()
+	if err != nil {
+		return err
+	}
+	if err := n.Stop(ctx); err != nil {
+		if wrote {
+			n.clearStopped()
+		}
+		return err
+	}
+	return nil
 }
 
 func (n Native) clearStopped() { _ = os.Remove(n.StoppedFile()) }

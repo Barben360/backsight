@@ -770,13 +770,12 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			if err := rt.Stop(cmd.Context()); err != nil {
-				return redacted(err, sec)
-			}
+			stop := rt.Stop
 			if n, ok := rt.(server.Native); ok {
-				if err := n.MarkStopped(); err != nil { // the SessionStart fallback leaves it down
-					return blocked(err)
-				}
+				stop = n.StopOnPurpose // marked first: the SessionStart fallback leaves it down
+			}
+			if err := stop(cmd.Context()); err != nil {
+				return redacted(err, sec)
 			}
 			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, text(false, "stopped\n"))
 		},

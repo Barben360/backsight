@@ -113,7 +113,7 @@ A policy of your organization can block your own scheduled tasks. Setup's probe 
 
 - each Claude Code session starts it when it is down: its SessionStart hook starts the supervisor the way `backsight server start` does without the task, and does not wait for it;
 - `backsight server start` starts it the same way, saying `Task Scheduler refused the server's task: the server runs until you log off, and starts with your next Claude Code session`;
-- `backsight server stop` writes the file `stopped` in `server\native`, and sessions then leave the server down; `backsight server start` removes it and starts the server.
+- `backsight server stop` writes the file `stopped` in `server\native` before it stops the server, and sessions then leave the server down; `backsight server start` removes it and starts the server. `backsight uninstall` writes it too, and sessions leave the server alone while a command holds it (`server stop`, `uninstall`, `server install`).
 
 A later `backsight setup` whose probe task passes removes `server.start_on_session` (`backsight setup --undo` puts it back), and the next start registers the task.
 

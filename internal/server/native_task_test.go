@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
 )
 
@@ -1225,5 +1227,111 @@ func TestRefusalIsTheSupervisorsElseTheIdentityChecks(t *testing.T) {
 	withHost(t, &fakeHost{})
 	if got := n.Refusal(ctx); got != "" {
 		t.Errorf("another host than the task's: %q, want none (its journal says it)", got)
+	}
+}
+
+// backsight server stop writes its marker before the stop: a SessionStart
+// during the stop (server.start_on_session) leaves the server down. A
+// stop that fails takes back the marker it wrote, never one a previous
+// stop left.
+func TestStopOnPurposeMarksTheServerBeforeTheStop(t *testing.T) {
+	h, f := taskFixture(t)
+	n := h.n
+	ctx := context.Background()
+	f.registered = true
+	f.start()
+	var markedWhileStopping bool
+	superviseAsk = func(ctx context.Context, project, op string) (supervise.Status, error) {
+		if op == "stop" {
+			markedWhileStopping = n.Stopped()
+		}
+		return f.ask(ctx, project, op)
+	}
+	if err := n.StopOnPurpose(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !markedWhileStopping || !n.Stopped() {
+		t.Errorf("marker while stopping %v, after %v: want it written before the stop and kept", markedWhileStopping, n.Stopped())
+	}
+
+	n.clearStopped()
+	f.start()
+	f.stopPolls = 1000 // never gone within superviseStopWait
+	if err := n.StopOnPurpose(ctx); err == nil || n.Stopped() {
+		t.Errorf("a stop that fails: %v, marker %v; want the error and the marker taken back", err, n.Stopped())
+	}
+
+	if err := n.MarkStopped(); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	if err := n.StopOnPurpose(ctx); err == nil || !n.Stopped() {
+		t.Errorf("a failed stop of a server already stopped on purpose: %v, marker %v; want the old marker kept", err, n.Stopped())
+	}
+
+	t.Run("another host: no marker", func(t *testing.T) {
+		withHost(t, stopsHost{})
+		n.clearStopped()
+		if err := n.StopOnPurpose(ctx); err != nil || n.Stopped() {
+			t.Errorf("StopOnPurpose on another host = %v, marker %v", err, n.Stopped())
+		}
+	})
+}
+
+// stopsHost is a host whose Stop succeeds, without a marker of its own.
+type stopsHost struct{ stubHost }
+
+func (stopsHost) Stop(context.Context) error { return nil }
+
+// The SessionStart start (server.start_on_session) leaves the server to a
+// live server.lock holder (server stop, uninstall, server install, render),
+// as startLateServer does; a lock its dead owner left does not hold it.
+func TestStartIfDownLeavesTheServerToALiveLockHolder(t *testing.T) {
+	h, f := taskFixture(t)
+	n := h.n
+	n.Cfg.Server.StartOnSession = true
+	lockPath := filepath.Join(n.Dirs.LocksDir(), "server.lock")
+	l, err := state.TryAcquire(lockPath, "server stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started, err := n.StartIfDown(context.Background()); started || err != nil || len(f.detached) != 0 {
+		t.Errorf("server.lock held by a live process: started %v, %v, detached %q; want nothing started", started, err, f.detached)
+	}
+	_ = l.Release()
+
+	dead := exec.Command(os.Args[0], "-test.run=^$")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(state.Owner{PID: dead.Process.Pid, Command: "server stop", Since: time.Now().UTC().Add(-time.Hour)})
+	if err := os.WriteFile(lockPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if started, err := n.StartIfDown(context.Background()); !started || err != nil || len(f.detached) != 1 {
+		t.Errorf("a dead owner's server.lock: started %v, %v, detached %q; want the supervisor started", started, err, f.detached)
+	}
+}
+
+// uninstall's Unregister marks the server stopped before it stops and
+// deletes the task: a SessionStart during the uninstall starts no
+// supervisor, which would hold current.exe the uninstall removes.
+func TestUnregisterMarksTheServerStoppedFirst(t *testing.T) {
+	h, f := taskFixture(t)
+	n := h.n
+	f.registered = true
+	f.start()
+	var markedWhileStopping bool
+	superviseAsk = func(ctx context.Context, project, op string) (supervise.Status, error) {
+		if op == "stop" {
+			markedWhileStopping = n.Stopped()
+		}
+		return f.ask(ctx, project, op)
+	}
+	if err := n.Unregister(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !markedWhileStopping || !n.Stopped() {
+		t.Errorf("marker while stopping %v, after %v: want it written before the stop", markedWhileStopping, n.Stopped())
 	}
 }
