@@ -36,11 +36,12 @@ The views (`backsight stats overview`, `quality`, `sessions`…) read this index
 
 | To | What | When |
 |---|---|---|
-| **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only, unless you open it to your other PCs on a private address (`backsight server expose --private`); its API and web UI always require a key. | Each session, report and stored fact. |
+| **Your Hindsight server** | Everything above. It runs on your machine, in Docker or natively (the [native runtime](native-runtime.md), the default on Windows), and listens on `127.0.0.1` only, unless you open it to your other PCs on a private address (`backsight server expose --private`); its API and web UI always require a key. | Each session, report and stored fact. |
 | **The server's host**, on a PC that joined another's server ([below](#several-pcs)) | The same, over your private network, with recall queries and their results, and the API key in every request. | Each session, report and stored fact, each prompt and memory search, each `jobs tick`. |
 | **The LLM provider you chose at setup** | Session text, reports and stored facts, which the server sends it to extract and consolidate memories, and the server's own summaries (the briefing pages). With `ollama`, nothing: the model runs on your machine. | In the background, after each send. |
-| **Hugging Face** (`huggingface.co`) | Nothing of yours: the server downloads its embedding model and its reranker from there, into a Docker volume. | The server's first start, and after its model cache is deleted. |
+| **Hugging Face** (`huggingface.co`) | Nothing of yours: the server downloads its embedding model and its reranker from there, into a Docker volume (on the native runtime, into `server/native/hf`). | The server's first start (native: its install), and after its model cache is deleted. |
 | **The image registries** (`ghcr.io` for Hindsight, Docker Hub for pgvector) | Nothing of yours: Docker pulls the server's images, by digest. | Setup, and server upgrades. |
+| **The native runtime's sources**, on the native runtime only | Nothing of yours: backsight downloads the pinned uv from GitHub and checks its SHA-256; uv downloads the pinned Python from its own source for Python builds, and Hindsight's packages from PyPI, checked against the hashes of backsight's lock. | Setup, and server upgrades. |
 | **GitHub** | Nothing of yours: the install script and `update` download releases, and the binary checks once a day for a newer one. | Install, updates, the daily check. |
 
 Setup shows the provider data flow and asks for your consent before anything is stored. Nothing else leaves the machine:

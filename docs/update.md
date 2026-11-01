@@ -49,7 +49,7 @@ backsight update apply
 `update apply`:
 
 1. downloads the release archive with its `checksums.txt` and signature, and verifies both; if either fails, nothing changes (exit 20);
-2. takes the maintenance lock, installs the new binary next to the old one, and switches the shim, so `backsight` on your PATH runs the new version;
+2. takes the maintenance lock, installs the new binary next to the old one, and switches the shim, so `backsight` on your PATH runs the new version (on Windows, where running Claude Code sessions hold the shim, it renames the running copy aside: [Windows](windows.md#updates-and-uninstall-while-claude-code-runs));
 3. runs the new version's client migrations, its plugin update and its scheduler refresh;
 4. if the new release pins another Hindsight version, upgrades the server (below);
 5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`). From v0.1.4-m5 it first renames a bank still called `claude-memory` to `backsight` (`backsight bank rename`); when the server is busy, the daily job does it after its backup;
@@ -69,7 +69,7 @@ When a release pins a newer Hindsight server, `update apply` runs `backsight ser
 
 1. pulls the new image, or on the [native runtime](native-runtime.md) installs the new version's virtual environment beside the running one, which keeps serving (a failure changes nothing);
 2. makes a safety backup and verifies it in a throwaway database;
-3. deploys and starts the new version (on native: points the server unit at the new environment and restarts it), waits for health and runs a recall.
+3. deploys and starts the new version (on native: points the server unit at the new environment and restarts it; on Windows, writes `supervise.json` for it and restarts the supervisor), waits for health and runs a recall.
 
 Any failure from the deploy on puts the safety backup back into the previous version (on native, the server unit runs the previous environment again; the new one stays on disk) and exits 30. On native, a passed upgrade removes the environments older than the previous one. A server upgrade never downgrades. The pinned versions are listed in [compatibility.md](compatibility.md).
 

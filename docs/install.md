@@ -4,8 +4,8 @@ How to install backsight and set it up for Claude Code. The short path is in the
 
 ## Requirements
 
-- **Linux**, amd64 (the arm64 binary is built but not tested). macOS and Windows binaries are built but not tested yet.
-- **Docker**, usable by your user without `sudo`, with **Docker Compose v2** (the `docker compose` plugin, not the old `docker-compose`):
+- **Linux**, amd64 (the arm64 binary is built but not tested), or **Windows 11**, x86_64, without administrator rights: see [backsight on Windows](windows.md) for its own requirements and install, which need no Docker. The macOS binaries are built but not tested yet.
+- On Linux, **Docker**, usable by your user without `sudo`, with **Docker Compose v2** (the `docker compose` plugin, not the old `docker-compose`):
   - install Docker Engine: [docs.docker.com/engine/install](https://docs.docker.com/engine/install/) (on Debian and Ubuntu, the distribution's `docker.io` package with its Compose v2 package works too);
   - let your user run it: `sudo usermod -aG docker $USER`, then log out and back in ([Linux post-install steps](https://docs.docker.com/engine/install/linux-postinstall/)). Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) avoids that and works too;
   - check with `docker compose version`, without `sudo`.
@@ -15,12 +15,20 @@ How to install backsight and set it up for Claude Code. The short path is in the
   - or [Ollama](https://ollama.com/download) on this machine, with no key (on Linux it must listen on an address the server container reaches: see [Local models with Ollama](#local-models-with-ollama));
   - or your Claude subscription, which Anthropic's terms are against: see [the subscription lane](privacy.md#the-claude-subscription-lane).
 - About **6 GB of free disk** for the server image and its models.
-- Without Docker, on Linux x86_64, the server can run as two systemd user units instead, for this PC only and without the web UI: `backsight setup --runtime native` ([the native runtime](native-runtime.md)).
+- Without Docker, on Linux x86_64, the server can run as two systemd user units instead, for this PC only and without the web UI: `backsight setup --runtime native` ([the native runtime](native-runtime.md)). On Windows x86_64 that is the default, under a scheduled task and backsight's own supervisor.
 - `curl`, `tar`, and `minisign` or OpenSSL 3 to check the release signature.
 
 The exact versions each release pins are in [compatibility.md](compatibility.md).
 
 ## Install the binary
+
+On Windows, in PowerShell (details in [backsight on Windows](windows.md#install-the-binary)):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"
+```
+
+On Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh
@@ -110,7 +118,7 @@ If the provider rejects the key (a typo, a revoked key), setup stops at the serv
 
 With the `ollama` provider, the server, which runs in a container, calls Ollama at `http://host.docker.internal:11434`: your machine, as the container sees it. Setup's `base_url` question changes that address.
 
-- **macOS and Windows (Docker Desktop)**: nothing to change. Docker Desktop forwards that address to Ollama on your machine (these platforms are not tested yet).
+- **macOS and Windows (Docker Desktop)**: nothing to change. Docker Desktop forwards that address to Ollama on your machine (Docker on these platforms is not tested yet). On the [native runtime](native-runtime.md) (Windows' default) there is no container: the server reads `host.docker.internal` as `127.0.0.1`, where Ollama listens by default.
 - **Linux (Docker Engine 20.10 or newer)**: backsight maps `host.docker.internal` to your machine's Docker gateway, but Ollama listens only on `127.0.0.1` by default, which the container cannot reach. Make Ollama listen on an address the container reaches, then restart it.
 
 With the systemd service Ollama's installer sets up, run `sudo systemctl edit ollama`, add these two lines, then `sudo systemctl restart ollama`:
@@ -161,6 +169,17 @@ A coding agent (Claude Code or another) can install backsight for you: point it 
 | The command on PATH | `~/.local/bin/backsight` |
 
 The XDG variables (`XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`) move them. `BACKSIGHT_HOME=<dir>` puts everything under one directory instead, for a test install for example.
+
+On Windows:
+
+| What | Where |
+|---|---|
+| Binaries, the shim, the server and its data, backups | `%LOCALAPPDATA%\backsight` |
+| `config.toml` and `secrets.toml` | `%LOCALAPPDATA%\backsight\config` |
+| State: cursors, outboxes, journals, logs | `%LOCALAPPDATA%\backsight\state` |
+| The command on PATH | `%LOCALAPPDATA%\Programs\backsight\backsight.exe` |
+
+`BACKSIGHT_HOME` works the same way there.
 
 ## Replacing an existing Hindsight install
 

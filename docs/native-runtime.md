@@ -1,6 +1,6 @@
 # The native runtime
 
-backsight runs its memory server in Docker by default. The native runtime runs the same server without Docker: Hindsight from PyPI, on [pg0](https://pypi.org/project/pg0-embedded/)'s PostgreSQL with pgvector, as two systemd user units of your own user. This page says what it is, what it lacks and how to set it up. Words you may not know are in the [glossary](glossary.md).
+backsight runs its memory server in Docker by default. The native runtime runs the same server without Docker: Hindsight from PyPI, on [pg0](https://pypi.org/project/pg0-embedded/)'s PostgreSQL with pgvector, as two systemd user units of your own user on Linux. On Windows, where it is the default, a scheduled task of your own and backsight's supervisor run the same server: [backsight on Windows](windows.md) covers what differs there. This page says what it is, what it lacks and how to set it up. Words you may not know are in the [glossary](glossary.md).
 
 ## What it is
 
@@ -18,10 +18,14 @@ The units are named after `server.project` (`<project>-db.service`, `<project>-s
 
 ## What it needs
 
+On Linux:
+
 - **A systemd user session**, reached from a login session of your user (an ssh login, not `su` or `sudo`): the server runs as your user's units. A container without systemd cannot run it.
 - **Lingering** on for your user, so the units run while you are logged out and start at boot: `loginctl enable-linger` (once; no `sudo` needed on most distributions). Setup checks it and stops until it is on.
 - About **3.5 GB of free disk**: Python, the virtual environment, the models and the first months of data.
 - No Docker.
+
+On Windows: 3.5 GB of free disk, a short enough path, Task Scheduler and `conhost.exe --headless`, no administrator rights ([setup on Windows](windows.md#set-it-up)).
 
 ## Set it up
 
@@ -29,13 +33,13 @@ The units are named after `server.project` (`<project>-db.service`, `<project>-s
 backsight setup --runtime native
 ```
 
-Setup asks its usual questions; `--runtime native` is the `runtime` answer (`--answer runtime=native` is the same, and `backsight setup --resume` keeps it). Its pre-flight then checks the platform, the user session, lingering, the API port and the disk instead of Docker. The server step downloads uv, Python, Hindsight's packages (each checked against the hash this release pins) and the models, then creates the database, records its identity and starts both units. Without `--runtime`, setup installs on Docker, as before.
+Setup asks its usual questions; `--runtime native` is the `runtime` answer (`--answer runtime=native` is the same, and `backsight setup --resume` keeps it). Its pre-flight then checks the platform, the user session, lingering, the API port and the disk instead of Docker. The server step downloads uv, Python, Hindsight's packages (each checked against the hash this release pins) and the models, then creates the database, records its identity and starts both units. Without `--runtime`, setup installs on Docker, as before, except on Windows x86_64, where native is the default.
 
 An install already on Docker keeps its runtime: `setup --runtime native` over it is refused, since its memory is in Docker's database. Moving an existing install from one runtime to the other is `backsight server runtime switch`, which takes a verified backup in one and restores it into the other ([below](#switch-runtimes)).
 
 ## Where it keeps its files
 
-Under `server/native` in backsight's data directory:
+Under `server/native` in backsight's data directory (on Windows the layout differs a little: [what runs on your PC](windows.md#what-runs-on-your-pc)):
 
 | Path | What |
 |---|---|
@@ -55,13 +59,15 @@ journalctl --user -u backsight-server.service
 journalctl --user -u backsight-db.service
 ```
 
-`backsight server start` and `backsight server stop` start, and stop and disable, both units. The units carry none of your shell's Python, uv, Hugging Face or PostgreSQL client variables, and the server reads no `.env` file: what you set for your own projects does not reach the server.
+On Windows the logs are files: `<project>-supervisor.log`, `<project>-db.log` and `<project>-api.log` in the state directory's `logs` ([logs](windows.md#logs)).
+
+`backsight server start` and `backsight server stop` start, and stop and disable, both units (on Windows, enable and disable the scheduled task). The units carry none of your shell's Python, uv, Hugging Face or PostgreSQL client variables, and the server reads no `.env` file: what you set for your own projects does not reach the server.
 
 ## The guards
 
-The database never starts on the wrong data. Before each start, from backsight, at boot or when systemd restarts it, the database unit runs `backsight server native-check`: it refuses a database that is missing, empty, or another one than the identity recorded, and stops a PostgreSQL running on the database's files outside the unit, never adopting it. After each start, backsight checks that `fsync` is on and stops both units when it is not. backsight creates a database only when it installs the server, never at a plain start, so a lost database is never silently replaced by an empty memory. Each refusal names what to do ([troubleshooting](troubleshooting.md#the-native-server-does-not-start)); `backsight restore <archive>` works after every one of them.
+The database never starts on the wrong data. Before each start, from backsight, at boot or when systemd restarts it, the database unit runs `backsight server native-check` (on Windows the supervisor runs it, before it starts the database): it refuses a database that is missing, empty, or another one than the identity recorded, and stops a PostgreSQL running on the database's files outside the unit, never adopting it. After each start, backsight checks that `fsync` is on and stops both units when it is not. backsight creates a database only when it installs the server, never at a plain start, so a lost database is never silently replaced by an empty memory. Each refusal names what to do ([troubleshooting](troubleshooting.md#the-native-server-does-not-start)); `backsight restore <archive>` works after every one of them.
 
-Uninstalling removes backsight, and with it that guard: `backsight uninstall` therefore stops and disables both units even when it keeps the server, its data left in place; `--delete-data` stops and disables them before removing anything. Backups are never deleted.
+Uninstalling removes backsight, and with it that guard: `backsight uninstall` therefore stops and disables both units even when it keeps the server, its data left in place; `--delete-data` stops and disables them before removing anything. On Windows it stops the supervisor and deletes its scheduled task instead. Backups are never deleted.
 
 ## Switch runtimes
 
@@ -70,6 +76,8 @@ backsight server runtime switch native --plan
 backsight server runtime switch native
 backsight server runtime switch docker
 ```
+
+Not on Windows in this release: Docker on Windows is untested, so the switch is refused there, both ways.
 
 The switch moves the memory of this install to the other runtime, either way, with nothing for your clients to do: the server keeps its URL, its API key and its server id, and no restore epoch is written (the target holds exactly what the source held).
 
@@ -113,6 +121,7 @@ backsight does not ship these: they are downloaded on your machine when the serv
 |---|---|
 | uv, by Astral | MIT or Apache-2.0: [LICENSE-MIT](https://github.com/astral-sh/uv/blob/main/LICENSE-MIT), [LICENSE-APACHE](https://github.com/astral-sh/uv/blob/main/LICENSE-APACHE). |
 | CPython, as built by [python-build-standalone](https://github.com/astral-sh/python-build-standalone) | The [Python Software Foundation License](https://docs.python.org/3/license.html); the libraries each build bundles keep their own licences, which python-build-standalone's repository and documentation list. |
-| Hindsight (`hindsight-api-slim`) and the other Python packages | Each package's own: its licence ships in its `*.dist-info` directory in the virtual environment (`venv/<version>/lib/python3.11/site-packages/`), and its PyPI page names it. The packages and versions are those of backsight's lock, `internal/server/nativelock/requirements-linux-amd64.txt` in the source. |
+| Hindsight (`hindsight-api-slim`) and the other Python packages | Each package's own: its licence ships in its `*.dist-info` directory in the virtual environment (`venv/<version>/lib/python3.11/site-packages/`), and its PyPI page names it. The packages and versions are those of backsight's lock, `internal/server/nativelock/requirements-linux-amd64.txt` in the source (on Windows, `requirements-windows-amd64.txt`, in `venv\<version>\Lib\site-packages\`). |
+| On Windows, the Microsoft Visual C++ runtime DLLs, from the [`msvc-runtime`](https://pypi.org/project/msvc-runtime/) package | Proprietary, Microsoft's terms for these runtime files: the package declares its licence as "Proprietary" on PyPI, and its `*.dist-info` holds what it ships of the terms. |
 | PostgreSQL and pgvector, shipped by `pg0-embedded` | The [PostgreSQL License](https://www.postgresql.org/about/licence/), and [pgvector's](https://github.com/pgvector/pgvector/blob/master/LICENSE); pg0's own is in its `*.dist-info`. |
 | The models | As in the [README](../README.md#third-party-components). |

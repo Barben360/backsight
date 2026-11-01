@@ -8,12 +8,12 @@
 [![Release](https://img.shields.io/github/v/release/Barben360/backsight?include_prereleases&sort=semver)](https://github.com/Barben360/backsight/releases)
 [![License: MIT](https://img.shields.io/github/license/Barben360/backsight)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/Barben360/backsight)](go.mod)
-[![Status: preview, Linux](https://img.shields.io/badge/preview-Linux%20%28macOS%20and%20Windows%20later%29-orange)](docs/compatibility.md)
+[![Status: preview, Linux and Windows](https://img.shields.io/badge/preview-Linux%20and%20Windows%20%28macOS%20later%29-orange)](docs/compatibility.md)
 [![Hindsight 1.1.0](https://img.shields.io/badge/Hindsight-1.1.0-blue)](docs/compatibility.md)
 
 Long-term memory for [Claude Code](https://code.claude.com/docs/en/overview), on a [Hindsight](https://github.com/vectorize-io/hindsight) server you run yourself.
 
-- **What**: one Go binary that installs a memory server in [Docker](https://www.docker.com/) on your machine, wires it into Claude Code, and keeps it running.
+- **What**: one Go binary that installs a memory server on your machine, in [Docker](https://www.docker.com/) or natively without it (the default on Windows), wires it into Claude Code, and keeps it running.
 - **Why**: Claude Code forgets everything between sessions. With backsight, Claude remembers what you decided, fixed and learned, across all your projects, and recalls it when it matters.
 - **Cost**: searching the memory is local and free. Only turning sessions into memories uses an LLM: a few cents per session, paid to the provider you choose ([below](#what-it-costs)).
 
@@ -165,8 +165,8 @@ Your Claude Code usage does not change, except that memories take a little of Cl
 
 You need:
 
-1. **Linux** on amd64. macOS and Windows come later.
-2. **Docker with Compose v2**, usable without `sudo`:
+1. **Linux** on amd64, or **Windows 11** on x86_64, without administrator rights ([Windows](docs/windows.md)). macOS comes later.
+2. On Linux, **Docker with Compose v2**, usable without `sudo` (Windows needs no Docker: the server runs natively):
    - install Docker Engine for your distribution: [docs.docker.com/engine/install](https://docs.docker.com/engine/install/);
    - add yourself to the `docker` group, then log out and back in: `sudo usermod -aG docker $USER` ([details](https://docs.docker.com/engine/install/linux-postinstall/)). Members of this group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) avoids that and works too;
    - check: `docker compose version` prints a version 2, without `sudo`.
@@ -176,7 +176,7 @@ You need:
    - Anthropic: [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys);
    - OpenAI: [platform.openai.com/api-keys](https://platform.openai.com/api-keys);
    - or no key at all, with [Ollama](https://ollama.com/download) running on the machine.
-5. About **6 GB of free disk** (the server image and its models are about 2.3 GB to download), and `curl`.
+5. About **6 GB of free disk** (the server image and its models are about 2.3 GB to download), and `curl`; on Windows, about 3.5 GB and PowerShell.
 
 ## Install
 
@@ -290,6 +290,8 @@ You mostly use Claude Code as before. Commands you may need:
 | Page | What is in it |
 |---|---|
 | [install](docs/install.md) | Requirements, setup questions, secrets, where files go. |
+| [Windows](docs/windows.md) | backsight on Windows without administrator rights: install, the server's scheduled task and supervisor, updates, troubleshooting. |
+| [native runtime](docs/native-runtime.md) | The server without Docker: what it is, what it lacks, how to switch. |
 | [daily use](docs/daily-use.md) | Sessions, projects, skills, searching, storing, forgetting. |
 | [how it works](docs/how-it-works.md) | Recall, the question gate, the save detector, latency and context cost, the hooks. |
 | [configuration](docs/configuration.md) | Every `config.toml` key. |
@@ -302,7 +304,7 @@ You mostly use Claude Code as before. Commands you may need:
 
 ## Status
 
-backsight is a **preview**: it is used daily by its author, but expect rough edges and changes between releases. Linux is the only tested platform. Each release pins one Hindsight version, listed in [docs/compatibility.md](docs/compatibility.md).
+backsight is a **preview**: it is used daily by its author, but expect rough edges and changes between releases. Linux is the main tested platform. Windows 11 x86_64 is new: CI runs its tests and a full native install, store, backup, restore and uninstall on every pull request. Each release pins one Hindsight version, listed in [docs/compatibility.md](docs/compatibility.md).
 
 Found a problem? Ask Claude `/backsight:doctor`: it diagnoses, fixes with your OK, and drafts the issue it files only once you confirm. Or run `backsight report` yourself: it prints a redacted diagnostic and a link to file a GitHub issue, and sends nothing itself. For a security problem, see [SECURITY.md](SECURITY.md).
 
@@ -319,6 +321,7 @@ backsight does not ship these: Docker pulls the images from their publishers, an
 | [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small), the embedding model | MIT | Downloaded at the server's first start. |
 | [mmarco-mMiniLMv2-L12-H384-v1](https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1), the reranker | Apache-2.0 | Downloaded at the server's first start. It was trained on mMARCO, a translation of [MS MARCO](https://microsoft.github.io/msmarco/), whose terms say the data is "intended for non-commercial research purposes only". Whether those terms reach a model trained on it is unsettled; Hindsight's own default reranker has the same origin. If it matters for your use, run another reranker ([troubleshooting.md](docs/troubleshooting.md#slow-recall-and-gpu-acceleration) shows how). |
 | [Qwen3 8B](https://huggingface.co/Qwen/Qwen3-8B), only with the `ollama` provider | Apache-2.0 | You pull it with Ollama. |
+| The native runtime's downloads: uv, Python, Hindsight and its Python packages, PostgreSQL with pgvector by pg0, and on Windows the Microsoft Visual C++ runtime DLLs | Each its own | Downloaded when a native server is installed. Their licences and where to read them: [native-runtime.md](docs/native-runtime.md#licences), [windows.md](docs/windows.md#licences). |
 | Go modules compiled into the binary | MIT, BSD-3-Clause, Apache-2.0 | Listed in [go.mod](go.mod). Their license texts and notices, with the Go standard library's, ship as `THIRD_PARTY_LICENSES` in every release archive and print with `backsight version --licenses`. |
 
 Your LLM provider's terms apply to what the server sends it: [privacy.md](docs/privacy.md#your-llm-provider).
