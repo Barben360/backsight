@@ -104,9 +104,9 @@ The one-hue sequential steps (`--seq-1..3`, used only for splits that are not ca
 - The canvas was not opened and checked visually after publishing: the Claude Design type forbids rendering it without asking first. The two static references were rendered once headless (Overview light at 1440 and 390 px, Memory dark at 1440 px) and the CSS was corrected from that look (tile alignment, legend icon size, Lately column width); the canvas uses the same stylesheet. Artboard heights are estimates: a page taller than its frame is clipped on the canvas but complete in full-window view.
 - Mockup pages are built from masters with `<dc-import>`; to edit one tile for every scenario, edit `Tile`.
 
-## Block 6 additions (draft)
+## Block 6 additions
 
-Draft for issue #118 (scope items 1, 3, 4, 5; decision 0079 §4 rows marked block 6, §7 Preferences, §8, §9, §11 and the block 5 "as built" amendments), on the same canvas, in five new rows titled "Block 6: …", each with a sticky note listing the states it shows. Not approved yet: the author reviews the canvas before block 6 builds anything.
+Draft for issue #118 (scope items 1, 3, 4, 5; decision 0079 §4 rows marked block 6, §7 Preferences, §8, §9, §11 and the block 5 "as built" amendments), on the same canvas, in five new rows titled "Block 6: …", each with a sticky note listing the states it shows. The author approved it on 2026-11-02 (canvas version 43), with the rulings listed below; block 6 builds from it.
 
 **Nothing drawn for block 3 changed.** Three masters gained props that are off by default, so every block 3 artboard renders exactly as before: `TopBar` (`b6`: custom window, two Preferences groups; `custom`, `density`, `keys`, and `open` values `custom`, `menucustom`), `Tile` (`ttr`: the Flowing tile's time-to-recall subline) and `LineChart` (`markers`). When block 6 is built, that behaviour becomes the default. `reference/dashboard.css` gained one appended section, "Block 6 additions (draft)", mirrored from the canvas (their first comment lines differ, as before); nothing above it changed. It opens with the calendar's four colour steps (`--hm-1..4`, light and dark): they belong in `tokens.css`, but `design/tokens.css` must stay byte-identical to the shipped `assets/tokens.css` (`TestTokensMatchTheDesign`), so they move there when block 6 is built. `tokens.css` is unchanged.
 
