@@ -189,3 +189,35 @@ func TestMkdirPrivateNestedIsPrivateAtEveryLevel(t *testing.T) {
 		}
 	}
 }
+
+// A secret written where the user chose (a token --out, a keys export)
+// is private even in a folder other users can read: you, SYSTEM and
+// Administrators only, inheritance off.
+func TestWritePrivateInAnOpenFolder(t *testing.T) {
+	root := openRoot(t)
+	plain := filepath.Join(root, "plain.txt")
+	if err := WriteAtomic(plain, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := OtherReaders(plain); len(r) == 0 {
+		t.Fatal("a plain write there is private already: the fixture proves nothing")
+	}
+	for name, write := range map[string]func(string, []byte) error{"WritePrivate": WritePrivate, "WritePrivateNoFollow": WritePrivateNoFollow} {
+		f := filepath.Join(root, name+".token")
+		if err := os.WriteFile(f, []byte("an older one"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := write(f, []byte("bst1.secret\n")); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if r, err := OtherReaders(f); err != nil || len(r) != 0 {
+			t.Errorf("%s: readable by %v (%v)", name, r, err)
+		}
+		if !protected(t, f) {
+			t.Errorf("%s: the DACL inherits from the folder", name)
+		}
+		if b, err := os.ReadFile(f); err != nil || string(b) != "bst1.secret\n" {
+			t.Errorf("%s: the owner reads %q, %v", name, b, err)
+		}
+	}
+}

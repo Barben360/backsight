@@ -72,7 +72,28 @@ func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return write(target, data, perm, nil)
+	return write(target, data, perm, nil, false)
+}
+
+// WritePrivate is WriteAtomic for a secret written where the user chose
+// (a connection token's --out, a keys export), whose folder may be open
+// to others: the temp file is made private (MakePrivate: mode 0600; on
+// Windows you, SYSTEM and Administrators only, inheritance off) before a
+// byte is written, and the rename keeps that DACL.
+func WritePrivate(path string, data []byte) error {
+	target, err := resolve(path)
+	if err != nil {
+		return err
+	}
+	return write(target, data, 0o600, nil, true)
+}
+
+// WritePrivateNoFollow is WriteAtomicNoFollow made private as WritePrivate.
+func WritePrivateNoFollow(path string, data []byte) error {
+	if err := RegularOrAbsent(path); err != nil {
+		return err
+	}
+	return write(path, data, 0o600, func() error { return RegularOrAbsent(path) }, true)
 }
 
 // ErrNotRegular: a path that is a symlink or not a regular file, which
@@ -105,12 +126,13 @@ func WriteAtomicNoFollow(path string, data []byte, perm fs.FileMode) error {
 	if err := RegularOrAbsent(path); err != nil {
 		return err
 	}
-	return write(path, data, perm, func() error { return RegularOrAbsent(path) })
+	return write(path, data, perm, func() error { return RegularOrAbsent(path) }, false)
 }
 
 // write puts data at path through a synced temp file; check, when set, runs
-// right before the rename and aborts it with its error.
-func write(path string, data []byte, perm fs.FileMode, check func() error) error {
+// right before the rename and aborts it with its error. private makes the
+// empty temp file private (MakePrivate) before data is written.
+func write(path string, data []byte, perm fs.FileMode, check func() error, private bool) error {
 	dir := filepath.Dir(path)
 	if err := MkdirPrivate(dir); err != nil {
 		return err
@@ -128,6 +150,11 @@ func write(path string, data []byte, perm fs.FileMode, check func() error) error
 	}()
 	if err := tmp.Chmod(perm); err != nil {
 		return err
+	}
+	if private {
+		if err := MakePrivate(tmp.Name()); err != nil {
+			return err
+		}
 	}
 	if _, err := tmp.Write(data); err != nil {
 		return err
@@ -187,5 +214,5 @@ func ReplaceIfUnchanged(path string, data []byte, perm fs.FileMode, want string)
 			return fmt.Errorf("%s: %w", path, ErrConflict)
 		}
 		return nil
-	})
+	}, false)
 }
