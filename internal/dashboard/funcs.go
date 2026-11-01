@@ -122,6 +122,8 @@ var funcs = template.FuncMap{
 	"dayspage":     daysOf,
 	"daypage":      dayOf,
 	"latelyhead":   latelyHead,
+	"releasespage": releasesOf,
+	"defspage":     defsOf,
 
 	"head":     headOf,
 	"fixed":    fixedHead,

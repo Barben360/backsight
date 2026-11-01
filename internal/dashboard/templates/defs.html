@@ -1,14 +1,12 @@
 {{/* views: defs */}}
 {{template "head" .}}{{template "top" .}}
-{{$r := .V.defs}}
 
-{{/* widget: definitions. Reads .V.defs.Tables.Defs (ID, Label, Question, Definition, Unit, MinN, N, MDC). */}}
-<section>
-<h2>Definitions</h2>
-<table>
-<tr><th>Number</th><th>Question</th><th>Definition</th><th>Unit</th><th>Minimum n</th><th>n now</th><th>Smallest change it can show</th><th>Id</th></tr>
-{{range $r.Tables.Defs}}<tr><td>{{.Label}}</td><td>{{.Question}}</td><td>{{.Definition}}</td><td>{{unit .Unit}}</td><td>{{.MinN}}</td><td>{{n .N}}</td><td>{{optpct .MDC}}</td><td><code>{{.ID}}</code></td></tr>
-{{end}}</table>
-{{template "paging" pager $.Frame.Path $r.Tables.Page}}
-</section>
+{{/* widget: definitions. Reads .V.defs.Tables.Defs (ID, Label, Question, Definition, Unit, MinN, N, MDC, Scope) and .Page, through defspage (DefsPage: Head, Note, Rows; DefLine: ID, Label, Question, Definition, Limits, Unit, Where, MinN, N, Smallest). */}}
+{{with defspage .}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Id</th><th>On the page</th><th>Question</th><th>Definition</th><th>When it is watched</th><th>Unit</th><th>Where from</th><th class="r">Fewest needed</th><th class="r">n now</th><th class="r">Smallest change it can show</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr id="{{.ID}}"><td class="mono"><code>{{.ID}}</code></td><td>{{.Label}}</td><td class="wrapok">{{.Question}}</td><td class="wrapok">{{.Definition}}</td><td class="wrapok">{{.Limits}}</td><td>{{.Unit}}</td><td>{{.Where}}</td><td class="r">{{.MinN}}</td><td class="r">{{.N}}</td><td class="r">{{.Smallest}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
 {{template "foot" .}}

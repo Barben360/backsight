@@ -353,7 +353,7 @@ func TestDeveloperPagesInTheMenu(t *testing.T) {
 			t.Errorf("/defs lists %s %d times", d.ID, got)
 		}
 	}
-	if got := strings.Count(section(b, "Definitions"), "<tr>") - 1; got != len(metrics.Catalog) {
+	if got := len(parseHTML(t, b).find("main tbody tr")); got != len(metrics.Catalog) {
 		t.Errorf("/defs has %d rows, the catalog %d", got, len(metrics.Catalog))
 	}
 }
