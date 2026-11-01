@@ -520,8 +520,20 @@ func TestOwnersAreLearntOnlyFromRepositoriesTheUserCommittedTo(t *testing.T) {
 	}
 }
 
-// Two sessions learning owners at once lose none.
+// The product waits about a second for the owners file's lock.
+func TestLearnOwnerWaitsAboutASecond(t *testing.T) {
+	if learnOwnerWait != time.Second {
+		t.Errorf("learnOwnerWait = %v, want 1s", learnOwnerWait)
+	}
+}
+
+// Sessions learning owners at once lose none. The wait's bound is the
+// test's own, far past the queue: how many fsync'd writes fit in the
+// product's 1 s is the disk's speed (windows-latest once kept 1 of 6).
 func TestOwnersLearntConcurrentlyAreAllKept(t *testing.T) {
+	old := learnOwnerWait
+	learnOwnerWait = time.Minute
+	t.Cleanup(func() { learnOwnerWait = old })
 	e := newEnv(t)
 	e.attributed()
 	var dirs []string
