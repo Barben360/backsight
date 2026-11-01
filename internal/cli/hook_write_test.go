@@ -252,10 +252,14 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 	}
 }
 
-// SubagentStop's child is killed at hook.ChildDeadline: with the outbox
-// lock held by someone else the whole time, its append is refused before
-// then (a "failed" retain event), never cut by the kill (a torn line, a
-// stale lock). It still waits most of its budget for the lock.
+// SubagentStop's child is killed hook.ChildDeadline after its start. With
+// the outbox lock held by someone else the whole time, its append is
+// refused before then (a "failed" retain event), never cut by the kill (a
+// torn line, a stale lock), and not before its lock deadline (the kill
+// time less subagentAppendMargin): it waits the budget it has. The times
+// are its telemetry's, so the work before the lock and after the refusal
+// (files a loaded runner's disk can stall for most of a second) is not
+// what is timed.
 func TestSubagentStopGivesUpTheLockBeforeTheChildDeadline(t *testing.T) {
 	home := hookHome(t)
 	l, err := state.TryAcquire(retain.NotesOutbox(pathsOf(home)).LockPath, "test holder")
@@ -264,20 +268,49 @@ func TestSubagentStopGivesUpTheLockBeforeTheChildDeadline(t *testing.T) {
 	}
 	defer func() { _ = l.Release() }()
 	start := time.Now()
+	old := hookChildStart
+	hookChildStart = start
+	t.Cleanup(func() { hookChildStart = old })
+	killAt := start.Add(hook.ChildDeadline("subagent-stop", nil))
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
 		"transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": "report"})
-	took := time.Since(start)
-	if limit := hook.ChildDeadline("subagent-stop", nil); took >= limit {
-		t.Errorf("the hook took %v, past its child's %v deadline", took.Round(time.Millisecond), limit)
-	}
-	if took < 1500*time.Millisecond {
-		t.Errorf("the hook gave up the lock after %v, far inside its budget", took.Round(time.Millisecond))
-	}
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Errorf("queued under a held lock:\n%s", raw)
 	}
-	tel, _ := os.ReadFile(filepath.Join(pathsOf(home).TelemetryDir(), "events-"+time.Now().UTC().Format("2006-01")+".jsonl"))
-	if !strings.Contains(string(tel), `"event":"retain"`) || !strings.Contains(string(tel), `"status":"failed"`) {
-		t.Errorf("no failed retain event:\n%s", tel)
+	// When it reached the lock (its attribution event, just
+	// before the append) and when the append was refused.
+	var reached, refused time.Time
+	for _, line := range strings.Split(telemetryText(t, home), "\n") {
+		var e struct{ Event, Status, TS string }
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		ts, _ := time.Parse("2006-01-02T15:04:05.000Z", e.TS)
+		switch {
+		case e.Event == "attribution":
+			reached = ts.Add(time.Millisecond) // the stamp is cut to the millisecond
+		case e.Event == "retain" && e.Status == "failed":
+			refused = ts
+		}
+	}
+	if reached.IsZero() || refused.IsZero() {
+		t.Fatalf("no attribution or failed retain event:\n%s", telemetryText(t, home))
+	}
+	lockDeadline := killAt.Add(-subagentAppendMargin)
+	if refused.Before(lockDeadline.Truncate(time.Millisecond)) {
+		t.Errorf("the append was refused %v after the child's start, before its lock deadline (%v)", refused.Sub(start).Round(time.Millisecond), lockDeadline.Sub(start))
+	}
+	// Due at the lock deadline, or at once when the hook's setup
+	// (the config, the project, the session's files: up to 760 ms
+	// on the loaded VM) reached the lock past it; one try of the
+	// lock fits in the margin, so a wait cut by the deadline is
+	// refused before the kill.
+	due := lockDeadline
+	if reached.After(due) {
+		due = reached
+	}
+	if late := refused.Sub(due); late >= subagentAppendMargin {
+		t.Errorf("the append was refused %v after the child's start, %v past its due time (%v; kill at %v)",
+			refused.Sub(start).Round(time.Millisecond), late.Round(time.Millisecond), due.Sub(start).Round(time.Millisecond), killAt.Sub(start))
 	}
 }
