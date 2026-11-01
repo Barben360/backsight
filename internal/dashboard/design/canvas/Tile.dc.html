@@ -167,7 +167,7 @@ class Component extends DCLogic {
     if (slot === 'flowing' && ttr !== 'none') {
       // The value only: its watch shows on its own card on Pipeline, never on the tile.
       t.sub = 'Session to recalled memory: typical ' + (ttr === 'watch' ? '1 d 3 h' : '1 d 2 h') + ' · ' + t.sub;
-      t.n = t.n + '; time to recall from 118 sessions recalled';
+      t.n = t.n + '; time to recall from ' + (ttr === 'watch' ? '109' : '118') + ' sessions recalled';
     }
     t.nf = String(p.nf ?? false) === 'true';
     // sparkline geometry (188 x 32 box, 3 px padding)

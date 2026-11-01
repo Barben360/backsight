@@ -26,16 +26,16 @@ body{margin:0}
       <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
       <span class="chip"><span class="i i-sm i-server"></span>server</span>
       <span class="spacer"></span>
-      <details class="info"><summary aria-label="About memories that proved useful"><span class="i i-info"></span></summary><div class="pop"><b>Memories that proved useful</b><dl><dt>What</dt><dd>Memories grouped by the week they were made: the share that Claude used at least once within 28 days, and the server’s tokens spent per memory used.</dd><dt>Weeks shown</dt><dd>Only weeks older than 28 days have their answer; the 4 latest are drawn dashed, without a value.</dd><dt>Limits</dt><dd>None: a trend to watch, not a verdict.</dd></dl><span class="term">memory.yield · weekly cohorts, 28 days</span></div></details>
+      <details class="info"><summary aria-label="About memories that proved useful"><span class="i i-info"></span></summary><div class="pop"><b>Memories that proved useful</b><dl><dt>What</dt><dd>Memories grouped by the week they were made: the share that Claude used at least once within 28 days, and the server’s tokens spent per memory used.</dd><dt>Weeks shown</dt><dd>A week has its answer once its last day is more than 28 days before the end of the window; the 5 latest are drawn dashed, without a value.</dd><dt>Limits</dt><dd>None: a trend to watch, not a verdict.</dd></dl><span class="term">memory.yield</span></div></details>
       <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 90</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
     </div>
     <div class="row lead">
-      <div><span class="big">31 %</span> <span class="small sub">of the memories made the week of Sep 29 were used within 28 days (14 of 45)</span></div>
+      <div><span class="big">31 %</span> <span class="small sub">of the memories made the week of Sep 22, the latest complete week, were used within 28 days (14 of 45)</span></div>
       <div><span class="big">12.4 k</span> <span class="small sub">tokens per memory used, that week</span></div>
     </div>
     <figure class="chart">
       <div class="chart-plot">
-        <svg class="vb1000" viewBox="0 0 1000 240" role="img" aria-label="Share of each week's new memories used within 28 days, last 13 weeks; the 4 latest weeks are not complete yet">
+        <svg class="vb1000" viewBox="0 0 1000 240" role="img" aria-label="Share of each week's new memories used within 28 days, last 13 weeks; the 5 latest weeks are not complete yet">
           <sc-for list="{{yt}}" as="g" hint-placeholder-count="5">
             <line class="gl" x1="48" x2="992" y1="{{g.y}}" y2="{{g.y}}"></line>
             <text class="ta-e" x="40" y="{{g.ty}}">{{g.label}}</text>
@@ -58,15 +58,55 @@ body{margin:0}
           <table class="tbl">
             <thead><tr><th>Week of</th><th class="r">New memories</th><th class="r">Used within 28 days</th><th class="r">Share</th><th class="r">Tokens per memory used</th></tr></thead>
             <tbody>
-              <tr><td>Oct 27</td><td class="r">38</td><td colspan="3" class="muted">not complete until Nov 24</td></tr>
-              <tr><td>Sep 29</td><td class="r">45</td><td class="r">14</td><td class="r">31 %</td><td class="r">12.4 k</td></tr>
-              <tr><td>Sep 22</td><td class="r">0</td><td class="r">—</td><td class="r">—</td><td class="r">—</td></tr>
-              <tr><td>Sep 15</td><td class="r">52</td><td class="r">13</td><td class="r">25 %</td><td class="r">15.8 k</td></tr>
+              <tr><td>Oct 27</td><td class="r">38</td><td colspan="3" class="muted">not complete until Nov 30 (its last day, Nov 2, plus 28 days)</td></tr>
+              <tr><td>Sep 29</td><td class="r">41</td><td colspan="3" class="muted">not complete until Nov 2 (its last day, Oct 5, plus 28 days)</td></tr>
+              <tr><td>Sep 22</td><td class="r">45</td><td class="r">14</td><td class="r">31 %</td><td class="r">12.4 k</td></tr>
+              <tr><td>Sep 15</td><td class="r">0</td><td class="r">—</td><td class="r">—</td><td class="r">—</td></tr>
+              <tr><td>Sep 8</td><td class="r">52</td><td class="r">13</td><td class="r">25 %</td><td class="r">15.8 k</td></tr>
               <tr><td>Aug 4</td><td class="r">12</td><td class="r">5</td><td class="r"><span class="st st-few">too few</span></td><td class="r">—</td></tr>
             </tbody>
           </table>
         </div>
         <p class="tbl-more">A week with fewer than 20 new memories shows its counts, not a share.</p>
+      </details>
+    </figure>
+  </section>
+
+  <h2 class="sec-h">On Cost: “What the server’s model spent” past the server’s 30 days, with the same gap</h2>
+  <section class="card" aria-labelledby="tok-h">
+    <div class="card-head">
+      <h2 id="tok-h">How many tokens does the server’s model use to build memory?</h2>
+      <span class="chip"><span class="i i-sm i-server"></span>server</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 90</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <figure class="chart">
+      <div class="chart-plot">
+        <svg class="vb1000" viewBox="0 0 1000 250" role="img" aria-label="Server model tokens per day by task, last 90 days; no record for Sep 12 to Sep 14; before Oct 1 from this PC's daily record">
+          <sc-for list="{{tyt}}" as="g" hint-placeholder-count="4">
+            <line class="gl" x1="48" x2="992" y1="{{g.y}}" y2="{{g.y}}"></line>
+            <text class="ta-e" x="40" y="{{g.ty}}">{{g.label}}</text>
+          </sc-for>
+          <rect class="gap-band" x="{{gap.x}}" y="24" width="{{gap.w}}" height="176"></rect>
+          <text class="lbl ta-m" x="{{gap.cx}}" y="18">no record</text>
+          <sc-for list="{{tareas}}" as="a" hint-placeholder-count="4">
+            <path class="seg {{a.cls}}" d="{{a.d}}"></path>
+          </sc-for>
+          <line class="src-mk" x1="{{src.x}}" x2="{{src.x}}" y1="24" y2="200"></line>
+          <text class="lbl ta-e" x="{{src.lx}}" y="240">from this PC’s daily record</text>
+          <text class="lbl" x="{{src.rx}}" y="240">kept by the server (30 days)</text>
+          <line class="bl" x1="48" x2="992" y1="200" y2="200"></line>
+          <sc-for list="{{gxt}}" as="x" hint-placeholder-count="7">
+            <text class="ta-m" x="{{x.x}}" y="218">{{x.label}}</text>
+          </sc-for>
+        </svg>
+      </div>
+      <div class="legend"><span><i class="sw f-seq1"></i>turning sessions into memories</span><span><i class="sw f-seq2"></i>building summaries</span><span><i class="sw" style="background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border)"></i>no record: the daily upkeep could not reach the server</span></div>
+      <p class="xs muted">Same source and same hole as “Is memory still growing?” on Bank: both read the daily record this PC keeps for the days the server no longer holds.</p>
+      <details class="tblfb">
+        <summary>Show as a table</summary>
+        <table class="tbl"><thead><tr><th>Day</th><th class="r">Turning sessions into memories</th><th class="r">Building summaries</th><th>Source</th></tr></thead>
+          <tbody><tr><td>Oct 30</td><td class="r">212 k</td><td class="r">48 k</td><td>server</td></tr><tr><td>Sep 15</td><td class="r">188 k</td><td class="r">41 k</td><td>this PC’s record</td></tr><tr><td>Sep 14</td><td colspan="2" class="muted">no record (server not reached)</td><td>—</td></tr></tbody></table>
       </details>
     </figure>
   </section>
@@ -111,7 +151,7 @@ body{margin:0}
   </section>
 
   <h2 class="sec-h">On the Memory page, under the header: where the memory came from</h2>
-  <div class="grid-3">
+  <div class="grid-2">
     <section class="card">
       <div class="card-head"><h3>Where did it come from?</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
       <dl class="dl">
@@ -129,19 +169,29 @@ body{margin:0}
       <div class="card-head"><h3>Where did it come from?</h3></div>
       <p class="small">Not known yet: the next daily upkeep looks it up on the server. Facts Claude stored itself have no session.</p>
     </section>
+    <section class="card">
+      <div class="card-head"><h3>Where did it come from?</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <dl class="dl">
+        <dt>Session</dt><dd><a class="idc" href="#">c1d8e5a0</a> · <a href="#">backsight</a></dd>
+        <dt>Ended</dt><dd><time datetime="2026-10-27T10:05" title="2026-10-27 10:05">Oct 27</time>, sent 4 min later</dd>
+        <dt>Became memory</dt><dd>2 min after it was sent</dd>
+        <dt>First shown</dt><dd>not yet</dd>
+      </dl>
+      <p class="xs muted">Never shown so far: it waits for a prompt on its topic. Its counts and its shows timeline are empty.</p>
+    </section>
   </div>
 </main>
 <footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2700}}'>
 class Component extends DCLogic {
   renderVals() {
     const theme = this.props.theme ?? 'light';
-    // memory.yield: 13 weekly cohorts, Aug 4 .. Oct 27; the last 4 are not complete
+    // memory.yield: 13 weekly cohorts, Aug 4 .. Oct 27. Complete when the week's last day + 28 days is before Oct 30: Sep 22 is the latest.
     const wk = ['Aug 4','Aug 11','Aug 18','Aug 25','Sep 1','Sep 8','Sep 15','Sep 22','Sep 29','Oct 6','Oct 13','Oct 20','Oct 27'];
-    const share = [null, 22, 27, 24, 29, 26, 25, 'none', 31, 'inc', 'inc', 'inc', 'inc'];
-    const tokens = ['', '17.1 k', '15.0 k', '16.2 k', '13.9 k', '14.8 k', '15.8 k', '', '12.4 k', '', '', '', ''];
+    const share = [null, 22, 27, 24, 29, 25, 'none', 31, 'inc', 'inc', 'inc', 'inc', 'inc'];
+    const tokens = ['', '17.1 k', '15.0 k', '16.2 k', '13.9 k', '15.8 k', '', '12.4 k', '', '', '', '', ''];
     const L = 48, R = 992, B = 200, T = 24, n = wk.length, slot = (R - L) / n, bw = slot * 0.62;
     const Y = (v) => B - (v / 40) * (B - T);
     const bars = wk.map((w, i) => {
@@ -153,13 +203,13 @@ class Component extends DCLogic {
       return { cls: 'f-used', x, w: bw.toFixed(1), y: Y(s).toFixed(1), h: (B - Y(s)).toFixed(1), cx: cx.toFixed(1), ty: (Y(s) - 6).toFixed(1), lab: s + ' %', tcls: 'val', wk: w, t: 'Week of ' + w + ': ' + s + ' % used within 28 days · ' + tokens[i] + ' tokens per memory used' };
     });
     const yt = [0, 10, 20, 30, 40].map((v) => ({ y: Y(v).toFixed(1), ty: (Y(v) + 4).toFixed(1), label: v + ' %' }));
-    const incX = (L + 11 * slot).toFixed(1);
+    const incX = (L + 10.5 * slot).toFixed(1);
     // bank.growth, 90 days, three kinds stacked; gap Sep 12..14 (days 13..15); server keeps the last 30 (from day 60)
     const N = 90, r = (i, s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
     const X = (d) => L + d * ((R - L) / (N - 1));
     const gmax = 16, GY = (v) => B - (v / gmax) * (B - T);
     const k = [...Array(N)].map((_, d) => [Math.round(r(d, 1) * 2), Math.round(1 + r(d, 2) * 3), Math.round(2 + r(d, 3) * 6)]);
-    const gapA = 42, gapB = 44;
+    const gapA = 41, gapB = 43;
     const segs = [[0, gapA - 1], [gapB + 1, N - 1]];
     const areas = [];
     const kinds = ['f-summary', 'f-about', 'f-session'];
@@ -174,12 +224,28 @@ class Component extends DCLogic {
         areas.push({ cls, d: 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z' });
       });
     });
+    // extraction.tokens, same days, gap and source change: two server tasks stacked (thousands of tokens)
+    const tk = [...Array(N)].map((_, d) => [Math.round(140 + r(d, 7) * 110), Math.round(25 + r(d, 8) * 40)]);
+    const tmax = 300, TY = (v) => B - (v / tmax) * (B - T);
+    const tareas = [];
+    segs.forEach((sg) => {
+      ['f-seq1', 'f-seq2'].forEach((cls, j) => {
+        const top = [], bot = [];
+        for (let d = sg[0]; d <= sg[1]; d++) {
+          const lo = j === 0 ? 0 : tk[d][0], hi = lo + tk[d][j];
+          top.push(X(d).toFixed(1) + ',' + TY(hi).toFixed(1));
+          bot.unshift(X(d).toFixed(1) + ',' + TY(lo).toFixed(1));
+        }
+        tareas.push({ cls, d: 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z' });
+      });
+    });
+    const tyt = [0, 100, 200, 300].map((v) => ({ y: TY(v).toFixed(1), ty: (TY(v) + 4).toFixed(1), label: v ? v + ' k' : '0' }));
     const gyt = [0, 5, 10, 15].map((v) => ({ y: GY(v).toFixed(1), ty: (GY(v) + 4).toFixed(1), label: String(v) }));
-    const dLabel = (d) => { const t = new Date(Date.UTC(2026, 7, 1) + d * 86400000); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][t.getUTCMonth()] + ' ' + t.getUTCDate(); };
+    const dLabel = (d) => { const t = new Date(Date.UTC(2026, 7, 2) + d * 86400000); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][t.getUTCMonth()] + ' ' + t.getUTCDate(); };
     const gxt = [0, 15, 30, 45, 60, 75, 89].map((d) => ({ x: X(d).toFixed(1), label: dLabel(d) }));
     const sx = X(60);
     return {
-      theme, yt, bars, incX, areas, gyt, gxt,
+      theme, yt, bars, incX, areas, gyt, gxt, tareas, tyt,
       gap: { x: X(gapA - 0.5).toFixed(1), w: (X(gapB + 0.5) - X(gapA - 0.5)).toFixed(1), cx: X(gapA + 1).toFixed(1) },
       src: { x: sx.toFixed(1), lx: (sx - 6).toFixed(1), rx: (sx + 6).toFixed(1) },
     };

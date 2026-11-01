@@ -36,7 +36,7 @@ body{margin:0}
           <span class="row" style="gap: 6px; min-width: 0"><a href="#" class="trunc" title="{{m.proj}}">{{m.projShort}}</a><span class="muted">· <i class="sw {{m.kindCls}}"></i> {{m.kind}}</span></span>
           <span class="cnt">used <b>{{m.used}}</b> of {{m.shown}} shown</span>
           <span class="act">
-            <sc-if value="{{canText}}" hint-placeholder-val="{{ true }}"><a class="btn" href="#" aria-label="Show the text of memory {{m.id}}"><span class="i i-doc"></span>Show text</a></sc-if>
+            <sc-if value="{{canText}}" hint-placeholder-val="{{ true }}"><a class="btn" href="#" aria-label="Show text of memory {{m.id}}"><span class="i i-doc"></span>Show text</a></sc-if>
             <sc-if value="{{down}}" hint-placeholder-val="{{ false }}"><span class="xs muted">text unavailable</span></sc-if>
           </span>
         </li>

@@ -505,13 +505,14 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
 /* ---------- calendar heatmap steps: one hue, four steps, light to dark ----------
  * Draft: these belong in tokens.css (its three palette blocks) once block 6 is built,
  * with assets/tokens.css copied again; kept here so tokens.css stays the shipped file.
- * A day with activity but none of the value is --surface-2 with a solid --border-strong
- * edge; a day with no record is a dashed outline. */
-:root, [data-theme="light"] { --hm-1: #86B1EB; --hm-2: #4F8FE0; --hm-3: #2569C2; --hm-4: #173F75; }
+ * Every step reaches 3:1 on the card. A day with activity but none of the value is
+ * --surface-2 with a solid --c-shown edge; a day with no record is a dashed --c-shown
+ * outline, no fill: the two differ by line style, not colour. */
+:root, [data-theme="light"] { --hm-1: #5C95E3; --hm-2: #2F72CC; --hm-3: #1F55A0; --hm-4: #123566; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --hm-1: #2A5689; --hm-2: #3374C4; --hm-3: #5A9EEE; --hm-4: #A7CDF8; }
+  :root:not([data-theme="light"]) { --hm-1: #3A6AA8; --hm-2: #4C88D8; --hm-3: #7DB1F1; --hm-4: #BBD9FB; }
 }
-[data-theme="dark"] { --hm-1: #2A5689; --hm-2: #3374C4; --hm-3: #5A9EEE; --hm-4: #A7CDF8; }   /* same as above: keep in sync */
+[data-theme="dark"] { --hm-1: #3A6AA8; --hm-2: #4C88D8; --hm-3: #7DB1F1; --hm-4: #BBD9FB; }   /* same as above: keep in sync */
 
 /* ---------- density: compact tightens the spacing tokens; touch sizes stay ---------- */
 .page.d-compact { --sp-3: 10px; --sp-4: 12px; --sp-5: 14px; --sp-6: 16px; --sp-7: 24px; --sp-8: 32px; --fs-3xl: 28px; --fs-2xl: 22px; }
@@ -548,6 +549,7 @@ kbd, .kbd { display: inline-flex; align-items: center; justify-content: center; 
 dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
 .keys-shade { background: rgba(14, 17, 22, 0.5); }   /* canvas only: stands for ::backdrop */
 .keyhint { display: inline-flex; align-items: center; gap: 6px; }
+.btn.keyhint-btn { min-height: 24px; padding: 0 6px; }
 
 /* ---------- days calendar heatmap: an HTML grid of day links ----------
  * Wide: weeks are columns, Monday to Sunday down. Under 900 px the same markup
@@ -563,12 +565,12 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
 .hm { grid-column: 2; display: grid; grid-template-rows: repeat(7, 14px); grid-auto-flow: column; grid-auto-columns: 14px; gap: 3px; }
 .hm-wk { display: none; }
 .hm-c { display: block; width: 14px; height: 14px; border-radius: 3px; border: 0; text-decoration: none; }
-.hm-c.q0 { background: var(--surface-2); border: 1px solid var(--border-strong); }
+.hm-c.q0 { background: var(--surface-2); border: 1px solid var(--c-shown); }
 .hm-c.q1 { background: var(--hm-1); }
 .hm-c.q2 { background: var(--hm-2); }
 .hm-c.q3 { background: var(--hm-3); }
 .hm-c.q4 { background: var(--hm-4); }
-.hm-c.none { background: transparent; border: 1px dashed var(--border-strong); }
+.hm-c.none { background: transparent; border: 1.5px dashed var(--c-shown); }
 .hm-c.pad { visibility: hidden; }
 .hm-c.inwin { box-shadow: 0 0 0 1px var(--surface), 0 0 0 2px var(--accent); }
 .hm-c.today { outline: 2px solid var(--fg); outline-offset: 1px; }
@@ -595,7 +597,7 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
 .f-st-ok { fill: var(--ok); background: var(--ok); }
 .f-st-watch { fill: var(--watch); background: var(--watch); }
 .f-st-bad { fill: var(--bad); background: var(--bad); }
-.chart .norun { fill: none; stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 2 2; }
+.chart .norun { fill: none; stroke: var(--c-shown); stroke-width: 1.5; stroke-dasharray: 2 2; }
 
 /* ---------- release and setting markers on time charts ---------- */
 .chart .rel-mk { stroke: var(--fg-2); stroke-width: 1.5; }
@@ -646,6 +648,7 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
   .funnel { grid-template-columns: minmax(0, 1fr); }
   .hopc { flex-direction: row; justify-content: flex-start; gap: 8px; min-width: 0; padding: 0 var(--sp-4); }
   .hopc .arr { transform: rotate(90deg); }
+  .btn.keyhint-btn { min-height: var(--touch); }
   .helped li { grid-template-columns: 24px max-content minmax(0, 1fr); }
   .helped li > .cnt, .helped li > .act { grid-column: 2 / -1; }
   .summary-row { flex-direction: column; }
@@ -656,5 +659,7 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
   .hm-c { forced-color-adjust: none; }
   .hm-c.q0, .hm-c.none { border-color: CanvasText; }
   .hm-c.today { outline-color: CanvasText; }
-  .chart .rng, .chart .rel-mk, .chart .cfg-mk, .chart .ci-ln { stroke: CanvasText; }
+  .chart .rng, .chart .rel-mk, .chart .cfg-mk, .chart .ci-ln, .chart .norun { stroke: CanvasText; }
+  .chart .gap-band { fill: Canvas; stroke: GrayText; stroke-dasharray: 3 3; }
+  .seg details.wpick.is-current > summary { border-bottom: 2px solid Highlight; }
 }

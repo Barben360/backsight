@@ -22,7 +22,7 @@ body{margin:0}
     <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
     <span class="spacer"></span>
     <span class="pill st {{st.cls}}">{{st.word}}</span>
-    <details class="info"><summary aria-label="About time to recall"><span class="i i-info"></span></summary><div class="pop"><b>From session to recalled memory</b><dl><dt>What</dt><dd>For each session sent in the window: from its last turn to its send, to the server turning it into memories, to the first time one of those memories was shown.</dd><dt>Limits</dt><dd>Watch when the slowest 1 in 20 takes over 1 h from sent to turned into memories.</dd><dt>Based on</dt><dd>{{basedOn}}</dd></dl><span class="term">pipeline.time_to_recall · p50 and p95 per hop</span></div></details>
+    <details class="info"><summary aria-label="About time to recall"><span class="i i-info"></span></summary><div class="pop"><b>From session to recalled memory</b><dl><dt>What</dt><dd>For each session sent in the window: from its last turn to its send, to the server turning it into memories, to the first time one of those memories was shown.</dd><dt>Limits</dt><dd>Watch when the slowest 1 in 20 takes over 1 h from sent to turned into memories.</dd><dt>Based on</dt><dd>{{basedOn}}</dd></dl><span class="term">pipeline.time_to_recall</span></div></details>
     <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats pipeline --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
   </div>
   <sc-if value="{{few}}" hint-placeholder-val="{{ false }}">

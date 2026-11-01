@@ -54,14 +54,15 @@ body{margin:0}
           <details class="wpick menu {{customCls}}" open="{{openCustom}}">
             <summary aria-label="{{customAria}}">{{customLabel}} <span class="caret">▾</span></summary>
             <div class="menu-pop right wide">
-              <form class="wform" method="get" action="/">
+              <form class="wform" method="get" action="{{pagePath}}">
+                <sc-for list="{{keep}}" as="k" hint-placeholder-count="0"><input type="hidden" name="{{k.n}}" value="{{k.v}}"></sc-for>
                 <span class="grp">Custom window</span>
                 <div class="row">
-                  <label class="field">From<input type="date" name="from" value="{{fromVal}}" aria-invalid="{{fromBad}}"></label>
-                  <label class="field">To<input type="date" name="to" value="{{toVal}}" aria-invalid="{{toBad}}"></label>
+                  <label class="field">From<input type="date" name="from" value="{{fromVal}}" min="2025-10-01" max="2026-10-30" aria-invalid="{{fromBad}}" aria-describedby="{{errRef}}"></label>
+                  <label class="field">To<input type="date" name="to" value="{{toVal}}" min="2025-10-01" max="2026-10-30" aria-invalid="{{toBad}}" aria-describedby="{{errRef}}"></label>
                 </div>
                 <sc-if value="{{customErr}}" hint-placeholder-val="{{ false }}">
-                  <p class="ferr" role="alert"><span class="i i-bad"></span><span>{{errText}}</span></p>
+                  <p class="ferr" id="werr" role="alert"><span class="i i-bad"></span><span>{{errText}}</span></p>
                 </sc-if>
                 <p class="fhint">Both days are included. Up to 13 months back, the history this PC keeps.</p>
                 <div class="row"><button class="btn btn-primary" type="submit">Apply</button></div>
@@ -117,7 +118,7 @@ body{margin:0}
         <summary class="btn"><span class="i i-menu"></span>Menu</summary>
         <div class="menu-pop right wider">
           <span class="grp">Window</span>
-          <nav class="seg" aria-label="Window"><a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a><sc-if value="{{b6}}" hint-placeholder-val="{{ false }}"><details class="wpick menu {{customCls}}" open="{{openMenuCustom}}"><summary aria-label="{{customAria}}">{{customLabel}} <span class="caret">▾</span></summary><div class="menu-pop"><form class="wform" method="get" action="/"><div class="row"><label class="field">From<input type="date" name="from" value="{{fromVal}}" aria-invalid="{{fromBad}}"></label><label class="field">To<input type="date" name="to" value="{{toVal}}" aria-invalid="{{toBad}}"></label></div><sc-if value="{{customErr}}" hint-placeholder-val="{{ false }}"><p class="ferr" role="alert"><span class="i i-bad"></span><span>{{errText}}</span></p></sc-if><p class="fhint">Both days are included. Up to 13 months back.</p><div class="row"><button class="btn btn-primary" type="submit">Apply</button></div></form></div></details></sc-if></nav>
+          <nav class="seg" aria-label="Window"><a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a><sc-if value="{{b6}}" hint-placeholder-val="{{ false }}"><details class="wpick menu {{customCls}}" open="{{openMenuCustom}}"><summary aria-label="{{customAria}}">{{customLabel}} <span class="caret">▾</span></summary><div class="menu-pop"><form class="wform" method="get" action="{{pagePath}}"><sc-for list="{{keep}}" as="k" hint-placeholder-count="0"><input type="hidden" name="{{k.n}}" value="{{k.v}}"></sc-for><div class="row"><label class="field">From<input type="date" name="from" value="{{fromVal}}" min="2025-10-01" max="2026-10-30" aria-invalid="{{fromBad}}" aria-describedby="{{errRefM}}"></label><label class="field">To<input type="date" name="to" value="{{toVal}}" min="2025-10-01" max="2026-10-30" aria-invalid="{{toBad}}" aria-describedby="{{errRefM}}"></label></div><sc-if value="{{customErr}}" hint-placeholder-val="{{ false }}"><p class="ferr" id="werr-m" role="alert"><span class="i i-bad"></span><span>{{errText}}</span></p></sc-if><p class="fhint">Both days are included. Up to 13 months back.</p><div class="row"><button class="btn btn-primary" type="submit">Apply</button></div></form></div></details></sc-if></nav>
           <span class="grp">Project</span>
           <a href="#"><span class="i i-filter"></span>{{filterLabel}} <span class="caret">▾</span></a>
           <hr>
@@ -191,7 +192,13 @@ class Component extends DCLogic {
       b6,
       customCls: applied ? 'is-current' : '',
       customLabel: applied ? 'Oct 1 – Oct 7' : 'Custom',
-      customAria: applied ? 'Custom window: Oct 1 to Oct 7, change it' : 'Custom window: pick the days',
+      customAria: applied ? 'Oct 1 – Oct 7, custom window, change it' : 'Custom window: pick the days',
+      errRef: invalid ? 'werr' : undefined,
+      errRefM: invalid ? 'werr-m' : undefined,
+      // The form goes back to the page it is on, with the page's other query keys kept
+      // as hidden inputs (as the project filter form does with .Frame.Keep).
+      pagePath: ({ overview: '/', quality: '/quality', cost: '/cost', bank: '/bank', pipeline: '/pipeline', projects: '/projects', sessions: '/sessions', memories: '/memories', system: '/system', releases: '/releases', defs: '/defs' })[p.active ?? 'overview'] || '/days',
+      keep: (p.filter ?? '') ? [{ n: 'project', v: p.filter }] : [],
       fromVal: invalid ? '2026-10-20' : '2026-10-01',
       toVal: invalid ? '2026-10-12' : '2026-10-07',
       fromBad: invalid ? 'true' : undefined,

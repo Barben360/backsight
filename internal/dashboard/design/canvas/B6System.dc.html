@@ -24,7 +24,7 @@ body{margin:0}
       <h2 id="dh-h">Have the health checks passed lately?</h2>
       <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
       <span class="spacer"></span>
-      <details class="info"><summary aria-label="About health checks over time"><span class="i i-info"></span></summary><div class="pop"><b>Health checks over time</b><dl><dt>What</dt><dd>One row per health check, one mark per run of the daily upkeep (<code>jobs maintain</code>), by its result.</dd><dt>No run</dt><dd>A dashed ring: upkeep did not run that day (the PC was off or asleep). Not a fault.</dd></dl><span class="term">doctor.history · doctor-history.jsonl</span></div></details>
+      <details class="info"><summary aria-label="About health checks over time"><span class="i i-info"></span></summary><div class="pop"><b>Health checks over time</b><dl><dt>What</dt><dd>One row per health check, one mark per run of the daily upkeep (<code>jobs maintain</code>), by its result.</dd><dt>No run</dt><dd>A dashed ring: upkeep did not run that day (the PC was off or asleep). Not a fault.</dd></dl><span class="term">doctor.history</span></div></details>
       <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats system --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
     </div>
     <figure class="chart">
@@ -55,7 +55,7 @@ body{margin:0}
           <thead><tr><th>Check</th><th>Now</th><th class="r">ok</th><th class="r">watch</th><th class="r">attention</th><th>Last change</th></tr></thead>
           <tbody>
             <tr><td>Backups</td><td><span class="st st-watch">watch</span></td><td class="r">17</td><td class="r">9</td><td class="r">0</td><td>Oct 21: ok → watch</td></tr>
-            <tr><td>Memory server reachable</td><td><span class="st st-ok">ok</span></td><td class="r">24</td><td class="r">1</td><td class="r">1</td><td>Oct 14: attention → ok</td></tr>
+            <tr><td>Memory server reachable</td><td><span class="st st-ok">ok</span></td><td class="r">24</td><td class="r">1</td><td class="r">1</td><td>Oct 14: watch → ok</td></tr>
             <tr><td>Update</td><td><span class="st st-watch">watch</span></td><td class="r">23</td><td class="r">3</td><td class="r">0</td><td>Oct 28: ok → watch</td></tr>
             <tr><td>6 other checks</td><td><span class="st st-ok">ok</span></td><td class="r">26 each</td><td class="r">0</td><td class="r">0</td><td>—</td></tr>
           </tbody>
@@ -72,7 +72,7 @@ body{margin:0}
         <span class="chip"><span class="i i-sm i-server"></span>server</span>
         <span class="spacer"></span>
         <span class="pill st st-watch">watch</span>
-        <details class="info"><summary aria-label="About possible secrets in memory"><span class="i i-info"></span></summary><div class="pop"><b>Possible secrets in memory</b><dl><dt>What</dt><dd>How many memories the last scan flagged as looking like a key, token or password, and when it ran.</dd><dt>Limits</dt><dd>Watch on Flowing as soon as one is found.</dd><dt>Privacy</dt><dd>Only the count and the date are kept: never the text, never which memories.</dd></dl><span class="term">secrets.suspects · scan-history.jsonl</span></div></details>
+        <details class="info"><summary aria-label="About possible secrets in memory"><span class="i i-info"></span></summary><div class="pop"><b>Possible secrets in memory</b><dl><dt>What</dt><dd>How many memories the last scan flagged as looking like a key, token or password, and when it ran.</dd><dt>Limits</dt><dd>Watch on Flowing as soon as one is found.</dd><dt>Privacy</dt><dd>Only the count and the date are kept: never the text, never which memories.</dd></dl><span class="term">secrets.suspects</span></div></details>
       </div>
       <div class="figs">
         <div class="fig"><span class="lab">Possible secrets</span><span class="v">2</span><span class="s">found by the last scan</span></div>

@@ -115,7 +115,7 @@ Draft for issue #118 (scope items 1, 3, 4, 5; decision 0079 §4 rows marked bloc
 | Block 6: Overview additions | `B6Overview` (healthy, light) and `-dark`, `-down` (server down), `-390`, `-390-dark`: the Overview with Copy summary beside the summary line, the Flowing tile's new subline, Helped most next to "How big is the memory?", and the days calendar under them (§8 item 7). `B6OverviewParts`: Helped most normal, fewer than 3, none yet, server down; Copy summary with scripts on, after a click, with scripts off; the copied text. `B6Helped`: the card's master. |
 | Block 6: Days calendar heatmap | `B6Heatmap` (master: 13 months, legend, today, window, a focused day, table), `B6Days` (Days list with the calendar, table open) and `-dark`, `-390`, `-390-dark`. |
 | Block 6: custom window, density, shortcuts | `B6Controls` and `-dark`: custom window open, applied (range in the control, "window: Oct 1 to Oct 7" in the page head), invalid, inside the Menu at 390 px; Preferences with Density and Keyboard shortcuts (defaults, then changed); shortcuts off, on, and the list. `B6Overview-compact` (with Preferences open), `B6Sessions-compact`, `B6Overview-keys` (shortcuts on, `?` list open). |
-| Block 6: Pipeline, System, Cost, Bank, Memory page, developer | `B6Funnel` (master), `B6Pipeline` and `-dark` (the funnel normal, watch, never extracted, too few; the Flowing tile's subline, its value only, in an ok and a watch week). `B6System` and `-dark` (health checks over time, the secrets card in four states, its attention item). `B6Widgets` and `-dark` (memory yield on Cost; Bank growth over 90 days with a gap; the Memory page's source session in three states). `B6Dev` (developer: share of memory that came up, concentration with the top 10, corrections after memory, learned-ranking changes, the language test). |
+| Block 6: Pipeline, System, Cost, Bank, Memory page, developer | `B6Funnel` (master), `B6Pipeline` and `-dark` (the funnel normal, watch, never extracted, too few; the Flowing tile's subline, its value only, in an ok and a watch week). `B6System` and `-dark` (health checks over time, the secrets card in four states, its attention item). `B6Widgets` and `-dark` (memory yield on Cost; the server model's tokens on Cost and Bank growth, both over 90 days with the same gap; the Memory page's source session in four states: this PC, another PC, not known, never shown yet). `B6Dev` (developer: share of memory that came up, concentration with the top 10, corrections after memory, learned-ranking changes, the language test). |
 | Block 6: Releases comparison, markers | `B6Releases` (picker; a matched result that differs with "Settings differ" and "Observational, not an experiment"; strata too few by days and by turns; raw and matched of opposite sign; a comparison too few; no clear difference; a time chart with release and setting markers). `B6Day` (Day page with its markers card). |
 
 New widget titles, in the catalog's style (proposed `Question` for each new metric):
@@ -149,22 +149,27 @@ New widget titles, in the catalog's style (proposed `Question` for each new metr
 1. **Helped most's "Show text" is a link to the memory's text page, not an inline `<details>` that fetches** (accepted by the author). `/memories/<id>/text` only answers a navigation (`Sec-Fetch-Dest: document`, block 4 R4), the CSP forbids framing it (`frame-ancestors 'none'`), and the API never returns text. The link keeps the shipped rule: text read live, never kept, one place that shows it.
 2. **`memory.yield` is on Cost, not Bank** (accepted by the author): decision 0079 §8 lists it under Cost, and its catalog family is Cost; the brief had Bank.
 3. **The window phrase reads "window: Oct 1 to Oct 7"**, as `windowPhrase` prints it since block 5, not "From Oct 1 to Oct 7".
-4. **The custom window form sends `from` and `to`, both days included.** A plain form cannot send the exclusive `until` the URL uses, so the server turns them into `since` and `until` and redirects; an invalid range (end before start, more than 13 months back, a future day, a day missing) renders the page with its previous window and the picker open with the error and the dates kept. No script.
-5. **The days calendar is an HTML grid of day links, not an SVG.** The same markup is weeks-as-columns at 1440 px and, under 900 px, rows of weeks with seven touch-size days; a phone shows the last 13 weeks (`.hm-old` hides the rest) and the table and the Days list hold the others. Colours are classes (`q0`–`q4`, `none`, `today`, `inwin`), no inline style.
-6. **The calendar is one Tab stop** (today's day; the others `tabindex="-1"`), arrow keys move day to day with scripts on, Enter opens the day: block 5 R5 makes a chart with more than 100 positions one Tab stop. With scripts off the table and the Days list carry the values and the links.
+4. **The custom window form sends `from` and `to`, both days included.** A plain form cannot send the exclusive `until` the URL uses, so the server turns them into `since` and `until` and redirects to the same page. The form's `action` is the current page's path (`/quality`, `/cost`, …, not `/`), and hidden inputs carry what the URL keeps (project filter, developer mode, a `has` filter), since a GET form replaces the whole query string. The date fields carry `min` (13 months back) and `max` (today), and point at the error with `aria-describedby`. An invalid range (end before start, more than 13 months back, a future day, a day missing) renders the same page with its previous window and the picker open with the error and the dates kept. No script.
+5. **The days calendar is an HTML grid of day links, not an SVG.** The same markup is weeks-as-columns at 1440 px and, under 900 px, rows of weeks with seven touch-size days; a phone shows the last 13 weeks (`.hm-old` hides the rest) and the table and the Days list hold the others. Colours are classes (`q0`–`q4`, `none`, `today`, `inwin`), no inline style. At 1440 px a day is 14 px with 3 px between days, under the 24 px of WCAG 2.2 SC 2.5.8: it passes through the exception for an equivalent control on the same page, since the table under the calendar and the Days list hold a real link for every day. Under 900 px days take the 40 px touch size.
+6. **The calendar is one Tab stop** (today's day; the others `tabindex="-1"`), arrow keys move day to day with scripts on, Enter opens the day: block 5 R5 makes a chart with more than 100 positions one Tab stop. The roving `tabindex` is rendered by the server, so with scripts off only today's day is reachable by Tab; that is acceptable only because the table and the Days list carry every value and link.
 7. **The calendar colours by "prompts that got memory" by default** (accepted by the author), with "turns where Claude used memory" and "sessions" as links. Used turns are about 16 a week on the author's PC, so most days would be 0 or 1 and the calendar would show little.
 8. **Time to recall's watch shows on its own card only** (author's ruling). The Flowing tile's subline carries the typical value with no watch word or icon; "What should I do?" gets no time-to-recall item, since slow extraction already has one, from `server.extraction_delay` (slowest 1 in 20 over 30 min); the Flowing verdict is unchanged. Both measures stay.
 9. **The funnel's times are on a logarithmic scale** (1 min to 7 d): the three steps take minutes, minutes and a day. The whole-way time is computed on its own, not summed, and the card says so.
 10. **The secrets card has two states the issue does not name**: "no scan yet" and "old scan" (the threshold, 30 days, is a proposal). Scope chip: server (the scan reads the server's memories).
 11. **Doctor history marks one run of the daily upkeep per day** (`jobs maintain` appends to `doctor-history.jsonl`); a day without a run is a dashed ring, which is not a fault.
-12. **The Releases comparison has a metric picker** (used, found, reported wrong; default "Turns where Claude used memory", since the 30-turn rule counts declared turns), and strata are "project × where memory was shown". Its readings, "differs" and "no clear difference", are worded as the issue asks and drawn as a neutral pill with the info icon, never a status colour. When raw and matched differences disagree, both are printed and the text says to read the matched one.
+12. **The Releases comparison has a metric picker** (used, found, reported wrong; default "Turns where Claude used memory", since the 30-turn rule counts declared turns), and strata are "project × where memory was shown". Its readings, "differs" and "no clear difference", are worded as the issue asks and drawn as a neutral pill with the info icon, never a status colour. When raw and matched differences disagree, both are printed and the text says to read the matched one. The drawn case reconciles: all turns, unmatched, v0.1.16 187/326 = 57 % against v0.1.17 154/295 = 52 % (−5 pts); matched on the two strata both versions fill, backsight·prompt 70 % → 77 % and project-a·prompt 30 % → 46 %, weighted by ab/(a+b) (46 and 51), give 49 % → 60 % (+11 pts). v0.1.17 ran mostly on project-a (190 of 295 turns), where the share is lower, so the raw share falls while each stratum rises. The arithmetic is on the row's sticky note.
 13. **Copy summary without scripts:** the button is hidden like every copy button, and the Overview gains a "Summary as text" disclosure holding the same plain text, so the summary can still be selected by hand (accepted by the author).
 14. **Keyboard shortcuts' hint:** off by default, nothing on the page; on, a footer button "? Keyboard shortcuts" opens the same list. Keys are ignored with Ctrl, Alt or Meta and in any field (WCAG 2.1.4, character key shortcuts).
-15. **Density is a set of spacing tokens** redefined on `.page.d-compact`; touch targets keep their size under 900 px. The cookie format changes (`v1.<theme>.<dev>.<refresh>` gains two fields).
-16. **Bank growth past 30 days** draws a "no record" band where `jobs maintain` could not reach the server, and a dotted line where the source changes from this PC's daily record to the server's last 30 days.
+15. **Density is a set of spacing tokens** redefined on `.page.d-compact`; touch targets keep their size under 900 px. The cookie format changes (`v1.<theme>.<dev>.<refresh>` gains two fields, density and shortcuts). A four-field cookie written by block 5 must still parse: the two missing fields take their defaults (comfortable, shortcuts off), and the next save writes six.
+16. **Bank growth and the server model's tokens past 30 days** (`bank.growth` and `extraction.tokens`, both read from `server-daily.jsonl`) draw a "no record" band where `jobs maintain` could not reach the server, and a dotted line where the source changes from this PC's daily record to the server's last 30 days. The tokens chart is drawn on Cost (two server tasks stacked) with the same band, line and labels as Bank growth.
 17. **A shipped bug found while drawing the Menu:** under 900 px the window links inside the Menu are hidden by `.tools .seg` (the Menu sits inside `.tools`), so a phone cannot change the window. The fix shipped separately, in the shipped stylesheet; the block 6 section carries no rule for it.
 18. **Helped most follows the selected window** ("Used most in the last 7 days"), not the verdict's fixed 7 days.
 19. **Touch targets under 900 px are 40 px** (`--touch`, decision 0079 §9 and the shipped stylesheet), not the 44 px the brief quotes: the calendar's days, the custom window's fields and Apply use the same token.
+20. **No server-down state is drawn for the funnel, memory yield and secrets cards.** With the server down they keep their last numbers under the scope line's existing "not answering since …" state (block 5); nothing new is drawn. Helped most and the Overview show the state in `B6Overview-down` and `B6OverviewParts`.
+21. **No dark artboards for `B6Releases`, `B6Dev`, `B6Day` and `B6Sessions-compact`.** They use only checked tokens and masters already drawn dark (`TopBar`, `LineChart`, tables, pills); block 3 also drew Releases and Day light only. `B6Dev` had a dark board in block 3; its new cards reuse the dark-checked marks of `B6Widgets-dark`.
+22. **The Releases page keeps its shipped title, "Did a release or a setting help?"** (`views.Questions`). The review suggested "Did anything change between versions?" as less causal; changing a shipped question is outside this block's design, and the comparison's own wording ("differs", "no clear difference", "Observational, not an experiment") stays non-causal.
+23. **A memory-yield week is complete only when its last day is more than 28 days before the window's end** (on Oct 30 the week of Sep 22 is the latest complete one; Sep 29 ends Oct 5, so it completes after Nov 2). Incomplete weeks are drawn as a band, never a bar.
+24. **Info popovers outside developer mode name the metric id only** (`pipeline.time_to_recall`, `memory.yield`, `doctor.history`, `secrets.suspects`), as block 3 does: no p50/p95, cohorts or file names.
 
 ### Colour-blind check (block 6)
 
@@ -172,10 +177,10 @@ The only new colours are the calendar's four steps. They encode magnitude, not i
 
 | Ramp | Theme | Steps (`--hm-1..4`) | Validator (`--ordinal`) |
 |---|---|---|---|
-| days calendar | light (#FFFFFF) | #86B1EB #4F8FE0 #2569C2 #173F75 | all pass: monotone, adjacent ΔL ≥ 0.06, light end 2.21:1, hue spread 2° |
-| same | dark (#161B22) | #2A5689 #3374C4 #5A9EEE #A7CDF8 | all pass: monotone, adjacent ΔL ≥ 0.06, light end 2.30:1, hue spread 3° |
+| days calendar | light (#FFFFFF) | #5C95E3 #2F72CC #1F55A0 #123566 | all pass: monotone, adjacent ΔL ≥ 0.06, light end 3.06:1, hue spread 1° |
+| same | dark (#161B22) | #3A6AA8 #4C88D8 #7DB1F1 #BBD9FB | all pass: monotone, adjacent ΔL ≥ 0.06, light end 3.14:1, hue spread 5° |
 
-- "Nothing recorded" and "0" differ by shape, not colour: a dashed outline versus a grey square with a solid edge.
+- "Nothing recorded" and "0" differ by shape, not colour: a 1.5 px dashed edge versus a 1 px solid edge, both in `--c-shown` (3:1 or more in both themes).
 - Health-check marks reuse the status colours, which are not separable under deuteranopia (watch vs attention, ΔE 3.1, block 3 table); each status has its own shape (circle, triangle, octagon; no run: dashed ring), the legend and the table carry the word.
 
 ### Contrast (block 6)
@@ -184,17 +189,18 @@ No new text colour: errors use `--bad`, key caps `--fg` on `--surface-2`, the pr
 
 | Mark | Light | Dark |
 |---|---|---|
-| calendar `--hm-1` | 2.21 | 2.30 |
-| calendar `--hm-2` | 3.31 | 3.65 |
-| calendar `--hm-3` | 5.41 | 6.23 |
-| calendar `--hm-4` | 10.48 | 10.49 |
-| calendar "0" edge (`--border-strong`) | 2.17 | 2.28 |
+| calendar `--hm-1` | 3.06 | 3.14 |
+| calendar `--hm-2` | 4.77 | 4.79 |
+| calendar `--hm-3` | 7.33 | 7.77 |
+| calendar `--hm-4` | 12.16 | 11.89 |
+| calendar "0" edge and "nothing recorded" dashed edge (`--c-shown`) | 3.08 | 3.65 |
+| health checks: "no run" dashed ring (`--c-shown`, 1.5 px) | 3.08 | 3.65 |
 | today outline (`--fg`) | 15.80 | 14.64 |
 | window ring (`--accent`) | 5.30 | 6.14 |
 | health checks: ok, watch, attention fills | 5.92, 6.13, 6.09 | 7.55, 7.91, 6.86 |
 | release and setting markers (`--fg-2`) | 7.82 | 9.50 |
 
-The lowest calendar step and the "0" edge are under 3:1, as block 3 accepted for `--seq`: each day also has its value in its label and title, the legend names every step, and the table lists every day.
+Every mark that carries meaning clears 3:1 in both themes; each day also has its value in its label and title, the legend names every step, and the table lists every day. In forced colours the "no run" ring uses `CanvasText`, the "no record" band a `GrayText` dashed outline, and the chosen custom window a `Highlight` underline like the window links.
 
 ### Limits of this draft
 

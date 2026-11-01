@@ -135,11 +135,21 @@ body{margin:0}
   </div>
 
   <dc-import name="B6Heatmap" theme="inherit" metric="got" hint-size="100%,420px"></dc-import>
+
+  <details class="why">
+    <summary>Summary as text</summary>
+    <pre class="sample">backsight · Is my memory working? · last 7 days (Oct 24 to Oct 30)
+Activity on this PC · memory on 127.0.0.1:18888
+
+Memory is working.
+  Found      ok      28 % of prompts got memory (21–35 %), +2 pts
+  …</pre>
+  </details>
 </main>
 <footer class="foot">
   <div class="wrap">
     <span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a>
-    <sc-if value="{{keysOn}}" hint-placeholder-val="{{ false }}"><button class="btn btn-quiet" type="button" aria-keyshortcuts="?" style="min-height: 0; padding: 0 4px"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button></sc-if>
+    <sc-if value="{{keysOn}}" hint-placeholder-val="{{ false }}"><button class="btn btn-quiet keyhint-btn" type="button" aria-keyshortcuts="?"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button></sc-if>
     <span>Rendered at <time datetime="2026-10-30T15:44">15:44</time> in 84 ms</span>
   </div>
 </footer>

@@ -29,18 +29,18 @@ body{margin:0}
       <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats releases --compare v0.1.16-m7,v0.1.17-m7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
     </div>
     <form class="row" method="get" action="/releases" style="align-items: flex-end; gap: 12px">
-      <label class="field" style="flex: 0 1 200px">Compare<select name="a"><option>v0.1.16-m7</option><option>v0.1.15-m6</option><option>v0.1.14-m6</option></select></label>
-      <label class="field" style="flex: 0 1 200px">with<select name="b"><option>v0.1.17-m7</option><option>v0.1.16-m7</option></select></label>
-      <label class="field" style="flex: 0 1 300px">on<select name="metric"><option>Turns where Claude used memory</option><option>Prompts that got memory</option><option>Memories reported wrong or out of date</option></select></label>
+      <label class="field" style="flex: 0 1 200px">Compare version<select name="a"><option>v0.1.16-m7</option><option>v0.1.15-m6</option><option>v0.1.14-m6</option></select></label>
+      <label class="field" style="flex: 0 1 200px">with version<select name="b"><option>v0.1.17-m7</option><option>v0.1.16-m7</option></select></label>
+      <label class="field" style="flex: 0 1 300px">on measure<select name="metric"><option>Turns where Claude used memory</option><option>Prompts that got memory</option><option>Memories reported wrong or out of date</option></select></label>
       <button class="btn btn-primary" type="submit">Compare</button>
     </form>
     <div class="state st-few"><span class="i i-info"></span><span><b>Observational, not an experiment.</b> The two versions ran on different weeks, on different work, with different memory. Matching by project and place removes some of that, not all.</span></div>
     <div class="state st-watch"><span class="i i-watch"></span><span><b>Settings differ:</b> <code>recall.min_score</code> was 0.5 under v0.1.16-m7 and 0.55 under v0.1.17-m7 (changed Oct 20). A difference may come from the setting, not the release.</span></div>
 
     <div class="row lead">
-      <div><span class="big">+10 pts</span> <span class="small sub">(+1 to +19) v0.1.17-m7 minus v0.1.16-m7, matched</span></div>
+      <div><span class="big">+11 pts</span> <span class="small sub">(+3 to +20) v0.1.17-m7 minus v0.1.16-m7, matched</span></div>
       <div><span class="pill st st-info">differs</span></div>
-      <div class="small sub">Unmatched, the raw numbers say −3 pts (55 % → 52 %): v0.1.17-m7 ran mostly on project-a, where fewer turns use memory. Read the matched figure.</div>
+      <div class="small sub">Unmatched, the raw numbers say the opposite, −5 pts (57 % → 52 %): v0.1.17-m7 ran mostly on project-a (190 of its 295 turns), where fewer turns use memory, and v0.1.16-m7 mostly on backsight (200 of 326). Read the matched figure.</div>
     </div>
 
     <figure class="chart">
@@ -70,14 +70,16 @@ body{margin:0}
           <table class="tbl">
             <thead><tr><th>Project</th><th>Where memory was shown</th><th class="r">v0.1.16-m7</th><th class="r">v0.1.17-m7</th><th class="r">Difference (95 %)</th><th>Reading</th></tr></thead>
             <tbody>
-              <tr><td>backsight</td><td>added to the prompt</td><td class="r">58 % <span class="muted">(64 turns, 21 d)</span></td><td class="r">66 % <span class="muted">(41 turns, 9 d)</span></td><td class="r">+8 pts <span class="muted">(−6 to +22)</span></td><td>no clear difference</td></tr>
-              <tr><td>project-a</td><td>added to the prompt</td><td class="r">41 % <span class="muted">(52 turns, 18 d)</span></td><td class="r">55 % <span class="muted">(38 turns, 9 d)</span></td><td class="r">+14 pts <span class="muted">(+1 to +27)</span></td><td><b>differs</b>: higher in v0.1.17-m7</td></tr>
-              <tr><td>backsight</td><td>Claude’s search</td><td class="r">47 % <span class="muted">(36 turns, 20 d)</span></td><td class="r"><span class="st st-few">too few</span> <span class="muted">(12 turns)</span></td><td class="r">—</td><td>needs 30 turns in each version</td></tr>
-              <tr><td>project-b</td><td>added to the prompt</td><td class="r"><span class="st st-few">too few</span> <span class="muted">(4 days)</span></td><td class="r">49 % <span class="muted">(33 turns, 8 d)</span></td><td class="r">—</td><td>needs 7 days in each version</td></tr>
-              <tr class="total"><td colspan="2">Matched, pooled (2 of 4 pairs)</td><td class="r">50 %</td><td class="r">61 %</td><td class="r">+10 pts <span class="muted">(+1 to +19)</span></td><td><b>differs</b>: higher in v0.1.17-m7</td></tr>
+              <tr><td>backsight</td><td>added to the prompt</td><td class="r">70 % <span class="muted">(140 of 200 turns, 21 d)</span></td><td class="r">77 % <span class="muted">(46 of 60 turns, 9 d)</span></td><td class="r">+7 pts <span class="muted">(−6 to +19)</span></td><td>no clear difference</td></tr>
+              <tr><td>project-a</td><td>added to the prompt</td><td class="r">30 % <span class="muted">(21 of 70 turns, 18 d)</span></td><td class="r">46 % <span class="muted">(87 of 190 turns, 9 d)</span></td><td class="r">+16 pts <span class="muted">(+3 to +29)</span></td><td><b>differs</b>: higher in v0.1.17-m7</td></tr>
+              <tr><td>backsight</td><td>Claude’s search</td><td class="r">47 % <span class="muted">(17 of 36 turns, 20 d)</span></td><td class="r"><span class="st st-few">too few</span> <span class="muted">(6 of 12 turns)</span></td><td class="r">—</td><td>needs 30 turns in each version</td></tr>
+              <tr><td>project-b</td><td>added to the prompt</td><td class="r"><span class="st st-few">too few</span> <span class="muted">(9 of 20 turns, 4 days)</span></td><td class="r">45 % <span class="muted">(15 of 33 turns, 8 d)</span></td><td class="r">—</td><td>needs 7 days in each version</td></tr>
+              <tr class="total"><td colspan="2">Matched, pooled (2 of 4 pairs)</td><td class="r">49 %</td><td class="r">60 %</td><td class="r">+11 pts <span class="muted">(+3 to +20)</span></td><td><b>differs</b>: higher in v0.1.17-m7</td></tr>
+              <tr><td colspan="2">All turns, unmatched</td><td class="r">57 % <span class="muted">(187 of 326)</span></td><td class="r">52 % <span class="muted">(154 of 295)</span></td><td class="r">−5 pts</td><td class="muted">not comparable: the mix of projects differs</td></tr>
             </tbody>
           </table>
         </div>
+        <p class="tbl-more">Pooled rates are each version’s rate in the two matched pairs, weighted by pair size (harmonic mean of the two versions’ turns: 46 and 51), so the same weights apply to both versions.</p>
       </details>
     </figure>
   </section>
@@ -109,11 +111,11 @@ class Component extends DCLogic {
   renderVals() {
     const X = (d) => 660 + d * 10;
     const R = [
-      { name: 'backsight · added to the prompt', d: 8, lo: -6, hi: 22, t: 'backsight, added to the prompt: +8 pts (−6 to +22), no clear difference' },
-      { name: 'project-a · added to the prompt', d: 14, lo: 1, hi: 27, t: 'project-a, added to the prompt: +14 pts (+1 to +27), differs' },
+      { name: 'backsight · added to the prompt', d: 6.7, lo: -6, hi: 19, t: 'backsight, added to the prompt: +7 pts (−6 to +19), no clear difference' },
+      { name: 'project-a · added to the prompt', d: 15.8, lo: 3, hi: 29, t: 'project-a, added to the prompt: +16 pts (+3 to +29), differs' },
       { name: 'backsight · Claude’s search', few: 'too few: v0.1.17-m7 has 12 turns, 30 needed' },
       { name: 'project-b · added to the prompt', few: 'too few: v0.1.16-m7 ran 4 days, 7 needed' },
-      { name: 'Matched, pooled', d: 10, lo: 1, hi: 19, pool: true, t: 'Matched, pooled: +10 pts (+1 to +19), differs' },
+      { name: 'Matched, pooled', d: 11.5, lo: 3, hi: 20, pool: true, t: 'Matched, pooled: +11 pts (+3 to +20), differs' },
     ];
     const rows = R.map((r, i) => {
       const y = 30 + i * 44 + (r.pool ? 8 : 0);

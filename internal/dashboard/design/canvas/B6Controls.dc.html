@@ -35,7 +35,7 @@ body{margin:0}
   </div>
   <div class="grid-2">
     <div class="state st-bad"><span class="i i-bad"></span><span><b>Other refusals, same place, same form:</b> “From” more than 13 months back: “This PC keeps 13 months: pick Oct 1, 2025 or later.” · A day after today: “Oct 31 is in the future: pick today or earlier.” · A date missing: “Pick both days.”</span></div>
-    <p class="small sub">The form sends <code>from</code> and <code>to</code> (both days included). The server checks them and redirects to the page with <code>since</code> and <code>until</code>, or renders the page with the previous window and this error. No script involved.</p>
+    <p class="small sub">The form goes back to the page it is on (its <code>action</code> is that page’s path) and carries the page’s other query keys, such as the project filter, as hidden inputs, like the project filter’s own form. It sends <code>from</code> and <code>to</code> (both days included); the date fields also carry <code>min</code> and <code>max</code> (13 months back, today). The server checks them and redirects to the page with <code>since</code> and <code>until</code>, or renders the page with the previous window and this error. No script involved.</p>
   </div>
 
   <h2 class="sec-h">4. Under 900 px: the window control lives in the Menu; the picker opens inline</h2>
@@ -71,7 +71,7 @@ body{margin:0}
     <section class="card">
       <div class="card-head"><h3>On</h3></div>
       <p class="small sub">The footer of every page gains a button that opens the list; <kbd>?</kbd> does the same. With scripts off the button is not drawn (shortcuts need the script).</p>
-      <footer class="foot" style="border-top: 1px solid var(--border)"><div class="wrap" style="padding: 0"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a><button class="btn btn-quiet" type="button" aria-keyshortcuts="?" style="min-height: 0; padding: 0 4px"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button></div></footer>
+      <footer class="foot" style="border-top: 1px solid var(--border)"><div class="wrap" style="padding: 0"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a><button class="btn btn-quiet keyhint-btn" type="button" aria-keyshortcuts="?"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button></div></footer>
     </section>
   </div>
   <div class="row" style="align-items: flex-start; gap: 32px">
