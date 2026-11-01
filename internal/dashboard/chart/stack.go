@@ -127,7 +127,7 @@ func (c Stack) frame(d stackData, top float64, centre func(j int) float64, hit f
 		}
 		rows[j] = row
 	}
-	return template.HTML(figure(c.Label, c.Size, !focus, b.String(), legend, tableData{head, rows, c.More}))
+	return template.HTML(figure(c.Label, c.Size, !focus, b.String(), legend, tableData{head: head, rows: rows, more: c.More}))
 }
 
 // r1 rounds to the one decimal geometry is written with.

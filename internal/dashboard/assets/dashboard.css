@@ -507,3 +507,6 @@ rect.seg.f-pending { fill: none; stroke: var(--c-shown); }
 /* ---------- stacked bars: thin segments keep their fill ---------- */
 rect.seg.seg-fine { stroke: none; }
 rect.seg.seg-fine.f-pending { stroke: var(--c-shown); }
+
+/* ---------- histograms and strip timelines: focusable marks ---------- */
+.chart rect:focus-visible, .chart path.mkp:focus-visible, .chart line.thr-w:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

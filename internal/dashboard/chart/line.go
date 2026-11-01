@@ -310,7 +310,7 @@ func (c Line) HTML() template.HTML {
 		}
 		rows[j] = row
 	}
-	return template.HTML(figure(c.Label, c.Size, !focus, b.String(), legend, tableData{head, rows, c.More}))
+	return template.HTML(figure(c.Label, c.Size, !focus, b.String(), legend, tableData{head: head, rows: rows, more: c.More}))
 }
 
 func (c Line) show(v val) string {
@@ -403,6 +403,11 @@ type xLabel struct {
 // centred on their position but kept inside the svg, and thins them until
 // no two overlap at an estimated 7 user units per character.
 func pickLabels(xs []string, x func(int) float64, width float64) []xLabel {
+	return pickLabelsMax(xs, x, width, 6)
+}
+
+// pickLabelsMax is pickLabels with the most labels as a parameter.
+func pickLabelsMax(xs []string, x func(int) float64, width float64, most int) []xLabel {
 	m := len(xs)
 	if m <= 1 {
 		if m == 1 {
@@ -410,7 +415,7 @@ func pickLabels(xs []string, x func(int) float64, width float64) []xLabel {
 		}
 		return nil
 	}
-	for cnt := min(m, 6); cnt >= 2; cnt-- {
+	for cnt := min(m, most); cnt >= 2; cnt-- {
 		var out []xLabel
 		ok := true
 		for i := 0; i < cnt; i++ {

@@ -47,6 +47,7 @@ var Classes = []string{
 	"seg", "seg-fine", "hatch-ln", "val",
 	"f-used", "f-ignored", "f-undeclared", "f-shown", "f-pending", "f-summary", "f-about", "f-session",
 	"f-ok", "f-queued", "f-aside", "f-failed", "f-neutral", "f-seq1", "f-seq2", "f-seq3",
+	"mkp", "mk-pend", "lbl", "sw-dash",
 }
 
 // known keeps the tokens of a caller's class list that Classes defines.
@@ -98,11 +99,21 @@ type tableData struct {
 	head []string
 	rows [][]string
 	more string // the command listing every row, shown under a capped table
+	text bool   // every column is text: none is right-aligned
 }
 
 // figure wraps a plot, its legend and its table fallback. Only the plot
 // scrolls sideways, so the legend and the table stay in view.
 func figure(label string, sz Size, focusable bool, svg string, legend []legendItem, t tableData) string {
+	var l strings.Builder
+	for _, it := range legend {
+		l.WriteString(`<span><i class="sw ` + it.class + `"></i>` + esc(it.name) + `</span>`)
+	}
+	return figureLegend(label, sz, focusable, svg, l.String(), t)
+}
+
+// figureLegend is figure with a legend already written as markup.
+func figureLegend(label string, sz Size, focusable bool, svg string, legend string, t tableData) string {
 	var b strings.Builder
 	b.WriteString(`<figure class="chart"><div class="chart-plot"><svg class="` + esc(known(sz.Class)) + `" viewBox="0 0 ` +
 		strconv.Itoa(sz.W) + ` ` + strconv.Itoa(sz.H) + `" role="img" aria-label="` + esc(label) + `"`)
@@ -110,12 +121,10 @@ func figure(label string, sz Size, focusable bool, svg string, legend []legendIt
 		b.WriteString(` tabindex="0"`)
 	}
 	b.WriteString(`>` + svg + `</svg></div><div class="legend">`)
-	for _, l := range legend {
-		b.WriteString(`<span><i class="sw ` + l.class + `"></i>` + esc(l.name) + `</span>`)
-	}
+	b.WriteString(legend)
 	b.WriteString(`</div><details class="tblfb"><summary>Show as a table</summary><div class="tbl-wrap"><table class="tbl"><thead><tr>`)
 	for i, h := range t.head {
-		if i == 0 {
+		if i == 0 || t.text {
 			b.WriteString(`<th>` + esc(h) + `</th>`)
 		} else {
 			b.WriteString(`<th class="r">` + esc(h) + `</th>`)
@@ -129,7 +138,7 @@ func figure(label string, sz Size, focusable bool, svg string, legend []legendIt
 	for _, r := range rows {
 		b.WriteString(`<tr>`)
 		for i, c := range r {
-			if i == 0 {
+			if i == 0 || t.text {
 				b.WriteString(`<td>` + esc(c) + `</td>`)
 			} else {
 				b.WriteString(`<td class="r">` + esc(c) + `</td>`)

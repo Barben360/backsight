@@ -43,12 +43,13 @@ func corpus() []string {
 	capped := many(2000)
 	capped.More, capped.Fmt = "backsight stats", pct
 	gap := usedLine([]string{"a", "b", "c", "d", "e"}, p(0), p(1), nil, p(0.5), p(0.2))
-	return []string{
+	out := []string{
 		string(full.HTML()), string(capped.HTML()), string(gap.HTML()),
 		string(usedLine([]string{"a"}, nil).HTML()),
 		spark("Found per day", 24, 31, 27, 22, 30, 29, 28), spark("L", 1),
 		string(Spark{Label: "L", Fmt: plain, Y: []*float64{nil, p(1), p(2)}}.HTML()),
 	}
+	return append(out, histStripOutputs()...)
 }
 
 func spark(label string, vs ...float64) string {
