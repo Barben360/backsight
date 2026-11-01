@@ -872,12 +872,17 @@ func TestVerifyDumpLeavesNothingRunning(t *testing.T) {
 			pids := filepath.Join(t.TempDir(), "pids")
 			never := filepath.Join(t.TempDir(), "never")
 			t.Cleanup(func() { _ = os.WriteFile(never, nil, 0o644) })
-			backend := testtool.Write(t, t.TempDir(), "backend", testtool.Fake{Script: "pid " + pids + "\nwaitfile " + never})
+			// psql answers (or fails) only once postgres and its backend
+			// run: each fake is a fresh copy of the test binary, which
+			// Defender may scan for seconds before it starts (windows-latest
+			// once ended the 3 s wait with neither started).
+			up := filepath.Join(t.TempDir(), "up")
+			backend := testtool.Write(t, t.TempDir(), "backend", testtool.Fake{Script: "pid " + pids + "\nwrite " + up + " up\nwaitfile " + never})
 			testtool.Write(t, bin, "initdb", testtool.Fake{})
 			testtool.Write(t, bin, "postgres", testtool.Fake{Script: "pid " + pids + "\nstart " + backend + "\nwaitfile " + never})
-			psql := testtool.Fake{Stdout: "3"}
+			psql := testtool.Fake{Script: "waitfile " + up, Stdout: "3"}
 			if !answers {
-				psql = testtool.Fake{Code: 2, Stderr: "could not connect"}
+				psql = testtool.Fake{Script: "waitfile " + up + "\nstderr could not connect\nexit 2"}
 			}
 			testtool.Write(t, bin, "psql", psql)
 			for _, tool := range []string{"dropdb", "createdb", "pg_restore"} {
@@ -886,7 +891,11 @@ func TestVerifyDumpLeavesNothingRunning(t *testing.T) {
 			dump := filepath.Join(t.TempDir(), "db.dump")
 			touch(t, dump, 0o600)
 
-			counts, err := n.VerifyDump(context.Background(), dump, []string{"memory_units", "documents"})
+			// The bound of a postgres that never starts (psql would wait
+			// for it): an error other than the wait's.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			counts, err := n.VerifyDump(ctx, dump, []string{"memory_units", "documents"})
 			if answers && (err != nil || counts["memory_units"] != 3 || counts["documents"] != 3) {
 				t.Errorf("VerifyDump = %v, %v; want 3 rows each", counts, err)
 			}
@@ -972,7 +981,9 @@ func TestWindowsTextsNameNoSystemdUnit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(n.Root(), "task.xml"), []byte("<Task/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	n.Ask = func(context.Context, string, string) (supervise.Status, error) { return supervise.Status{}, supervise.ErrNotRunning }
+	n.Ask = func(context.Context, string, string) (supervise.Status, error) {
+		return supervise.Status{}, supervise.ErrNotRunning
+	}
 	states, err := n.UnitStates(context.Background())
 	if err != nil || len(states) != 2 || states["db"] != "inactive" || states["hindsight"] != "inactive" {
 		t.Errorf("UnitStates = %v %v, want db and hindsight inactive", states, err)
