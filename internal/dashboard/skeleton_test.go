@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -310,6 +311,9 @@ var chartOrCounts = regexp.MustCompile(`(?s)<figure class="chart">.*?</figure>|<
 func TestPagesShowNoJargon(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
+	// The longest session and the hottest memory are pages too.
+	long := indexgen.AppendLongSession(t, h.dirs.State, 400)
+	hot := indexgen.AppendHotMemory(t, h.dirs.State, 600)
 	// A key that is an everyday word may stand in a sentence; it must
 	// not stand alone as a table cell or a line, where it is a code shown raw.
 	words := []map[string]string{views.NoDataWords, views.ServerErrorWords, views.OutcomeWords, views.SentWords, views.CheckWords, views.PathWords, views.KindWords,
@@ -333,6 +337,7 @@ func TestPagesShowNoJargon(t *testing.T) {
 		pages = append(pages, "/"+page)
 	}
 	pages = append(pages, browsePaths(t, h)...)
+	pages = append(pages, "/sessions/"+url.PathEscape(long), "/memories/"+url.PathEscape(hot), "/memories/"+url.PathEscape(hot)+"?limit=500")
 	for _, path := range pages {
 		r, b := pageGet(t, h, ck, path)
 		if r.StatusCode != 200 {

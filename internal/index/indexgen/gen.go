@@ -264,3 +264,88 @@ func AppendRecent(t testing.TB, stateDir string, s Spec, nTel, nJ, round int) {
 		}
 	}
 }
+
+// appendLines appends lines, one JSON object each, to path (created when
+// missing).
+func appendLines(t testing.TB, path string, lines []map[string]any) {
+	t.Helper()
+	fh, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := json.NewEncoder(fh)
+	for _, l := range lines {
+		if err := enc.Encode(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fh.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// appendBig is the sequence number the journal lines of the helpers below
+// start from: above every generated line's.
+const appendBig = 2_000_000
+
+// AppendLongSession appends one main-agent session of the given number of
+// turns, the day before End(), a turn every 30 seconds, and returns its id.
+// Each turn has its prompt (telemetry) and its turn, shows, credit and
+// stop (journal), so the session page has a rail as long as turns.
+func AppendLongSession(t testing.TB, stateDir string, turns int) string {
+	t.Helper()
+	d := paths.Dirs{State: stateDir}
+	day := time.Date(End().Year(), End().Month(), End().Day(), 8, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	sid := session(day, 900)
+	var tel, jr []map[string]any
+	for i := 0; i < turns; i++ {
+		ts := day.Add(time.Duration(i) * 30 * time.Second)
+		turn := fmt.Sprintf("long-turn-%04d", i)
+		stamp := ts.Format(time.RFC3339Nano)
+		ids := []string{MemID(i % 500), MemID((i + 1) % 500), MemID((i + 2) % 500)}
+		tel = append(tel, map[string]any{"event": "prompt", "ts": stamp, "session": sid, "project": "proj-1", "binary_version": "v0.1.17",
+			"decision": "recall", "reason": "gap", "plen": 120, "above": 3, "injected": 3, "ms": 80, "top": 0.8, "ids": ids, "lang": "en", "n": i})
+		seq := appendBig + i*4
+		base := map[string]any{"schema": 1, "ts": stamp, "session": sid, "turn": turn, "project": "proj-1"}
+		line := func(n int, kind string, extra map[string]any) {
+			m := map[string]any{"seq": seq + n, "kind": kind}
+			for k, v := range base {
+				m[k] = v
+			}
+			for k, v := range extra {
+				m[k] = v
+			}
+			jr = append(jr, m)
+		}
+		line(0, "turn", map[string]any{"n": i})
+		line(1, "shows", map[string]any{"path": "prompt", "items": []map[string]any{
+			{"id": ids[0], "rank": 1, "reranker": 0.9}, {"id": ids[1], "rank": 2, "reranker": 0.7}, {"id": ids[2], "rank": 3, "reranker": 0.5}}})
+		line(2, "credit", map[string]any{"ids": ids[:1], "verdict": "used"})
+		line(3, "stop", map[string]any{"outcome": "declared", "stop_check": "ok"})
+	}
+	appendLines(t, filepath.Join(d.TelemetryDir(), "events-"+day.Format("2006-01")+".jsonl"), tel)
+	appendLines(t, filepath.Join(d.FeedbackDir(), "journal-"+day.Format("2006-01")+".jsonl"), jr)
+	return sid
+}
+
+// AppendHotMemory appends the given number of shows of one memory (the
+// first of the ledger), spread over the 85 days before End(), one session
+// and turn each, and returns the memory's id.
+func AppendHotMemory(t testing.TB, stateDir string, shows int) string {
+	t.Helper()
+	d := paths.Dirs{State: stateDir}
+	id := MemID(0)
+	step := 85 * 24 * time.Hour / time.Duration(max(shows, 1))
+	byMonth := map[string][]map[string]any{}
+	for i := 0; i < shows; i++ {
+		ts := End().Add(-time.Duration(i) * step)
+		m := map[string]any{"schema": 1, "seq": appendBig + 1_000_000 + i, "ts": ts.Format(time.RFC3339Nano),
+			"session": session(ts, 800+i%5), "turn": fmt.Sprintf("hot-turn-%04d", i), "project": "proj-1",
+			"kind": "shows", "path": "prompt", "items": []map[string]any{{"id": id, "rank": 1 + i%3, "reranker": 0.5}}}
+		byMonth[ts.Format("2006-01")] = append(byMonth[ts.Format("2006-01")], m)
+	}
+	for month, lines := range byMonth {
+		appendLines(t, filepath.Join(d.FeedbackDir(), "journal-"+month+".jsonl"), lines)
+	}
+	return id
+}

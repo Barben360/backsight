@@ -547,3 +547,9 @@ details.tabs .count { font-variant-numeric: tabular-nums; color: var(--fg-3); fo
 
 /* ---------- the memory's text page ---------- */
 .memtext { margin: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--fg); font-family: var(--mono); font-size: var(--fs-sm); line-height: var(--lh); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+
+/* ---------- detail pages: the line under the title, the day's neighbours, the releases' beside-it columns, the failure pages' kinds ---------- */
+.session-meta, .memory-meta { gap: var(--sp-2); }
+.day-nav { justify-content: space-between; }
+th.side, td.side { border-left: 1px solid var(--border); }
+.state-notfound, .state-bad { max-width: 60ch; }
