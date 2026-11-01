@@ -334,22 +334,6 @@ func niceMax(m float64) float64 {
 	return m
 }
 
-// labelIdx picks at most six x labels: first, last, evenly between.
-func labelIdx(m int) []int {
-	if m <= 1 {
-		return []int{0}
-	}
-	cnt := min(m, 6)
-	var out []int
-	for i := 0; i < cnt; i++ {
-		j := int(math.Round(float64(i) * float64(m-1) / float64(cnt-1)))
-		if len(out) == 0 || out[len(out)-1] != j {
-			out = append(out, j)
-		}
-	}
-	return out
-}
-
 // bandPath is the 95 % interval of a rate series as one closed path per run
 // of positions that have one; a gap breaks it like the line.
 func bandPath(row []val, x func(int) float64, y func(float64) float64) string {

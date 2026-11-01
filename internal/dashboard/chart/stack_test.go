@@ -108,19 +108,44 @@ func TestHatchedPartHasNoFill(t *testing.T) {
 }
 
 func TestHatchIsBounded(t *testing.T) {
-	x := make([]string, 60)
-	v := make([]float64, 60)
+	x := make([]string, 40)
+	v := make([]float64, 40)
 	for i := range x {
 		x[i], v[i] = fmt.Sprintf("d%d", i), 5
 	}
-	c := outcomes(x, v, v)
+	c := outcomes(x, v, nil)
+	c.Size = Full
 	c.Parts[0].Class, c.Hatch = "f-pending", "f-pending"
 	out := string(c.Bars())
-	if n := strings.Count(out, `class="hatch-ln"`); n == 0 || n > maxHatchLines {
-		t.Errorf("hatch lines = %d, want 1..%d", n, maxHatchLines)
+	// 40 bars of 14.7 x 94 take about 18 lines each: far over the budget without the cap.
+	if n := strings.Count(out, `class="hatch-ln"`); n != maxHatchLines {
+		t.Errorf("hatch lines = %d, want exactly the %d budget", n, maxHatchLines)
 	}
-	if strings.Count(out, `class="seg f-pending"`) != 60 {
+	if strings.Count(out, `class="seg f-pending"`) != 40 {
 		t.Error("a bar past the hatch budget keeps its rect")
+	}
+}
+
+func hatchCount(c Stack) int { return strings.Count(string(c.Bars()), `class="hatch-ln"`) }
+
+func TestNarrowBarsAreNotHatched(t *testing.T) {
+	mk := func(n int) Stack {
+		x := make([]string, n)
+		v := make([]float64, n)
+		for i := range x {
+			x[i], v[i] = fmt.Sprintf("d%d", i), 5
+		}
+		c := outcomes(x, v, nil)
+		c.Size = Full
+		c.Parts[0].Class, c.Hatch = "f-pending", "f-pending"
+		return c
+	}
+	// slot = 948/n, bar = 0.62 slot: 4.2 wide at 140, 3.9 wide at 150.
+	if hatchCount(mk(140)) == 0 {
+		t.Error("a 4.2 wide bar is hatched")
+	}
+	if n := hatchCount(mk(150)); n != 0 {
+		t.Errorf("a 3.9 wide bar is not hatched, got %d lines", n)
 	}
 }
 
@@ -131,8 +156,8 @@ func TestValuedPartIsLabelled(t *testing.T) {
 		Valued: "f-failed",
 	}
 	out := kept(string(c.Bars()))
-	if got := regexp.MustCompile(`<text class="val ta-m" [^>]*>([^<]*)</text>`).FindAllStringSubmatch(out, -1); len(got) != 1 || got[0][1] != "2" {
-		t.Errorf("want one label reading 2: %s", out)
+	if got := regexp.MustCompile(`<text class="val ta-m" [^>]*>([^<]*)</text>`).FindAllStringSubmatch(out, -1); len(got) != 1 || got[0][1] != "2 failed" {
+		t.Errorf("want one label reading 2 failed: %s", out)
 	}
 	c.Valued = ""
 	if strings.Contains(string(c.Bars()), `class="val`) {
@@ -321,5 +346,169 @@ func TestStackOutputIsPublicText(t *testing.T) {
 	}
 	if len(stackOutputs) == 0 {
 		t.Error("no output was checked")
+	}
+}
+
+func TestThinPartsStayVisible(t *testing.T) {
+	// one failed among a column of 120: 0.94 units tall.
+	c := Stack{Label: "L", Size: Half, XName: "Day", X: []string{"a", "b"}, Fmt: plain, Empty: "x",
+		Parts: []Series{{Name: "sent", Class: "f-ok", Y: counts(119, 119)}, {Name: "failed", Class: "f-failed", Y: counts(1, 0)}}}
+	out := kept(string(c.Bars()))
+	segs := segRect.FindAllStringSubmatch(out, -1)
+	if len(segs) != 3 {
+		t.Fatalf("segments: %s", out)
+	}
+	h, _ := strconv.ParseFloat(segs[1][5], 64)
+	if h < 1 || !strings.HasPrefix(segs[1][1], "seg-fine f-failed") {
+		t.Errorf("the thin part is 1 tall and has no stroke: %v", segs[1])
+	}
+	if strings.Contains(segs[0][1], "seg-fine") {
+		t.Errorf("a tall wide part keeps its stroke: %v", segs[0])
+	}
+
+	// 500 bars at Full width: every non-zero part has a width and a height of at least 1.
+	const n = 500
+	x := make([]string, n)
+	big, small := make([]float64, n), make([]float64, n)
+	for i := range x {
+		x[i], big[i], small[i] = fmt.Sprintf("d%d", i), 120, 1
+	}
+	for _, sz := range []Size{Half, Full} {
+		wide := outcomes(x, big, small)
+		wide.Size = sz
+		out = kept(string(wide.Bars()))
+		segs = segRect.FindAllStringSubmatch(out, -1)
+		if len(segs) != 2*n {
+			t.Fatalf("segments = %d, want %d", len(segs), 2*n)
+		}
+		for _, s := range segs {
+			w, _ := strconv.ParseFloat(s[4], 64)
+			h, _ := strconv.ParseFloat(s[5], 64)
+			if w < 1 || h < 1 || !strings.Contains(s[1], "seg-fine") {
+				t.Fatalf("a bar at 500 positions (%d wide) must be visible and unstroked: %v", sz.W, s)
+			}
+		}
+	}
+}
+
+func TestStackFocusRule(t *testing.T) {
+	mk := func(n int) Stack {
+		x := make([]string, n)
+		v := make([]float64, n)
+		for i := range x {
+			x[i], v[i] = fmt.Sprintf("d%d", i), 1
+		}
+		return outcomes(x, v, v)
+	}
+	for name, run := range map[string]func(Stack) string{"bars": func(c Stack) string { return string(c.Bars()) }, "area": func(c Stack) string { return string(c.Area()) }} {
+		in := run(mk(100))
+		if got := strings.Count(in, `<rect class="hit"`); got != 100 || strings.Count(in, `tabindex="0" aria-label=`) != 100 || strings.Contains(in, `role="img" aria-label="Memories per day" tabindex`) {
+			t.Errorf("%s at 100: each hit is a stop, the svg is not: %s", name, in)
+		}
+		over := run(mk(101))
+		if strings.Contains(over, `<rect class="hit" x="`) && strings.Contains(over, `tabindex="0" aria-label="d`) {
+			t.Errorf("%s at 101: hit rects are not stops", name)
+		}
+		if !strings.Contains(over, `role="img" aria-label="Memories per day" tabindex="0"`) {
+			t.Errorf("%s at 101: the svg is the one stop: %s", name, over)
+		}
+	}
+}
+
+func pathPoints(d string) [][2]float64 {
+	var pts [][2]float64
+	f := strings.Fields(d)
+	for i := 0; i+2 < len(f); i += 3 {
+		a, _ := strconv.ParseFloat(f[i+1], 64)
+		b, _ := strconv.ParseFloat(f[i+2], 64)
+		pts = append(pts, [2]float64{a, b})
+	}
+	return pts
+}
+
+func TestAreaStacksCumulatively(t *testing.T) {
+	out := string(thirty().Area())
+	paths := regexp.MustCompile(`<path class="seg [^"]*" d="([^"]*)"`).FindAllStringSubmatch(out, -1)
+	if len(paths) != 3 {
+		t.Fatalf("paths = %d", len(paths))
+	}
+	tops := []string{"181.2", "143.6", "87.2"} // cumulative 1, 3, 6 of a nice max of 10
+	var prev [][2]float64
+	for k, m := range paths {
+		pts := pathPoints(m[1])
+		if len(pts) != 60 {
+			t.Fatalf("band %d has %d points, want 60", k, len(pts))
+		}
+		for i := 0; i < 30; i++ {
+			if f(pts[i][1]) != tops[k] {
+				t.Fatalf("band %d top at %d = %v, want %s", k, i, pts[i][1], tops[k])
+			}
+			base := pts[59-i][1]
+			if k == 0 && base != 200 {
+				t.Fatalf("band 0 sits on the baseline, got %v", base)
+			}
+			if k > 0 && base != prev[i][1] {
+				t.Fatalf("band %d bottom %v != band %d top %v", k, base, k-1, prev[i][1])
+			}
+		}
+		prev = pts[:30]
+	}
+}
+
+func TestAreaSkipsZeroPartsAndDrawsOnePositionAsBand(t *testing.T) {
+	c := outcomes([]string{"a", "b"}, []float64{2, 3}, []float64{0, 0})
+	out := string(c.Area())
+	if strings.Count(out, `<path class="seg`) != 1 || strings.Count(out, `<i class="sw f-ignored">`) != 1 {
+		t.Errorf("an all-zero part draws no path but stays in the legend: %s", out)
+	}
+	must(t, out, `<th class="r">ignored</th>`)
+
+	one := string(outcomes([]string{"only"}, []float64{4}, []float64{2}).Area())
+	paths := regexp.MustCompile(`<path class="seg [^"]*" d="([^"]*)"`).FindAllStringSubmatch(one, -1)
+	if len(paths) != 2 {
+		t.Fatalf("paths = %d: %s", len(paths), one)
+	}
+	for _, m := range paths {
+		lo, hi := math.Inf(1), math.Inf(-1)
+		for _, pt := range pathPoints(m[1]) {
+			lo, hi = math.Min(lo, pt[0]), math.Max(hi, pt[0])
+		}
+		if hi-lo != 16 {
+			t.Errorf("one position is a 16 wide band, got %v..%v", lo, hi)
+		}
+	}
+}
+
+func TestBucketedLabelsShowTheRange(t *testing.T) {
+	x := make([]string, 1000)
+	v := make([]float64, 1000)
+	for i := range x {
+		x[i], v[i] = fmt.Sprintf("d%04d", i), 1
+	}
+	out := string(outcomes(x, v, v).Bars())
+	must(t, out, `<title>d0000–d0001 · used: 2, ignored: 2</title>`)
+}
+
+func TestValueLabelsDoNotOverlap(t *testing.T) {
+	x := make([]string, 30)
+	u, fl := make([]float64, 30), make([]float64, 30)
+	for i := range x {
+		x[i], u[i], fl[i] = fmt.Sprintf("Oct %d", i+1), 10, 3
+	}
+	c := Stack{Label: "L", Size: Half, XName: "Day", X: x, Fmt: plain, Empty: "x",
+		Parts:  []Series{{Name: "Sent", Class: "f-ok", Y: counts(u...)}, {Name: "Failed", Class: "f-failed", Y: counts(fl...)}},
+		Valued: "f-failed"}
+	out := kept(string(c.Bars()))
+	labels := regexp.MustCompile(`<text class="val ta-m" x="([^"]*)" y="[^"]*">([^<]*)</text>`).FindAllStringSubmatch(out, -1)
+	if len(labels) < 2 || len(labels) >= 30 {
+		t.Fatalf("labels = %d: thinned but present", len(labels))
+	}
+	prev := -1000.0
+	for _, l := range labels {
+		x, _ := strconv.ParseFloat(l[1], 64)
+		if l[2] != "3 failed" || x < 20 || x > 540 || x-prev < 56 {
+			t.Errorf("label %v at %v overlaps or clips (previous %v)", l, x, prev)
+		}
+		prev = x
 	}
 }

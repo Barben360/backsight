@@ -28,6 +28,8 @@ const (
 	maxHatchLines = 600
 	// minHatchWidth is the narrowest bar worth hatching.
 	minHatchWidth = 4.0
+	// fineBelow is the size under which a rect carries seg-fine (no stroke).
+	fineBelow = 4.0
 )
 
 // stackData is the bucketed counts of a Stack: totals[j] and counts[p][j].
@@ -97,8 +99,8 @@ func (c Stack) frame(d stackData, top float64, centre func(j int) float64, hit f
 	draw(&b)
 	b.WriteString(`<line class="bl" x1="` + f(left) + `" x2="` + f(right) + `" y1="` + f(plotBase) + `" y2="` + f(plotBase) + `"></line>`)
 	m := len(d.xs)
-	for _, j := range labelIdx(m) {
-		b.WriteString(`<text class="ta-m" x="` + f(centre(j)) + `" y="218">` + esc(d.xs[j]) + `</text>`)
+	for _, l := range pickLabels(d.xs, centre, W) {
+		b.WriteString(`<text class="ta-m" x="` + f(l.x) + `" y="218">` + esc(d.xs[l.j]) + `</text>`)
 	}
 	focus := m <= FocusMax
 	for j := 0; j < m; j++ {
@@ -148,9 +150,13 @@ func (c Stack) Bars() template.HTML {
 	top := niceMax(d.max)
 	y := func(v float64) float64 { return plotBase - clamp(v/top, 0, 1)*plotH }
 	slot := (right - left) / float64(m)
-	bw := math.Max(math.Min(28, slot*0.62), 0.5)
+	// a bar is at least 1 unit wide so a bucket never vanishes.
+	bw := math.Max(math.Min(28, slot*0.62), 1)
 	hatchLeft := maxHatchLines
 	draw := func(b *strings.Builder) {
+		var vj []int
+		var vt []string
+		var vy []float64
 		for j := 0; j < m; j++ {
 			x := left + slot*float64(j) + (slot-bw)/2
 			var acc float64
@@ -162,21 +168,32 @@ func (c Stack) Bars() template.HTML {
 				y0, y1 := r1(y(acc)), r1(y(acc+v))
 				acc += v
 				rx, ry, rw, rh := r1(x), y1, r1(bw), r1(y0-y1)
+				if rh < 1 {
+					// a non-zero part always shows: at least 1 unit tall, sitting on what is below it.
+					rh, ry = 1, r1(y0-1)
+				}
 				cls := known(part.Class)
+				if rw < fineBelow || rh < fineBelow {
+					// the 2 px surface stroke would eat a thin rect whole: it is drawn without one.
+					cls = "seg-fine " + cls
+				}
 				b.WriteString(`<rect class="seg ` + cls + `" x="` + f(rx) + `" y="` + f(ry) + `" width="` + f(rw) + `" height="` + f(rh) + `"></rect>`)
 				if c.Hatch != "" && part.Class == c.Hatch && rw >= minHatchWidth {
 					hatchLeft -= hatch(b, rx, ry, rw, rh, hatchLeft)
 				}
 			}
-			if c.Valued == "" {
-				continue
-			}
 			for p, part := range c.Parts {
-				if part.Class == c.Valued && d.counts[p][j] > 0 {
-					b.WriteString(`<text class="val ta-m" x="` + f(x+bw/2) + `" y="` + f(y(acc)-5) + `">` + esc(c.Fmt.format(d.counts[p][j])) + `</text>`)
+				if c.Valued != "" && part.Class == c.Valued && d.counts[p][j] > 0 {
+					vj = append(vj, j)
+					vt = append(vt, c.Fmt.format(d.counts[p][j])+" "+strings.ToLower(part.Name))
+					vy = append(vy, y(acc)-5)
 					break
 				}
 			}
+		}
+		// the count labels are thinned like the x labels so none overlaps or clips.
+		for _, l := range pickLabels(vt, func(i int) float64 { return left + slot*(float64(vj[i])+0.5) }, W) {
+			b.WriteString(`<text class="val ta-m" x="` + f(l.x) + `" y="` + f(vy[l.j]) + `">` + esc(vt[l.j]) + `</text>`)
 		}
 	}
 	centre := func(j int) float64 { return left + slot*(float64(j)+0.5) }

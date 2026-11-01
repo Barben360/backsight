@@ -503,3 +503,7 @@ rect.seg.f-pending { fill: none; stroke: var(--c-shown); }
 @media (forced-colors: active) {
   .chart svg rect.seg, .chart svg path.seg[class*="f-"] { stroke: CanvasText; stroke-width: 1; }
 }
+
+/* ---------- stacked bars: thin segments keep their fill ---------- */
+rect.seg.seg-fine { stroke: none; }
+rect.seg.seg-fine.f-pending { stroke: var(--c-shown); }
