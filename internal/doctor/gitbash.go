@@ -19,7 +19,7 @@ const gitBashImpact = "Claude Code then runs backsight's hooks in PowerShell, wh
 // checkGitBash says whether Claude Code on Windows will find Git Bash
 // (its Bash tool, and the shell of backsight's hooks). Claude Code's own
 // detection is not fully documented, so it is judged conservatively: ok
-// when CLAUDE_CODE_GIT_BASH_PATH names an existing file, or when Git for
+// when CLAUDE_CODE_GIT_BASH_PATH names an existing bash.exe, or when Git for
 // Windows is in one of its standard places (%ProgramFiles%\Git,
 // %LOCALAPPDATA%\Programs\Git); any other Git (a PortableGit, a git on
 // PATH elsewhere) counts as not found. The fix names the bash.exe beside
@@ -35,6 +35,13 @@ func checkGitBash(p GitBashProbe) Check {
 			"(in PowerShell: [Environment]::SetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', '<Git>\\bin\\bash.exe', 'User')), then restart Claude Code (from a new terminal)"
 	}
 	if named := p.Getenv("CLAUDE_CODE_GIT_BASH_PATH"); named != "" {
+		if !strings.EqualFold(winBase(named), "bash.exe") {
+			// git-bash.exe (the mintty launcher) or another program: not
+			// the shell Claude Code runs commands with.
+			c.Status, c.Summary = Warn, "CLAUDE_CODE_GIT_BASH_PATH names "+named+", not bash.exe"
+			c.Detail, c.Fix = "it must name Git's bin\bash.exe (git-bash.exe is a terminal launcher); "+gitBashImpact, fix()
+			return c
+		}
 		if p.Exists(named) {
 			c.Status, c.Summary = OK, "Claude Code finds Git Bash at "+named+" (CLAUDE_CODE_GIT_BASH_PATH)"
 			return c
