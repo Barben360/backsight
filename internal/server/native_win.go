@@ -314,12 +314,20 @@ func (n Native) finishInstance(pg0dir, inst, v string) error {
 // first start when Root() already had its copy (copyPostgres kept it):
 // moved aside first, so that pg0 never sees a half-removed one, and left
 // where it is if pg0 runs from it elsewhere (a file in use). pg0 extracts
-// again if it ever needs it.
+// again if it ever needs it. Aside is under Root()'s tmp\, else, when
+// Root() is on another volume than the user's profile (BACKSIGHT_HOME on
+// D:, which no rename reaches), beside it in pg0's installation\.
 func (n Native) dropExtracted(pg0dir string) {
 	src := n.join(pg0dir, "installation", nativelock.PGInstallation)
-	aside := n.join(n.Root(), "tmp", "pg0-installation-"+randHex())
-	if renameDir(src, aside) == nil {
-		_ = removeAllRetry(aside)
+	for _, aside := range []string{n.join(n.Root(), "tmp", "pg0-installation-"+randHex()), n.join(pg0dir, "installation", ".backsight-drop-"+randHex())} {
+		err := renameDir(src, aside)
+		if err == nil {
+			_ = removeAllRetry(aside)
+			return
+		}
+		if !crossVolume(err) {
+			return
+		}
 	}
 }
 

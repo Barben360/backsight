@@ -377,6 +377,31 @@ func TestFirstInstallCopiesPostgresAndForgetsPg0sInstance(t *testing.T) {
 		check(t, n, tools, pg0dir)
 	})
 
+	// The kept copy on another volume than the profile (BACKSIGHT_HOME on
+	// D:, as on GitHub's runner): the installation pg0 extracted again for
+	// the first start is removed all the same, never left in the user's
+	// .pg0 (a rename reaches Root() from pg0's directory on no volume).
+	t.Run("a complete copy is kept across volumes", func(t *testing.T) {
+		n, tools, pg0dir := winInstall(t)
+		pgInstallation(t, n.installation())
+		touch(t, filepath.Join(n.installation(), pgUnpacked), 0o644)
+		old := renameDir
+		renameDir = func(from, to string) error {
+			if strings.HasPrefix(from, pg0dir) != strings.HasPrefix(to, pg0dir) {
+				return &os.LinkError{Op: "rename", Old: from, New: to, Err: windows.ERROR_NOT_SAME_DEVICE}
+			}
+			return old(from, to)
+		}
+		t.Cleanup(func() { renameDir = old })
+		if err := firstStart(t, n); err != nil {
+			t.Fatal(err)
+		}
+		check(t, n, tools, pg0dir)
+		if ents, _ := os.ReadDir(filepath.Join(pg0dir, "installation")); len(ents) > 0 {
+			t.Errorf("pg0's installation directory keeps %v", ents)
+		}
+	})
+
 	// Fix round 1: a failure after pg0 created the database (here the move
 	// of its installation) removes it too: kept, ensureInstance would
 	// refuse it for ever, no identity recorded for it.
