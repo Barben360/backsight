@@ -517,17 +517,27 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				}
 			}
 		}
-		var buf bytes.Buffer
-		if err := s.tpl.pages[spec.Name].ExecuteTemplate(&buf, spec.File, data); err != nil {
+		body, err := renderPage(s.tpl, spec.Name, data)
+		if err != nil {
 			refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(buf.Bytes())
+		_, _ = w.Write(body)
 		if r.Method == http.MethodGet {
 			s.served.Add(1)
 		}
 	}
+}
+
+// renderPage executes the page called name on data into a buffer: the
+// whole body or an error, nothing half written.
+func renderPage(set *pageSet, name string, data PageData) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := set.pages[name].ExecuteTemplate(&buf, set.specs[name].File, data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // notReadyPage answers a building, updating or updated index with its
