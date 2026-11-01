@@ -242,6 +242,9 @@ func defsOf(d PageData) DefsPage {
 			ln.Smallest = smallest(def, metrics.Metric{MDC: row.MDC}, l)
 		}
 		fam := views.Heading(def)
+		if fam == "" { // a metric without a family is listed under Other
+			fam = "other"
+		}
 		byAxis[fam] = append(byAxis[fam], ln)
 	}
 	add := func(family, label string) {

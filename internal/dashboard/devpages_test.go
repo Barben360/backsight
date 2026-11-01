@@ -537,3 +537,33 @@ func releaseLinks(n *node, sel string) []*node {
 	}
 	return out
 }
+
+// A metric with no family is listed, under Other, instead of breaking the page.
+func TestDefinitionWithoutFamilyIsUnderOther(t *testing.T) {
+	b := pageHTML(t, "defs", func(d *PageData) {
+		d.V["defs"].Tables.Defs[0].Family = ""
+	})
+	doc := parseHTML(t, b)
+	id := doc.find("main tbody tr")
+	var other *node
+	for _, sec := range doc.find("main section") {
+		if sec.attr("id") == "axis-other" {
+			other = sec
+		}
+	}
+	if other == nil || other.first("h3").text() != "Other" {
+		t.Fatalf("no Other section among %d rows", len(id))
+	}
+	if rows := other.find("tbody tr"); len(rows) != 1 || rows[0].attr("id") != metrics.Catalog[0].ID {
+		t.Errorf("Other holds %d rows", len(rows))
+	}
+	var tab string
+	for _, a := range doc.find("main nav.seg a") {
+		if a.attr("href") == "#axis-other" {
+			tab = a.text()
+		}
+	}
+	if tab != "Other 1" {
+		t.Errorf("tab %q, want Other 1", tab)
+	}
+}
