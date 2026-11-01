@@ -263,7 +263,7 @@ To undo the install on the host, run `backsight setup --undo` there; on this PC,
 ## Memories are not recalled
 
 1. Restart Claude Code, or run `/reload-plugins`: a session started before setup or an update has no plugin, or the old one.
-2. Run `backsight doctor`. A `client` warning ("Claude Code wiring drifted") means the plugin, the permission rule or the shim changed: run `backsight client install`.
+2. Run `backsight doctor`. A `client` warning ("Claude Code wiring drifted") means the plugin, the permission rule or the shim changed, or the plugin was disabled in Claude Code: run `backsight client install`, which also enables it again.
 3. Check that this project is not paused or excluded: `backsight resume` in the session, or `backsight resume --project` in its directory (see [privacy.md](privacy.md)).
 4. A new project has no memories yet: they appear after its first sessions are sent and processed.
 

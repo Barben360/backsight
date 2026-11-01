@@ -212,7 +212,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		}
 		return partialError(err)
 	}
-	known, err := pluginIDs(ctx, env)
+	known, err := pluginList(ctx, env)
 	if err != nil {
 		return res, failAfterWrites(err)
 	}
@@ -238,8 +238,13 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	default:
 		steps = append(steps, []string{"plugin", "marketplace", "update", plugin.Marketplace})
 	}
-	if known[plugin.PluginID()] {
+	if enabled, installed := known[plugin.PluginID()]; installed {
 		steps = append(steps, []string{"plugin", "update", plugin.PluginID()})
+		if !enabled {
+			// Disabled in Claude Code (/plugin, or by hand): doctor's
+			// client check sends here, and an update does not enable it.
+			steps = append(steps, []string{"plugin", "enable", plugin.PluginID(), "--scope", "user"})
+		}
 	} else {
 		steps = append(steps, []string{"plugin", "install", plugin.PluginID(), "--scope", "user"})
 	}
@@ -350,6 +355,20 @@ func needsClaude(msg string) error {
 
 // pluginIDs is the set of plugin ids `claude plugin list` reports.
 func pluginIDs(ctx context.Context, env []string) (map[string]bool, error) {
+	list, err := pluginList(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for id := range list {
+		out[id] = true
+	}
+	return out, nil
+}
+
+// pluginList maps the profile's installed plugins to whether Claude Code
+// has them enabled (an entry without "enabled" counts as enabled).
+func pluginList(ctx context.Context, env []string) (map[string]bool, error) {
 	args := []string{"plugin", "list", "--json"}
 	raw, err := claudeRunner.Run(ctx, env, args...)
 	if err != nil {
@@ -362,7 +381,8 @@ func pluginIDs(ctx context.Context, env []string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, it := range items {
 		if v, ok := it["id"].(string); ok {
-			out[v] = true
+			enabled, set := it["enabled"].(bool)
+			out[v] = enabled || !set
 		}
 	}
 	return out, nil

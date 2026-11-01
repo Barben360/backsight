@@ -53,6 +53,8 @@ func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byt
 		return []byte(f.marketplaces), nil
 	case "plugin list --json":
 		return []byte(f.plugins), nil
+	case "plugin enable " + plugin.PluginID() + " --scope user":
+		f.plugins = strings.ReplaceAll(f.plugins, `"enabled":false`, `"enabled":true`)
 	}
 	return []byte("ok\n"), nil
 }
@@ -477,6 +479,58 @@ func TestDoctorAsksClaudeCodeWhetherThePluginIsEnabled(t *testing.T) {
 	}
 	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "not installed in Claude Code") {
 		t.Errorf("doctor:\n%s", out)
+	}
+}
+
+// Doctor's client check sends a disabled plugin to client install: the
+// install enables it again (in its profile), says so, and doctor's check
+// is then ok. An enabled plugin is left alone.
+func TestClientInstallEnablesADisabledPlugin(t *testing.T) {
+	home := devInstall(t, true)
+	f := withClaude(t)
+	run(t, "client", "install")
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
+	f.plugins = `[{"id":"backsight@backsight","version":"x","scope":"user","enabled":false}]`
+	old := probes
+	probes = func(e *doctor.Env) { // doctor asks the fake claude, as the real one
+		old(e)
+		e.ClaudePlugins = func(string) ([]byte, error) {
+			return claudeRunner.Run(context.Background(), nil, "plugin", "list", "--json")
+		}
+	}
+	t.Cleanup(func() { probes = old })
+	doctorClient := func() doctor.Check {
+		_, out, _ := run(t, "doctor", "--json")
+		var env struct {
+			Data struct {
+				Checks []doctor.Check `json:"checks"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal([]byte(out), &env)
+		for _, c := range env.Data.Checks {
+			if c.ID == "client" {
+				return c
+			}
+		}
+		t.Fatalf("no client check:\n%s", out)
+		return doctor.Check{}
+	}
+	if c := doctorClient(); c.Status != doctor.Warn || !strings.Contains(c.Detail, "disabled in Claude Code") {
+		t.Fatalf("before: %+v", c)
+	}
+	f.calls = nil
+	code, out, _ := run(t, "client", "install", "--json")
+	enable := "plugin enable " + plugin.PluginID() + " --scope user"
+	if code != output.OK || !slices.Contains(mutating(f), enable) || !strings.Contains(out, enable) {
+		t.Fatalf("exit %d, claude %q\n%s", code, mutating(f), out)
+	}
+	if c := doctorClient(); c.Status != doctor.OK {
+		t.Errorf("after: %+v", c)
+	}
+	f.calls = nil
+	run(t, "client", "install")
+	if slices.Contains(mutating(f), enable) {
+		t.Errorf("an enabled plugin enabled again: %q", mutating(f))
 	}
 }
 
