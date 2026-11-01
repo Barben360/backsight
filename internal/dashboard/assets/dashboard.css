@@ -465,6 +465,8 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
   .btn, .copy, details.cli > summary, .seg a, details.info > summary, .badge, .mchip, .tabs a, details.why > summary { min-height: var(--touch); }
   details.info > summary { width: var(--touch); }
   .pop { position: fixed; left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; }
+  .idc, .menu > summary, .nav a, .menu-pop a, .menu-pop button, a.chip, .skip, .tblfb > summary, details.tabs > summary { min-height: var(--touch); }
+  a.trunc { min-height: var(--touch); line-height: var(--touch); }
 }
 
 /* ---------- forced colors (Windows contrast themes) ----------
