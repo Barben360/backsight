@@ -229,7 +229,7 @@ func latencyOf(l format.Locale, more string, vs ...MetricView) template.HTML {
 	}
 	// The limit is recall's: it is drawn only where recall's latency is.
 	if bad := latencyLimit(); bad != nil && recall {
-		c.Limits = []chart.Limit{{Label: l.Duration(*bad) + " (prompts)", V: *bad, Class: "thr"}}
+		c.Limits = []chart.Limit{{Label: "limit " + l.Duration(*bad), V: *bad, Class: "thr"}}
 	}
 	return c.HTML()
 }

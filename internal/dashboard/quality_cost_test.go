@@ -407,7 +407,7 @@ func TestCostCards(t *testing.T) {
 		for _, x := range c.find("text.thr-t") {
 			limit = x.text()
 		}
-		if limit != "2.5 s (prompts)" {
+		if limit != "limit 2.5 s" {
 			t.Errorf("limit label %q", limit)
 		}
 		if got := len(c.find("polyline.s-latency")) + len(c.find("polyline.s-search-latency")); got != 2 {
@@ -852,7 +852,7 @@ func TestExtractionTableIsCappedAndTotalled(t *testing.T) {
 	if got := len(table.find("th.r")); got != 4 {
 		t.Errorf("%d right-aligned headers", got)
 	}
-	if n.first("a[href=/pipeline]") == nil {
+	if n.first("main a[href=/pipeline]") == nil {
 		t.Error("no link to the crashed steps")
 	}
 }
