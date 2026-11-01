@@ -473,3 +473,24 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
   .nav > a[aria-current="page"], .tabs a[aria-current="true"], .seg a[aria-current="true"] { border-bottom: 2px solid Highlight; }
   .tile.is-bad, .tile.is-watch { border-width: 2px; }
 }
+
+/* ---------- line charts and sparklines: the plot, hover rects, series strokes ---------- */
+.chart-plot { overflow-x: auto; }
+.vb560 { min-width: 560px; }
+.vb1000 { min-width: 1000px; }
+.chart .hit { fill: transparent; }
+.chart .hit:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.chart > .chart-plot > svg:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chart .pt { fill: currentColor; }
+.chart .pt.ln-2 { stroke-dasharray: none; }
+.chart .empty { margin: 0; }
+.tbl-more { margin: 8px 0 0; font-size: var(--fs-xs); color: var(--fg-2); }
+.tblfb .tbl-wrap { max-height: 220px; overflow-y: auto; margin: 0; padding: 0; }
+.s-coverage { stroke: var(--fg-2); color: var(--fg-2); }
+.s-hit { stroke: var(--seq-1); color: var(--seq-1); }
+.s-search { stroke: var(--c-used); color: var(--c-used); }
+.s-empty { stroke: var(--c-ignored); color: var(--c-ignored); }
+.s-latency { stroke: var(--c-used); color: var(--c-used); }
+.s-search-latency { stroke: var(--fg-2); color: var(--fg-2); }
+.sw.s-used, .sw.s-coverage, .sw.s-hit, .sw.s-search, .sw.s-empty, .sw.s-latency, .sw.s-search-latency, .sw.s-fg { width: 14px; height: 2px; border-radius: 1px; background: currentColor; }
+.sw.ln-2 { background: none; height: 0; border-top: 2px dashed currentColor; border-radius: 0; }
