@@ -22,6 +22,7 @@ type node struct {
 	Text   string
 
 	items []nodeItem // text and children in document order
+	line  int        // line of the start tag
 }
 
 type nodeItem struct {
@@ -34,23 +35,142 @@ var voidElements = map[string]bool{
 	"input": true, "link": true, "meta": true, "source": true, "track": true, "wbr": true,
 }
 
-var scriptBody = regexp.MustCompile(`(?is)(<script\b[^>]*>)(.*?)(</script\s*>)`)
+var rawEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
-// rawScripts escapes the body of every <script> so the XML decoder reads
-// it as plain text; newlines stay, so line numbers stay.
-func rawScripts(body string) string {
-	return scriptBody.ReplaceAllStringFunc(body, func(m string) string {
-		g := scriptBody.FindStringSubmatch(m)
-		var b strings.Builder
-		_ = xml.EscapeText(&b, []byte(g[2]))
-		return g[1] + b.String() + g[3]
-	})
+func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' }
+
+// selfCloseAt reports whether s[i:] starts with "/>".
+func selfCloseAt(s string, i int) bool { return strings.HasPrefix(s[i:], "/>") }
+
+func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
+// normalize rewrites body so the XML decoder reads it as HTML: unquoted
+// attribute values are quoted (a value ends at white space or '>'), '/>'
+// is dropped on void elements and expanded to an explicit end tag inside
+// <svg> (foreign content), and the bodies of <script> are escaped to plain
+// text. Every newline is kept, so line numbers stay.
+func normalize(body string) string {
+	var out strings.Builder
+	svg := 0
+	for i := 0; i < len(body); {
+		c := body[i]
+		if c != '<' || i+1 >= len(body) {
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		rest := body[i:]
+		switch {
+		case strings.HasPrefix(rest, "<!--"):
+			end := strings.Index(rest[4:], "-->")
+			if end < 0 {
+				out.WriteString(rest)
+				return out.String()
+			}
+			out.WriteString(rest[:4+end+3])
+			i += 4 + end + 3
+		case rest[1] == '!' || rest[1] == '?' || rest[1] == '/':
+			end := strings.IndexByte(rest, '>')
+			if end < 0 {
+				out.WriteString(rest)
+				return out.String()
+			}
+			if rest[1] == '/' && strings.EqualFold(strings.TrimSpace(rest[2:end]), "svg") && svg > 0 {
+				svg--
+			}
+			out.WriteString(rest[:end+1])
+			i += end + 1
+		case isAlpha(rest[1]):
+			j := 1
+			for j < len(rest) && !isSpace(rest[j]) && rest[j] != '>' && !selfCloseAt(rest, j) {
+				j++
+			}
+			name := strings.ToLower(rest[1:j])
+			var tag strings.Builder
+			tag.WriteString(rest[:j])
+			selfClosed := false
+			for j < len(rest) && rest[j] != '>' {
+				switch {
+				case isSpace(rest[j]):
+					tag.WriteByte(rest[j])
+					j++
+				case selfCloseAt(rest, j):
+					selfClosed = true
+					j++
+				case rest[j] == '/':
+					tag.WriteByte(' ')
+					j++
+				default:
+					k := j
+					for k < len(rest) && !isSpace(rest[k]) && rest[k] != '=' && rest[k] != '>' && !selfCloseAt(rest, k) {
+						k++
+					}
+					tag.WriteString(rest[j:k])
+					j = k
+					m := j
+					for m < len(rest) && isSpace(rest[m]) {
+						m++
+					}
+					if m >= len(rest) || rest[m] != '=' {
+						continue
+					}
+					tag.WriteString(rest[j : m+1])
+					m++
+					for m < len(rest) && isSpace(rest[m]) {
+						tag.WriteByte(rest[m])
+						m++
+					}
+					switch {
+					case m < len(rest) && (rest[m] == '"' || rest[m] == '\''):
+						end := strings.IndexByte(rest[m+1:], rest[m])
+						if end < 0 {
+							end = len(rest) - m - 2
+						}
+						tag.WriteString(rest[m : m+end+2])
+						m += end + 2
+					default:
+						k = m
+						for k < len(rest) && !isSpace(rest[k]) && rest[k] != '>' {
+							k++
+						}
+						tag.WriteString(`"` + strings.ReplaceAll(rest[m:k], `"`, "&quot;") + `"`)
+						m = k
+					}
+					j = m
+				}
+			}
+			if j >= len(rest) {
+				out.WriteString(rest)
+				return out.String()
+			}
+			out.WriteString(tag.String() + ">")
+			i += j + 1
+			if selfClosed && !voidElements[name] && (svg > 0 || name == "svg") {
+				out.WriteString("</" + name + ">")
+			}
+			if !selfClosed && name == "svg" {
+				svg++
+			}
+			if !selfClosed && name == "script" {
+				end := strings.Index(strings.ToLower(body[i:]), "</script")
+				if end < 0 {
+					end = len(body) - i
+				}
+				out.WriteString(rawEscape.Replace(body[i : i+end]))
+				i += end
+			}
+		default:
+			out.WriteByte(c)
+			i++
+		}
+	}
+	return out.String()
 }
 
 // parseHTMLErr parses body strictly: every non-void element is closed in
 // order, a void element never has an end tag.
 func parseHTMLErr(body string) (*node, error) {
-	d := xml.NewDecoder(strings.NewReader(rawScripts(body)))
+	d := xml.NewDecoder(strings.NewReader(normalize(body)))
 	d.Strict = false
 	d.AutoClose = nil
 	d.Entity = xml.HTMLEntity
@@ -67,7 +187,7 @@ func parseHTMLErr(body string) (*node, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			n := &node{Name: strings.ToLower(t.Name.Local), Attr: map[string]string{}, Parent: top}
+			n := &node{Name: strings.ToLower(t.Name.Local), Attr: map[string]string{}, Parent: top, line: line}
 			for _, a := range t.Attr {
 				n.Attr[strings.ToLower(a.Name.Local)] = a.Value
 			}
@@ -95,8 +215,7 @@ func parseHTMLErr(body string) (*node, error) {
 		}
 	}
 	if top != root {
-		line, _ := d.InputPos()
-		return nil, fmt.Errorf("line %d: <%s> is still open at the end of the page", line, top.Name)
+		return nil, fmt.Errorf("line %d: <%s> is still open at the end of the page", top.line, top.Name)
 	}
 	return root, nil
 }
@@ -229,33 +348,46 @@ func (n *node) attr(k string) string { return n.Attr[k] }
 
 func (n *node) has(k string) bool { _, ok := n.Attr[k]; return ok }
 
+var blockElements = map[string]bool{
+	"div": true, "p": true, "li": true, "td": true, "th": true, "tr": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "section": true, "article": true, "header": true,
+	"footer": true, "nav": true, "main": true, "ul": true, "ol": true, "table": true, "details": true,
+	"summary": true, "figure": true, "figcaption": true, "dl": true, "dt": true, "dd": true, "br": true,
+}
+
 // text is the subtree's text as a reader sees it: <code> contents removed,
-// pieces joined by single spaces, entities decoded, whitespace collapsed.
+// a space at block-level boundaries only (inline elements do not split
+// words), entities decoded, whitespace collapsed.
 func (n *node) text() string {
-	var parts []string
+	var b strings.Builder
 	var walk func(*node)
 	walk = func(c *node) {
 		for _, it := range c.items {
 			switch {
 			case it.kid == nil:
-				parts = append(parts, it.text)
-			case it.kid.Name != "code":
+				b.WriteString(it.text)
+			case it.kid.Name == "code":
+			case blockElements[it.kid.Name]:
+				b.WriteByte(' ')
+				walk(it.kid)
+				b.WriteByte(' ')
+			default:
 				walk(it.kid)
 			}
 		}
 	}
 	walk(n)
-	return strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-var spokenAttr = regexp.MustCompile(`(?is)\b(?:aria-label|title)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+var spokenAttr = regexp.MustCompile(`(?is)\s(?:aria-label|title)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
 
 // spokenText is visibleText plus every aria-label and title value, with
 // <code> contents removed.
 func spokenText(page string) string {
 	out := []string{visibleText(page)}
 	for _, m := range spokenAttr.FindAllStringSubmatch(codeSpan.ReplaceAllString(page, ""), -1) {
-		v := m[1] + m[2]
+		v := m[1] + m[2] + m[3]
 		if v = strings.Join(strings.Fields(html.UnescapeString(v)), " "); v != "" {
 			out = append(out, v)
 		}
