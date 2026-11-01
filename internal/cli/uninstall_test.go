@@ -170,8 +170,18 @@ func TestUninstallPlanChangesNothing(t *testing.T) {
 		}
 	}
 	// The plan names the edited paths, never a whole file.
-	if s := stepNamed(env.Data, "claude settings"); s == nil || !strings.Contains(s.Detail, "permissions.allow") {
-		t.Errorf("settings plan: %+v", s)
+	s := stepNamed(env.Data, "claude settings")
+	if s == nil || !strings.Contains(s.Detail, "permissions.allow") {
+		t.Fatalf("settings plan: %+v", s)
+	}
+	// Each changed path once: removing several rules of one list changes
+	// its first index each time.
+	seen := map[string]bool{}
+	for _, p := range strings.Split(s.Detail, ", ") {
+		if seen[p] {
+			t.Errorf("%q listed twice in %q", p, s.Detail)
+		}
+		seen[p] = true
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -334,7 +335,11 @@ func changedPaths(fr []claudecfg.FileResult) string {
 	var out []string
 	for _, f := range fr {
 		for _, ch := range f.Changes {
-			out = append(out, f.Target+": "+ch.Path)
+			// Removing several items of one list changes the same index
+			// each time: each path is listed once.
+			if p := f.Target + ": " + ch.Path; !slices.Contains(out, p) {
+				out = append(out, p)
+			}
 		}
 	}
 	if len(out) == 0 {
