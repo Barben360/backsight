@@ -26,6 +26,18 @@ type rotating struct {
 	retryAt int64
 }
 
+// OpenLog opens path for appending as the supervisor's logs are kept:
+// created private, rotated to <path>.1 at 10 MiB (backsight's jobs on
+// Windows keep theirs so).
+func OpenLog(path string) (io.WriteCloser, error) { return openRotating(path) }
+
+// NewRedactor writes to dst line by line with the forms of secrets
+// replaced, as the supervisor writes its children's output; Close writes a
+// last line without a newline.
+func NewRedactor(dst io.Writer, secrets []string) io.WriteCloser {
+	return newLineRedactor(dst, secrets)
+}
+
 func openRotating(path string) (*rotating, error) {
 	r := &rotating{path: path}
 	if err := r.open(); err != nil {

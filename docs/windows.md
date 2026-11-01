@@ -123,9 +123,10 @@ In the `logs` directory of backsight's state directory (`%LOCALAPPDATA%\backsigh
 
 - `<project>-supervisor.log`: what the supervisor did (starts, restarts, refusals, stops), and what kept it from starting at all (a `config.toml` that does not load, a missing `supervise.json`); a `config.toml` that does not load names no project, so that goes to `backsight-supervisor.log`;
 - `<project>-db.log`: the database's output;
-- `<project>-api.log`: the memory server's output.
+- `<project>-api.log`: the memory server's output;
+- `<project>-jobs-tick.log` and `<project>-jobs-maintain.log`: what each run of the scheduled jobs printed, between a `started` line and an `ended: exit <code>` line, with the reason of a failed run (the task itself keeps no output).
 
-Each is kept to 10 MiB, the previous one as `.1`. The server's keys are replaced in them. A server that fails to start shows the last lines of the API's log.
+Each is kept to 10 MiB, the previous one as `.1`. The server's keys, and every value of `secrets.toml`, are replaced in them. A server that fails to start shows the last lines of the API's log.
 
 ## The scheduled jobs
 
@@ -184,6 +185,7 @@ Other things you may meet:
 
 - **`backsight` is not found** right after the install: the terminal started before `PATH` changed. Open a new one, or run `"$LOCALAPPDATA/Programs/backsight/backsight.exe"` in Git Bash.
 - **The server is down after a restart**: the task starts it at your logon. `backsight server status`, then the logs above. With `server.start_on_session`, the first Claude Code session starts it.
+- **A scheduled job that fails** (doctor's `jobs` check late, Task Scheduler's last run result not 0): `<project>-jobs-tick.log` or `<project>-jobs-maintain.log` in the logs above says what the run printed and why it stopped.
 - **A server that keeps restarting**: `<project>-supervisor.log` says which program stopped and when; `<project>-db.log` and `<project>-api.log` hold their own output.
 - **Over SSH**, `backsight server start` runs the server only until you log off (above): log on at the PC once for the task to take over.
 
