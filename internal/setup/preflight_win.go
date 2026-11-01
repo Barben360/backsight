@@ -141,7 +141,10 @@ const probeStart = "2099-01-01T00:00:00"
 // renders for the user sid (shim version under conhost --headless, never
 // due), then deletes it, always: a refused /Create may have left it
 // half made. /F replaces a probe an interrupted setup left behind. The XML goes through a file in dir, removed after.
-func ProbeTask(ctx context.Context, run Run, sid, project, shim, dir string) (err error) {
+// The folder \<project> schtasks leaves goes too (deleteFolder), unless
+// it holds a task (the server's, from an earlier setup): Task Scheduler
+// deletes only an empty folder, and that refusal is not the probe's.
+func ProbeTask(ctx context.Context, run Run, deleteFolder func(name string) (bool, error), sid, project, shim, dir string) (err error) {
 	name := `\` + project + `\probe`
 	xml, err := scheduler.TaskXML(scheduler.TaskSpec{
 		Description: "backsight setup's probe (" + project + "), deleted at once",
@@ -165,6 +168,7 @@ func ProbeTask(ctx context.Context, run Run, sid, project, shim, dir string) (er
 		if err == nil && derr != nil {
 			err = fmt.Errorf("deleting the probe task %s: %w", name, derr)
 		}
+		_, _ = deleteFolder(project)
 	}()
 	if out, cerr := run(ctx, "schtasks", "/Create", "/F", "/XML", file, "/TN", name); cerr != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {

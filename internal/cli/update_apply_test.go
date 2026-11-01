@@ -2,6 +2,7 @@ package cli
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -24,6 +25,7 @@ import (
 	"aead.dev/minisign"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/migrate"
 	"github.com/Barben360/backsight/internal/output"
@@ -34,6 +36,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -83,6 +86,11 @@ func withBinaries(t *testing.T, d paths.Dirs) *fakeBinaries {
 }
 
 func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]byte, []byte, int, error) {
+	if d, ok := ctx.Deadline(); ok && time.Until(d) <= time.Millisecond {
+		// A real exec takes longer: the deadline is reached before the
+		// child does anything (Windows' clock may not even have moved yet).
+		<-ctx.Done()
+	}
 	if err := ctx.Err(); err != nil { // exec does not start a command on a done context
 		return nil, nil, 0, err
 	}
@@ -195,20 +203,35 @@ func signedRelease(t *testing.T, root, v string, key minisign.PrivateKey, o relO
 	if o.tamperBinary {
 		inArchive = append(slices.Clone(body), []byte("# tampered\n")...)
 	}
-	var tgz bytes.Buffer
-	gz := gzip.NewWriter(&tgz)
-	tw := tar.NewWriter(gz)
-	for name, b := range map[string][]byte{"LICENSE": []byte("MIT"), "backsight": inArchive} {
-		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(b)), Typeflag: tar.TypeReg})
-		_, _ = tw.Write(b)
-	}
-	_ = tw.Close()
-	_ = gz.Close()
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if o.platform != "" {
 		goos, goarch, _ = strings.Cut(o.platform, "_")
 	}
+	// goreleaser's shape: a .tar.gz holding backsight, on Windows a .zip
+	// holding backsight.exe (release.Archive, unpackBinary).
+	var tgz bytes.Buffer
 	archive := "backsight_" + v + "_" + goos + "_" + goarch + ".tar.gz"
+	if goos == "windows" {
+		archive = strings.TrimSuffix(archive, ".tar.gz") + ".zip"
+		zw := zip.NewWriter(&tgz)
+		for _, f := range []struct {
+			name string
+			b    []byte
+		}{{"LICENSE", []byte("MIT")}, {"backsight.exe", inArchive}} {
+			w, _ := zw.Create(f.name)
+			_, _ = w.Write(f.b)
+		}
+		_ = zw.Close()
+	} else {
+		gz := gzip.NewWriter(&tgz)
+		tw := tar.NewWriter(gz)
+		for name, b := range map[string][]byte{"LICENSE": []byte("MIT"), "backsight": inArchive} {
+			_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(b)), Typeflag: tar.TypeReg})
+			_, _ = tw.Write(b)
+		}
+		_ = tw.Close()
+		_ = gz.Close()
+	}
 	bare := selfcheck.BinaryName(v, goos, goarch)
 	sums := sha(tgz.Bytes()) + "  " + archive + "\n"
 	if !o.noBareBinary {
@@ -283,11 +306,33 @@ func installedOn(t *testing.T, home, v string) (*fakeClaude, *fakeBinaries) {
 
 func shimOf(t *testing.T, d paths.Dirs) string {
 	t.Helper()
-	got, err := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS)))
+	got, err := shimTargetOf(d)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return got
+}
+
+// shimTargetOf is the installed binary the shim runs: its link's target, on
+// Windows the <data>/bin/<version>/backsight.exe it is a copy of (the
+// shim itself when it copies none).
+func shimTargetOf(d paths.Dirs) (string, error) {
+	shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
+	if runtime.GOOS != "windows" {
+		return filepath.EvalSymlinks(shim)
+	}
+	raw, err := os.ReadFile(shim)
+	if err != nil {
+		return "", err
+	}
+	ents, _ := os.ReadDir(filepath.Join(d.Data, "bin"))
+	for _, e := range ents {
+		p := filepath.Join(d.Data, "bin", e.Name(), "backsight.exe")
+		if b, err := os.ReadFile(p); err == nil && e.IsDir() && bytes.Equal(b, raw) {
+			return p, nil
+		}
+	}
+	return shim, nil
 }
 
 type applyEnvelope struct {
@@ -333,7 +378,7 @@ func decodeApply(t *testing.T, out string) applyEnvelope {
 func snapshot(t *testing.T, d paths.Dirs) string {
 	t.Helper()
 	var b strings.Builder
-	shim, _ := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS)))
+	shim, _ := shimTargetOf(d)
 	b.WriteString("shim " + shim + "\n")
 	ents, _ := os.ReadDir(filepath.Join(d.Data, "bin"))
 	for _, e := range ents {
@@ -364,7 +409,6 @@ func snapshot(t *testing.T, d paths.Dirs) string {
 }
 
 func TestUpdateApplyInstallsTheNewRelease(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, claude, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	key := trustTestKey(t)
@@ -450,7 +494,6 @@ func TestUpdateApplyInstallsTheNewRelease(t *testing.T) {
 }
 
 func TestUpdateApplyRefusesABadSignatureBeforeAnythingChanges(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	_, otherPriv, _ := minisign.GenerateKey(rand.Reader)
 	// want: what the refusal names (the check that caught it).
 	for name, c := range map[string]struct {
@@ -491,7 +534,6 @@ func TestUpdateApplyRefusesABadSignatureBeforeAnythingChanges(t *testing.T) {
 // by a binary that trusts the release keys only, before anything changes
 // (security review M3).
 func TestUpdateApplyRefusesASnapshotSignedByAThrowawayKey(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	old := signing.TestKey
 	signing.TestKey = "" // a release binary: minisign.pub and minisign.next.pub only
 	t.Cleanup(func() { signing.TestKey = old })
@@ -522,7 +564,6 @@ func TestUpdateApplyRefusesASnapshotSignedByAThrowawayKey(t *testing.T) {
 // update installs with a warning, and the new binary's self-check fails
 // until a release lists it. A last line without its newline still counts.
 func TestUpdateApplyChecksTheBareBinaryWhenListed(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	t.Run("not listed", func(t *testing.T) {
 		home, _, _ := installedAt(t, "0.1.0")
 		src := t.TempDir()
@@ -583,7 +624,6 @@ func TestUpdateApplyRefusesAnOlderOrEqualVersion(t *testing.T) {
 }
 
 func TestUpdateApplyPlanChangesNothing(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, claude, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -616,7 +656,6 @@ func TestUpdateApplyPlanChangesNothing(t *testing.T) {
 // A failing migration rolls everything back: the shim, state.json and
 // config.toml as they were, the new binary removed, exit 30.
 func TestUpdateApplyFailingMigrationRollsBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, claude, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -645,7 +684,6 @@ func TestUpdateApplyFailingMigrationRollsBack(t *testing.T) {
 // A Ctrl-C during the update rolls it back too (the rollback itself is
 // not cancelled).
 func TestUpdateApplyInterruptedRollsBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -670,7 +708,6 @@ func TestUpdateApplyInterruptedRollsBack(t *testing.T) {
 // A Ctrl-C while the new binary installs its plugin: the rollback is not
 // cancelled with it, and puts the previous plugin back (exit 30).
 func TestUpdateApplyInterruptedDuringThePluginRollsBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -703,7 +740,6 @@ func TestUpdateApplyInterruptedDuringThePluginRollsBack(t *testing.T) {
 // A failure in the plugin step, after the new plugin was generated, puts
 // the previous binary's plugin back through its own client install.
 func TestUpdateApplyFailingPluginStepRollsBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, claude, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -737,7 +773,6 @@ func TestUpdateApplyFailingPluginStepRollsBack(t *testing.T) {
 // A rollback that fails exits 20, keeps the marker, and doctor names the
 // way back.
 func TestUpdateApplyFailedRollbackKeepsTheMarker(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -811,7 +846,6 @@ func TestUpdateApplyRefusesWhileARestoreIsIncomplete(t *testing.T) {
 
 // A binary that says it is another version than its release is refused.
 func TestUpdateApplyRefusesABinaryOfAnotherVersion(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -829,7 +863,6 @@ func TestUpdateApplyRefusesABinaryOfAnotherVersion(t *testing.T) {
 
 // jobs maintain only checks unless update.auto_apply is set (default off).
 func TestMaintainAppliesOnlyWhenAutoApplyIsOn(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, _ := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -853,7 +886,6 @@ func TestMaintainAppliesOnlyWhenAutoApplyIsOn(t *testing.T) {
 // release is recorded and skipped until a newer one appears or the user
 // runs update apply.
 func TestMaintainSkipsAReleaseWhoseAutoApplyFailed(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	key := trustTestKey(t)
@@ -940,9 +972,7 @@ func TestExecBinaryRunsAProgram(t *testing.T) {
 // waits for it: the child's own rollback runs and its exit code comes
 // back. The child is told which maintenance lock its parent holds.
 func TestExecBinaryStopsTheChildGently(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		testtool.SkipWindows(t, "Task 13: the graceful stop of the child (the fake is a POSIX trap)")
-	}
+	testtool.SkipWindows(t, "linux-only: the fake child is a POSIX shell script with a TERM trap; Windows asks a child to stop with CTRL_BREAK, which needs a console")
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "child")
 	_ = os.WriteFile(exe, []byte("#!/bin/sh\necho \"$"+updateLockEnv+"\" > "+dir+"/token\ntrap 'echo rolled back > "+dir+"/trap; exit 30' TERM\nsleep 30 &\nwait\n"), 0o755)
@@ -1037,7 +1067,6 @@ func serverInstalledAt(t *testing.T, v, v2 string) (home, archive string, dk *re
 }
 
 func TestUpdateApplyUpgradesTheServerWithTheNewBinarysPin(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -1075,7 +1104,6 @@ func TestUpdateApplyUpgradesTheServerWithTheNewBinarysPin(t *testing.T) {
 // the previous version and its data back, then update apply rolls back
 // the client: everything as it was, exit 30.
 func TestUpdateApplyServerFailureRollsEverythingBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, dk, claude, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1108,7 +1136,6 @@ func TestUpdateApplyServerFailureRollsEverythingBack(t *testing.T) {
 // progress: update apply restores the safety archive itself, through
 // restore and with its own pin.
 func TestUpdateApplyRestoresWhenTheServerStepDied(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, archive, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1157,7 +1184,6 @@ func shortRecordWait(t *testing.T, w time.Duration) {
 // old pin would start on a database the new Hindsight migrated). It exits
 // 40, keeps the marker, and a rerun of the new binary finishes it.
 func TestUpdateApplyIsCommittedOnceTheServerUpgraded(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1212,7 +1238,6 @@ func TestUpdateApplyIsCommittedOnceTheServerUpgraded(t *testing.T) {
 
 // A state lock held for a moment is waited for.
 func TestUpdateApplyRecordWaitsForTheStateLock(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1236,7 +1261,6 @@ func TestUpdateApplyRecordWaitsForTheStateLock(t *testing.T) {
 // cleared, the server on the new pin): update apply sees the upgrade done
 // and finishes, without touching the server.
 func TestUpdateApplyKeepsAnUpgradeThatPassedBeforeItsChildDied(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1265,7 +1289,6 @@ func TestUpdateApplyKeepsAnUpgradeThatPassedBeforeItsChildDied(t *testing.T) {
 // one migrated (here a renamed bank, which the safety archive's restore
 // refuses).
 func TestUpdateApplyRollbackRestoresTheFilesBeforeTheServer(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, archive, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1304,7 +1327,6 @@ func TestUpdateApplyRollbackRestoresTheFilesBeforeTheServer(t *testing.T) {
 // The rollback writes state.json under its lock: a tick holding it is
 // waited for, not overwritten.
 func TestUpdateApplyRollbackWritesTheStateUnderItsLock(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply (hangs on Windows)")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1374,7 +1396,6 @@ func killedAfterTheShim(t *testing.T, d paths.Dirs, src string) (old, target str
 // resumes it (migrations, plugin, server, record) instead of answering
 // "up to date".
 func TestUpdateApplyResumesAnUpdateToItself(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, claude, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1403,7 +1424,6 @@ func TestUpdateApplyResumesAnUpdateToItself(t *testing.T) {
 // A resume that fails rolls back to the marker's previous install, with
 // state.json as the snapshot persisted before the update kept it.
 func TestUpdateApplyResumeRollsBackToTheSnapshot(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1430,7 +1450,6 @@ func TestUpdateApplyResumeRollsBackToTheSnapshot(t *testing.T) {
 // the half-installed one) and the persisted snapshot (state.json changed
 // since) are the way back.
 func TestUpdateApplyReplacesAnUnfinishedUpdateFromItsMarker(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1484,7 +1503,6 @@ func TestUpdateApplyWithoutAnInstallNeedsSetup(t *testing.T) {
 // after the rollback, update apply exits 10 with the child's actions and
 // says it rolled back.
 func TestUpdateApplyPassesOnAChildsNeedsUser(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1506,7 +1524,6 @@ func TestUpdateApplyPassesOnAChildsNeedsUser(t *testing.T) {
 // and so are the bank template and the docs, plan and run (the host's
 // backsight applies its own).
 func TestUpdateApplySkipsARemoteServer(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1536,7 +1553,6 @@ func TestUpdateApplySkipsARemoteServer(t *testing.T) {
 
 // --plan verifies like the update: a release that fails it is refused.
 func TestUpdateApplyPlanRefusesAReleaseThatFailsVerification(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1621,9 +1637,9 @@ func TestDownloadBoundsTheAsset(t *testing.T) {
 // The archive must hold the binary as a regular file within the size
 // bound.
 func TestUnpackBinaryRefusals(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	dir := t.TempDir()
-	tgz := func(name string, h tar.Header, body []byte) string {
+	name := binaryName() // backsight, on Windows backsight.exe
+	tgz := func(file string, h tar.Header, body []byte) string {
 		var b bytes.Buffer
 		gz := gzip.NewWriter(&b)
 		tw := tar.NewWriter(gz)
@@ -1631,35 +1647,54 @@ func TestUnpackBinaryRefusals(t *testing.T) {
 		_, _ = tw.Write(body)
 		_ = tw.Close()
 		_ = gz.Close()
-		p := filepath.Join(dir, name+".tar.gz")
+		p := filepath.Join(dir, file+".tar.gz")
 		_ = os.WriteFile(p, b.Bytes(), 0o644)
 		return p
 	}
-	dst := filepath.Join(dir, "out", "backsight")
-	if err := unpackBinary(tgz("ok", tar.Header{Name: "backsight", Mode: 0o755, Size: 4, Typeflag: tar.TypeReg}, []byte("body")), dst); err != nil {
-		t.Fatalf("a good archive: %v", err)
+	// Windows' releases are .zip archives.
+	zipped := func(file, entry string, body []byte) string {
+		var b bytes.Buffer
+		zw := zip.NewWriter(&b)
+		w, _ := zw.Create(entry)
+		_, _ = w.Write(body)
+		_ = zw.Close()
+		p := filepath.Join(dir, file+".zip")
+		_ = os.WriteFile(p, b.Bytes(), 0o644)
+		return p
 	}
-	if raw, _ := os.ReadFile(dst); string(raw) != "body" {
-		t.Errorf("%q", raw)
+	dst := filepath.Join(dir, "out", name)
+	for _, good := range []string{tgz("ok", tar.Header{Name: name, Mode: 0o755, Size: 4, Typeflag: tar.TypeReg}, []byte("body")), zipped("ok", "dist/"+name, []byte("body"))} {
+		_ = os.Remove(dst)
+		if err := unpackBinary(good, dst); err != nil {
+			t.Fatalf("a good archive %s: %v", good, err)
+		}
+		if raw, _ := os.ReadFile(dst); string(raw) != "body" {
+			t.Errorf("%s: %q", good, raw)
+		}
 	}
-	if err := unpackBinary(tgz("none", tar.Header{Name: "LICENSE", Mode: 0o644, Size: 3, Typeflag: tar.TypeReg}, []byte("MIT")), dst); err == nil || !strings.Contains(err.Error(), "no backsight") {
-		t.Errorf("no binary: %v", err)
-	}
-	if err := unpackBinary(tgz("link", tar.Header{Name: "backsight", Linkname: "/bin/sh", Typeflag: tar.TypeSymlink}, nil), dst); err == nil || !strings.Contains(err.Error(), "no backsight") {
-		t.Errorf("a symlink: %v", err)
+	for what, bad := range map[string]string{
+		"no binary":     tgz("none", tar.Header{Name: "LICENSE", Mode: 0o644, Size: 3, Typeflag: tar.TypeReg}, []byte("MIT")),
+		"a symlink":     tgz("link", tar.Header{Name: name, Linkname: "/bin/sh", Typeflag: tar.TypeSymlink}, nil),
+		"no binary zip": zipped("none", "LICENSE", []byte("MIT")),
+		"a directory":   zipped("dir", name+"/", nil),
+	} {
+		if err := unpackBinary(bad, dst); err == nil || !strings.Contains(err.Error(), "no "+name) {
+			t.Errorf("%s: %v", what, err)
+		}
 	}
 	old := maxBinary
 	maxBinary = 3
 	t.Cleanup(func() { maxBinary = old })
-	if err := unpackBinary(tgz("big", tar.Header{Name: "backsight", Mode: 0o755, Size: 4, Typeflag: tar.TypeReg}, []byte("body")), dst); err == nil || !strings.Contains(err.Error(), "larger than") {
-		t.Errorf("an oversized binary: %v", err)
+	for _, big := range []string{tgz("big", tar.Header{Name: name, Mode: 0o755, Size: 4, Typeflag: tar.TypeReg}, []byte("body")), zipped("big", name, []byte("body"))} {
+		if err := unpackBinary(big, dst); err == nil || !strings.Contains(err.Error(), "larger than") {
+			t.Errorf("an oversized binary in %s: %v", big, err)
+		}
 	}
 }
 
 // With auto_apply, jobs maintain (run by the shim, the new binary)
 // finishes an update to itself that did not finish.
 func TestMaintainResumesAnUnfinishedUpdate(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -1725,7 +1760,7 @@ func schedulerStepIn(steps []step) step {
 // nothing; the update rewrites the stale unit and only reloads (never a
 // stop or restart); a refresh that fails is a warning, never a rollback.
 func TestUpdateApplyRefreshesTheSchedulerEntries(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	home, _, bins := installedAt(t, "0.1.0")
 	sys := fakeScheduler(t, home)
 	if code, out, _ := run(t, "jobs", "install"); code != output.OK {
@@ -1786,7 +1821,7 @@ func TestUpdateApplyRefreshesTheSchedulerEntries(t *testing.T) {
 // Without Claude Code wired there is no client install: the new binary's
 // own jobs refresh runs.
 func TestUpdateApplyRefreshesTheSchedulerWithoutAClient(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	home, _, bins := installedAt(t, "0.1.0")
 	fakeScheduler(t, home)
 	run(t, "jobs", "install")
@@ -1800,5 +1835,51 @@ func TestUpdateApplyRefreshesTheSchedulerWithoutAClient(t *testing.T) {
 	env := decodeApply(t, out)
 	if s := schedulerStepIn(env.Data.Steps); code != output.OK || s.Status != "done" || bins.ran("0.2.0 jobs refresh") != 1 || !strings.Contains(readFile(t, svc), "KillMode=mixed") {
 		t.Errorf("exit %d %+v calls %q\n%s", code, s, bins.calls, out)
+	}
+}
+
+// update apply's rule for the Windows supervisor (decision 0080,
+// "Updates"): restarted on another protocol, or when it still runs the old
+// backsight after a server upgrade; else kept, and the step says so.
+func TestSupervisorRestartRule(t *testing.T) {
+	st := supervise.Status{Proto: 1, Version: "0.1.0"}
+	for _, c := range []struct {
+		name     string
+		st       supervise.Status
+		proto    int
+		upgraded bool
+		restart  bool
+		why      string
+	}{
+		{"same protocol", st, 1, false, false, "the server keeps running backsight 0.1.0 until its next restart"},
+		{"another protocol", st, 2, false, true, "restarted: it spoke protocol 1, backsight 0.2.0 speaks 2"},
+		{"a binary that does not say", st, 0, false, true, "restarted: it spoke protocol 1, backsight 0.2.0 speaks 0"},
+		{"upgraded, still the old one", st, 1, true, true, "restarted: it still ran backsight 0.1.0 after the server upgrade"},
+		{"upgraded, restarted by it", supervise.Status{Proto: 1, Version: "0.2.0"}, 1, true, false, "the server upgrade restarted it: it runs backsight 0.2.0"},
+		{"upgraded, restarted by it, v-prefixed", supervise.Status{Proto: 1, Version: "v0.2.0"}, 1, true, false, "the server upgrade restarted it: it runs backsight 0.2.0"},
+	} {
+		restart, why := supervisorRestart(c.st, c.proto, c.upgraded, "0.2.0")
+		if restart != c.restart || why != c.why {
+			t.Errorf("%s: %v %q, want %v %q", c.name, restart, why, c.restart, c.why)
+		}
+	}
+}
+
+// On Linux update apply never asks a supervisor: the units run no
+// backsight.
+func TestUpdateApplyAsksNoSupervisorOffWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows asks it (update_apply_windows_test.go)")
+	}
+	home, _, _ := installedAt(t, "0.1.0")
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	raw, _ = config.SetRuntime(raw, "native")
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), raw, 0o600)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json") // TestMain refuses the pipe
+	env := decodeApply(t, out)
+	if code != output.OK || applyStepIndex(env.Data.Steps, "supervisor") >= 0 {
+		t.Errorf("exit %d\n%s", code, out)
 	}
 }

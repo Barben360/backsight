@@ -68,6 +68,11 @@ func (refuseSSH) Run(_ context.Context, args []string, _ io.Reader, _, _ io.Writ
 	return -1, fmt.Errorf("test reached ssh %v without a fake runner", args)
 }
 
+// refuseCleaner: no test starts a real trash cleaner without a fake.
+func refuseCleaner(trash string) error {
+	return fmt.Errorf("test reached a real trash cleaner of %s without a fake", trash)
+}
+
 // testHookFault makes the test binary, run as `hook-child`, fail before
 // the handler as a crashing child would: panic | fatal | hang | kill |
 // exit2. Test code only; the binary's own chaos switch exists in testhooks
@@ -123,6 +128,9 @@ func TestMain(m *testing.M) {
 	nativeSys, nativeTools, nativeAsk, nativeDetach = refuseSys{}, refuseTools{}, refuseAsk, refuseDetach
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
+	// Windows: no test deletes a real Task Scheduler folder (a no-op that
+	// succeeds), nor starts a real trash cleaner.
+	deleteTaskFolder, startCleaner = func(string) (bool, error) { return false, nil }, refuseCleaner
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
 	code := m.Run()
 	cleanup()

@@ -37,6 +37,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // update apply (SPEC §11.7, decision 0067 block 2) is driven by the
@@ -810,6 +811,7 @@ func (a *applyRun) steps(ctx context.Context) error {
 		a.bank(ctx)
 		a.docs(ctx)
 		a.metricsIndex(ctx)
+		a.supervisor(ctx)
 	}
 
 	// 8. Recorded: the shim's target and the one to roll back to.
@@ -1055,6 +1057,76 @@ func (a *applyRun) server(ctx context.Context) error {
 	res.Server.Upgraded = true
 	add("server", "done", sp.Current+" → "+sp.Target)
 	return nil
+}
+
+// restartSupervisor restarts the native server's supervisor (Windows);
+// tests replace it.
+var restartSupervisor = func(ctx context.Context, n server.Native) error { return n.RestartSupervisor(ctx) }
+
+// supervisor is the native server's supervisor on Windows (decision 0080,
+// "Updates"): it keeps running the backsight it started from, now the
+// shim's current.exe.old-<n>. It is restarted, a short outage while hooks
+// queue, only when it speaks another protocol than the new binary, or
+// when it still runs another backsight after the new binary's server
+// upgrade (which restarts it itself): otherwise it runs on until its next
+// restart, and the step says so. A failure is a warning: the update stays.
+// After the commit point; nothing on Linux, where the units run no
+// backsight.
+func (a *applyRun) supervisor(ctx context.Context) {
+	if nativeGOOS != "windows" || a.cfg.Server.Mode != "local" || a.cfg.RuntimeKind() != "native" {
+		return
+	}
+	n, ok := runtimeFor(a.cfg).(server.Native)
+	if !ok {
+		return
+	}
+	st, err := n.SupervisorStatus(ctx)
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor did not answer ("+err.Error()+"): it runs the previous backsight until its next restart ("+restartCmd+")")
+		a.add("supervisor", "failed", err.Error())
+		return
+	}
+	if st == nil {
+		a.add("supervisor", "skipped", "the native server is not running: its next start runs backsight "+a.res.Target)
+		return
+	}
+	proto := 0 // a binary that does not say speaks another protocol
+	if env, err := runChild(ctx, a.target, "version"); err == nil {
+		var v versionInfo
+		_ = json.Unmarshal(env.Data, &v)
+		proto = v.SuperviseProto
+	}
+	upgraded := a.res.Server != nil && a.res.Server.Upgraded
+	restart, why := supervisorRestart(*st, proto, upgraded, a.res.Target)
+	if !restart {
+		a.add("supervisor", "kept", why)
+		return
+	}
+	if err := restartSupervisor(ctx, n); err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor was not restarted ("+err.Error()+"): "+restartCmd)
+		a.add("supervisor", "failed", err.Error())
+		return
+	}
+	a.add("supervisor", "done", why)
+}
+
+// restartCmd restarts the native server on Windows: there is no server
+// restart command.
+const restartCmd = "backsight server stop, then backsight server start"
+
+// supervisorRestart is update apply's rule for the supervisor st that
+// runs, the new binary (target) speaking proto: restart only on another
+// protocol, or after a server upgrade that left the old backsight running.
+func supervisorRestart(st supervise.Status, proto int, upgraded bool, target string) (restart bool, why string) {
+	switch {
+	case st.Proto != proto:
+		return true, fmt.Sprintf("restarted: it spoke protocol %d, backsight %s speaks %d", st.Proto, target, proto)
+	case upgraded && strings.TrimPrefix(st.Version, "v") != target: // a binary may report v<version>
+		return true, "restarted: it still ran backsight " + st.Version + " after the server upgrade"
+	case upgraded:
+		return false, "the server upgrade restarted it: it runs backsight " + target
+	}
+	return false, "the server keeps running backsight " + st.Version + " until its next restart"
 }
 
 // upgradePassed: no upgrade is marked in progress (the child clears its

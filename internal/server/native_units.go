@@ -476,7 +476,24 @@ func (n Native) waitDB(ctx context.Context) error {
 // API to answer with its database connected. What restart-pending lists
 // is restarted, and the marker removed only once the API answered
 // (rulings R1, R30).
-func (n Native) Start(ctx context.Context) error {
+func (n Native) Start(ctx context.Context) error { return n.start(ctx, false) }
+
+// RestartSupervisor is Start with the supervisor restarted whatever
+// restart-pending says (Windows): update apply's, when the supervisor
+// that runs speaks another protocol than the new backsight, or still runs
+// the old one after a server upgrade. The task's action runs the shim,
+// the new binary since the update's switch. The systemd host has no
+// supervisor: an error.
+func (n Native) RestartSupervisor(ctx context.Context) error {
+	if _, ok := n.host().(taskHost); !ok {
+		return errors.New("the native server has a supervisor on Windows only")
+	}
+	return n.start(ctx, true)
+}
+
+// start is Start; restart forces the database side's restart (the task
+// host: the supervisor).
+func (n Native) start(ctx context.Context, restart bool) error {
 	if n.Err != nil {
 		return n.Err
 	}
@@ -493,7 +510,10 @@ func (n Native) Start(ctx context.Context) error {
 	}
 	marks := h.markers()
 	db, srv := marks[0], marks[1]
-	if err := h.StartDB(ctx, pending[db]); err != nil {
+	// A supervisor restarted on purpose starts an API that reads the
+	// server.env of now: nothing more to restart.
+	apiRestart := (pending[db] || pending[srv]) && !restart
+	if err := h.StartDB(ctx, pending[db] || restart); err != nil {
 		return err
 	}
 	if err := n.waitDB(ctx); err != nil {
@@ -502,7 +522,7 @@ func (n Native) Start(ctx context.Context) error {
 	if err := n.fsyncOrStop(ctx); err != nil {
 		return err
 	}
-	if err := h.StartAPI(ctx, pending[db] || pending[srv]); err != nil {
+	if err := h.StartAPI(ctx, apiRestart); err != nil {
 		return err
 	}
 	if err := n.waitAPI(ctx); err != nil {
@@ -652,7 +672,13 @@ func (n Native) Delete(ctx context.Context) error {
 			return err
 		}
 	}
-	return os.RemoveAll(n.Root())
+	if err := os.RemoveAll(n.Root()); err != nil {
+		return err
+	}
+	if _, task := h.(taskHost); task {
+		n.dropPg0Skeleton()
+	}
+	return nil
 }
 
 // Status reads each installed unit's state, as Docker's container states:

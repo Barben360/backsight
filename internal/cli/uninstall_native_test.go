@@ -59,7 +59,7 @@ func nativeUninstallHost(t *testing.T) (n server.Native, watch *guardWatch, arch
 // plain uninstall stops and disables both units first, its data kept, and
 // its plan says so; the JSON still says the server was kept.
 func TestUninstallOnNativeNeverLeavesAUnitWithoutItsGuard(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
+	testtool.SkipWindows(t, "linux-only: the systemd units' guard; Windows' order (the task, the supervisor) is TestUninstallLeavesNoTaskAndNoProcess")
 	n, watch, archive := nativeUninstallHost(t)
 
 	code, out, errOut := run(t, "uninstall", "--plan")
@@ -98,7 +98,7 @@ func TestUninstallOnNativeNeverLeavesAUnitWithoutItsGuard(t *testing.T) {
 // --delete-data stops and disables both units before anything under
 // Root() goes; backups stay.
 func TestUninstallDeleteDataOnNativeStopsBeforeRemoving(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units); Windows' order (the task, the supervisor) is TestUninstallLeavesNoTaskAndNoProcess")
 	n, watch, archive := nativeUninstallHost(t)
 	code, env, raw := uninstall(t, "--delete-data", "--answer", "confirm_bank="+n.Cfg.Server.Bank)
 	if code != output.OK || env.Data.Server != "delete-data" {
@@ -124,7 +124,7 @@ func TestUninstallDeleteDataOnNativeStopsBeforeRemoving(t *testing.T) {
 // --purge-local over a kept native server names the file its password
 // lives in: server.env, not Docker's .env.
 func TestUninstallPurgeLocalOnNativeNamesServerEnv(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units); Windows' task host has its own uninstall tests")
 	n, _, _ := nativeUninstallHost(t)
 	code, env, raw := uninstall(t, "--purge-local", "--answer", "identity_saved=yes", "--answer", "pre_images_ack=yes", "--non-interactive")
 	if code != output.OK {

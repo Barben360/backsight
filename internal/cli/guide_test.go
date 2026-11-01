@@ -388,7 +388,6 @@ func TestMemoryCommandsNeverReadTheDocsBank(t *testing.T) {
 // update apply has the new binary index its docs once the update is
 // committed; a failure there is a warning, never a rollback.
 func TestUpdateApplyIndexesTheNewBinarysDocs(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	withGuideDocs(t)
 	f := newDocsHindsight(t, home)
@@ -407,7 +406,6 @@ func TestUpdateApplyIndexesTheNewBinarysDocs(t *testing.T) {
 }
 
 func TestUpdateApplyGoesOnWhenTheDocsCannotBeIndexed(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0") // its server hangs up
 	d := pathsOf(home)
 	withGuideDocs(t)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/scheduler"
 	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -216,6 +217,9 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 		defer cancel()
 		_ = h.stopSupervisor(cctx)
 		_, _ = execSys{}.Run(cctx, "schtasks", "/Delete", "/F", "/TN", n.TaskName())
+		if _, err := scheduler.DeleteTaskFolder(project); err != nil { // schtasks leaves the folder
+			t.Errorf("the task's folder \\%s: %v", project, err)
+		}
 		for _, pid := range append(append(pidsIn(file("pg.pids")), pidsIn(file("api.pids"))...), supPID) {
 			if pid != 0 && alive(pid) {
 				t.Errorf("pid %d still runs at the end", pid)

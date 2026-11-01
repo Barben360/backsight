@@ -478,15 +478,20 @@ func TestProbeTaskAlwaysDeletes(t *testing.T) {
 			}
 			return nil, nil
 		}
-		err := ProbeTask(context.Background(), run, "S-1-5-21-1-2-3-1001", "bs-test-probe", `C:\Jé & Co\bin\current.exe`, dir)
+		deleteFolder := func(name string) (bool, error) {
+			calls = append(calls, []string{"DeleteTaskFolder", name})
+			return false, errors.New("ERROR_DIR_NOT_EMPTY") // the server's task is there: not the probe's failure
+		}
+		err := ProbeTask(context.Background(), run, deleteFolder, "S-1-5-21-1-2-3-1001", "bs-test-probe", `C:\Jé & Co\bin\current.exe`, dir)
 		if refuse != (err != nil) {
 			t.Fatalf("refuse %v: %v", refuse, err)
 		}
 		if refuse && !strings.Contains(err.Error(), "Access is denied") {
 			t.Errorf("the refusal does not say why: %v", err)
 		}
-		want := [][]string{{"schtasks", "/Create", "/F", "/XML", "", "/TN", `\bs-test-probe\probe`}, {"schtasks", "/Delete", "/F", "/TN", `\bs-test-probe\probe`}}
-		if len(calls) != 2 || len(calls[0]) != 7 {
+		want := [][]string{{"schtasks", "/Create", "/F", "/XML", "", "/TN", `\bs-test-probe\probe`}, {"schtasks", "/Delete", "/F", "/TN", `\bs-test-probe\probe`},
+			{"DeleteTaskFolder", "bs-test-probe"}}
+		if len(calls) != 3 || len(calls[0]) != 7 {
 			t.Fatalf("calls %q", calls)
 		}
 		calls[0][4] = ""
@@ -503,7 +508,7 @@ func TestProbeTaskAlwaysDeletes(t *testing.T) {
 	// A path Task Scheduler would expand never reaches schtasks.
 	called := false
 	err := ProbeTask(context.Background(), func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil },
-		"S-1-5-21-1-2-3-1001", "bs-test-probe", `C:\a%USERNAME%b\current.exe`, dir)
+		func(string) (bool, error) { called = true; return false, nil }, "S-1-5-21-1-2-3-1001", "bs-test-probe", `C:\a%USERNAME%b\current.exe`, dir)
 	if err == nil || called {
 		t.Errorf("a %% path: %v, schtasks called %v", err, called)
 	}

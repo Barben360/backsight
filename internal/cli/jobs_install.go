@@ -312,6 +312,14 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 						return blocked(err)
 					}
 				}
+				if p.Kind == "schtasks" { // their directories, <state>\tasks\<project>, once empty
+					for _, f := range files {
+						if dir := filepath.Dir(f); filepath.Base(filepath.Dir(dir)) == "tasks" {
+							removeIfEmpty(dir)
+							removeIfEmpty(filepath.Dir(dir))
+						}
+					}
+				}
 				if p.Kind == "systemd" {
 					_, _ = sysRunner.Run(cmd.Context(), "systemctl", "--user", "daemon-reload")
 				}

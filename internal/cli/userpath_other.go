@@ -6,5 +6,6 @@ package cli
 // shell's own profile decide.
 func ensureUserPath(dir string) (added bool, err error) { return false, nil }
 
-//nolint:unused // uninstall calls it (Task 13)
 func removeUserPath(dir string) (removed bool, err error) { return false, nil }
+
+func userPathHas(dir string) (bool, error) { return false, nil }

@@ -90,6 +90,20 @@ func ensureUserPath(dir string) (added bool, err error) {
 	return true, nil
 }
 
+// userPathHas: an entry of the user's PATH is dir (read only).
+func userPathHas(dir string) (bool, error) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, userPathKey, registry.QUERY_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = k.Close() }()
+	cur, _, err := readUserPath(k)
+	return err == nil && pathHas(cur, dir), err
+}
+
 // removeUserPath removes exactly the entries that are dir from the user's
 // PATH (uninstall), and nothing else.
 func removeUserPath(dir string) (removed bool, err error) {

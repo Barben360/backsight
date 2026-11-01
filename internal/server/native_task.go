@@ -424,6 +424,22 @@ func (h taskHost) Remove(ctx context.Context) error {
 	return h.onTask(ctx, "/Delete", "/F", "/TN", h.n.TaskName())
 }
 
+// Unregister stops the native server and deletes its scheduled task
+// (Windows), its files and data kept: uninstall removes the shim the task
+// runs, so a task left registered would fail at every logon and every 5
+// minutes. A later server start registers it again from task.xml. The
+// systemd host has no such entry to delete: it stops (its units stay,
+// disabled, as uninstall leaves them on Linux).
+func (n Native) Unregister(ctx context.Context) error {
+	if n.Err != nil {
+		return n.Err
+	}
+	if h, ok := n.host().(taskHost); ok {
+		return h.Remove(ctx)
+	}
+	return n.host().Stop(ctx)
+}
+
 // onTask runs schtasks on the task, always: a failure counts only while
 // the task is registered (schtasks' text, localized, is never read). A
 // /Query that failed for another reason would otherwise skip a /DISABLE,

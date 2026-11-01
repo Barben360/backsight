@@ -765,7 +765,7 @@ func windowsProbes(p *setup.Probes, s setupEnv, srv *config.Config, extra map[st
 		if err != nil {
 			return err
 		}
-		return setup.ProbeTask(ctx, nativeSys.Run, sid, cfg.Server.Project, shim, os.TempDir())
+		return setup.ProbeTask(ctx, nativeSys.Run, deleteTaskFolder, sid, cfg.Server.Project, shim, os.TempDir())
 	}
 }
 

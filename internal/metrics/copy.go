@@ -95,6 +95,7 @@ var doctorNames = map[string]string{
 	"native-refused": "native install refusal", "native-stray": "stray native files", "native-unit": "native service",
 	"native-venv": "native Python environment", "native-task": "native scheduled task", "supervisor": "native server supervisor",
 	"native-dlls": "native runtime libraries", "native-private": "private files", "path-length": "install path length",
+	"shim-copies":    "earlier program copies",
 	"noise-headless": "background sessions", "noise-subagent": "helper agents",
 	"noise-transverse": "shared notes", "notes": "notes", "own-owners": "file owners", "pending-restore": "pending restore",
 	"purged-documents": "removed sessions",

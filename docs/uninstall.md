@@ -34,6 +34,8 @@ backsight uninstall
 
 The server keeps running with your memory; uninstall prints the command to stop it yourself. Config, secrets, state and backups stay, so a later install picks up where you left off.
 
+On Windows, uninstall also stops the native server and deletes its scheduled task (the task would run the removed shim), deletes the tasks' folder in Task Scheduler and removes backsight's directory from your user `PATH`, before the files. Files that Claude Code sessions still run are moved to `trash` under the data directory, and a cleaner deletes them within 5 minutes of their release; uninstall names that directory, to delete after closing Claude Code if it is still there. See [windows.md](windows.md).
+
 ## Stopping or deleting the server
 
 | Flag | Effect |

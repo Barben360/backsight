@@ -27,6 +27,22 @@ import (
 // user's profile (native_windows.go); tests use another.
 var pg0Home = userPg0Home
 
+// dropPg0Skeleton removes what the first install left in pg0's own
+// directory once its installation moved and its instance was forgotten:
+// installation\, instances\ and .pg0 itself, each only when empty (a
+// pg0 of the user's own keeps everything of it). Delete's last step.
+func (n Native) dropPg0Skeleton() {
+	dir, err := pg0Home()
+	if err != nil {
+		return
+	}
+	for _, d := range []string{n.join(dir, "installation"), n.join(dir, "instances"), dir} {
+		if ents, err := os.ReadDir(d); err == nil && len(ents) == 0 {
+			_ = os.Remove(d)
+		}
+	}
+}
+
 // renameDir moves a directory; tests make it fail as across volumes.
 var renameDir = renameRetry
 

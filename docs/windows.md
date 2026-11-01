@@ -56,6 +56,14 @@ Windows has no service manager a standard user can use, so backsight supervises 
 
 `backsight jobs tick` (every 15 minutes) and `backsight jobs maintain` (every day at 04:00) are two more scheduled tasks of your own, `\backsight\tick` and `\backsight\maintain` (named after `server.project`), registered the same way as the server's: with your own rights, in a console without a window, on battery too, with no time limit. A run missed while the PC was off or asleep runs as soon as it can, so a 04:00 maintain missed overnight runs at your next logon. Their files are `tick.xml` and `maintain.xml` in `tasks\<project>` under backsight's state directory, so that `backsight jobs uninstall` still deletes them after `server.project` changes. A task cannot carry environment variables, so a `BACKSIGHT_HOME` or `BACKSIGHT_STATE_DIR` set when the jobs (or the server's task) were installed is written into each task's command line. A failed run is not retried: the next one comes at its time. An update registers a changed task again, except while its job runs: that one waits for the next update or `backsight jobs refresh`.
 
+## Updates and uninstall while Claude Code runs
+
+Every Claude Code session runs `current.exe`, the shim in `bin` under backsight's data directory, and so does the server's supervisor. Windows cannot delete or overwrite a program that runs, but can rename it.
+
+- `backsight update apply` renames the running shim to `current.exe.old-<n>` and puts the new one in its place; a later update or `backsight client install` deletes the copies nothing runs any more. Doctor's `shim-copies` check counts those still running (info).
+- The supervisor keeps running the backsight it started from. `update apply` restarts it only when the new backsight speaks another protocol to it, or when it still runs the old one after the update's own server upgrade (which restarts it); hooks queue their notes during that short outage. Otherwise its `supervisor` step says `the server keeps running backsight <old> until its next restart`, and doctor's `supervisor` check shows it as info.
+- `backsight uninstall` stops the supervisor and deletes the server's task (its data stays unless `--delete-data`), deletes the jobs' tasks, then their folder `\<project>` in Task Scheduler, removes backsight's `bin` directory from your user `PATH` (no other entry), then deletes the files. A file a program still runs or holds is moved to `trash` under the data directory, and a cleaner (`cmd.exe`, without a window) tries to delete that directory every 5 seconds for 5 minutes after uninstall exits, then the data directory once nothing else is left in it. The result names the trash: if it is still there, close Claude Code, then delete it.
+
 ## Setup
 
 `backsight setup` on Windows x86_64 runs the server natively (`--runtime native` is the default there; `--runtime docker` keeps Docker, untested on Windows) and for this PC (`--role both`). Its pre-flight checks, before anything is written:
@@ -79,6 +87,7 @@ When a policy blocks your scheduled tasks, setup warns and goes on: it writes `s
 - `supervisor`: the supervisor answers; after an update that changed its protocol it asks for a restart (`backsight server stop`, then `backsight server start`), and one still running an older backsight is shown as info;
 - `native-dlls`: each copy of the VC++ runtime DLLs matches `dlls.json`;
 - `native-private`: the data directory, the config directory, `secrets.toml` and `server.env` are readable by you, SYSTEM and Administrators only;
-- `path-length`: the server's Python environment is within the path bound.
+- `path-length`: the server's Python environment is within the path bound;
+- `shim-copies`: the earlier copies of the shim an update renamed, still run by a session or the supervisor (info; the next update deletes those no longer running).
 
 [Troubleshooting](troubleshooting.md) gives the fix for each.

@@ -58,3 +58,25 @@ func TestBinaryCheckNeedsTheProbe(t *testing.T) {
 		}
 	}
 }
+
+// The shim's earlier copies a swap left (Windows): none is ok, some is
+// information with each named, never a fault; no list asked, no check.
+func TestShimCopiesCheck(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range f.run().Checks {
+		if c.ID == "shim-copies" {
+			t.Errorf("a check without ShimCopies: %+v", c)
+		}
+	}
+	var copies []string
+	f.env.ShimCopies = func() []string { return copies }
+	expect(t, check(t, f.run(), "shim-copies"), OK, "no earlier copy")
+	copies = []string{`C:\d\bin\current.exe.old-1`, `C:\d\bin\current.exe.old-3`}
+	c := check(t, f.run(), "shim-copies")
+	expect(t, c, Info, "2 earlier copies of the shim still run")
+	if !strings.Contains(c.Detail, copies[0]) || !strings.Contains(c.Detail, copies[1]) {
+		t.Errorf("detail %q", c.Detail)
+	}
+	copies = copies[:1]
+	expect(t, check(t, f.run(), "shim-copies"), Info, "1 earlier copy of the shim still runs")
+}

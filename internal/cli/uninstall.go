@@ -25,6 +25,8 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
@@ -55,6 +57,10 @@ type uninstallResult struct {
 	Kept      []string        `json:"kept"`
 	Warnings  []string        `json:"warnings,omitempty"`
 	NextSteps []string        `json:"next_steps,omitempty"`
+	// Trash: the files Windows would not delete because a program held
+	// them (Claude Code sessions run the shim), moved to <data>\trash for
+	// the cleaner (Windows only).
+	Trash []string `json:"trash,omitempty"`
 }
 
 func newUninstallCmd(e *env) *cobra.Command {
@@ -115,6 +121,20 @@ var jobLockWait = 2 * time.Minute
 
 // uninstallShareBudget bounds the delete of this machine's shared counts.
 var uninstallShareBudget = 5 * time.Second
+
+// The Windows seams; tests replace them (TestMain refuses both).
+var (
+	// deleteTaskFolder deletes Task Scheduler's empty folder \<project>,
+	// which schtasks /Delete leaves behind.
+	deleteTaskFolder = scheduler.DeleteTaskFolder
+	// startCleaner starts the detached cleaner of the trash directory.
+	startCleaner = startTrashCleaner
+)
+
+// The Windows cleaner's loop: cleanerTries attempts, cleanerPings-1
+// seconds apart (ping -n N waits N-1 s): 60 × 5 s, five minutes. Tests
+// shorten it.
+var cleanerTries, cleanerPings = 60, 6
 
 var uninstallAnswers = map[string][]string{"confirm_bank": nil, "retention": {"keep", "restore"}, "identity_saved": {"yes"},
 	"pre_images_ack": {"yes"}, "drop_queued": {"yes"}}
@@ -337,6 +357,12 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			}
 		}
 	}
+	// Windows: what a program holds cannot be deleted, but can be renamed
+	// into the data root's trash, which a cleaner empties once released.
+	var trash *trashBin
+	if runtime.GOOS == "windows" && !f.plan {
+		trash = &trashBin{dir: filepath.Join(d.Data, "trash")}
+	}
 	add := func(a undoAction) { res.Steps = append(res.Steps, a) }
 	fail := func(name string, err error) (uninstallResult, error) {
 		add(undoAction{Name: name, Status: "failed", Detail: errMessage(err)})
@@ -461,6 +487,15 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			res.NextSteps = append(res.NextSteps, "the server's images stay on disk (about 3 GB) for another install to reuse; remove them with: "+imagesCmd)
 		}
 	}
+	// Windows: the folder \<project> the server's and the jobs' tasks were
+	// in, which schtasks leaves behind; both tasks are gone now.
+	if runtime.GOOS == "windows" {
+		tasks := false
+		for _, s := range res.Steps {
+			tasks = tasks || ((s.Name == "scheduler" || s.Name == "server") && (s.Status == "done" || s.Status == "planned"))
+		}
+		add(uninstallTaskFolder(cfg.Server.Project, f.plan, tasks, &res))
+	}
 
 	// 5. Local files, before the binaries: a failure here still resumes.
 	switch {
@@ -473,7 +508,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		} else {
 			releaseLocks()
 			var err error
-			if foreign, err = purgeLocal(d, keep); err != nil {
+			if foreign, err = purgeLocal(d, trash, keep); err != nil {
 				return fail("local files", err)
 			}
 		}
@@ -496,7 +531,15 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// 6. Last, the command on PATH, the shim, the binaries and the
 	// marketplace. A failure here is not resumable (the state may be gone
 	// and the binary with it): what is left is listed, to remove by hand.
-	a, warn, err := uninstallBinaries(d, keep, f.plan)
+	// Windows: the user PATH entry first, then the files.
+	if runtime.GOOS == "windows" {
+		a, err := uninstallUserPath(d, f.plan)
+		if err != nil {
+			return fail("user path", err)
+		}
+		add(a)
+	}
+	a, warn, err := uninstallBinaries(d, trash, keep, f.plan)
 	res.Warnings = append(res.Warnings, warn...)
 	if err != nil {
 		add(undoAction{Name: "binaries", Status: "failed", Detail: errMessage(err)})
@@ -506,6 +549,16 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	if !f.plan {
 		removeIfEmpty(filepath.Join(d.Data, "server"))
 		removeIfEmpty(d.Data)
+	}
+	if trash != nil && len(trash.moved) > 0 {
+		res.Trash = trash.moved
+		left := "close Claude Code, then delete " + trash.dir
+		if err := startCleaner(trash.dir); err != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("%d file(s) in use were moved to %s, and its cleaner did not start (%v): %s", len(trash.moved), trash.dir, err, left))
+		} else {
+			res.NextSteps = append(res.NextSteps, fmt.Sprintf("%d file(s) in use (Claude Code sessions run the shim) were moved to %s: a cleaner deletes them within %s of their release; if it is still there after, %s",
+				len(trash.moved), trash.dir, time.Duration(cleanerTries*(cleanerPings-1))*time.Second, left))
+		}
 	}
 	if res.Server != "delete-data" && deployed != "" {
 		res.Kept = append(res.Kept, "the memory server's data (backsight uninstall --delete-data removes it)")
@@ -799,6 +852,9 @@ func ownEntry(d paths.Dirs, dir, name string) bool {
 		for _, n := range []string{"staging", "logs", "breaker.json", "reach.json", "split-sessions.json", "doctor-snapshot.json", "machine_id", "reattribute.jsonl", "reattribute.json", "noise-history.jsonl", serverCheckStamp} {
 			own = append(own, filepath.Join(d.State, n))
 		}
+		if runtime.GOOS == "windows" {
+			own = append(own, filepath.Join(d.State, "tasks")) // the jobs' task files (jobs install)
+		}
 	}
 	return slices.Contains(own, filepath.Join(dir, name))
 }
@@ -821,7 +877,7 @@ func foreignEntries(d paths.Dirs) []string {
 // purgeLocal deletes what backsight wrote in the config and state
 // directories, never the backups (keep) nor an entry it did not write,
 // which it returns.
-func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
+func purgeLocal(d paths.Dirs, trash *trashBin, keep []string) ([]string, error) {
 	foreign := foreignEntries(d)
 	// The index directory first: its own files go one by one, so that a
 	// file of another hand in it stays, and the state directory's pass
@@ -839,7 +895,7 @@ func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
 				continue
 			}
 			if ownEntry(d, dir, e.Name()) {
-				if err := removeAllExcept(filepath.Join(dir, e.Name()), keep...); err != nil {
+				if err := removeAllExcept(filepath.Join(dir, e.Name()), trash, keep...); err != nil {
 					return foreign, err
 				}
 			}
@@ -920,7 +976,11 @@ func uninstallServer(ctx context.Context, cfg config.Config, mode string, plan b
 	}
 	// The caller holds the server lock.
 	if mode == "stop" {
-		if err := rt.Stop(ctx); err != nil {
+		stop := rt.Stop
+		if n, ok := rt.(server.Native); ok && runtime.GOOS == "windows" {
+			stop = n.Unregister // its task runs the shim this uninstall removes
+		}
+		if err := stop(ctx); err != nil {
 			return a, err
 		}
 		a.Status, a.Detail = "done", "stopped, its data kept"
@@ -939,14 +999,23 @@ func uninstallServer(ctx context.Context, cfg config.Config, mode string, plan b
 // native-check), which this uninstall removes with the shim, so a unit
 // left enabled would fail at its next start (boot, Restart=). Both units
 // are stopped and disabled instead; the data stays.
+//
+// On Windows the scheduled task runs backsight itself: it is deleted (the
+// supervisor stopped first), task.xml and the data kept for a later
+// server start.
 func nativeKept(ctx context.Context, n server.Native, plan bool) (undoAction, error) {
 	a := undoAction{Name: "server", Status: "planned",
 		Detail: "stopped and disabled: its guard is backsight, which this uninstall removes; its data is kept in " + n.Home()}
+	stop := n.Stop
+	if runtime.GOOS == "windows" {
+		a.Detail = "stopped and its scheduled task " + n.TaskName() + " deleted: the task runs backsight, which this uninstall removes; its data is kept in " + n.Root()
+		stop = n.Unregister
+	}
 	if plan {
 		return a, nil
 	}
 	// The caller holds the server lock.
-	if err := n.Stop(ctx); err != nil {
+	if err := stop(ctx); err != nil {
 		return a, err
 	}
 	a.Status = "done"
@@ -962,11 +1031,21 @@ type binariesAction struct {
 // uninstallBinaries removes the command on PATH when it is backsight's
 // link, then <data>/bin (shim and versioned binaries) and the marketplace.
 // A command on PATH that is not that link stays, with a warning.
-func uninstallBinaries(d paths.Dirs, keep []string, plan bool) (binariesAction, []string, error) {
+func uninstallBinaries(d paths.Dirs, trash *trashBin, keep []string, plan bool) (binariesAction, []string, error) {
 	a := binariesAction{undoAction: undoAction{Name: "binaries"}}
 	var warn []string
 	bin, mkt := filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace")
 	link := ""
+	if runtime.GOOS == "windows" && d.Bin != "" {
+		// A copy of the shim: any file there is backsight's (install
+		// refuses another), anything else stays.
+		if p, ours, there := windowsPathCommand(d); ours {
+			link = p
+			a.paths = append(a.paths, p)
+		} else if there {
+			warn = append(warn, p+" is not backsight's copy of the shim: kept; remove it by hand if it is an old backsight")
+		}
+	}
 	if runtime.GOOS != "windows" && d.Bin != "" {
 		p := filepath.Join(d.Bin, "backsight")
 		if _, err := os.Lstat(p); err == nil {
@@ -993,12 +1072,22 @@ func uninstallBinaries(d paths.Dirs, keep []string, plan bool) (binariesAction, 
 	}
 	if !plan {
 		if link != "" {
-			if err := os.Remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := trash.remove(link); err != nil {
 				return a, warn, err
+			}
+			if runtime.GOOS == "windows" {
+				// The signed checksums the copy carries (pointShimWindows),
+				// then backsight's own directory there.
+				for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
+					if err := trash.remove(filepath.Join(d.Bin, name)); err != nil {
+						return a, warn, err
+					}
+				}
+				removeIfEmpty(d.Bin)
 			}
 		}
 		for _, p := range []string{bin, mkt} {
-			if err := removeAllExcept(p, keep...); err != nil {
+			if err := removeAllExcept(p, trash, keep...); err != nil {
 				return a, warn, err
 			}
 		}
@@ -1022,7 +1111,7 @@ func stillThere(list []string) []string {
 // paths and the directories that lead to them. A keep path is also
 // compared through its symlinks, so a backup directory reached by a link
 // into root is kept.
-func removeAllExcept(root string, keep ...string) error {
+func removeAllExcept(root string, trash *trashBin, keep ...string) error {
 	var keeps []string
 	for _, k := range keep {
 		keeps = append(keeps, filepath.Clean(k))
@@ -1030,10 +1119,10 @@ func removeAllExcept(root string, keep ...string) error {
 			keeps = append(keeps, r)
 		}
 	}
-	return removeKeeping(filepath.Clean(root), keeps)
+	return removeKeeping(filepath.Clean(root), keeps, trash)
 }
 
-func removeKeeping(root string, keeps []string) error {
+func removeKeeping(root string, keeps []string, trash *trashBin) error {
 	real := root
 	if r, err := filepath.EvalSymlinks(root); err == nil {
 		real = r
@@ -1052,7 +1141,7 @@ func removeKeeping(root string, keeps []string) error {
 		}
 	}
 	if !inside {
-		return removeAll(root) // a link is removed, never what it points at
+		return trash.removeAll(root) // a link is removed, never what it points at
 	}
 	ents, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1062,7 +1151,7 @@ func removeKeeping(root string, keeps []string) error {
 		return err
 	}
 	for _, e := range ents {
-		if err := removeKeeping(filepath.Join(root, e.Name()), keeps); err != nil {
+		if err := removeKeeping(filepath.Join(root, e.Name()), keeps, trash); err != nil {
 			return err
 		}
 	}
@@ -1088,6 +1177,139 @@ func printable(err error, p string) (out error) {
 	}()
 	_ = err.Error()
 	return err
+}
+
+// trashBin is where uninstall moves, on Windows, what it cannot delete
+// because a program holds it (a Claude Code session runs the shim): a
+// running or open file can be renamed there. A nil trashBin (other
+// systems, a plan) removes as removeAll does.
+type trashBin struct {
+	dir   string
+	moved []string // what went there, as <dir>\<n>-<base>
+}
+
+// remove removes the file or link p (gone already: done), moving it to
+// the trash when held.
+func (t *trashBin) remove(p string) error {
+	err := os.Remove(p)
+	switch {
+	case err == nil, errors.Is(err, fs.ErrNotExist):
+		return nil
+	case t != nil && heldError(err):
+		return t.move(p)
+	}
+	return err
+}
+
+// removeAll is removeAll(p), then, for what a program held, a pass that
+// moves each held file to the trash and removes the directories left.
+func (t *trashBin) removeAll(p string) error {
+	err := removeAll(p)
+	if err == nil || t == nil {
+		return err
+	}
+	return t.sweep(p)
+}
+
+func (t *trashBin) sweep(p string) error {
+	fi, err := os.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() || fi.Mode()&fs.ModeSymlink != 0 {
+		return t.remove(p)
+	}
+	ents, err := os.ReadDir(p)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if err := t.sweep(filepath.Join(p, e.Name())); err != nil {
+			return err
+		}
+	}
+	return t.remove(p) // a directory a program works in is moved whole
+}
+
+// move renames p to the first free <dir>\<n>-<base>.
+func (t *trashBin) move(p string) error {
+	if err := os.MkdirAll(t.dir, 0o700); err != nil {
+		return err
+	}
+	for n := 1; ; n++ {
+		dst := filepath.Join(t.dir, fmt.Sprintf("%d-%s", n, filepath.Base(p)))
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		}
+		if err := os.Rename(p, dst); err != nil {
+			return fmt.Errorf("%s is in use and cannot be moved to %s either: %w", p, t.dir, err)
+		}
+		t.moved = append(t.moved, dst)
+		return nil
+	}
+}
+
+// windowsPathCommand is <bin>\backsight.exe: ours when it is a plain file
+// (a copy of the shim), there when anything is at that name.
+func windowsPathCommand(d paths.Dirs) (p string, ours, there bool) {
+	p = pathCommand(d.Bin)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return p, false, false
+	}
+	return p, fi.Mode().IsRegular(), true
+}
+
+// uninstallUserPath removes <bin>, backsight's directory, from the user
+// PATH (HKCU) on Windows, and no other entry; kept while a file that is
+// not backsight's copy stays at <bin>\backsight.exe.
+func uninstallUserPath(d paths.Dirs, plan bool) (undoAction, error) {
+	a := undoAction{Name: "user path"}
+	if _, ours, there := windowsPathCommand(d); there && !ours {
+		a.Status, a.Detail = "kept", d.Bin+" stays on the user PATH: "+pathCommand(d.Bin)+" is not backsight's"
+		return a, nil
+	}
+	has, err := userPathHas(d.Bin)
+	if err != nil {
+		return a, err
+	}
+	if !has {
+		a.Status, a.Detail = "skipped", d.Bin+" is not on the user PATH"
+		return a, nil
+	}
+	if !plan {
+		if _, err := removeUserPath(d.Bin); err != nil {
+			return a, fmt.Errorf("removing %s from the user PATH: %w", d.Bin, err)
+		}
+	}
+	a.Status, a.Detail = done(plan), d.Bin+" removed from the user PATH (its other entries kept)"
+	return a, nil
+}
+
+// uninstallTaskFolder deletes Task Scheduler's folder \<project> once its
+// tasks are gone (tasks: a step removed one, or plans to). One still
+// holding a task is refused by Task Scheduler and kept, with a warning
+// naming it; none there is skipped.
+func uninstallTaskFolder(project string, plan, tasks bool, res *uninstallResult) undoAction {
+	a := undoAction{Name: "task folder", Status: done(plan), Detail: `Task Scheduler's folder \` + project + " deleted"}
+	if plan {
+		if !tasks {
+			a.Status, a.Detail = "skipped", "no task of backsight's here"
+		}
+		return a
+	}
+	deleted, err := deleteTaskFolder(project)
+	switch {
+	case err != nil:
+		a.Status, a.Detail = "kept", err.Error()
+		res.Warnings = append(res.Warnings, `Task Scheduler's folder \`+project+" stays ("+err.Error()+"): delete it in Task Scheduler once its tasks are gone")
+	case !deleted:
+		a.Status, a.Detail = "skipped", `no folder \`+project+" in Task Scheduler"
+	}
+	return a
 }
 
 func removeIfEmpty(dir string) {

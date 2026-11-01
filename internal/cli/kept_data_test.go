@@ -11,7 +11,6 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // uninstall --stop --purge-local keeps the server and its .env; server
@@ -19,7 +18,6 @@ import (
 // database and the server's API key work again (M5 review rules,
 // "Setting up again over kept data").
 func TestServerInstallAfterPurgeLocalAdoptsTheKeptKeys(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: uninstall (--stop --purge-local; the PATH command is a copy, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	before, err := config.LoadSecrets(d.SecretsFile())

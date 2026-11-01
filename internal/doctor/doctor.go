@@ -108,6 +108,9 @@ type Env struct {
 	// MetricsIndex reads the local metrics index, read-only (nil: not
 	// asked). The cli reduces a read failure to its class.
 	MetricsIndex func() (IndexFacts, error)
+	// ShimCopies lists the earlier copies of the shim a swap renamed and
+	// could not delete yet, current.exe.old-<n> (Windows; nil: not asked).
+	ShimCopies func() []string
 	InstallProbes
 }
 
@@ -150,6 +153,9 @@ func Run(ctx context.Context, env Env) Report {
 	add(cfgCheck)
 	if env.SelfCheck != nil {
 		add(checkBinary(env.SelfCheck()))
+	}
+	if env.ShimCopies != nil {
+		add(checkShimCopies(env.ShimCopies()))
 	}
 	native := cfgErr == nil && cfg.Server.Mode == "local" && cfg.RuntimeKind() == "native"
 	if native {

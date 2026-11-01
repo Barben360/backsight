@@ -35,8 +35,7 @@ func TestJobsTasksRegisterForReal(t *testing.T) {
 		for _, c := range p.Remove {
 			_, _ = exec.Command(c[0], c[1:]...).CombinedOutput()
 		}
-		_, _ = exec.Command("powershell", "-NoProfile", "-Command",
-			`$s=New-Object -ComObject Schedule.Service; $s.Connect(); $s.GetFolder('\').DeleteFolder('`+project+`', 0)`).CombinedOutput()
+		_, _ = DeleteTaskFolder(project)
 	})
 	for _, f := range p.Files {
 		if err := os.MkdirAll(filepath.Dir(f.Path), 0o700); err != nil {

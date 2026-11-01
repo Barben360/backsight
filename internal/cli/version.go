@@ -10,6 +10,7 @@ import (
 	"github.com/Barben360/backsight/internal/licenses"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 type versionInfo struct {
@@ -28,6 +29,10 @@ type versionInfo struct {
 	// HindsightImage: the server version this binary deploys; a release's
 	// is the source's pin (make verify-keys).
 	HindsightImage string `json:"hindsight_image"`
+	// SuperviseProto: the native server's supervisor protocol this binary
+	// speaks (Windows only): update apply restarts a supervisor that
+	// speaks another.
+	SuperviseProto int `json:"supervise_proto,omitempty"`
 }
 
 func newVersionCmd(e *env) *cobra.Command {
@@ -44,7 +49,10 @@ func newVersionCmd(e *env) *cobra.Command {
 				}{licenses.Text}
 				return e.emit("version", data, func() string { return licenses.Text })
 			}
-			v := versionInfo{buildinfo.Version, buildinfo.Commit, buildinfo.Date, runtime.Version(), runtime.GOOS, runtime.GOARCH, signing.Keys(), signing.TestKey != "", buildinfo.TestHooks, server.HindsightImage}
+			v := versionInfo{buildinfo.Version, buildinfo.Commit, buildinfo.Date, runtime.Version(), runtime.GOOS, runtime.GOARCH, signing.Keys(), signing.TestKey != "", buildinfo.TestHooks, server.HindsightImage, 0}
+			if runtime.GOOS == "windows" {
+				v.SuperviseProto = supervise.Proto
+			}
 			return e.emit("version", v, func() string {
 				s := fmt.Sprintf("backsight %s (%s, %s) %s %s/%s\nHindsight %s\nThird-party licenses: backsight version --licenses\n", v.Version, v.Commit, v.Date, v.Go, v.OS, v.Arch, v.HindsightImage)
 				for _, k := range v.SigningKeys {

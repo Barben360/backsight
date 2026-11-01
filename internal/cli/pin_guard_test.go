@@ -12,7 +12,6 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // Images ordered around the default pin (Hindsight 1.1.0) in these tests.
@@ -182,7 +181,6 @@ func TestServerUpgradeRefusesUnorderedPinsUnlessAllowed(t *testing.T) {
 // update apply passes --allow-unordered on to the new binary's server
 // upgrade; without it the update stops at the server step and rolls back.
 func TestUpdateApplyPassesAllowUnordered(t *testing.T) {
-	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, _, _, bins, oldImage := serverInstalledAt(t, "0.1.1", "0.2.1")
 	bins.images["0.2.1"] = unorderedImage
 	src := t.TempDir()

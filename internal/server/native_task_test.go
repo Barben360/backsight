@@ -355,6 +355,9 @@ func taskFixture(t *testing.T) (taskHost, *fakeTask) {
 	if err := os.WriteFile(filepath.Join(n.Root(), "task.xml"), []byte("<Task/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	oldPg0 := pg0Home
+	pg0Home = func() (string, error) { return filepath.Join(base, "profile", ".pg0"), nil } // never the user's own
+	t.Cleanup(func() { pg0Home = oldPg0 })
 	old := []any{superviseAsk, startSupervisor, taskRunWait, superviseStopWait, supervisePoll}
 	superviseAsk = f.ask
 	startSupervisor = func(args ...string) error {
@@ -635,6 +638,32 @@ func TestRemoveUnregistersAfterTheStop(t *testing.T) {
 	}
 }
 
+// Unregister, uninstall's on Windows (Task 13): disabled, stopped, then
+// deleted, files and data kept; a failing stop deletes nothing.
+func TestUnregisterDeletesTheTaskAfterTheStop(t *testing.T) {
+	h, f := taskFixture(t)
+	f.registered = true
+	f.start()
+	if err := h.n.Unregister(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := f.ev.all()
+	disable, stop, del := slices.Index(got, `schtasks /Change /TN \bs\server /DISABLE`), slices.Index(got, "pipe stop"), slices.Index(got, `schtasks /Delete /F /TN \bs\server`)
+	if disable < 0 || stop < disable || del < stop || f.registered || f.up {
+		t.Errorf("Unregister did\n%s\nwant /DISABLE, the stop, then /Delete", strings.Join(got, "\n"))
+	}
+	if !exists(filepath.Join(h.n.Root(), "task.xml")) {
+		t.Error("Unregister removed task.xml")
+	}
+
+	f.registered, f.stopPolls = true, 1000 // never gone within superviseStopWait
+	f.start()
+	f.ev = &events{}
+	if err := h.n.Unregister(context.Background()); err == nil || !f.registered {
+		t.Errorf("a supervisor that never stops: %v, registered %v", err, f.registered)
+	}
+}
+
 func TestStatesFromThePipe(t *testing.T) {
 	h, f := taskFixture(t)
 	ctx := context.Background()
@@ -778,6 +807,37 @@ func TestDeleteStopsAndUnregistersTheTaskFirst(t *testing.T) {
 	journal, err := os.ReadFile(n.Dirs.JournalFile())
 	if err != nil || !strings.Contains(string(journal), "supervise.json") {
 		t.Errorf("the files were not removed through the config editor: %v", err)
+	}
+}
+
+// What the first install left in pg0's own directory (installation\ and
+// instances\, empty once the installation moved and the instance was
+// forgotten) goes with Delete; a pg0 of the user's own stays whole.
+func TestDeleteDropsPg0sEmptySkeleton(t *testing.T) {
+	for _, own := range []bool{false, true} {
+		h, f := taskFixture(t)
+		withHost(t, h)
+		pg0, _ := pg0Home()
+		for _, d := range []string{"installation", "instances"} {
+			if err := os.MkdirAll(filepath.Join(pg0, d), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if own {
+			if err := os.MkdirAll(filepath.Join(pg0, "instances", "mine"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.registered = true
+		if err := h.n.Delete(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case !own && exists(pg0):
+			t.Errorf("the empty %s stays", pg0)
+		case own && (!exists(filepath.Join(pg0, "instances", "mine")) || exists(filepath.Join(pg0, "installation"))):
+			t.Errorf("a pg0 of the user's own: instance kept %v, empty installation kept %v", exists(filepath.Join(pg0, "instances", "mine")), exists(filepath.Join(pg0, "installation")))
+		}
 	}
 }
 
@@ -1041,4 +1101,60 @@ func TestStoppedOnPurpose(t *testing.T) {
 			t.Errorf("MarkStopped without Root = %v, Root created %v", err, exists(n.Root()))
 		}
 	})
+}
+
+// update apply's supervisor restart (Task 13): with nothing pending, the
+// running supervisor is stopped, gone, and started again through the task
+// (which runs the shim, the new binary), the database and the API waited
+// for as Start does; its API, new, is not restarted a second time, and
+// restart-pending is left as it was. The systemd host has no supervisor.
+func TestRestartSupervisorStopsAndStartsItAgain(t *testing.T) {
+	n, _, _ := nativeFixture(t, secrets)
+	n.GOOS = ""
+	h, f := taskFixture(t)
+	h.n.Cfg, h.n.Dirs, h.n.Tools, h.n.Proc, h.n.Env = n.Cfg, n.Dirs, n.Tools, n.Proc, n.Env
+	h.n.Cfg.Server.Project = "bs"
+	n = h.n
+	withHost(t, h)
+	completeVenv(t, n, n.Version())
+	files, err := n.Render(secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Write(files); err != nil {
+		t.Fatal(err)
+	}
+	recordInstance(t, n, "7702339718603615110")
+	f.registered, f.runStarts = true, true
+	f.start()
+	f.stopPolls = 2
+
+	if err := n.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.ev.all(); slices.Contains(got, "pipe stop") {
+		t.Fatalf("Start with nothing pending stopped the supervisor:\n%s", strings.Join(got, "\n"))
+	}
+
+	f.ev = &events{}
+	if err := n.RestartSupervisor(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := f.ev.all()
+	stop, run := slices.Index(got, "pipe stop"), slices.Index(got, `schtasks /Run /TN \bs\server`)
+	if stop < 0 || run < stop || slices.Contains(got, "pipe api-stop") || !slices.Contains(got[run:], "pipe api-start") {
+		t.Errorf("RestartSupervisor did\n%s\nwant a stop, a /Run, then the API started once", strings.Join(got, "\n"))
+	}
+	if statuses := strings.Count(strings.Join(got[stop:run], "\n"), "pipe status"); statuses < 2 {
+		t.Errorf("started again after %d status polls: the old supervisor still answered", statuses)
+	}
+	if exists(n.pendingFile()) {
+		t.Error("a restart wrote restart-pending")
+	}
+
+	sd, _, _ := nativeFixture(t, secrets)
+	withHost(t, systemdHost{n: sd})
+	if err := sd.RestartSupervisor(context.Background()); err == nil || !strings.Contains(err.Error(), "on Windows only") {
+		t.Errorf("the systemd host: %v", err)
+	}
 }

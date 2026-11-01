@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -643,5 +644,34 @@ func TestDoctorOnWindowsReadsTheTaskAndTheSupervisor(t *testing.T) {
 	sys.missing = true
 	if _, c = doctorChecks(t); c["native-task"].Status != doctor.Error || c["native-task"].Fix != "backsight server start" {
 		t.Errorf("native-task missing: %+v", c["native-task"])
+	}
+}
+
+// Doctor on Windows counts the shim's current.exe.old-<n> a swap left
+// (decision 0080): information, never a fault; another name beside the
+// shim is not one of them. Elsewhere there is no such check (the Linux
+// check list is unchanged).
+func TestDoctorCountsTheShimsEarlierCopiesOnWindows(t *testing.T) {
+	home := devInstall(t, true)
+	bin := filepath.Join(pathsOf(home).Data, "bin")
+	_ = os.MkdirAll(bin, 0o700)
+	for _, n := range []string{"current.exe", "current.exe.old-1", "current.exe.old-12", "current.exe.old-x", "current.exe.old-"} {
+		if err := os.WriteFile(filepath.Join(bin, n), []byte("MZ"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, c := doctorChecks(t); runtime.GOOS != "windows" {
+		if _, ok := c["shim-copies"]; ok {
+			t.Errorf("a shim-copies check on %s: %+v", runtime.GOOS, c["shim-copies"])
+		}
+	}
+	old := doctorGOOS
+	doctorGOOS = "windows"
+	t.Cleanup(func() { doctorGOOS = old })
+	_, c := doctorChecks(t)
+	got := c["shim-copies"]
+	if got.Status != doctor.Info || !strings.HasPrefix(got.Summary, "2 earlier copies") ||
+		got.Detail != filepath.Join(bin, "current.exe.old-1")+", "+filepath.Join(bin, "current.exe.old-12") {
+		t.Errorf("shim-copies %+v", got)
 	}
 }
