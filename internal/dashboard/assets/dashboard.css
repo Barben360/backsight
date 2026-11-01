@@ -444,7 +444,7 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
   .navmenu { display: block; }
   .navmenu > summary { min-height: var(--touch); }
   .tools { margin-left: auto; gap: var(--sp-2); }
-  .tools .seg, .tools .proj, .tools .refresh-t { display: none; }
+  .tools > .seg, .tools > .proj, .tools .refresh-t { display: none; }
   .scope { padding-block: 6px; }
   .main { padding-block: var(--sp-4) var(--sp-7); gap: var(--sp-4); }
   .verdict { padding: var(--sp-4); }

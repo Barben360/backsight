@@ -296,12 +296,20 @@ func (s simple) matches(n *node) bool {
 }
 
 // find returns the descendants of n matching sel, in document order.
-// Selectors: tag, .class, tag.class, #id, tag[attr], tag[attr=value], and
-// descendant chains separated by spaces.
+// Selectors: tag, .class, tag.class, #id, tag[attr], tag[attr=value],
+// descendant chains separated by spaces, and child steps written " > ".
 func (n *node) find(sel string) []*node {
 	var chain []simple
+	var child []bool // child[i]: chain[i] must be a direct child of chain[i-1]
+	next := false
 	for _, p := range strings.Fields(sel) {
+		if p == ">" {
+			next = true
+			continue
+		}
 		chain = append(chain, parseSimple(p))
+		child = append(child, next)
+		next = false
 	}
 	if len(chain) == 0 {
 		return nil
@@ -310,7 +318,7 @@ func (n *node) find(sel string) []*node {
 	var walk func(*node)
 	walk = func(c *node) {
 		for _, k := range c.Kids {
-			if chain[len(chain)-1].matches(k) && ancestorsMatch(k, n, chain[:len(chain)-1]) {
+			if chain[len(chain)-1].matches(k) && ancestorsMatch(k, n, chain, child, len(chain)-1) {
 				out = append(out, k)
 			}
 			walk(k)
@@ -321,19 +329,21 @@ func (n *node) find(sel string) []*node {
 }
 
 // ancestorsMatch reports whether the ancestors of k below scope satisfy
-// the rest of the chain, last element nearest.
-func ancestorsMatch(k, scope *node, rest []simple) bool {
-	for i := len(rest) - 1; i >= 0; i-- {
-		p := k.Parent
-		for p != nil && p != scope && !rest[i].matches(p) {
-			p = p.Parent
-		}
-		if p == nil || p == scope {
-			return false
-		}
-		k = p
+// chain[:i], chain[i] being k itself, the nearest ancestor first.
+func ancestorsMatch(k, scope *node, chain []simple, child []bool, i int) bool {
+	if i == 0 {
+		return true
 	}
-	return true
+	p := k.Parent
+	if child[i] {
+		return p != nil && p != scope && chain[i-1].matches(p) && ancestorsMatch(p, scope, chain, child, i-1)
+	}
+	for ; p != nil && p != scope; p = p.Parent {
+		if chain[i-1].matches(p) && ancestorsMatch(p, scope, chain, child, i-1) {
+			return true
+		}
+	}
+	return false
 }
 
 // first is the first match of find, or nil.
