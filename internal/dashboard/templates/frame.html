@@ -166,9 +166,9 @@
 
 {{define "fig"}}<div class="fig"><span class="lab">{{.Label}}</span><span class="v">{{.Value}}</span><span class="st {{.Class}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}</div>{{end}}
 
-{{define "nodata"}}<div class="empty{{with .Class}} {{.}}{{end}}"><span>{{.Text}}{{with .Code}}<code>{{.}}</code>{{end}}{{.Tail}}</span>
+{{define "nodata"}}{{if .Text}}<div class="empty{{with .Class}} {{.}}{{end}}"><span>{{.Text}}{{with .Code}}<code>{{.}}</code>{{end}}{{.Close}}</span>{{with .Tail}}<span class="xs muted">{{.}}</span>{{end}}
 {{if .Links}}<span class="small">{{.Pick}}</span><nav class="seg" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</nav>
-{{end}}</div>{{end}}
+{{end}}</div>{{end}}{{end}}
 
 {{/*
   metric: dot is a MetricView. Reads .Def (Question, Scope, Series), .M (Den,

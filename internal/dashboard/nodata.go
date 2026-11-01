@@ -10,12 +10,12 @@ import (
 )
 
 // NoData is the sentence that stands where a number would be. Code, when
-// set, is shown after Text and before Tail; Pick, when set, introduces
-// Links.
+// set, is shown after Text, then Close; Tail is a muted second sentence;
+// Pick, when set, introduces Links.
 type NoData struct {
-	Text, Code, Tail, Pick string
-	Links                  []Choice
-	Class                  string
+	Text, Code, Close, Tail, Pick string
+	Links                         []Choice
+	Class                         string
 }
 
 // windowDaysOf is the days a window phrase spans; 0 for a custom window.
@@ -70,7 +70,7 @@ func noDataOf(v MetricView, f Frame, l format.Locale, loc *time.Location) (NoDat
 		return n, true
 	case metrics.ReasonFeedbackOff:
 		return NoData{Text: "Memory feedback is off (", Code: "feedback.enabled",
-			Tail: "). Quality numbers need it. Found, Cost and Flowing still work."}, true
+			Close: ").", Tail: "Quality numbers need it. Found, Cost and Flowing still work."}, true
 	case metrics.ReasonServerOnlyHost:
 		return NoData{Text: "This PC runs the server only: activity is recorded on the PCs that use it."}, true
 	case metrics.ReasonServerDown:

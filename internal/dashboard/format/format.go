@@ -120,8 +120,16 @@ func (l Locale) Size(v float64, unit string) string {
 	return s + " " + unit
 }
 
-// durationParts is ms rounded to the millisecond, as a number and a unit.
+// durationParts is ms rounded to the millisecond, as a number and a unit:
+// under a minute in ms or seconds, then minutes, then hours. A unit changes
+// where the rounded number would read 60 of the one below.
 func (l Locale) durationParts(ms float64) (string, string) {
+	if a := math.Abs(ms); a >= 59950 {
+		if a >= 59.5*60000 {
+			return l.trimmed(ms / 3600000), "h"
+		}
+		return l.trimmed(ms / 60000), "min"
+	}
 	ms = math.Round(ms)
 	if math.Abs(ms) < 1000 {
 		return l.Fixed(ms, 0), "ms"
@@ -129,8 +137,17 @@ func (l Locale) durationParts(ms float64) (string, string) {
 	return l.Fixed(ms/1000, 1), "s"
 }
 
-// Duration writes ms: whole milliseconds under a second, else seconds with
-// one decimal.
+// trimmed writes v with one decimal under 10 (none when it is whole), whole
+// from 10.
+func (l Locale) trimmed(v float64) string {
+	if math.Abs(v) >= 9.95 {
+		return l.Fixed(v, 0)
+	}
+	return strings.TrimSuffix(l.Fixed(v, 1), l.sepDecimal()+"0")
+}
+
+// Duration writes ms: whole milliseconds under a second, seconds with one
+// decimal under a minute, then minutes and hours ("3 min", "30 min", "1.5 h").
 func (l Locale) Duration(ms float64) string {
 	if bad(ms) {
 		return dash

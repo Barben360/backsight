@@ -249,6 +249,9 @@ func drillHref(drill string, p views.Params) string {
 		path = "/"
 	}
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "--") {
+		if rest[0] == "." || rest[0] == ".." {
+			return ""
+		}
 		path += "/" + url.PathEscape(rest[0])
 		rest = rest[1:]
 	}
@@ -268,18 +271,26 @@ func drillHref(drill string, p views.Params) string {
 			return ""
 		}
 		i++
+		if strings.HasPrefix(rest[i], "--") {
+			return ""
+		}
 		q.Set(k, rest[i])
 	}
+	// The window is one group: a drill that sets any of days, since or
+	// until keeps the page's window out (the two forms are refused together).
+	ownWindow := q.Has("days") || q.Has("since") || q.Has("until")
 	set := func(k, v string) {
 		if v != "" && !q.Has(k) {
 			q.Set(k, v)
 		}
 	}
-	if p.DaysSet {
-		set("days", strconv.Itoa(p.Days))
+	if !ownWindow {
+		if p.DaysSet {
+			set("days", strconv.Itoa(p.Days))
+		}
+		set("since", p.Since)
+		set("until", p.Until)
 	}
-	set("since", p.Since)
-	set("until", p.Until)
 	set("tz", p.TZ)
 	set("project", p.Project)
 	switch {
@@ -294,12 +305,21 @@ func drillHref(drill string, p views.Params) string {
 	return path + "?" + q.Encode()
 }
 
-// quoteArg is s as one shell word.
+// quoteArg is s as one shell word: bare when it holds only characters that
+// mean nothing to a shell, else in single quotes (a ' written '\”).
 func quoteArg(s string) string {
-	if s == "" || strings.ContainsAny(s, " \t'\"$\\`") {
-		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	safe := s != ""
+	for _, r := range s {
+		plain := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./:=@%+,-", r)
+		if !plain {
+			safe = false
+			break
+		}
 	}
-	return s
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // cliFor is the command that prints what the page shows.
