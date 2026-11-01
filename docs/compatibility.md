@@ -27,7 +27,7 @@ Release binaries are built for four targets. Linux amd64 is tested, and Windows 
 | Linux amd64 | yes | **tested**: Ubuntu 24.04 (CI, on every change, the fresh-install chain included) and CachyOS (rolling, Arch-based) |
 | Linux arm64 | yes | built, not tested |
 | macOS arm64 (Apple silicon) | yes | built, not tested |
-| Windows amd64 | yes | **tested in CI**: Windows 11 x86_64 targeted, without admin rights ([Windows](windows.md)); GitHub's `windows-latest` runners run the unit tests and a full native install, store, backup, restore and uninstall on every change. Not yet run on a real Windows 11 PC by a standard user |
+| Windows amd64 | yes | **tested in CI**: Windows 11 x86_64 targeted, without admin rights ([Windows](windows.md)); GitHub's `windows-latest` runners run the unit tests and a full native install, store, backup, restore and uninstall on every change. and v0.1.21-m7 was run on a Windows 11 PC by a standard user (install, setup, Claude Code sessions, restart, kills, jobs, a client of a Linux server) |
 
 Other targets (macOS on Intel, Windows on arm64, 32-bit) have no release binary.
 
@@ -37,6 +37,7 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.22-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked; Windows: its own hash-locked set) | 2.1.309 | Fixes from a run on a real Windows 11 PC by a standard user: the jobs' log, private token files, doctor's `git-bash` check, the plugin kept enabled; `client install` enables a disabled plugin; instruction set v11; Linux amd64 tested, Windows tested in CI and on a Windows 11 PC ([notes](releases/v0.1.22-m7.md)) |
 | v0.1.21-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked; Windows: its own hash-locked set) | 2.1.309 | Windows 11 x86_64 without admin rights: `install.ps1`, the native server under a per-user scheduled task and backsight's own supervisor, updates and uninstall while Claude Code runs; instruction set v11; Linux amd64 tested, Windows tested in CI ([notes](releases/v0.1.21-m7.md)) |
 | v0.1.20-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | `backsight dashboard`: the stats views as local web pages behind a one-time link, `dashboard link`, remote viewing over `ssh -L`; instruction set v11; Linux amd64 tested ([notes](releases/v0.1.20-m7.md)) |
 | v0.1.19-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | `backsight stats <view>`: how well memory works, with a verdict, statuses and intervals, over a new local metrics index (SQLite, its own migrations); subagent reports logged when sent; instruction set v11; Linux amd64 tested ([notes](releases/v0.1.19-m7.md)) |
