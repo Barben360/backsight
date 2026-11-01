@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -926,6 +927,19 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	return res, err
 }
 
+// connectGOOS is the OS connect's messages describe; tests replace it.
+var connectGOOS = runtime.GOOS
+
+// privateNote says how a secret file backsight keeps private is protected:
+// its mode where mode bits apply, its access list (fsutil.MakePrivate) on
+// Windows.
+func privateNote(goos string) string {
+	if goos == "windows" {
+		return "(private: you, SYSTEM and Administrators only)"
+	}
+	return "(mode 0600)"
+}
+
 // connectPlan lists what connect will do, in order, and counts the past
 // sessions setup offers to send.
 func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, situation string, cfg config.Config) ([]step, int) {
@@ -938,7 +952,7 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 		llm = "the host's LLM (" + tok.LLM.Provider + "/" + tok.LLM.Model + ") for cost estimates"
 	}
 	steps := []step{{Name: "config", Status: "planned", Detail: verb + d.ConfigFile() + ": [server] url " + tok.URL + ", bank " + tok.Bank + ", mode remote; [llm] " + llm + ", never a key"}}
-	steps = append(steps, step{Name: "secrets", Status: "planned", Detail: "api_key in " + d.SecretsFile() + " (mode 0600)"})
+	steps = append(steps, step{Name: "secrets", Status: "planned", Detail: "api_key in " + d.SecretsFile() + " " + privateNote(connectGOOS)})
 	since, idx := now().UTC(), (*retain.SentIndex)(nil)
 	restart := situation == joinOther || situation == joinOwn
 	switch situation {

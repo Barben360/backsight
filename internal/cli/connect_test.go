@@ -235,6 +235,29 @@ func TestConnectPlanChangesNothing(t *testing.T) {
 	sameTree(t, before, treeOf(t, home))
 }
 
+// The plan's secrets step says how secrets.toml is kept private: its mode
+// on Linux, its access list on Windows, where no mode bit applies.
+func TestConnectPlanSaysHowTheKeyIsKeptPrivate(t *testing.T) {
+	for goos, want := range map[string]string{"linux": "(mode 0600)", "windows": "(private: you, SYSTEM and Administrators only)"} {
+		t.Run(goos, func(t *testing.T) {
+			isolate(t)
+			old := connectGOOS
+			connectGOOS = goos
+			t.Cleanup(func() { connectGOOS = old })
+			code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, joinableHost(t)), "--plan", "--json")
+			var detail string
+			for _, s := range parseConnect(t, out).Data.Steps {
+				if s.Name == "secrets" {
+					detail = s.Detail
+				}
+			}
+			if code != output.OK || !strings.HasSuffix(detail, want) || (goos == "windows" && strings.Contains(detail, "0600")) {
+				t.Errorf("exit %d, secrets step %q, want it to end with %q\n%s", code, detail, want, errOut)
+			}
+		})
+	}
+}
+
 // Without a terminal, connect needs the consent as an answer: exit 10,
 // the resume naming a token file, nothing written.
 func TestConnectAsksForConsent(t *testing.T) {
