@@ -380,6 +380,27 @@ func TestRefusalStartsNothingAndIsReported(t *testing.T) {
 	}
 }
 
+// An incomplete supervise.json (an older render, a hand edit) starts
+// nothing, and the reason reaches the supervisor's log: under Task
+// Scheduler no one sees the supervisor's stderr.
+func TestIncompleteConfigIsLoggedAndStartsNothing(t *testing.T) {
+	x := newFx(t, "incomplete", fakes{})
+	x.cfg.Postgres, x.cfg.API = nil, nil
+	err := Run(context.Background(), x.cfg, Options{Version: "test"})
+	want := "supervise.json names no api, postgres: run backsight server render"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Run: %v, want %q", err, want)
+	}
+	if l := x.log("supervisor"); !strings.Contains(l, "supervisor of "+x.cfg.Project+" did not start: "+want) {
+		t.Errorf("supervisor log %q: want the reason", l)
+	}
+	for _, f := range []string{x.pg, x.isReady, x.ctl, x.api} {
+		if got := testtool.Calls(t, f); got != nil {
+			t.Errorf("%s ran %q: an incomplete config starts nothing", filepath.Base(f), got)
+		}
+	}
+}
+
 func TestTransientGuardErrorIsRetried(t *testing.T) {
 	fast(t)
 	x := newFx(t, "retried", fakes{})
