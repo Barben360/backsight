@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	codeSpan = regexp.MustCompile(`(?s)<code>.*?</code>`)
+	codeSpan = regexp.MustCompile(`(?s)<code\b[^>]*>.*?</code>`)
 	tagSpan  = regexp.MustCompile(`(?s)<[^>]*>`)
 )
 
@@ -43,6 +43,11 @@ func TestVisibleText(t *testing.T) {
 	if got != "One &amp; two link" && got != "One & two link" {
 		t.Errorf("visibleText: %q", got)
 	}
+	if got = visibleText(`<p>Metric <code class="term">recall.hit_rate</code> here</p>`); got != "Metric here" {
+		t.Errorf("visibleText kept a code element with attributes: %q", got)
+	}
+	got = visibleText(`<p class="x" title="hidden">One <code>cmd --flag</code>&amp; two</p>
+<a href="/secret">link</a>`)
 	if strings.Contains(got, "cmd") || strings.Contains(got, "hidden") || strings.Contains(got, "secret") {
 		t.Errorf("visibleText kept code or an attribute: %q", got)
 	}
