@@ -39,7 +39,7 @@ Archives are encrypted with [age](https://age-encryption.org/). By default backs
 backsight backup identity show | pass insert -m backsight/backup-identity
 ```
 
-It prints the identity alone on stdout (the advice goes to stderr), so it pipes into a password manager (`pass`, `gpg -e`, a file on an encrypted disk) or shows at a terminal. It needs a person's shell, with a terminal on one side of the pipe: an agent's command, which has none, and `--json` are refused.
+It prints the identity alone on stdout (the advice goes to stderr), so it pipes into a password manager (`pass`, `gpg -e`, a file on an encrypted disk) or shows at a terminal (on Windows, where there is no `pass`, run it at a terminal and copy it into your password manager). It needs a person's shell, with a terminal on one side of the pipe: an agent's command, which has none, and `--json` are refused.
 
 To encrypt to a key you already keep elsewhere, set `backup.recipient` in `config.toml` to one or more age recipients (`age1…`) or SSH public keys (`ssh-ed25519 …`), separated by commas. Backups are then encrypted to them, and you decrypt with your own key (`--identity <file>`, an age identity file or an SSH private key).
 

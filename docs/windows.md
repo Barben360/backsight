@@ -63,7 +63,7 @@ On Windows x86_64, setup runs the server natively (`--runtime native` is the def
 - `conhost.exe --headless` runs (Windows 10 version 1809 and later);
 - Task Scheduler accepts your task: setup registers a probe task, `\<project>\probe`, which never runs, and deletes it at once.
 
-Each check, and what to do when it fails: [setup on the native runtime stops at its pre-flight](troubleshooting.md#setup-on-the-native-runtime-stops-at-its-pre-flight). The rest of setup is as on Linux ([install](install.md#run-setup)); then restart Claude Code.
+Each check, and what to do when it fails: [setup on the native runtime stops at its pre-flight](troubleshooting.md#setup-on-the-native-runtime-stops-at-its-pre-flight). The rest of setup is as on Linux ([install](install.md#run-setup)); then restart Claude Code. With backups on, save the backup identity in a password manager: `backsight backup identity show`, run at a terminal, shows it (`pass`, which the Linux hint names, does not exist on Windows).
 
 ## What runs on your PC
 

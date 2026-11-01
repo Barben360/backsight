@@ -1458,7 +1458,11 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 			"writes the connection token they join with (it holds the API key: carry it by hand, never through an agent; backsight server token writes it again)")
 	}
 	if answers["backups"] == "on" && (s.cfg == nil || s.cfg.Server.Mode == "local") { // a client's backups are its host's
-		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)")
+		hint := "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)"
+		if setupGOOS == "windows" { // no pass there
+			hint = "save the backup key somewhere safe, in a password manager: backsight backup identity show, run at a terminal, shows it"
+		}
+		res.NextSteps = append(res.NextSteps, hint)
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""

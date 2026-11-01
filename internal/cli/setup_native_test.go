@@ -611,3 +611,41 @@ func TestSetupClearsStartOnSessionWhenTheTaskPasses(t *testing.T) {
 		t.Errorf("setup --undo did not put start_on_session back:\n%s\n%s", back, out)
 	}
 }
+
+// Setup's closing hint on where to keep the backup key names pass on
+// Linux, which Windows does not have: there it says a password manager and
+// the command that shows the key.
+func TestBackupKeyHintFitsTheOS(t *testing.T) {
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			var home string
+			if goos == "windows" {
+				home, _ = windowsMachine(t, nil)
+			} else {
+				home, _ = setupMachine(t)
+			}
+			withLLMKey(t, home)
+			// Docker: the hint is the OS's, and native would download.
+			code, out, _ := run(t, "setup", "--runtime", "docker", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+			env := parseSetup(t, out)
+			if code != output.OK {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			var hint string
+			for _, s := range env.Data.NextSteps {
+				if strings.Contains(s, "backup key") {
+					hint = s
+				}
+			}
+			if !strings.Contains(hint, "backsight backup identity show") {
+				t.Fatalf("no backup key hint naming the command: %q", env.Data.NextSteps)
+			}
+			if pass := strings.Contains(hint, "pass insert"); pass != (goos == "linux") {
+				t.Errorf("%s hint %q: pass named %v", goos, hint, pass)
+			}
+			if goos == "windows" && !strings.Contains(hint, "password manager") {
+				t.Errorf("windows hint %q: want a password manager", hint)
+			}
+		})
+	}
+}
