@@ -391,6 +391,19 @@ func windowPhrase(p views.Params, w metrics.Window) string {
 	return from.Format(f) + " to " + to.AddDate(0, 0, -1).Format(f)
 }
 
+// spanPhrase is the days a session spans: "Oct 15", or "Oct 15 – Oct 16".
+func spanPhrase(start, last time.Time, loc *time.Location) string {
+	if start.IsZero() {
+		return "all time"
+	}
+	const f = "Jan 2"
+	s := start.In(zoneOr(loc)).Format(f)
+	if e := last.In(zoneOr(loc)).Format(f); !last.IsZero() && e != s {
+		return s + " – " + e
+	}
+	return s
+}
+
 // frame is the frame of a page about r.
 func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 	path := withoutCode(r.URL)
@@ -459,6 +472,9 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		data := s.pageData(r, title, prefs, started)
 		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
 		data.CLI = cliFor(first, id, p)
+		if spec.Name == "session" || spec.Name == "memory" {
+			data.CLI = cliFor(first, id, allTimeParams(p))
+		}
 		if spec.Name == "defs" { // the catalog is read whole: its axis links are anchors on one page
 			p.Limit, p.Offset = metrics.MaxLimit, 0
 			data.P = p
@@ -490,6 +506,14 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				data.Frame.Window = id
 				if !head.Window.Since.IsZero() {
 					data.Frame.Window = head.Window.Since.In(zoneOr(head.Window.Loc)).Format("2006-01-02")
+				}
+			}
+			if spec.Name == "session" || spec.Name == "memory" {
+				// Both pages read the whole history: no window to pick, and none to name.
+				data.Frame.Windows = nil
+				data.Frame.Window = "all time"
+				if t := head.Tables.Session; spec.Name == "session" && t != nil {
+					data.Frame.Window = spanPhrase(t.Totals.Start, t.Totals.Last, head.Window.Loc)
 				}
 			}
 		}

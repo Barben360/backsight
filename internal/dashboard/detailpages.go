@@ -198,7 +198,7 @@ func sessionOf(d PageData) SessionDetail {
 		id = t.Totals.ID
 	}
 	pg := SessionDetail{ID: idLink("/sessions/", id)}
-	pg.Rail.Head = fixedHead("session-turns", "Turn by turn", "machine", cliFor("sessions", id, d.P))
+	pg.Rail.Head = fixedHead("session-turns", "Turn by turn", "machine", cliFor("sessions", id, allTimeParams(d.P)))
 	if t == nil {
 		pg.Rail.Note = NoData{Text: "No turn of this session was recorded."}
 		return pg
@@ -334,7 +334,7 @@ func memoryOf(d PageData) MemoryDetail {
 	}
 	pg := MemoryDetail{ID: idLink("/memories/", id), FullID: views.Plain(id, ""), TextHref: pathHref("/memories/", id, "/text")}
 	pg.TextHead = fixedHead("memory-text", "What does it say?", "server", "")
-	pg.Strip.Head = withInfo(fixedHead("memory-strip", "When and where was it shown?", "machine", cliFor("memories", id, d.P)),
+	pg.Strip.Head = withInfo(fixedHead("memory-strip", "When and where was it shown?", "machine", cliFor("memories", id, allTimeParams(d.P))),
 		"About this timeline", "Strip timeline", "ledger shows · path · outcome · rank · boost",
 		"One mark per time this memory was shown, on the row of where it was shown. Shape says what Claude did with it. Hover or focus a mark for its day, its rank, and its rank without the learned ranking.")
 	pg.RankHead = fixedHead("memory-rank", "How high was it ranked when shown?", "machine", "")
@@ -390,10 +390,14 @@ func memoryOf(d PageData) MemoryDetail {
 	// The strip draws this page of shows; the oldest show is on the last page
 	// only, so only there does the memory's creation bound the strip.
 	shown := *m
+	shown.Retirements = pagedRetirements(m, r.Tables.Page)
 	if pageOf := r.Tables.Page; pageOf != nil && pageOf.Offset+len(m.Shows) < pageOf.Total {
 		shown.Created = nil
 	}
 	pg.Strip.HTML = stripOf(l, d.more(), &shown, r.GeneratedAt, d.Loc)
+	if pageOf := r.Tables.Page; len(m.Shows) == 0 && pageOf != nil && pageOf.Total > 0 {
+		pg.Strip.HTML = `<p class="empty">No show on this page.</p>`
+	}
 	pg.Strip.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
 	if pageOf := r.Tables.Page; pageOf != nil && pageOf.Total > len(m.Shows) && pageOf.Limit < metrics.MaxLimit {
 		pg.Strip.AllShows = allShowsHref(d.Frame.Path)
@@ -407,3 +411,42 @@ func memoryOf(d PageData) MemoryDetail {
 
 // memlink is the link to a memory's page as an id reference.
 func memlink(id string) Ref { return idLink("/memories/", id) }
+
+// allTimeParams are p without the window: the pages about one session or
+// one memory read the whole history.
+func allTimeParams(p views.Params) views.Params {
+	p.Days, p.DaysSet, p.Since, p.Until, p.TZ = 0, false, "", "", ""
+	return p
+}
+
+// pagedRetirements are the retirements the strip draws for the page of
+// shows it holds: those inside the span of the page's shows. The first page
+// runs on to now, and the last one back to the memory's creation (all of
+// them when it is not known), so a hide older than a page of recent shows
+// does not stretch that page.
+func pagedRetirements(m *metrics.MemoryPage, pg *metrics.Page) []metrics.RetireMark {
+	if pg == nil || len(m.Shows) == 0 {
+		return m.Retirements
+	}
+	lo, hi := m.Shows[0].At, m.Shows[0].At
+	for _, s := range m.Shows {
+		if s.At.Before(lo) {
+			lo = s.At
+		}
+		if s.At.After(hi) {
+			hi = s.At
+		}
+	}
+	first, last := pg.Offset <= 0, pg.Offset+len(m.Shows) >= pg.Total
+	var out []metrics.RetireMark
+	for _, r := range m.Retirements {
+		switch {
+		case !first && r.At.After(hi):
+		case !last && r.At.Before(lo):
+		case last && m.Created != nil && r.At.Before(*m.Created) && r.At.Before(lo):
+		default:
+			out = append(out, r)
+		}
+	}
+	return out
+}

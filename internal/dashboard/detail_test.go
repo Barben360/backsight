@@ -79,27 +79,40 @@ func lineKeys(turn *node) []string {
 
 func TestTurnRail(t *testing.T) {
 	tab := goldenResult(t, "session-page").Tables.Session
-	n := detailNode(t, "session", "/sessions/sess-long-1", views.Params{Limit: 50}, nil)
-	turns := mainOf(t, n).find("ol.rail li.turn")
-	if len(tab.Turns) == 0 || len(turns) != min(len(tab.Turns), 50) {
-		t.Fatalf("%d turns on the rail, the golden has %d", len(turns), len(tab.Turns))
-	}
-	chips := mainOf(t, n).find("a.mchip")
-	if len(chips) == 0 {
-		t.Fatal("no memory chip on the rail")
-	}
-	for _, a := range chips {
-		id := strings.TrimPrefix(a.attr("href"), "/memories/")
-		if id == a.attr("href") || id == "" {
-			t.Errorf("a chip links to %q, not a memory", a.attr("href"))
+	// The golden shows pending memories only: a variant gives them other outcomes too.
+	for name, edit := range map[string]func(d *PageData){
+		"golden": nil,
+		"outcomes": func(d *PageData) {
+			for _, turn := range d.V["sessions"].Tables.Session.Turns {
+				for i := range turn.Shows {
+					turn.Shows[i].Outcome = "credit"
+				}
+			}
+		},
+	} {
+		n := detailNode(t, "session", "/sessions/sess-long-1", views.Params{Limit: 50}, edit)
+		turns := mainOf(t, n).find("ol.rail li.turn")
+		if len(tab.Turns) == 0 || len(turns) != min(len(tab.Turns), 50) {
+			t.Fatalf("%s: %d turns on the rail, the golden has %d", name, len(turns), len(tab.Turns))
 		}
-		full, err := url.PathUnescape(id)
-		if err != nil || !strings.HasPrefix(a.attr("title"), full+" · ") {
-			t.Errorf("chip title %q does not start with the full id of %q", a.attr("title"), id)
+		chips := mainOf(t, n).find("a.mchip")
+		if len(chips) == 0 {
+			t.Fatalf("%s: no memory chip on the rail", name)
 		}
-		text := a.text()
-		if !strings.HasPrefix(text, views.ShortID(full)) || !strings.HasSuffix(text, views.Word(views.OutcomeWords, "pending")) {
-			t.Errorf("chip text %q: want it to start with %q and end with the outcome word", text, views.ShortID(full))
+		word := map[string]string{"golden": "pending", "outcomes": "used by Claude"}[name]
+		for _, a := range chips {
+			id := strings.TrimPrefix(a.attr("href"), "/memories/")
+			if id == a.attr("href") || id == "" {
+				t.Errorf("%s: a chip links to %q, not a memory", name, a.attr("href"))
+			}
+			full, err := url.PathUnescape(id)
+			if err != nil || !strings.HasPrefix(a.attr("title"), full+" · ") {
+				t.Errorf("%s: chip title %q does not start with the full id of %q", name, a.attr("title"), id)
+			}
+			text := a.text()
+			if !strings.HasPrefix(text, views.ShortID(full)) || !strings.HasSuffix(text, word) {
+				t.Errorf("%s: chip text %q: want it to start with %q and end with %q", name, text, views.ShortID(full), word)
+			}
 		}
 	}
 }
@@ -115,10 +128,19 @@ func TestTurnChipsTellTheOutcomeInWords(t *testing.T) {
 	for i, c := range cases {
 		shows = append(shows, metrics.ShowChip{MemoryID: fmt.Sprintf("mem-%d-aaaaaaaa", i), Path: "prompt", Outcome: c.outcome, Rank: one})
 	}
+	// A show with no rank, or rank 0, says no rank.
+	shows = append(shows, metrics.ShowChip{MemoryID: "mem-zero-aaaaaaaa", Path: "prompt", Outcome: "shown", Rank: ptrI(0)},
+		metrics.ShowChip{MemoryID: "mem-none-aaaaaaaa", Path: "prompt", Outcome: "shown"})
 	n := detailNode(t, "session", "/sessions/s", views.Params{Limit: 50}, func(d *PageData) {
 		d.V["sessions"].Tables.Session.Turns = []metrics.TurnRow{{N: one, At: detailBase, Shows: shows}}
 	})
 	chips := mainOf(t, n).find("a.mchip")
+	for _, a := range chips[len(cases):] {
+		if strings.Contains(a.text(), "#") || strings.Contains(a.attr("title"), "rank") {
+			t.Errorf("a show with no rank says %q / %q", a.text(), a.attr("title"))
+		}
+	}
+	chips = chips[:len(cases)]
 	if len(chips) != len(cases) {
 		t.Fatalf("%d chips, want %d", len(chips), len(cases))
 	}
@@ -861,5 +883,166 @@ func TestTextPageLinkBackIsEscaped(t *testing.T) {
 				t.Errorf("id %q: link %q is not escaped", id, h)
 			}
 		}
+	}
+}
+
+// The memory header names its kind and state in words; a value the page has
+// no word for is never shown as stored.
+func TestMemoryPageShowsNoStoredValue(t *testing.T) {
+	const bad = "FREE-TEXT-CANARY"
+	b := render(t, "memory", func(d *PageData) {
+		d.L, d.P = en, views.Params{Limit: 50}
+		m := d.V["memories"].Tables.Memory
+		m.Kind, m.ServerState, m.Row.State = bad+"-k", bad+"-s", bad+"-st"
+		m.Shows = []metrics.ShowMark{{At: detailBase, Path: bad + "-p", Outcome: bad + "-o", Session: "s", Turn: bad + "-t"}}
+		m.Retirements = []metrics.RetireMark{{At: detailBase, Kind: bad + "-r"}}
+	})
+	if i := strings.Index(b, bad); i >= 0 {
+		t.Errorf("the memory page shows a stored value: %q", b[max(0, i-60):min(len(b), i+60)])
+	}
+	m := mainOf(t, parseHTML(t, b))
+	if !strings.Contains(m.first("div.memory-meta").text(), "memory of another kind") || !strings.Contains(m.first("div.memory-meta").text(), "state not recorded") {
+		t.Errorf("unknown kind and state are not named neutrally: %q", m.first("div.memory-meta").text())
+	}
+}
+
+func TestPathOrderIsThePathWords(t *testing.T) {
+	seen := map[string]bool{}
+	for _, k := range pathOrder {
+		if seen[k] {
+			t.Errorf("path %q is listed twice", k)
+		}
+		seen[k] = true
+		if _, ok := views.PathWords[k]; !ok {
+			t.Errorf("pathOrder lists %q, which has no word", k)
+		}
+	}
+	for k := range views.PathWords {
+		if !seen[k] {
+			t.Errorf("path %q has a word but no place in pathOrder: its shows would land on \"elsewhere\"", k)
+		}
+	}
+}
+
+// Session and memory pages read the whole history: no window to pick, the
+// phrase says what they cover, and their command takes no window.
+func TestSessionAndMemoryPagesAreAllTime(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	sid := ""
+	for _, s := range apiPath(t, h, "/api/v1/sessions").Tables.Sessions {
+		sid = s.ID
+		break
+	}
+	mem := apiPath(t, h, "/api/v1/memories").Tables.Memories[0].ID
+	for _, c := range []struct{ path, phrase string }{
+		{"/sessions/" + url.PathEscape(sid) + "?days=30&tz=Europe%2FParis", ""},
+		{"/memories/" + url.PathEscape(mem) + "?days=30&tz=Europe%2FParis", "window: all time"},
+	} {
+		_, b := pageGet(t, h, ck, c.path)
+		n := parseHTML(t, b)
+		if got := n.find("nav.seg"); len(got) != 0 {
+			for _, s := range got {
+				if s.attr("aria-label") == "Window" {
+					t.Errorf("%s offers window links", c.path)
+				}
+			}
+		}
+		head := mainOf(t, n).first("div.page-head").text()
+		if strings.Contains(head, "last 30 days") || strings.Contains(head, "last ") && strings.Contains(head, "days") {
+			t.Errorf("%s: heading %q names a window", c.path, head)
+		}
+		if c.phrase != "" && !strings.Contains(head, c.phrase) {
+			t.Errorf("%s: heading %q lacks %q", c.path, head, c.phrase)
+		}
+		for _, code := range n.find("main details.cli code") {
+			if cmd := allText(code); strings.Contains(cmd, "--days") || strings.Contains(cmd, "--tz") || strings.Contains(cmd, "--since") {
+				t.Errorf("%s: command %q takes a window", c.path, cmd)
+			}
+		}
+	}
+	// The session's phrase is its span.
+	if got := spanPhrase(time.Date(2026, 10, 15, 22, 0, 0, 0, time.UTC), time.Date(2026, 10, 15, 23, 0, 0, 0, time.UTC), time.UTC); got != "Oct 15" {
+		t.Errorf("one-day span %q", got)
+	}
+	if got := spanPhrase(time.Date(2026, 10, 15, 22, 0, 0, 0, time.UTC), time.Date(2026, 10, 16, 1, 0, 0, 0, time.UTC), time.UTC); got != "Oct 15 – Oct 16" {
+		t.Errorf("two-day span %q", got)
+	}
+	if got := spanPhrase(time.Time{}, time.Time{}, nil); got != "all time" {
+		t.Errorf("no span %q", got)
+	}
+}
+
+func TestSessionPageNamesItsSpan(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	var s metrics.SessionRow
+	for _, r := range apiPath(t, h, "/api/v1/sessions").Tables.Sessions {
+		s = r
+		break
+	}
+	_, b := pageGet(t, h, ck, "/sessions/"+url.PathEscape(s.ID))
+	want := "window: " + spanPhrase(s.Start, s.Last, apiPath(t, h, "/api/v1/sessions").Window.Loc)
+	if head := mainOf(t, parseHTML(t, b)).first("div.page-head").text(); !strings.Contains(head, want) || strings.Contains(head, "last ") {
+		t.Errorf("heading %q, want it to hold %q", head, want)
+	}
+}
+
+func TestMemoryStripDrawsOnlyTheRetirementsOfItsPage(t *testing.T) {
+	created := detailBase.Add(-90 * 24 * time.Hour)
+	old := detailBase.Add(-80 * 24 * time.Hour) // between creation and the oldest show of the last page
+	mid := detailBase.Add(-10 * time.Hour)      // inside the span of the shows
+	later := detailBase.Add(time.Hour)          // after the newest show
+	before := created.Add(-time.Hour)           // before creation
+	lines := func(offset, total int) []string {
+		n := detailNode(t, "memory", "/memories/m", views.Params{Limit: 50, Offset: offset}, func(d *PageData) {
+			d.V["memories"].GeneratedAt = detailBase.Add(2 * time.Hour)
+			m := d.V["memories"].Tables.Memory
+			m.Created, m.Shows = &created, showsOf(50)
+			if offset == 70 { // the oldest shows are 49 hours back at most: put them near the start
+				for i := range m.Shows {
+					m.Shows[i].At = detailBase.Add(-70*24*time.Hour - time.Duration(i)*time.Hour)
+				}
+			}
+			m.Retirements = []metrics.RetireMark{{At: before, Kind: "hide"}, {At: old, Kind: "hide"}, {At: mid, Kind: "unhide"}, {At: later, Kind: "hide"}}
+			d.V["memories"].Tables.Page = &metrics.Page{Limit: 50, Offset: offset, Total: total}
+		})
+		var out []string
+		for _, l := range mainOf(t, n).find("line.thr-w") {
+			out = append(out, l.first("title").text())
+		}
+		return out
+	}
+	day := func(t time.Time) string { return t.In(parisZone()).Format("Jan 2") }
+	// First page of three: from the page's oldest show to now.
+	if got := lines(0, 120); len(got) != 2 || got[0] != day(mid)+" · restored" || got[1] != day(later)+" · hidden" {
+		t.Errorf("first page: %q", got)
+	}
+	// A middle page: only inside its span (none here: the shows are an hour apart and mid is among them).
+	if got := lines(50, 150); len(got) != 1 || got[0] != day(mid)+" · restored" {
+		t.Errorf("middle page: %q", got)
+	}
+	// The last page: back to creation, so the hide between creation and the oldest show is there, the one before creation and the newer ones are not.
+	got := lines(70, 120)
+	if len(got) != 1 || got[0] != day(old)+" · hidden" {
+		t.Errorf("last page: %q", got)
+	}
+}
+
+func TestMemoryPageOffsetPastTheEnd(t *testing.T) {
+	n := detailNode(t, "memory", "/memories/m?offset=500", views.Params{Limit: 50, Offset: 500}, func(d *PageData) {
+		d.V["memories"].Tables.Memory.Shows = nil
+		d.V["memories"].Tables.Page = &metrics.Page{Limit: 50, Offset: 500, Total: 120}
+	})
+	m := mainOf(t, n)
+	if !strings.Contains(m.text(), "No show on this page.") || strings.Contains(m.text(), "has not been shown yet") && len(m.find("p.empty")) > 1 {
+		t.Errorf("an offset past the end: %q", m.text())
+	}
+	var prev bool
+	for _, a := range m.find("div.pager a") {
+		prev = prev || a.attr("rel") == "prev"
+	}
+	if !prev {
+		t.Error("the pager is gone past the end")
 	}
 }
