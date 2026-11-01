@@ -1,25 +1,27 @@
 {{/* views: cost */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.cost}}
 
-{{/* widget: context and speed. Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency. */}}
-{{template "metric" framed (metric $r "context.per_session") $d $.Loc}}
-{{template "metric" framed (metric $r "context.per_prompt") $d $.Loc}}
-{{template "metric" framed (metric $r "recall.latency") $d $.Loc}}
-{{template "metric" framed (metric $r "search.latency") $d $.Loc}}
-
-{{/* widget: extraction. Reads the metrics extraction.tokens, extraction.cost (Extra currency, through the currency func) and .V.cost.Tables.Extraction (Day, Operation, Input, Cached, Output, Cost). */}}
-{{template "metric" framed (metric $r "extraction.tokens") $d $.Loc}}
-{{$cost := metric $r "extraction.cost"}}{{template "metric" framed $cost $d $.Loc}}
-<section>
-<h2>What the server's model spent, by day</h2>
-<table>
-<tr><th>Day</th><th>Task</th><th>Input</th><th>Cached</th><th>Output</th><th>Cost</th></tr>
-{{range $r.Tables.Extraction}}<tr><td>{{.Day}}</td><td>{{operation .Operation}}</td><td>{{n .Input}}</td><td>{{n .Cached}}</td><td>{{n .Output}}</td><td>{{money .Cost (currency $cost)}}</td></tr>
-{{end}}</table>
-</section>
-
-{{/* widget: developer detail. Reads the metric extraction.per_session. */}}
-{{if $d}}{{template "metric" framed (metric $r "extraction.per_session") $d $.Loc}}
+{{/* widgets: the cards of cost (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd; Extraction adds Rows: Day, Task, Input, Cached, Output, Cost). Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency, extraction.tokens, extraction.cost, .V.cost.Tables.Extraction, and with developer mode extraction.per_session. */}}
+{{with cost .}}<div class="grid-2">
+{{template "pcard" .Context}}
+{{template "pcard" .Split}}
+</div>
+<div class="grid-2">
+{{template "pcard" .PerPrompt}}
+{{template "pcard" .Latency}}
+</div>
+<div class="grid-2">
+{{with .Extraction}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{range .Charts}}{{.HTML}}
+{{end}}{{if .Figs}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
+{{end}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Day</th><th>Server task</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{.Day}}</td><td>{{.Task}}</td><td class="r">{{.Input}}</td><td class="r">{{.Cached}}</td><td class="r">{{.Output}}</td><td class="r">{{.Cost}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
+{{with .PerSession}}{{template "pcard" .}}
+{{end}}</div>
+<p class="small muted">Steps that crashed are on <a href="/pipeline">Pipeline</a>.</p>
 {{end}}
 {{template "foot" .}}

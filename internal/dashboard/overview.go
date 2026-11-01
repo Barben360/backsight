@@ -46,7 +46,7 @@ func extraAs[T any](m metrics.Metric, key string) (T, bool) {
 		return out, false
 	}
 	raw, err := json.Marshal(v)
-	if err != nil || json.Unmarshal(raw, &out) != nil {
+	if err != nil || string(raw) == "null" || json.Unmarshal(raw, &out) != nil { // a typed nil (an absent percentile in process) is null too
 		var zero T
 		return zero, false
 	}

@@ -109,6 +109,8 @@ var funcs = template.FuncMap{
 	"tiles":       tilesOf,
 	"dash":        func() string { return dash },
 	"glance":      glancePage,
+	"quality":     qualityOf,
+	"cost":        costOf,
 	"latelyhead":  latelyHead,
 
 	"head":     headOf,

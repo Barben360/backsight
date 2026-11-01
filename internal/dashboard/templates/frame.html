@@ -147,7 +147,7 @@
 {{template "card-head" .}}{{end}}
 
 {{define "card-head"}}<div class="card-head">{{if eq .Level 3}}<h3 id="{{.ID}}">{{.Title}}</h3>{{else}}<h2 id="{{.ID}}">{{.Title}}</h2>{{end}}
-{{if eq .Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
+{{if eq .Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{with .Chip}}<span class="chip chip-dev">{{.}}</span>{{end}}<span class="spacer"></span>
 {{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
 {{end}}
 
@@ -164,7 +164,28 @@
 {{end}}</section>
 {{end}}
 
-{{define "fig"}}<div class="fig"><span class="lab">{{.Label}}</span><span class="v">{{.Value}}</span><span class="st {{.Class}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}</div>{{end}}
+{{define "fig"}}<div class="fig"><span class="lab">{{.Label}}</span><span class="v">{{.Value}}</span><span class="st {{.Class}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
+
+{{/*
+  lead: dot is a Card; its headline numbers and the word for the first.
+  pcard: dot is a Card: head, numbers, the sentence or the charts, the figures and the lines under them.
+*/}}
+{{define "lead"}}{{if .Leads}}<div class="row lead">{{range .Leads}}<div><span class="num big">{{.Big}}</span>{{with .Unit}} <span class="unit">{{.}}</span>{{end}}{{with .CI}} <span class="small sub">{{.}}</span>{{end}} <span class="small sub">{{.Label}}</span></div>
+{{end}}{{if .Word.Word}}<span class="st {{.Word.Class}}">{{.Word.Word}}</span>{{end}}</div>
+{{end}}{{end}}
+
+{{define "devids"}}{{with .Dev}}<p class="devid">{{range .}}<code>{{.}}</code> {{end}}</p>
+{{end}}{{end}}
+
+{{define "pcard"}}{{template "card-open" .Head}}
+{{template "devids" .}}{{template "lead" .}}{{template "nodata" .Note}}{{range .Charts}}{{with .Name}}<h3 class="chart-name">{{.}}</h3>
+{{end}}{{.HTML}}
+{{end}}{{if .Figs}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
+{{end}}{{with .Extras}}<ul class="extras small sub">
+{{range .}}<li>{{.}}</li>
+{{end}}</ul>
+{{end}}{{with .Hint}}<p class="small muted">{{.}}</p>
+{{end}}{{with .HintCmd}}{{template "cmd" .}}{{end}}{{template "card-close" .Head}}{{end}}
 
 {{define "nodata"}}{{if .Text}}<div class="empty{{with .Class}} {{.}}{{end}}"><span>{{.Text}}{{with .Code}}<code>{{.}}</code>{{end}}{{.Close}}</span>{{with .Tail}}<span class="xs muted">{{.}}</span>{{end}}
 {{if .Links}}<span class="small">{{.Pick}}</span><nav class="seg" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</nav>

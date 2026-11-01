@@ -516,3 +516,10 @@ rect.seg.seg-fine.f-pending { stroke: var(--c-shown); }
 
 /* ---------- widget frame: hidden stays hidden ---------- */
 [hidden] { display: none !important; }
+
+/* ---------- quality and cost: a card's headline numbers, chart names, lines under a chart ---------- */
+.lead { gap: var(--sp-5); margin: 0 0 var(--sp-3); }
+.lead .big { font-size: var(--fs-2xl); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
+.chart-name { margin: var(--sp-3) 0 0; font-size: var(--fs-sm); color: var(--fg-2); }
+.extras { margin: var(--sp-2) 0 0; padding-left: var(--sp-4); }
+.card .devid { margin: 0 0 var(--sp-2); font-family: var(--mono); font-size: var(--fs-xs); color: var(--fg-3); }

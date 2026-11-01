@@ -59,11 +59,15 @@ func TestVisibleText(t *testing.T) {
 var pageMetrics = map[string][]string{
 	"overview": {"bank.size"}, // the six tiles have their own checks (tileTexts); the growth and the kinds are TestGlance's
 	"quality":  {"used.turn_rate", "declare.coverage", "recall.hit_rate", "recall.empty_reasons", "search.rate", "search.empty_rate"},
-	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens", "extraction.cost"},
+	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens"}, // extraction.cost is a figure of the tokens card: TestCostCards
 	"bank":     {"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "notes.stored", "bank.churn", "stale.never_used", "stale.hidden", "stale.reported"},
 	"pipeline": {"pipeline.flow", "retain.outcomes", "local.backlog", "server.queue", "server.extraction_delay", "hooks.failures", "jobs.last_run"},
 	"system":   {"doctor.check", "server.reach", "jobs.last_run", "local.backlog"},
 }
+
+// drawnInOtherCard are metrics a card shows beside the metric that asks its
+// question: they have no card, hence no question, of their own.
+var drawnInOtherCard = map[string]bool{"declare.coverage": true, "search.empty_rate": true, "search.latency": true}
 
 var devMetrics = []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"}
 
@@ -110,7 +114,7 @@ func TestPagesShowTheViewsNumbers(t *testing.T) {
 			if page == "overview" { // the card asks its own question
 				question = "How big is the memory?"
 			}
-			if !strings.Contains(text, question) {
+			if !drawnInOtherCard[id] && !strings.Contains(text, question) {
 				t.Errorf("%s lacks the question of %s: %q", page, id, question)
 			}
 			m, found := res.Metrics[id]
@@ -220,9 +224,14 @@ func TestServerDownMarksServerSections(t *testing.T) {
 			if def.Source != "server" {
 				continue
 			}
-			sec := sectionOf(b, def.Question)
-			if !strings.Contains(visibleText(sec), "memory server not answering") {
-				t.Errorf("/%s: the section of %s is not marked: %q", page, id, visibleText(sec))
+			sec := visibleText(sectionOf(b, def.Question))
+			if sec == "" { // a card of the new pages: its heading is the metric's id
+				if card := parseHTML(t, b).first("section.card[aria-labelledby=" + widgetID(id, "") + "]"); card != nil {
+					sec = card.text()
+				}
+			}
+			if !strings.Contains(strings.ToLower(sec), "memory server not answering") {
+				t.Errorf("/%s: the section of %s is not marked: %q", page, id, sec)
 			}
 			checked++
 		}
@@ -262,12 +271,15 @@ func TestDevWidgetsOnlyInDevMode(t *testing.T) {
 	plain, dev := get(""), get("v1.system.1.0")
 	for _, id := range devMetrics {
 		def, _ := metrics.DefOf(id)
-		if strings.Contains(visibleText(plain), def.Question) || strings.Contains(plain, "<code>"+id+"</code>") {
+		if strings.Contains(visibleText(plain), views.Label(def)) || strings.Contains(plain, "<code>"+id+"</code>") {
 			t.Errorf("without the preference the page shows %s", id)
 		}
-		if !strings.Contains(visibleText(dev), def.Question) {
-			t.Errorf("with the preference the page lacks the question of %s", id)
+		if !strings.Contains(visibleText(dev), views.Label(def)) {
+			t.Errorf("with the preference the page lacks the label of %s", id)
 		}
+	}
+	if parseHTML(t, plain).first("#w-ranking") != nil || parseHTML(t, dev).first("#w-ranking") == nil {
+		t.Error("the ranking card shows only with the preference")
 	}
 	if !strings.Contains(dev, "<code>used.rank</code>") {
 		t.Error("with the preference the page does not name used.rank")
@@ -464,6 +476,8 @@ func TestMetricPartial(t *testing.T) {
 // raw are values the stored data holds that a reader must never see as they are.
 var raw = []string{"outdated", "batch_retain", "maintain", "partial", "warn", "docker", "remote", "bank-config", "tick"}
 
+var popovers = regexp.MustCompile(`(?s)<details class="info">.*?</details>`)
+
 func hasWord(text, w string) bool {
 	return regexp.MustCompile(`(^|[^A-Za-z_-])` + regexp.QuoteMeta(w) + `($|[^A-Za-z_-])`).MatchString(text)
 }
@@ -481,6 +495,10 @@ func TestTablesShowWordsNotStoredValues(t *testing.T) {
 			t.OutcomeMix = []metrics.OutcomeDay{{Day: "2026-10-30", Used: 11, Ignored: 12, NotDeclared: 13, ShownOnly: 14, Pending: 15}}
 		},
 		"cost": func(d *PageData) {
+			// The table is the tokens card's: it shows with a number to stand beside.
+			tokens, v := d.V["cost"].Metrics["extraction.tokens"], 204.0
+			tokens.Value, tokens.Status = &v, metrics.StatusOK
+			d.V["cost"].Metrics["extraction.tokens"] = tokens
 			d.V["cost"].Tables.Extraction = []metrics.ExtractionRow{{Day: "2026-10-30", Operation: "batch_retain", Input: 101, Cached: 102, Output: 103, Cost: &cost}}
 		},
 		"bank": func(d *PageData) {
@@ -500,15 +518,16 @@ func TestTablesShowWordsNotStoredValues(t *testing.T) {
 		},
 	}
 	want := map[string][]string{
-		"quality":  {"out of date", `<td>11</td>`, `<td>12</td>`, `<td>13</td>`, `<td>14</td>`, `<td>15</td>`, `href="/memories/mem-aaaa1111bbbb"`, `href="/sessions/ses-cccc2222dddd"`, "mem-aaaa"},
-		"cost":     {"saving notes in batches", `<td>101</td>`, `<td>102</td>`, `<td>103</td>`, "0.50"},
+		"quality":  {"out of date", `<td class="r">11</td>`, `<td class="r">12</td>`, `<td class="r">13</td>`, `<td class="r">14</td>`, `<td class="r">15</td>`, `href="/memories/mem-aaaa1111bbbb"`, `href="/sessions/ses-cccc2222dddd"`, "mem-aaaa"},
+		"cost":     {"saving notes in batches", `<td class="r">101</td>`, `<td class="r">102</td>`, `<td class="r">103</td>`, "0.50"},
 		"bank":     {"mem-n111", "mem-h222", "mem-r333", "<code>backsight forget mem-n1111111</code>", "<code>backsight forget mem-h2222222</code>", "<code>backsight forget mem-r3333333</code>", `<td>21</td>`},
 		"pipeline": {"saving notes in batches", `<td>4</td>`, "2026-10-30 13:00 CET", "1 h", "daily maintenance", "partly done", "memory settings", "warning", "<code>backsight doctor --fix</code>"},
 		"system":   {"regular upkeep", "partly done", "warning", "version 1.2.3, running in Docker, mode on another machine"},
 	}
 	for name, edit := range pages {
 		b := render(t, name, func(d *PageData) { edit(d) })
-		text := visibleText(b)
+		// The ⓘ popovers are the catalog's own prose, which names the stored values it counts.
+		text := visibleText(popovers.ReplaceAllString(b, ""))
 		for _, w := range want[name] {
 			if !strings.Contains(b, w) && !strings.Contains(text, w) {
 				t.Errorf("%s lacks %q", name, w)
@@ -592,6 +611,9 @@ func TestExtraBreakdownsAreShown(t *testing.T) {
 	}, "by result: failed 2, sent 7", "2 notes and 1 session wait on this PC")
 	check("cost", func(d *PageData) {
 		set(d.V["cost"], "context.per_session", map[string]any{"p50": 1200.0, "p95": 9000.0})
+		m, high := d.V["cost"].Metrics["context.per_session"], 9000.0 // a number to stand beside the lines
+		m.Value = &high
+		d.V["cost"].Metrics["context.per_session"] = m
 	}, "typical 1,200 chars, high 9,000 chars")
 }
 

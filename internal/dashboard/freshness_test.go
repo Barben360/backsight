@@ -138,7 +138,7 @@ func TestCatchingSentence(t *testing.T) {
 	if chip == nil || chip.text() != sentence {
 		t.Errorf("catching chip %+v", chip)
 	}
-	if parseHTML(t, render(t, "quality", nil)).first("span.chip") != nil {
+	if parseHTML(t, render(t, "quality", nil)).first("div.scope span.chip") != nil {
 		t.Error("a chip without a catch-up")
 	}
 }
