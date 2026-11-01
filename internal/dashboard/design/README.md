@@ -7,7 +7,7 @@ First draft of the `backsight dashboard` UI for issue #115 (decision 0079 §8–
 - `reference/dashboard.css`: the single stylesheet built on `tokens.css`. The canvas uses this same file, so the mockups and the references cannot drift apart.
 - `reference/overview.html`, `reference/memory.html`: static HTML, no script. Open them straight from disk; they load the logos from `docs/assets/`.
 
-`canvas/` holds read-only, byte-for-byte copies of the 26 canvas artboards (`*.dc.html`) the pages are built from, taken on 2026-11-01, the day block 5 started, so the scenarios' wording and numbers can be read offline and reviewed in a diff. The canvas above stays the source: a change to the design is made there and these copies are refreshed from it, never edited here. They are mockups that need the canvas's runtime (`support.js`, `<dc-import>`, inline styles): nothing embeds, serves or links them.
+`canvas/` holds read-only, byte-for-byte copies of the 26 canvas artboards (`*.dc.html`) the pages are built from, taken on 2026-11-01, the day block 5 started (refreshed the same day with the block 6 draft: 27 new `B6*` artboards and the three masters it changed, see the last section), so the scenarios' wording and numbers can be read offline and reviewed in a diff. The canvas above stays the source: a change to the design is made there and these copies are refreshed from it, never edited here. They are mockups that need the canvas's runtime (`support.js`, `<dc-import>`, inline styles): nothing embeds, serves or links them.
 
 ## Rules for block 5 (from the review)
 
@@ -103,3 +103,93 @@ The one-hue sequential steps (`--seq-1..3`, used only for splits that are not ca
 
 - The canvas was not opened and checked visually after publishing: the Claude Design type forbids rendering it without asking first. The two static references were rendered once headless (Overview light at 1440 and 390 px, Memory dark at 1440 px) and the CSS was corrected from that look (tile alignment, legend icon size, Lately column width); the canvas uses the same stylesheet. Artboard heights are estimates: a page taller than its frame is clipped on the canvas but complete in full-window view.
 - Mockup pages are built from masters with `<dc-import>`; to edit one tile for every scenario, edit `Tile`.
+
+## Block 6 additions (draft)
+
+Draft for issue #118 (scope items 1, 3, 4, 5; decision 0079 §4 rows marked block 6, §7 Preferences, §8, §9, §11 and the block 5 "as built" amendments), on the same canvas, in five new rows titled "Block 6: …", each with a sticky note listing the states it shows. Not approved yet: the author reviews the canvas before block 6 builds anything.
+
+**Nothing drawn for block 3 changed.** Three masters gained props that are off by default, so every block 3 artboard renders exactly as before: `TopBar` (`b6`: custom window, two Preferences groups; `custom`, `density`, `keys`, and `open` values `custom`, `menucustom`), `Tile` (`ttr`: the Flowing tile's time-to-recall subline) and `LineChart` (`markers`). When block 6 is built, that behaviour becomes the default. `reference/dashboard.css` gained one appended section, "Block 6 additions (draft)", mirrored from the canvas (their first comment lines differ, as before); nothing above it changed. It opens with the calendar's four colour steps (`--hm-1..4`, light and dark): they belong in `tokens.css`, but `design/tokens.css` must stay byte-identical to the shipped `assets/tokens.css` (`TestTokensMatchTheDesign`), so they move there when block 6 is built. `tokens.css` is unchanged.
+
+| Row | Artboards (`B6*`) |
+|---|---|
+| Block 6: Overview additions | `B6Overview` (healthy, light) and `-dark`, `-down` (server down), `-390`, `-390-dark`: the Overview with Copy summary beside the summary line, the Flowing tile's new subline, Helped most next to "How big is the memory?", and the days calendar under them (§8 item 7). `B6OverviewParts`: Helped most normal, fewer than 3, none yet, server down; Copy summary with scripts on, after a click, with scripts off; the copied text. `B6Helped`: the card's master. |
+| Block 6: Days calendar heatmap | `B6Heatmap` (master: 13 months, legend, today, window, a focused day, table), `B6Days` (Days list with the calendar, table open) and `-dark`, `-390`, `-390-dark`. |
+| Block 6: custom window, density, shortcuts | `B6Controls` and `-dark`: custom window open, applied (range in the control, "window: Oct 1 to Oct 7" in the page head), invalid, inside the Menu at 390 px; Preferences with Density and Keyboard shortcuts (defaults, then changed); shortcuts off, on, and the list. `B6Overview-compact` (with Preferences open), `B6Sessions-compact`, `B6Overview-keys` (shortcuts on, `?` list open). |
+| Block 6: Pipeline, System, Cost, Bank, Memory page, developer | `B6Funnel` (master), `B6Pipeline` and `-dark` (the funnel normal, watch, never extracted, too few; the Flowing tile's subline ok and watch; its attention item). `B6System` and `-dark` (health checks over time, the secrets card in four states, its attention item). `B6Widgets` and `-dark` (memory yield on Cost; Bank growth over 90 days with a gap; the Memory page's source session in three states). `B6Dev` (developer: share of memory that came up, concentration with the top 10, corrections after memory, learned-ranking changes, the language test). |
+| Block 6: Releases comparison, markers | `B6Releases` (picker; a matched result that differs with "Settings differ" and "Observational, not an experiment"; strata too few by days and by turns; raw and matched of opposite sign; a comparison too few; no clear difference; a time chart with release and setting markers). `B6Day` (Day page with its markers card). |
+
+New widget titles, in the catalog's style (proposed `Question` for each new metric):
+
+| Metric | Label | Question |
+|---|---|---|
+| Helped most (no metric id: `stats memories --sort used --limit 3`) | Helped most | Which memories helped most? |
+| days view, calendar | Days calendar | Which days did memory help? |
+| `pipeline.time_to_recall` | From session to recalled memory | How long until a session's memories come back? |
+| `memory.yield` | Memories that proved useful | Do new memories turn out useful? |
+| `secrets.suspects` | Possible secrets in memory | Could memory hold a secret? |
+| `doctor.history` | Health checks over time | Have the health checks passed lately? |
+| `bank.active_share` (dev) | Share of the memory that came up | How much of the memory ever comes up? |
+| `shows.concentration` (dev) | How concentrated shows are | Do a few memories take all the shows? |
+| `injection.contradicted` (dev) | Corrections after memory was shown | Does the user correct Claude after memory is shown? |
+| `boost.set_changed` (dev) | Recalls the learned ranking changed | How often does the learned ranking change what is shown? |
+| Releases comparison | Comparing two versions | Do two versions differ? |
+| Release and setting markers (Day page) | Release and setting markers | Did anything change that day? |
+
+### Where this draft departs from the issue, the decision or the brief, and why
+
+1. **Helped most's "Show text" is a link to the memory's text page, not an inline `<details>` that fetches.** `/memories/<id>/text` only answers a navigation (`Sec-Fetch-Dest: document`, block 4 R4), the CSP forbids framing it (`frame-ancestors 'none'`), and the API never returns text. A fetch from the page would need that guard loosened. The link keeps the shipped rule: text read live, never kept, one place that shows it.
+2. **`memory.yield` is on Cost, not Bank.** The brief puts it on Bank; decision 0079 §8 lists "Block 6: `memory.yield` cohorts" under Cost, and its catalog family is Cost. The decision wins until the author says otherwise.
+3. **The window phrase reads "window: Oct 1 to Oct 7"**, as `windowPhrase` prints it since block 5, not "From Oct 1 to Oct 7".
+4. **The custom window form sends `from` and `to`, both days included.** A plain form cannot send the exclusive `until` the URL uses, so the server turns them into `since` and `until` and redirects; an invalid range (end before start, more than 13 months back, a future day, a day missing) renders the page with its previous window and the picker open with the error and the dates kept. No script.
+5. **The days calendar is an HTML grid of day links, not an SVG.** The same markup is weeks-as-columns at 1440 px and, under 900 px, rows of weeks with seven touch-size days; a phone shows the last 13 weeks (`.hm-old` hides the rest) and the table and the Days list hold the others. Colours are classes (`q0`–`q4`, `none`, `today`, `inwin`), no inline style.
+6. **The calendar is one Tab stop** (today's day; the others `tabindex="-1"`), arrow keys move day to day with scripts on, Enter opens the day: block 5 R5 makes a chart with more than 100 positions one Tab stop. With scripts off the table and the Days list carry the values and the links.
+7. **The calendar colours by "prompts that got memory" by default**, with "turns where Claude used memory" and "sessions" as links. Used turns are about 16 a week on the author's PC, so most days would be 0 or 1 and the calendar would show little.
+8. **Time to recall's watch does not change the Flowing verdict.** It is not an error-class metric, and Flowing reads failures and backlogs. It shows as a second line on the Flowing tile (word and icon), as the funnel card's status and as one watch item in "What should I do?".
+9. **The funnel's times are on a logarithmic scale** (1 min to 7 d): the three steps take minutes, minutes and a day. The whole-way time is computed on its own, not summed, and the card says so.
+10. **The secrets card has two states the issue does not name**: "no scan yet" and "old scan" (the threshold, 30 days, is a proposal). Scope chip: server (the scan reads the server's memories).
+11. **Doctor history marks one run of the daily upkeep per day** (`jobs maintain` appends to `doctor-history.jsonl`); a day without a run is a dashed ring, which is not a fault.
+12. **The Releases comparison has a metric picker** (used, found, reported wrong; default "Turns where Claude used memory", since the 30-turn rule counts declared turns), and strata are "project × where memory was shown". Its readings, "differs" and "no clear difference", are worded as the issue asks and drawn as a neutral pill with the info icon, never a status colour. When raw and matched differences disagree, both are printed and the text says to read the matched one.
+13. **Copy summary without scripts:** the button is hidden like every copy button, and the Overview gains a "Summary as text" disclosure holding the same plain text, so the summary can still be selected by hand. This is an addition to the issue; drop it if unwanted.
+14. **Keyboard shortcuts' hint:** off by default, nothing on the page; on, a footer button "? Keyboard shortcuts" opens the same list. Keys are ignored with Ctrl, Alt or Meta and in any field (WCAG 2.1.4, character key shortcuts).
+15. **Density is a set of spacing tokens** redefined on `.page.d-compact`; touch targets keep their size under 900 px. The cookie format changes (`v1.<theme>.<dev>.<refresh>` gains two fields).
+16. **Bank growth past 30 days** draws a "no record" band where `jobs maintain` could not reach the server, and a dotted line where the source changes from this PC's daily record to the server's last 30 days.
+17. **A shipped bug found while drawing the Menu:** under 900 px the window links inside the Menu are hidden by `.tools .seg` (the Menu sits inside `.tools`), so a phone cannot change the window. The block 6 section shows them again (`.tools .navmenu .seg`).
+18. **Helped most follows the selected window** ("Used most in the last 7 days"), not the verdict's fixed 7 days.
+19. **Touch targets under 900 px are 40 px** (`--touch`, decision 0079 §9 and the shipped stylesheet), not the 44 px the brief quotes: the calendar's days, the custom window's fields and Apply use the same token.
+
+### Colour-blind check (block 6)
+
+The only new colours are the calendar's four steps. They encode magnitude, not identity, so they were run through the validator's ordinal mode (one hue, lightness monotone, visible steps, light end clearing the surface), which passes in both themes; adjacent-pair CVD ΔE does not apply to a one-hue ramp. Every other new mark reuses a checked token.
+
+| Ramp | Theme | Steps (`--hm-1..4`) | Validator (`--ordinal`) |
+|---|---|---|---|
+| days calendar | light (#FFFFFF) | #86B1EB #4F8FE0 #2569C2 #173F75 | all pass: monotone, adjacent ΔL ≥ 0.06, light end 2.21:1, hue spread 2° |
+| same | dark (#161B22) | #2A5689 #3374C4 #5A9EEE #A7CDF8 | all pass: monotone, adjacent ΔL ≥ 0.06, light end 2.30:1, hue spread 3° |
+
+- "Nothing recorded" and "0" differ by shape, not colour: a dashed outline versus a grey square with a solid edge.
+- Health-check marks reuse the status colours, which are not separable under deuteranopia (watch vs attention, ΔE 3.1, block 3 table); each status has its own shape (circle, triangle, octagon; no run: dashed ring), the legend and the table carry the word.
+
+### Contrast (block 6)
+
+No new text colour: errors use `--bad`, key caps `--fg` on `--surface-2`, the primary button `--surface` on `--fg`, all already in the block 3 table. Graphics against the card surface (requirement 3:1):
+
+| Mark | Light | Dark |
+|---|---|---|
+| calendar `--hm-1` | 2.21 | 2.30 |
+| calendar `--hm-2` | 3.31 | 3.65 |
+| calendar `--hm-3` | 5.41 | 6.23 |
+| calendar `--hm-4` | 10.48 | 10.49 |
+| calendar "0" edge (`--border-strong`) | 2.17 | 2.28 |
+| today outline (`--fg`) | 15.80 | 14.64 |
+| window ring (`--accent`) | 5.30 | 6.14 |
+| health checks: ok, watch, attention fills | 5.92, 6.13, 6.09 | 7.55, 7.91, 6.86 |
+| release and setting markers (`--fg-2`) | 7.82 | 9.50 |
+
+The lowest calendar step and the "0" edge are under 3:1, as block 3 accepted for `--seq`: each day also has its value in its label and title, the legend names every step, and the table lists every day.
+
+### Limits of this draft
+
+- The canvas was not opened or rendered after publishing (the Claude Design type forbids checking without asking). The files were checked statically only: balanced tags, valid `data-props`, and the published copies byte-identical to the local ones. Heights are estimates; the sheets' open menus sit in boxes sized by guess, so a popover may be clipped on the canvas.
+- Numbers are invented and consistent within each board, not across boards; the calendar and charts use seeded pseudo-random series.
+- The `?` list is drawn over the page with `.keys-shade`, which stands for `dialog::backdrop`; the canvas cannot show a real modal, focus or keys.
+- Copy summary's text is a proposal; its exact lines are for block 6 to settle with the CLI's text output.

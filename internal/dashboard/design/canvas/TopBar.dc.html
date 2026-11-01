@@ -50,6 +50,25 @@ body{margin:0}
     <div class="tools">
       <nav class="seg" aria-label="Window">
         <a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a>
+        <sc-if value="{{b6}}" hint-placeholder-val="{{ false }}">
+          <details class="wpick menu {{customCls}}" open="{{openCustom}}">
+            <summary aria-label="{{customAria}}">{{customLabel}} <span class="caret">▾</span></summary>
+            <div class="menu-pop right wide">
+              <form class="wform" method="get" action="/">
+                <span class="grp">Custom window</span>
+                <div class="row">
+                  <label class="field">From<input type="date" name="from" value="{{fromVal}}" aria-invalid="{{fromBad}}"></label>
+                  <label class="field">To<input type="date" name="to" value="{{toVal}}" aria-invalid="{{toBad}}"></label>
+                </div>
+                <sc-if value="{{customErr}}" hint-placeholder-val="{{ false }}">
+                  <p class="ferr" role="alert"><span class="i i-bad"></span><span>{{errText}}</span></p>
+                </sc-if>
+                <p class="fhint">Both days are included. Up to 13 months back, the history this PC keeps.</p>
+                <div class="row"><button class="btn btn-primary" type="submit">Apply</button></div>
+              </form>
+            </div>
+          </details>
+        </sc-if>
       </nav>
       <details class="menu proj" open="{{openProject}}">
         <summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short">{{filterLabel}}</span><span class="caret">▾</span></summary>
@@ -80,13 +99,25 @@ body{margin:0}
           <span class="grp">Auto-refresh</span>
           <a href="#" aria-current="true"><span class="check">✓</span>Off</a>
           <a href="#"><span class="check"></span>Every minute</a>
+          <sc-if value="{{b6}}" hint-placeholder-val="{{ false }}">
+            <hr>
+            <span class="grp">Density</span>
+            <a href="#" aria-current="{{dComf}}"><span class="check">{{dComfCheck}}</span>Comfortable</a>
+            <a href="#" aria-current="{{dComp}}"><span class="check">{{dCompCheck}}</span>Compact</a>
+            <span class="hint">Compact fits more on a screen; touch targets keep their size.</span>
+            <hr>
+            <span class="grp">Keyboard shortcuts</span>
+            <a href="#" aria-current="{{kOff}}"><span class="check">{{kOffCheck}}</span>Off</a>
+            <a href="#" aria-current="{{kOn}}"><span class="check">{{kOnCheck}}</span>On</a>
+            <span class="hint">g then a letter opens a page; press ? to list them all.</span>
+          </sc-if>
         </div>
       </details>
       <details class="menu navmenu" open="{{openMenu}}">
         <summary class="btn"><span class="i i-menu"></span>Menu</summary>
         <div class="menu-pop right wider">
           <span class="grp">Window</span>
-          <nav class="seg" aria-label="Window"><a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a></nav>
+          <nav class="seg" aria-label="Window"><a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a><sc-if value="{{b6}}" hint-placeholder-val="{{ false }}"><details class="wpick menu {{customCls}}" open="{{openMenuCustom}}"><summary aria-label="{{customAria}}">{{customLabel}} <span class="caret">▾</span></summary><div class="menu-pop"><form class="wform" method="get" action="/"><div class="row"><label class="field">From<input type="date" name="from" value="{{fromVal}}" aria-invalid="{{fromBad}}"></label><label class="field">To<input type="date" name="to" value="{{toVal}}" aria-invalid="{{toBad}}"></label></div><sc-if value="{{customErr}}" hint-placeholder-val="{{ false }}"><p class="ferr" role="alert"><span class="i i-bad"></span><span>{{errText}}</span></p></sc-if><p class="fhint">Both days are included. Up to 13 months back.</p><div class="row"><button class="btn btn-primary" type="submit">Apply</button></div></form></div></details></sc-if></nav>
           <span class="grp">Project</span>
           <a href="#"><span class="i i-filter"></span>{{filterLabel}} <span class="caret">▾</span></a>
           <hr>
@@ -137,7 +168,7 @@ body{margin:0}
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"active":{"editor":"enum","options":["overview","quality","cost","bank","pipeline","projects","sessions","memories","system","releases","defs"],"default":"overview"},"dev":{"editor":"boolean","default":false},"open":{"editor":"enum","options":["none","browse","developer","project","prefs","menu"],"default":"none"},"scope":{"editor":"enum","options":["ok","serverdown","stale","partial"],"default":"ok"},"filter":{"editor":"text","default":""},"win":{"editor":"enum","options":["1","7","30","90"],"default":"7"},"$preview":{"width":1440,"height":520}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"active":{"editor":"enum","options":["overview","quality","cost","bank","pipeline","projects","sessions","memories","system","releases","defs"],"default":"overview"},"dev":{"editor":"boolean","default":false},"open":{"editor":"enum","options":["none","browse","developer","project","prefs","menu","custom","menucustom"],"default":"none"},"b6":{"editor":"boolean","default":false},"custom":{"editor":"enum","options":["none","applied","invalid"],"default":"none"},"density":{"editor":"enum","options":["comfortable","compact"],"default":"comfortable"},"keys":{"editor":"boolean","default":false},"scope":{"editor":"enum","options":["ok","serverdown","stale","partial"],"default":"ok"},"filter":{"editor":"text","default":""},"win":{"editor":"enum","options":["1","7","30","90"],"default":"7"},"$preview":{"width":1440,"height":520}}'>
 class Component extends DCLogic {
   renderVals() {
     const p = this.props;
@@ -148,11 +179,37 @@ class Component extends DCLogic {
     const scope = p.scope ?? 'ok';
     const filter = p.filter ?? '';
     const win = String(p.win ?? '7');
-    const w = { d1: win === '1' ? 'true' : undefined, d7: win === '7' ? 'true' : undefined, d30: win === '30' ? 'true' : undefined, d90: win === '90' ? 'true' : undefined };
+    // Block 6 (opt-in, off for every block 3 artboard): custom window, density, shortcuts.
+    const b6 = String(p.b6 ?? false) === 'true';
+    const custom = p.custom ?? 'none';
+    const applied = b6 && custom === 'applied';
+    const invalid = b6 && custom === 'invalid';
+    const density = p.density ?? 'comfortable';
+    const keysOn = String(p.keys ?? false) === 'true';
+    const w = applied ? {} : { d1: win === '1' ? 'true' : undefined, d7: win === '7' ? 'true' : undefined, d30: win === '30' ? 'true' : undefined, d90: win === '90' ? 'true' : undefined };
+    const b6v = {
+      b6,
+      customCls: applied ? 'is-current' : '',
+      customLabel: applied ? 'Oct 1 – Oct 7' : 'Custom',
+      customAria: applied ? 'Custom window: Oct 1 to Oct 7, change it' : 'Custom window: pick the days',
+      fromVal: invalid ? '2026-10-20' : '2026-10-01',
+      toVal: invalid ? '2026-10-12' : '2026-10-07',
+      fromBad: invalid ? 'true' : undefined,
+      toBad: invalid ? 'true' : undefined,
+      customErr: invalid,
+      errText: '“To” (Oct 12) is before “From” (Oct 20). Pick a “To” on or after Oct 20.',
+      openCustom: ((p.open ?? 'none') === 'custom') || undefined,
+      openMenuCustom: ((p.open ?? 'none') === 'menucustom') || undefined,
+      dComf: density === 'compact' ? undefined : 'true', dComfCheck: density === 'compact' ? '' : '✓',
+      dComp: density === 'compact' ? 'true' : undefined, dCompCheck: density === 'compact' ? '✓' : '',
+      kOff: keysOn ? undefined : 'true', kOffCheck: keysOn ? '' : '✓',
+      kOn: keysOn ? 'true' : undefined, kOnCheck: keysOn ? '✓' : '',
+    };
     const keys = ['overview','quality','cost','bank','pipeline','projects','sessions','memories','system','releases','defs'];
     const cur = {};
     keys.forEach((k) => { cur[k] = k === active ? 'page' : undefined; });
     return {
+      ...b6v,
       theme,
       rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo',
       cur, dev, w,

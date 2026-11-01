@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Developer widgets added in block 6</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="bank" dev="true" b6="true" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Developer widgets added in block 6</h1><span class="muted">window: last 30 days · developer mode on · each sits on the page named above it</span></div>
+
+  <h2 class="sec-h">On Bank</h2>
+  <div class="grid-main">
+    <section class="card" aria-labelledby="as-h">
+      <div class="card-head">
+        <h2 id="as-h">How much of the memory ever comes up?</h2>
+        <span class="chip chip-dev">developer</span>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats bank --days 30 --dev</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="xs muted mono">bank.active_share</p>
+      <div class="figs">
+        <div class="fig"><span class="lab">Shown at least once</span><span class="v">34 %</span><span class="s">412 of the 1,214 memories there were on Oct 1</span></div>
+        <div class="fig"><span class="lab">Never shown in the window</span><span class="v">802</span><span class="s">not a fault: most memory waits for its topic</span></div>
+      </div>
+      <p class="xs muted">Memories made during the window are left out of both counts.</p>
+    </section>
+
+    <section class="card" aria-labelledby="gi-h">
+      <div class="card-head">
+        <h2 id="gi-h">Do a few memories take all the shows?</h2>
+        <span class="chip chip-dev">developer</span>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories --sort shown --limit 10</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="xs muted mono">shows.concentration</p>
+      <div class="row lead">
+        <div><span class="big">0.62</span> <span class="small sub">Gini of shows per memory shown (0: all shown alike, 1: one memory takes every show)</span></div>
+      </div>
+      <p class="small sub">The 10 most shown memories took <b>31 %</b> of the 1,906 shows.</p>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th class="r">#</th><th>Memory</th><th>Project</th><th class="r">Shown</th><th class="r">Share of shows</th><th class="r">Used</th></tr></thead>
+          <tbody>
+            <tr><td class="r">1</td><td><a class="idc" href="#">e5a17c90</a></td><td>backsight</td><td class="r">96</td><td class="r">5.0 %</td><td class="r">4</td></tr>
+            <tr><td class="r">2</td><td><a class="idc" href="#">0c3b9f42</a></td><td>backsight</td><td class="r">81</td><td class="r">4.2 %</td><td class="r"><span class="st st-few">0</span></td></tr>
+            <tr><td class="r">3</td><td><a class="idc" href="#">7f3a9c21</a></td><td>backsight</td><td class="r">74</td><td class="r">3.9 %</td><td class="r">6</td></tr>
+            <tr><td class="r">4</td><td><a class="idc" href="#">b20e5d47</a></td><td><span class="trunc" title="project-d-shared-frontend-tools">project-d-shared-fronten…</span></td><td class="r">61</td><td class="r">3.2 %</td><td class="r">4</td></tr>
+            <tr><td class="r">5</td><td><a class="idc" href="#">91d4e2b8</a></td><td>project-a</td><td class="r">58</td><td class="r">3.0 %</td><td class="r">1</td></tr>
+            <tr><td colspan="6" class="muted">6 to 10: 41 to 52 shows each · <a href="#">all, by shows →</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <h2 class="sec-h">On Quality</h2>
+  <div class="grid-3">
+    <section class="card" aria-labelledby="co-h">
+      <div class="card-head"><h2 id="co-h">Does the user correct Claude after memory is shown?</h2><span class="chip chip-dev">developer</span><span class="spacer"></span><span class="pill st st-info">info only</span></div>
+      <p class="xs muted mono">injection.contradicted</p>
+      <div class="figs"><div class="fig"><span class="lab">Next prompt looked like a correction</span><span class="v">3 %</span><span class="s">5 of 167 prompts that got memory</span></div></div>
+      <p class="xs muted">The pattern that spots a correction has never been measured for precision, so this never gets a status. The sessions: <code>backsight stats sessions --has contradicted</code>.</p>
+    </section>
+    <section class="card" aria-labelledby="bo-h">
+      <div class="card-head"><h2 id="bo-h">How often does the learned ranking change what is shown?</h2><span class="chip chip-dev">developer</span></div>
+      <p class="xs muted mono">boost.set_changed</p>
+      <div class="figs"><div class="fig"><span class="lab">Recalls it changed</span><span class="v">18 %</span><span class="s">30 of 167 recalls showed a different set</span></div></div>
+      <p class="small sub">What another weight would do:</p>
+      <div class="cmd"><code>backsight feedback replay --set boost_weight=0.15</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+    <section class="card" aria-labelledby="la-h">
+      <div class="card-head"><h2 id="la-h">Does memory show up as often in every language?</h2><span class="chip chip-dev">developer</span><span class="spacer"></span><span class="pill st st-watch">watch</span></div>
+      <p class="xs muted mono">recall.by_lang · two-proportion test</p>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Prompt language</th><th class="r">Got memory</th><th class="r">Prompts</th></tr></thead>
+          <tbody>
+            <tr><td>English</td><td class="r">31 % <span class="muted">(26–37)</span></td><td class="r">271</td></tr>
+            <tr><td>French</td><td class="r">13 % <span class="muted">(7–22)</span></td><td class="r">84</td></tr>
+            <tr><td>German</td><td class="r"><span class="st st-few">3 of 9</span></td><td class="r">9</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small"><span class="st st-watch">watch</span> French prompts get memory 18 pts less often than English (8 to 27 pts): a gap over 15 pts whose interval excludes 0.</p>
+      <p class="xs muted">Languages with fewer than 20 prompts show counts and are left out of the test.</p>
+    </section>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

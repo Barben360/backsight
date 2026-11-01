@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Releases: comparing two versions</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="releases" dev="true" b6="true" win="90" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Did a release or a setting help?</h1><span class="muted">window: last 90 days · the comparison sits above “Per version”</span></div>
+
+  <section class="card" aria-labelledby="cmp-h">
+    <div class="card-head">
+      <h2 id="cmp-h">Do two versions differ?</h2>
+      <span class="chip chip-dev">developer</span>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About comparing two versions"><span class="i i-info"></span></summary><div class="pop"><b>Comparing two versions</b><dl><dt>How</dt><dd>Turns are matched by project and by where memory was shown. Each matched pair gives a difference; they are pooled, weighted by size, with a 95 % interval that counts each session once (turns of one session are not independent).</dd><dt>Shown when</dt><dd>Each version has at least 7 days and 30 turns that said what they used in that project and place.</dd><dt>Words</dt><dd>“Differs” when the interval leaves out 0, “no clear difference” otherwise. Never “better”: weeks, work and memory differ.</dd></dl><span class="term">stats releases --compare A,B · stratified, clustered by session</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats releases --compare v0.1.16-m7,v0.1.17-m7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <form class="row" method="get" action="/releases" style="align-items: flex-end; gap: 12px">
+      <label class="field" style="flex: 0 1 200px">Compare<select name="a"><option>v0.1.16-m7</option><option>v0.1.15-m6</option><option>v0.1.14-m6</option></select></label>
+      <label class="field" style="flex: 0 1 200px">with<select name="b"><option>v0.1.17-m7</option><option>v0.1.16-m7</option></select></label>
+      <label class="field" style="flex: 0 1 300px">on<select name="metric"><option>Turns where Claude used memory</option><option>Prompts that got memory</option><option>Memories reported wrong or out of date</option></select></label>
+      <button class="btn btn-primary" type="submit">Compare</button>
+    </form>
+    <div class="state st-few"><span class="i i-info"></span><span><b>Observational, not an experiment.</b> The two versions ran on different weeks, on different work, with different memory. Matching by project and place removes some of that, not all.</span></div>
+    <div class="state st-watch"><span class="i i-watch"></span><span><b>Settings differ:</b> <code>recall.min_score</code> was 0.5 under v0.1.16-m7 and 0.55 under v0.1.17-m7 (changed Oct 20). A difference may come from the setting, not the release.</span></div>
+
+    <div class="row lead">
+      <div><span class="big">+10 pts</span> <span class="small sub">(+1 to +19) v0.1.17-m7 minus v0.1.16-m7, matched</span></div>
+      <div><span class="pill st st-info">differs</span></div>
+      <div class="small sub">Unmatched, the raw numbers say −3 pts (55 % → 52 %): v0.1.17-m7 ran mostly on project-a, where fewer turns use memory. Read the matched figure.</div>
+    </div>
+
+    <figure class="chart">
+      <div class="chart-plot">
+        <svg class="vb1000" viewBox="0 0 1000 270" role="img" aria-label="Difference in turns where Claude used memory, v0.1.17-m7 minus v0.1.16-m7, per project and place, with 95 % intervals; the table below lists them">
+          <sc-for list="{{xt}}" as="x" hint-placeholder-count="5">
+            <line class="gl" x1="{{x.x}}" x2="{{x.x}}" y1="10" y2="232"></line>
+            <text class="ta-m" x="{{x.x}}" y="250">{{x.label}}</text>
+          </sc-for>
+          <line class="zero" x1="660" x2="660" y1="10" y2="232"></line>
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+            <text class="ta-e lbl" x="340" y="{{r.ty}}">{{r.name}}</text>
+            <sc-if value="{{r.shown}}" hint-placeholder-val="{{ true }}">
+              <line class="ci-ln" x1="{{r.lo}}" x2="{{r.hi}}" y1="{{r.y}}" y2="{{r.y}}"><title>{{r.t}}</title></line>
+              <path class="{{r.cls}}" d="{{r.d}}"><title>{{r.t}}</title></path>
+            </sc-if>
+            <sc-if value="{{r.few}}" hint-placeholder-val="{{ false }}"><text class="few-t" x="372" y="{{r.ty}}">{{r.fewText}}</text></sc-if>
+          </sc-for>
+          <line class="bl" x1="360" x2="960" y1="232" y2="232"></line>
+          <text class="lbl ta-e" x="652" y="266">← lower in v0.1.17-m7</text>
+          <text class="lbl" x="668" y="266">higher in v0.1.17-m7 →</text>
+        </svg>
+      </div>
+      <details class="tblfb" open="true">
+        <summary>Show as a table</summary>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Project</th><th>Where memory was shown</th><th class="r">v0.1.16-m7</th><th class="r">v0.1.17-m7</th><th class="r">Difference (95 %)</th><th>Reading</th></tr></thead>
+            <tbody>
+              <tr><td>backsight</td><td>added to the prompt</td><td class="r">58 % <span class="muted">(64 turns, 21 d)</span></td><td class="r">66 % <span class="muted">(41 turns, 9 d)</span></td><td class="r">+8 pts <span class="muted">(−6 to +22)</span></td><td>no clear difference</td></tr>
+              <tr><td>project-a</td><td>added to the prompt</td><td class="r">41 % <span class="muted">(52 turns, 18 d)</span></td><td class="r">55 % <span class="muted">(38 turns, 9 d)</span></td><td class="r">+14 pts <span class="muted">(+1 to +27)</span></td><td><b>differs</b>: higher in v0.1.17-m7</td></tr>
+              <tr><td>backsight</td><td>Claude’s search</td><td class="r">47 % <span class="muted">(36 turns, 20 d)</span></td><td class="r"><span class="st st-few">too few</span> <span class="muted">(12 turns)</span></td><td class="r">—</td><td>needs 30 turns in each version</td></tr>
+              <tr><td>project-b</td><td>added to the prompt</td><td class="r"><span class="st st-few">too few</span> <span class="muted">(4 days)</span></td><td class="r">49 % <span class="muted">(33 turns, 8 d)</span></td><td class="r">—</td><td>needs 7 days in each version</td></tr>
+              <tr class="total"><td colspan="2">Matched, pooled (2 of 4 pairs)</td><td class="r">50 %</td><td class="r">61 %</td><td class="r">+10 pts <span class="muted">(+1 to +19)</span></td><td><b>differs</b>: higher in v0.1.17-m7</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </figure>
+  </section>
+
+  <div class="grid-2">
+    <section class="card" aria-labelledby="few-h">
+      <div class="card-head"><h2 id="few-h">Do two versions differ?</h2><span class="chip chip-dev">developer</span><span class="spacer"></span><span class="pill st st-few">too few</span></div>
+      <p class="small sub">Comparing v0.1.17-m7 with v0.1.18-m7 on turns where Claude used memory:</p>
+      <div class="state st-few"><span class="i i-few"></span><span><b>Too few to compare.</b> v0.1.18-m7 has run 3 days with 11 turns that said what they used; each version needs 7 days and 30 such turns in at least one shared project and place. Try again around Nov 6.</span></div>
+    </section>
+    <section class="card" aria-labelledby="nd-h">
+      <div class="card-head"><h2 id="nd-h">Do two versions differ?</h2><span class="chip chip-dev">developer</span><span class="spacer"></span><span class="pill st st-info">no clear difference</span></div>
+      <p class="small sub">Comparing v0.1.15-m6 with v0.1.16-m7 on prompts that got memory, same settings:</p>
+      <div class="row lead"><div><span class="big">+1 pt</span> <span class="small sub">(−4 to +6), matched over 3 pairs</span></div></div>
+      <p class="small">No clear difference: the interval includes 0. That is not proof that they are the same.</p>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="mk-h">
+    <div class="card-head"><h2 id="mk-h">When did Claude use memory?</h2><span class="chip"><span class="i i-sm i-pc"></span>this PC</span><span class="spacer"></span><span class="small muted">release and setting markers, on every time chart</span></div>
+    <dc-import name="LineChart" theme="inherit" data="used" markers="true" table="true" hint-size="100%,560px"></dc-import>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const X = (d) => 660 + d * 10;
+    const R = [
+      { name: 'backsight · added to the prompt', d: 8, lo: -6, hi: 22, t: 'backsight, added to the prompt: +8 pts (−6 to +22), no clear difference' },
+      { name: 'project-a · added to the prompt', d: 14, lo: 1, hi: 27, t: 'project-a, added to the prompt: +14 pts (+1 to +27), differs' },
+      { name: 'backsight · Claude’s search', few: 'too few: v0.1.17-m7 has 12 turns, 30 needed' },
+      { name: 'project-b · added to the prompt', few: 'too few: v0.1.16-m7 ran 4 days, 7 needed' },
+      { name: 'Matched, pooled', d: 10, lo: 1, hi: 19, pool: true, t: 'Matched, pooled: +10 pts (+1 to +19), differs' },
+    ];
+    const rows = R.map((r, i) => {
+      const y = 30 + i * 44 + (r.pool ? 8 : 0);
+      const x = X(r.d || 0);
+      const d = r.pool ? 'M' + (x - 9) + ',' + y + ' L' + x + ',' + (y - 8) + ' L' + (x + 9) + ',' + y + ' L' + x + ',' + (y + 8) + 'Z'
+        : 'M' + (x - 5) + ',' + (y - 5) + ' H' + (x + 5) + ' V' + (y + 5) + ' H' + (x - 5) + 'Z';
+      return { name: r.name, y, ty: y + 4, shown: !r.few, few: !!r.few, fewText: r.few || '', lo: X(r.lo || 0), hi: X(r.hi || 0), d, cls: r.pool ? 'ci-pool' : 'ci-pt', t: r.t || '' };
+    });
+    const xt = [-30, -15, 0, 15, 30].map((v) => ({ x: X(v), label: (v > 0 ? '+' : (v < 0 ? '−' : '')) + Math.abs(v) + ' pts' }));
+    return { rows, xt };
+  }
+}
+</script>
+</body>
+</html>

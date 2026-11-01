@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>System: doctor history and secrets scan</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="system" b6="true" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is the service up?</h1><span class="muted">window: last 30 days · the new cards sit under “Do the health checks pass?”</span></div>
+
+  <section class="card" aria-labelledby="dh-h">
+    <div class="card-head">
+      <h2 id="dh-h">Have the health checks passed lately?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About health checks over time"><span class="i i-info"></span></summary><div class="pop"><b>Health checks over time</b><dl><dt>What</dt><dd>One row per health check, one mark per run of the daily upkeep (<code>jobs maintain</code>), by its result.</dd><dt>No run</dt><dd>A dashed ring: upkeep did not run that day (the PC was off or asleep). Not a fault.</dd></dl><span class="term">doctor.history · doctor-history.jsonl</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats system --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <figure class="chart">
+      <div class="legend">
+        <span><svg viewBox="-6 -6 12 12" aria-hidden="true"><circle class="f-st-ok" r="4.5"></circle></svg>ok</span>
+        <span><svg viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-st-watch" d="M0,-5.5 L5.5,4.5 L-5.5,4.5Z"></path></svg>watch</span>
+        <span><svg viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-st-bad" d="M-2.3,-5.5 H2.3 L5.5,-2.3 V2.3 L2.3,5.5 H-2.3 L-5.5,2.3 V-2.3Z"></path></svg>attention</span>
+        <span><svg viewBox="-6 -6 12 12" aria-hidden="true"><circle class="norun" r="4"></circle></svg>no upkeep run that day</span>
+      </div>
+      <div class="chart-plot">
+        <svg viewBox="0 0 1000 300" role="img" aria-label="Health check results per daily run, last 30 days, one row per check; the table below lists them">
+          <sc-for list="{{rows}}" as="w" hint-placeholder-count="9">
+            <line class="gl" x1="210" x2="992" y1="{{w.y}}" y2="{{w.y}}"></line>
+            <text class="ta-e lbl" x="200" y="{{w.ty}}">{{w.label}}</text>
+          </sc-for>
+          <sc-for list="{{marks}}" as="m" hint-placeholder-count="200">
+            <path class="{{m.cls}}" d="{{m.d}}"><title>{{m.t}}</title></path>
+          </sc-for>
+          <line class="bl" x1="210" x2="992" y1="262" y2="262"></line>
+          <sc-for list="{{xt}}" as="x" hint-placeholder-count="5">
+            <text class="ta-m" x="{{x.x}}" y="282">{{x.label}}</text>
+          </sc-for>
+        </svg>
+      </div>
+      <details class="tblfb">
+        <summary>Show as a table</summary>
+        <table class="tbl">
+          <thead><tr><th>Check</th><th>Now</th><th class="r">ok</th><th class="r">watch</th><th class="r">attention</th><th>Last change</th></tr></thead>
+          <tbody>
+            <tr><td>Backups</td><td><span class="st st-watch">watch</span></td><td class="r">17</td><td class="r">9</td><td class="r">0</td><td>Oct 21: ok → watch</td></tr>
+            <tr><td>Memory server reachable</td><td><span class="st st-ok">ok</span></td><td class="r">24</td><td class="r">1</td><td class="r">1</td><td>Oct 14: attention → ok</td></tr>
+            <tr><td>Update</td><td><span class="st st-watch">watch</span></td><td class="r">23</td><td class="r">3</td><td class="r">0</td><td>Oct 28: ok → watch</td></tr>
+            <tr><td>6 other checks</td><td><span class="st st-ok">ok</span></td><td class="r">26 each</td><td class="r">0</td><td class="r">0</td><td>—</td></tr>
+          </tbody>
+        </table>
+        <p class="tbl-more">26 runs in 30 days; 4 days without a run.</p>
+      </details>
+    </figure>
+  </section>
+
+  <div class="grid-2">
+    <section class="card" aria-labelledby="sec-h1">
+      <div class="card-head">
+        <h2 id="sec-h1">Could memory hold a secret?</h2>
+        <span class="chip"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <span class="pill st st-watch">watch</span>
+        <details class="info"><summary aria-label="About possible secrets in memory"><span class="i i-info"></span></summary><div class="pop"><b>Possible secrets in memory</b><dl><dt>What</dt><dd>How many memories the last scan flagged as looking like a key, token or password, and when it ran.</dd><dt>Limits</dt><dd>Watch on Flowing as soon as one is found.</dd><dt>Privacy</dt><dd>Only the count and the date are kept: never the text, never which memories.</dd></dl><span class="term">secrets.suspects · scan-history.jsonl</span></div></details>
+      </div>
+      <div class="figs">
+        <div class="fig"><span class="lab">Possible secrets</span><span class="v">2</span><span class="s">found by the last scan</span></div>
+        <div class="fig"><span class="lab">Last scan</span><span class="v v-word"><time datetime="2026-10-28" title="2026-10-28 03:12">2 d ago</time></span><span class="s">took 41 s</span></div>
+      </div>
+      <p class="small sub">The scan lists them in your terminal, with what to do for each. The dashboard never shows which memories they are.</p>
+      <div class="cmd"><code>backsight memory scan</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+
+    <section class="card" aria-labelledby="att-sys">
+      <div class="card-head"><h2 id="att-sys">The same, in “What should I do?” on the Overview</h2><span class="spacer"></span><span class="muted small">Flowing: watch</span></div>
+      <ul class="att">
+        <li class="att-item"><span class="pill st st-watch">watch</span><div class="body"><p>Possible secrets in memory: run <code>backsight memory scan</code>.</p><div class="cmd"><code>backsight memory scan</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div><details class="why" open="true"><summary>Why this matters</summary><div>The last scan, 2 days ago, found 2 memories that look like a key, token or password. Memory is shown to Claude in later sessions; the scan says which ones and how to forget them.</div></details></div></li>
+      </ul>
+      <p class="xs muted">Banner reason on the Flowing axis: “2 possible secrets in memory (scan of Oct 28).”</p>
+    </section>
+  </div>
+
+  <h2 class="sec-h">The secrets card in its other states</h2>
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-head"><h3>Could memory hold a secret?</h3><span class="spacer"></span><span class="pill st st-ok">ok</span></div>
+      <p class="small">None found by the last scan, <time datetime="2026-10-28" title="2026-10-28 03:12">2 d ago</time> (41 s).</p>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Could memory hold a secret?</h3><span class="spacer"></span><span class="pill st st-few">no scan yet</span></div>
+      <p class="small">Memory has never been scanned on this PC.</p>
+      <div class="cmd"><code>backsight memory scan</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Could memory hold a secret?</h3><span class="spacer"></span><span class="pill st st-few">old scan</span></div>
+      <p class="small">None found, but the last scan is 41 days old: memories added since are not checked.</p>
+      <div class="cmd"><code>backsight memory scan</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    const checks = ['Backups', 'Update', 'Memory server reachable', 'Server version', 'Search index', 'Claude Code steps', 'Background jobs', 'Settings', 'Waiting on this PC'];
+    const L = 222, R = 980, N = 30;
+    const X = (d) => L + d * ((R - L) / (N - 1));
+    const Y = (i) => 20 + i * 27;
+    const date = (d) => (d < 30 ? 'Oct ' + (d + 1) : 'Oct 30');
+    const norun = [5, 6, 18, 25];
+    const st = (c, d) => {
+      if (c === 0) return d >= 20 ? 'watch' : 'ok';
+      if (c === 1) return d >= 27 ? 'watch' : 'ok';
+      if (c === 2) return d === 11 ? 'bad' : (d === 12 ? 'watch' : 'ok');
+      return 'ok';
+    };
+    const shape = (s, x, y) => {
+      if (s === 'ok') return 'M' + x + ',' + (y - 4.5) + ' A4.5,4.5 0 1,1 ' + x + ',' + (y + 4.5) + ' A4.5,4.5 0 1,1 ' + x + ',' + (y - 4.5) + 'Z';
+      if (s === 'watch') return 'M' + x + ',' + (y - 6) + ' L' + (x + 6) + ',' + (y + 5) + ' L' + (x - 6) + ',' + (y + 5) + 'Z';
+      if (s === 'bad') return 'M' + (x - 2.5) + ',' + (y - 6) + ' H' + (x + 2.5) + ' L' + (x + 6) + ',' + (y - 2.5) + ' V' + (y + 2.5) + ' L' + (x + 2.5) + ',' + (y + 6) + ' H' + (x - 2.5) + ' L' + (x - 6) + ',' + (y + 2.5) + ' V' + (y - 2.5) + 'Z';
+      return 'M' + x + ',' + (y - 4) + ' A4,4 0 1,1 ' + x + ',' + (y + 4) + ' A4,4 0 1,1 ' + x + ',' + (y - 4) + 'Z';
+    };
+    const word = { ok: 'ok', watch: 'watch', bad: 'attention', none: 'no upkeep run' };
+    const cls = { ok: 'mkp f-st-ok', watch: 'mkp f-st-watch', bad: 'mkp f-st-bad', none: 'norun' };
+    const marks = [];
+    checks.forEach((c, i) => {
+      for (let d = 0; d < N; d++) {
+        const s = norun.includes(d) ? 'none' : st(i, d);
+        marks.push({ cls: cls[s], d: shape(s, X(d).toFixed(1), Y(i)), t: date(d) + ' · ' + c + ' · ' + word[s] });
+      }
+    });
+    const rows = checks.map((c, i) => ({ label: c, y: Y(i), ty: Y(i) + 4 }));
+    const xt = [0, 7, 14, 21, 29].map((d) => ({ x: X(d).toFixed(1), label: date(d) }));
+    return { theme, rows, marks, xt };
+  }
+}
+</script>
+</body>
+</html>

@@ -40,6 +40,7 @@ body{margin:0}
   <p class="tile-q">{{t.q}}</p>
   <div class="tile-v"><span class="big num">{{t.big}}</span><span class="unit">{{t.unit}}</span><span class="ci">{{t.ci}}</span></div>
   <p class="tile-sub">{{t.sub}}</p>
+  <sc-if value="{{ttrWatch}}" hint-placeholder-val="{{ false }}"><p class="tile-sub"><span class="st st-watch">watch</span> Slow to become memory: 1 in 20 sessions took over 2 h 40 min (watch over 1 h).</p></sc-if>
   <div class="tile-st">
     <span class="st {{t.st}}">{{t.word}}</span>
     <sc-if value="{{hasDelta}}" hint-placeholder-val="{{ true }}"><span class="delta {{t.dcls}}"><span class="arr">{{t.darr}}</span> {{t.dtext}}</span></sc-if>
@@ -62,7 +63,7 @@ body{margin:0}
 </article>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"$preview":{"width":300,"height":400}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"ttr":{"editor":"enum","options":["none","ok","watch"],"default":"none"},"$preview":{"width":300,"height":400}}'>
 class Component extends DCLogic {
   renderVals() {
     const p = this.props;
@@ -162,6 +163,12 @@ class Component extends DCLogic {
     };
     const t = { ...base[slot], ...((S[sc] || healthy)[slot]) };
     if (t.unit === undefined) t.unit = base[slot].unit;
+    // Block 6 (opt-in, off for every block 3 artboard): the Flowing tile's subline becomes time to recall.
+    const ttr = p.ttr ?? 'none';
+    if (slot === 'flowing' && ttr !== 'none') {
+      t.sub = 'Session to recalled memory: typical 1 d 2 h · ' + t.sub;
+      t.n = t.n + '; time to recall from 118 sessions recalled';
+    }
     t.nf = String(p.nf ?? false) === 'true';
     // sparkline geometry (188 x 32 box, 3 px padding)
     const vals = t.s || [];
@@ -183,6 +190,7 @@ class Component extends DCLogic {
       chipIco: isServer ? 'i-server' : 'i-pc',
       chipTitle: isServer ? 'From the memory server: all PCs' : 'Activity recorded on this PC',
       hasDelta: !t.nodelta, hasNote: !!t.note,
+      ttrWatch: slot === 'flowing' && (p.ttr ?? 'none') === 'watch',
       infoOpen: String(p.info ?? false) === 'true' || undefined,
       pts, area, ex: last[0], ey: last[1],
       sparkLabel: t.name + ' per day, last 7 days',

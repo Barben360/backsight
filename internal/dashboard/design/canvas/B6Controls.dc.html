@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Custom window, density and shortcuts</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<main class="wrap main" style="padding-top: 32px">
+  <div class="page-head"><h1>Custom window, density, keyboard shortcuts</h1><span class="muted">Top bar controls added in block 6 · {{theme}}</span></div>
+
+  <h2 class="sec-h">1. Custom window: the picker open (a form with two dates and Apply; works with scripts off)</h2>
+  <div style="min-height: 330px; border: 1px dashed var(--border); border-radius: 10px; overflow: hidden">
+    <dc-import name="TopBar" theme="inherit" b6="true" open="custom" hint-size="100%,94px"></dc-import>
+  </div>
+
+  <h2 class="sec-h">2. Applied: the control shows the range, the page head says it</h2>
+  <div style="border: 1px dashed var(--border); border-radius: 10px; overflow: hidden">
+    <dc-import name="TopBar" theme="inherit" b6="true" custom="applied" hint-size="100%,94px"></dc-import>
+    <div class="wrap" style="padding-block: 20px"><div class="page-head"><h1>Is my memory working?</h1><span class="muted">window: Oct 1 to Oct 7</span></div></div>
+  </div>
+
+  <h2 class="sec-h">3. Invalid range: sent back with the picker open, the dates kept, the window unchanged</h2>
+  <div style="min-height: 380px; border: 1px dashed var(--border); border-radius: 10px; overflow: hidden">
+    <dc-import name="TopBar" theme="inherit" b6="true" custom="invalid" open="custom" hint-size="100%,94px"></dc-import>
+  </div>
+  <div class="grid-2">
+    <div class="state st-bad"><span class="i i-bad"></span><span><b>Other refusals, same place, same form:</b> “From” more than 13 months back: “This PC keeps 13 months: pick Oct 1, 2025 or later.” · A day after today: “Oct 31 is in the future: pick today or earlier.” · A date missing: “Pick both days.”</span></div>
+    <p class="small sub">The form sends <code>from</code> and <code>to</code> (both days included). The server checks them and redirects to the page with <code>since</code> and <code>until</code>, or renders the page with the previous window and this error. No script involved.</p>
+  </div>
+
+  <h2 class="sec-h">4. Under 900 px: the window control lives in the Menu; the picker opens inline</h2>
+  <div class="row" style="align-items: flex-start; gap: 32px">
+    <div style="width: 390px; min-height: 900px; border: 1px dashed var(--border); border-radius: 10px; overflow: hidden">
+      <dc-import name="TopBar" theme="{{theme}}" b6="true" open="menucustom" hint-size="390px,94px"></dc-import>
+    </div>
+    <div class="stack" style="max-width: 560px">
+      <div class="state st-watch"><span class="i i-watch"></span><span><b>Found while drawing this:</b> in the shipped stylesheet the window links inside the Menu are hidden under 900 px (<code>.tools .seg</code> also matches the Menu’s copy), so a phone cannot change the window today. The block 6 rules show them again.</span></div>
+      <p class="small sub">Fields and Apply are 40 px tall here, like every touch target under 900 px.</p>
+    </div>
+  </div>
+
+  <h2 class="sec-h">5. Preferences: two new groups, density and keyboard shortcuts</h2>
+  <div class="grid-2">
+    <div style="min-height: 820px; border: 1px dashed var(--border); border-radius: 10px; overflow: hidden">
+      <dc-import name="TopBar" theme="inherit" b6="true" open="prefs" hint-size="100%,94px"></dc-import>
+      <p class="xs muted" style="padding: 8px 16px">Defaults: comfortable, shortcuts off.</p>
+    </div>
+    <div style="min-height: 820px; border: 1px dashed var(--border); border-radius: 10px; overflow: hidden">
+      <dc-import name="TopBar" theme="inherit" b6="true" open="prefs" density="compact" keys="true" hint-size="100%,94px"></dc-import>
+      <p class="xs muted" style="padding: 8px 16px">Compact and shortcuts on. Each choice is a link to <code>/prefs?density=compact&amp;back=…</code>, like the others.</p>
+    </div>
+  </div>
+
+  <h2 class="sec-h">6. Keyboard shortcuts: how users learn they exist</h2>
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><h3>Off (default)</h3></div>
+      <p class="small sub">No key does anything. The only mention is the line under “Keyboard shortcuts” in Preferences.</p>
+      <footer class="foot" style="border-top: 1px solid var(--border)"><div class="wrap" style="padding: 0"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>On</h3></div>
+      <p class="small sub">The footer of every page gains a button that opens the list; <kbd>?</kbd> does the same. With scripts off the button is not drawn (shortcuts need the script).</p>
+      <footer class="foot" style="border-top: 1px solid var(--border)"><div class="wrap" style="padding: 0"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a><button class="btn btn-quiet" type="button" aria-keyshortcuts="?" style="min-height: 0; padding: 0 4px"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button></div></footer>
+    </section>
+  </div>
+  <div class="row" style="align-items: flex-start; gap: 32px">
+    <div class="keys" role="dialog" aria-modal="true" aria-labelledby="keys-h2" style="flex: none">
+      <div class="keys-head"><h2 id="keys-h2">Keyboard shortcuts</h2><button class="btn btn-quiet" type="button" aria-label="Close keyboard shortcuts">Close <kbd>Esc</kbd></button></div>
+      <dl>
+        <dt><kbd>g</kbd> <kbd>o</kbd></dt><dd>Overview</dd>
+        <dt><kbd>g</kbd> <kbd>q</kbd></dt><dd>Quality</dd>
+        <dt><kbd>g</kbd> <kbd>c</kbd></dt><dd>Cost</dd>
+        <dt><kbd>g</kbd> <kbd>b</kbd></dt><dd>Bank</dd>
+        <dt><kbd>g</kbd> <kbd>p</kbd></dt><dd>Pipeline</dd>
+        <dt><kbd>g</kbd> <kbd>s</kbd></dt><dd>System</dd>
+        <dt><kbd>/</kbd></dt><dd>Filter by project</dd>
+        <dt><kbd>r</kbd></dt><dd>Refresh this page</dd>
+        <dt><kbd>?</kbd></dt><dd>This list</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this list or an open menu</dd>
+      </dl>
+      <p class="xs muted">Press g, then the letter within a second. Keys do nothing while you type in a field. Turn shortcuts off in Preferences.</p>
+    </div>
+    <ul class="small sub stack" style="gap: 8px; max-width: 520px; list-style: disc; padding-left: 18px">
+      <li>A real <code>&lt;dialog&gt;</code> opened with <code>showModal()</code>: focus moves to Close, Tab stays inside, Esc closes it and focus returns to where it was.</li>
+      <li><kbd>/</kbd> opens the project filter and focuses its field; <kbd>r</kbd> follows the Refresh link.</li>
+      <li>Single keys are ignored when Ctrl, Alt or Meta is held, and in any field, so typing and screen reader keys are never taken.</li>
+      <li>Under 900 px the list is the same box, full width minus 16 px each side.</li>
+    </ul>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":3800}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Helped most</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<section class="card" aria-labelledby="{{hid}}">
+  <div class="card-head">
+    <h2 id="{{hid}}">Which memories helped most?</h2>
+    <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+    <span class="spacer"></span>
+    <details class="info"><summary aria-label="About helped most"><span class="i i-info"></span></summary><div class="pop"><b>Which memories helped most?</b><dl><dt>What</dt><dd>The 3 memories Claude said it used most often in the window, with how often each was shown.</dd><dt>Text</dt><dd>Read live from the memory server when you ask, on the memory’s own page. The dashboard never keeps it.</dd></dl><span class="term">stats memories --sort used --limit 3</span></div></details>
+    <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories --sort used --limit 3</code><button class="copy" type="button" aria-label="Copy: backsight stats memories --sort used --limit 3"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+  </div>
+  <p class="small sub">Used most in the last 7 days.</p>
+  <sc-if value="{{down}}" hint-placeholder-val="{{ false }}">
+    <div class="state st-watch"><span class="i i-server"></span><span>Memory server not answering since 09:12: the counts are from this PC, the text can’t be read until it answers.</span></div>
+  </sc-if>
+  <sc-if value="{{hasRows}}" hint-placeholder-val="{{ true }}">
+    <ol class="helped">
+      <sc-for list="{{rows}}" as="m" hint-placeholder-count="3">
+        <li>
+          <span class="rank">{{m.rank}}</span>
+          <a class="idc" href="#" title="{{m.full}}">{{m.id}}</a>
+          <span class="row" style="gap: 6px; min-width: 0"><a href="#" class="trunc" title="{{m.proj}}">{{m.projShort}}</a><span class="muted">· <i class="sw {{m.kindCls}}"></i> {{m.kind}}</span></span>
+          <span class="cnt">used <b>{{m.used}}</b> of {{m.shown}} shown</span>
+          <span class="act">
+            <sc-if value="{{canText}}" hint-placeholder-val="{{ true }}"><a class="btn" href="#" aria-label="Show the text of memory {{m.id}}"><span class="i i-doc"></span>Show text</a></sc-if>
+            <sc-if value="{{down}}" hint-placeholder-val="{{ false }}"><span class="xs muted">text unavailable</span></sc-if>
+          </span>
+        </li>
+      </sc-for>
+    </ol>
+  </sc-if>
+  <sc-if value="{{few}}" hint-placeholder-val="{{ false }}">
+    <p class="small muted">Only 2 memories were used in the last 7 days.</p>
+  </sc-if>
+  <sc-if value="{{none}}" hint-placeholder-val="{{ false }}">
+    <div class="empty"><span class="row">No memory was used in the last 7 days yet.</span><span class="small">When Claude says it used a memory, the ones it used most show up here. A longer window may already have some.</span></div>
+  </sc-if>
+  <p class="xs muted">Show text opens the memory’s page with its text, read live from the server and never kept.</p>
+  <div class="card-foot"><a href="#">All memories, by use →</a></div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"state":{"editor":"enum","options":["normal","few","none","down"],"default":"normal"},"$preview":{"width":680,"height":360}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const st = p.state ?? 'normal';
+    const all = [
+      { rank: '1', id: '7f3a9c21', proj: 'backsight', kind: 'fact about you and your work', kindCls: 'f-about', used: 6, shown: 9 },
+      { rank: '2', id: 'b20e5d47', proj: 'project-d-shared-frontend-tools', kind: 'fact from a session', kindCls: 'f-session', used: 4, shown: 11 },
+      { rank: '3', id: '4c81f0a3', proj: 'project-a', kind: 'summary', kindCls: 'f-summary', used: 3, shown: 3 },
+    ];
+    const rows = (st === 'few' ? all.slice(0, 2) : (st === 'none' ? [] : all)).map((m) => ({ ...m, full: m.id + '9d2c4e1b0a7f63e85b1d0c4a', projShort: m.proj.length > 24 ? m.proj.slice(0, 24) + '…' : m.proj }));
+    return {
+      theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad',
+      hid: 'helped-h-' + st,
+      rows, hasRows: rows.length > 0,
+      few: st === 'few', none: st === 'none', down: st === 'down', canText: st !== 'down',
+    };
+  }
+}
+</script>
+</body>
+</html>

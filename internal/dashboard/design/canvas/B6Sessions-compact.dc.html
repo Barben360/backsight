@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sessions list, compact density</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page d-compact" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="sessions" b6="true" density="compact" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>What happened in each session?</h1><span class="muted">window: last 7 days · 34 sessions · compact density</span></div>
+  <section class="card">
+    <div class="card-head">
+      <h2>Sessions</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <nav class="tabs" aria-label="Show"><a href="#" aria-current="true">All <span class="count">34</span></a><a href="#">With a used memory <span class="count">9</span></a><a href="#">With a wrong report <span class="count">1</span></a><a href="#">Didn't say <span class="count">3</span></a><a href="#">Any memory shown <span class="count">27</span></a></nav>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th aria-sort="descending"><a href="#">When <span class="sort">▼</span></a></th><th>Session</th><th><a href="#">Project <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Prompts <span class="sort">↕</span></a></th><th class="r"><a href="#">Got memory <span class="sort">↕</span></a></th><th class="r"><a href="#">Shown <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Used <span class="sort">↕</span></a></th><th class="r"><a href="#">Wrong <span class="sort">↕</span></a></th><th class="r"><a href="#">Context added <span class="sort">↕</span></a></th><th>Sent</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><time datetime="2026-10-30T14:52" title="2026-10-30 14:52">25 min ago</time></td><td><a class="idc" href="#" title="a41c09e24e1b0c9d2f7a63e85b1d0c4a">a41c09e2</a></td><td><a href="#">backsight</a></td><td class="r">5</td><td class="r">2</td><td class="r">10</td><td class="r">2</td><td class="r"><span class="st st-watch">1</span></td><td class="r">3,100</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>2 h ago</td><td><a class="idc" href="#">5be2d7f0</a></td><td><a href="#">project-a</a></td><td class="r">7</td><td class="r">2</td><td class="r">4</td><td class="r">1</td><td class="r">0</td><td class="r">2,400</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>5 h ago</td><td><a class="idc" href="#">93c1a4e8</a></td><td><a href="#">backsight</a></td><td class="r">9</td><td class="r">4</td><td class="r">9</td><td class="r">3</td><td class="r">0</td><td class="r">3,600</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>yesterday</td><td><a class="idc" href="#">d0f63b15</a></td><td><a href="#">project-c</a></td><td class="r">4</td><td class="r">1</td><td class="r">3</td><td class="r">0</td><td class="r">0</td><td class="r">1,200</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>yesterday</td><td><a class="idc" href="#">7ac0d915</a></td><td><a href="#">backsight</a></td><td class="r">11</td><td class="r">3</td><td class="r">6</td><td class="r">1</td><td class="r">0</td><td class="r">2,900</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>2 d ago</td><td><a class="idc" href="#">2e8a91c7</a></td><td><a href="#" class="trunc" title="project-d-shared-frontend-tools">project-d-shared-fronten…</a></td><td class="r">3</td><td class="r">1</td><td class="r">5</td><td class="r">1</td><td class="r">0</td><td class="r">1,800</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>2 d ago</td><td><a class="idc" href="#">c7d24e60</a></td><td><a href="#">project-b</a></td><td class="r">6</td><td class="r">0</td><td class="r">2</td><td class="r">0</td><td class="r">0</td><td class="r">900</td><td><span class="st st-ok">sent</span></td></tr>
+          <tr><td>3 d ago</td><td><a class="idc" href="#">0b7e3f12</a></td><td><a href="#">project-a</a></td><td class="r">8</td><td class="r">3</td><td class="r">7</td><td class="r">2</td><td class="r">0</td><td class="r">3,300</td><td><span class="st st-ok">sent</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pager"><a class="btn" href="#">← Newer</a><span>1–8 of 34</span><a class="btn" href="#">Older →</a></div>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

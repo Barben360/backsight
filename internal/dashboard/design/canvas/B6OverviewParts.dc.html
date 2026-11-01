@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Helped most states and Copy summary</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<main class="wrap main" style="padding-top: 32px">
+  <div class="page-head"><h1>Helped most, and Copy summary</h1><span class="muted">Overview parts added in block 6 · {{theme}}</span></div>
+
+  <h2 class="sec-h">1. Helped most: normal and fewer than 3</h2>
+  <div class="grid-2">
+    <dc-import name="B6Helped" theme="inherit" state="normal" hint-size="100%,330px"></dc-import>
+    <dc-import name="B6Helped" theme="inherit" state="few" hint-size="100%,330px"></dc-import>
+  </div>
+  <h2 class="sec-h">2. Helped most: none yet, and the memory server down</h2>
+  <div class="grid-2">
+    <dc-import name="B6Helped" theme="inherit" state="none" hint-size="100%,330px"></dc-import>
+    <dc-import name="B6Helped" theme="inherit" state="down" hint-size="100%,380px"></dc-import>
+  </div>
+
+  <h2 class="sec-h">3. Copy summary: the button beside the summary line</h2>
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><h3>Scripts on</h3></div>
+      <div class="summary-row">
+        <p class="summary">In the last 7 days: <b>46</b> prompts got memory, Claude used it in <b>10</b> turns, about <b>17 k</b> tokens added; extraction cost <b>$43.62</b> <span class="muted">(server, all PCs).</span></p>
+        <button class="copy" type="button" aria-label="Copy summary: the numbers on this page as plain text, without any memory text"><span class="i i-sm i-copy"></span>Copy summary</button>
+      </div>
+      <div class="summary-row">
+        <p class="summary">After a click, for 2 seconds (and read out by screen readers):</p>
+        <button class="copy" type="button">Copied</button>
+      </div>
+      <p class="xs muted">The text is written into the button’s <code>data-copy</code> by the server, so the copy script stays the same small file. Clipboard refused: the button says “Couldn’t copy: the text is shown below” and opens the box below.</p>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Scripts off</h3></div>
+      <p class="summary">In the last 7 days: <b>46</b> prompts got memory, Claude used it in <b>10</b> turns, about <b>17 k</b> tokens added; extraction cost <b>$43.62</b> <span class="muted">(server, all PCs).</span></p>
+      <p class="xs muted">No button: like every copy button it is rendered <code>hidden</code> and only the script shows it. The same text is in a “Summary as text” disclosure at the foot of the Overview, selectable by hand:</p>
+      <details class="why" open="true"><summary>Summary as text</summary><pre class="sample">backsight · Is my memory working? · last 7 days (Oct 24 to Oct 30)
+Activity on this PC · memory on 127.0.0.1:18888
+
+Memory is working.
+…</pre></details>
+    </section>
+  </div>
+
+  <h2 class="sec-h">4. What it copies (healthy scenario, all projects)</h2>
+  <div class="grid-2">
+<pre class="sample">backsight · Is my memory working? · last 7 days (Oct 24 to Oct 30)
+Activity on this PC · memory on 127.0.0.1:18888
+
+Memory is working.
+  Found      ok      28 % of prompts got memory (21–35 %), +2 pts
+  Right      ok      used in 62 % of turns (50–73 %), judged on 28 days
+  Cost       ok      slowest prompts 1.6 s; context high 3,600 chars
+  Flowing    ok      239 of 239 sessions sent; back as memory in about 1 d 2 h
+
+In the last 7 days: 46 prompts got memory, Claude used it in 10 turns,
+about 17 k tokens added; extraction cost $43.62 (server, all PCs).
+
+Reported wrong: too few to judge (1 of 14 verdicts).
+Needs attention: nothing.
+Memory: 1,284 memories, +46 in the last 7 days.
+
+backsight v0.1.17-m7 · 2026-10-30 15:44</pre>
+    <ul class="small sub stack" style="gap: 8px; list-style: disc; padding-left: 18px">
+      <li>Counts, rates, statuses and commands only: no memory text, no prompt, no memory id, no session id.</li>
+      <li>Project names appear only when a project filter is set (its name in the first line), as on the page.</li>
+      <li>With an attention item: one line per item, with its command (“Needs attention: 1. Memory adds 2.3 s to the slowest prompts (limit 2.5 s): backsight doctor”).</li>
+      <li>Plain text, 72 columns at most, so it pastes cleanly into an issue, a chat or a terminal.</li>
+    </ul>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>
