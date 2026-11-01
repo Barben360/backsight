@@ -72,7 +72,7 @@
 {{template "card-head" .Head}}
 {{with .Down}}<div class="state st-watch"><span class="i i-server"></span><span>{{.}}</span></div>
 {{end}}<div class="glance">
-<div class="glance-total"><span class="muted small">Memories</span><span class="v">{{.Total}}</span>{{with .Growth}}<span class="small sub">{{.}}</span>{{end}}</div>
+<div class="glance-total"><span class="muted small">Memories</span><span class="v">{{.Total}}</span>{{if .Growth}}<span class="small sub">{{.Growth}}{{with .GrowthNote}} <span class="muted">{{.}}</span>{{end}}</span>{{end}}</div>
 {{if .Kinds}}<div class="glance-kinds">
 <svg class="kbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{.Aria}}">
 {{range .Kinds}}<rect class="{{.Class}}" x="{{.X}}" y="0" width="{{.W}}" height="10"></rect>

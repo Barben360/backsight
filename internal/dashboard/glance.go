@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"math"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -17,6 +16,7 @@ import (
 type Glance struct {
 	Head          Head
 	Total, Growth string
+	GrowthNote    string // muted words after Growth; "" none
 	Kinds         []KindPart
 	Aria, Down    string // Down: the sentence shown while the server does not answer; "" otherwise
 	Badges        []Badge
@@ -45,11 +45,10 @@ var glanceKinds = []struct{ key, one, many, class string }{
 }
 
 // glanceHead is the card's frame.
-func glanceHead(cli string, filtered bool) Head {
+func glanceHead(cli string) Head {
 	h := withInfo(fixedHead("glance", "How big is the memory?", "server", cli),
 		"About memory at a glance", "Memory at a glance", "bank.size · bank.growth · stale.*",
 		"Memories on the server, by kind, and how many were added in the window. The badges count memories worth a look; they never change the verdict.")
-	h.NotFiltered = filtered
 	return h
 }
 
@@ -96,12 +95,43 @@ func barOf(counts []int64) (xs, ws []float64) {
 // glanceOf is the card of the overview r; project is the page's project
 // filter, which the memory counts do not follow.
 func glanceOf(r *metrics.Result, l format.Locale, loc *time.Location, project string) Glance {
+	return glanceFor(r, l, loc, views.Params{Project: project})
+}
+
+// growthWindow says over what time the memories were added, from the
+// window the result was computed for. days_covered says the server keeps
+// less history than the window asks for.
+func growthWindow(r *metrics.Result, grow metrics.Metric, p views.Params) string {
+	w := r.Window
+	custom := p.Since != "" || p.Until != ""
+	if covered, ok := extraAs[int](grow, "days_covered"); ok && covered > 0 {
+		if custom {
+			return "in the " + format.Count(format.Locale{}, int64(covered), "day", "days") + " the server keeps"
+		}
+		w.Days = covered
+		p.Days = covered
+	}
+	phrase := windowPhrase(p, w)
+	switch {
+	case phrase == "" || phrase == "last 0 days":
+		return "in the window"
+	case strings.HasPrefix(phrase, "last"):
+		return "in the " + phrase
+	case strings.HasPrefix(phrase, "since"):
+		return phrase
+	}
+	return "from " + phrase
+}
+
+// glanceFor is glanceOf for the page's parameters.
+func glanceFor(r *metrics.Result, l format.Locale, loc *time.Location, p views.Params) Glance {
 	g := Glance{Total: dash}
-	g.Head = glanceHead(cliFor("bank", "", views.Params{Project: project}), project != "")
+	g.Head = glanceHead(cliFor("bank", "", p))
+	project := p.Project
 
 	size := r.Metrics["bank.size"]
 	if size.Value != nil {
-		g.Total = l.Int(int64(*size.Value + 0.5))
+		g.Total = l.Int(int64(*size.Value))
 	}
 
 	// Growth: the memories added over the window, summed from the bank's
@@ -112,13 +142,12 @@ func glanceOf(r *metrics.Result, l format.Locale, loc *time.Location, project st
 			n, _ := extraAs[int64](grow, k.key)
 			added += n
 		}
-		days := r.Window.Days
-		if days <= 0 {
-			days = 7
-		}
-		g.Growth = "+" + l.Int(added) + " in the last " + strconv.Itoa(days) + " days"
+		g.Growth = "+" + l.Int(added) + " " + growthWindow(r, grow, p)
 		if docs, ok := extraAs[int64](size, "documents"); ok && docs > 0 {
 			g.Growth += " · " + l.Int(docs) + " documents"
+		}
+		if project != "" { // the size above is the project's; the growth is the whole memory's
+			g.GrowthNote = "(all projects)"
 		}
 	}
 
@@ -169,9 +198,7 @@ func glanceOf(r *metrics.Result, l format.Locale, loc *time.Location, project st
 
 // glancePage is glanceOf with the page's own flags on its CLI.
 func glancePage(r *metrics.Result, l format.Locale, loc *time.Location, p views.Params) Glance {
-	g := glanceOf(r, l, loc, p.Project)
-	g.Head.CLI = cliFor("bank", "", p)
-	return g
+	return glanceFor(r, l, loc, p)
 }
 
 // latelyHead is the frame of "What happened lately?".

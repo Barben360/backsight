@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
@@ -82,6 +83,11 @@ func apiResult(t *testing.T, h *harness, view string) metrics.Result {
 
 func TestPagesShowTheViewsNumbers(t *testing.T) {
 	h := dataHarness(t)
+	// The server holds 1,284 memories: the overview's total is a number.
+	h.srv.set(func(f *fakeServer) {
+		f.stats = &hindsight.BankStats{TotalDocuments: 286, Present: map[string]bool{"nodes_by_fact_type": true},
+			NodesByFactType: map[string]int{"observation": 212, "world": 431, "experience": 641}}
+	})
 	ck := h.login()
 	shown := 0
 	for page, ids := range pageMetrics {
@@ -111,6 +117,10 @@ func TestPagesShowTheViewsNumbers(t *testing.T) {
 			want := views.FormatValue(def, m)
 			if page == "overview" {
 				want = en.Value(def, m)
+				total := parseHTML(t, b).first(".glance-total .v")
+				if want != "1,284" || total == nil || total.text() != want {
+					t.Errorf("overview total %v, want %q from the API (%v)", total, "1,284", m.Value)
+				}
 			}
 			if id == "jobs.last_run" && m.Value != nil { // shown as how long ago
 				want = views.Age(int64(*m.Value)) + " ago"

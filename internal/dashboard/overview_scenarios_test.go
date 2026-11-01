@@ -205,15 +205,73 @@ func TestGlance(t *testing.T) {
 	t.Run("filtered", func(t *testing.T) {
 		r := scenarioNamed(t, "healthy")
 		g := glanceOf(r, en, r.Window.Loc, "my project")
-		if !g.Head.NotFiltered || g.Head.CLI != "backsight stats bank --project 'my project'" {
-			t.Errorf("filtered head: %v %q", g.Head.NotFiltered, g.Head.CLI)
+		if g.Head.NotFiltered {
+			t.Error("the total is the project's: the card must not claim to be unfiltered")
 		}
-		if g := glanceOf(r, en, r.Window.Loc, ""); g.Head.NotFiltered || g.Head.CLI != "backsight stats bank" {
-			t.Errorf("unfiltered head: %v %q", g.Head.NotFiltered, g.Head.CLI)
+		if g.Head.CLI != "backsight stats bank --project 'my project'" {
+			t.Errorf("CLI %q", g.Head.CLI)
+		}
+		if g.GrowthNote != "(all projects)" || !strings.HasPrefix(g.Growth, "+46 in the last 7 days") {
+			t.Errorf("growth %q note %q: want the whole memory's growth, labelled", g.Growth, g.GrowthNote)
+		}
+		if g := glanceOf(r, en, r.Window.Loc, ""); g.GrowthNote != "" || g.Head.CLI != "backsight stats bank" {
+			t.Errorf("unfiltered: note %q CLI %q", g.GrowthNote, g.Head.CLI)
 		}
 		g = glancePage(r, en, r.Window.Loc, views.Params{Days: 30, DaysSet: true})
 		if g.Head.CLI != "backsight stats bank --days 30" {
 			t.Errorf("page flags: %q", g.Head.CLI)
+		}
+		// On the page: the note shows after the growth, and no chip.
+		r.Info = nil
+		page := renderOverview(t, r)
+		card := page.first("section.card[aria-labelledby=w-glance]")
+		if card.first(".chip-nf") != nil || strings.Contains(card.text(), "(all projects)") {
+			t.Error("an unfiltered page shows the filter marks")
+		}
+	})
+	t.Run("window", func(t *testing.T) {
+		grown := func(mod func(r *metrics.Result), p views.Params) string {
+			r := scenarioNamed(t, "healthy")
+			mod(r)
+			return glancePage(r, en, r.Window.Loc, p).Growth
+		}
+		if got := grown(func(r *metrics.Result) {}, views.Params{}); got != "+46 in the last 7 days · 286 documents" {
+			t.Errorf("7 days: %q", got)
+		}
+		if got := grown(func(r *metrics.Result) { r.Window.Days = 30 }, views.Params{Days: 30, DaysSet: true}); got != "+46 in the last 30 days · 286 documents" {
+			t.Errorf("30 days: %q", got)
+		}
+		if got := grown(func(r *metrics.Result) { r.Window.Days = 1 }, views.Params{}); got != "+46 in the last 24 h · 286 documents" {
+			t.Errorf("1 day: %q", got)
+		}
+		// Over 90 days the server keeps less: the days it covered are said.
+		cov := func(r *metrics.Result) {
+			r.Window.Days = 120
+			g := r.Metrics["bank.growth"]
+			g.Extra["days_covered"] = 90
+			r.Metrics["bank.growth"] = g
+		}
+		if got := grown(cov, views.Params{Days: 120, DaysSet: true}); got != "+46 in the last 90 days · 286 documents" {
+			t.Errorf("covered: %q", got)
+		}
+		since, until := scAt(1, 0, 0), scAt(21, 0, 0)
+		rng := func(r *metrics.Result) { r.Window.Since, r.Window.Until, r.Window.Days = since, until, 20 }
+		if got := grown(rng, views.Params{Since: "2026-10-01", Until: "2026-10-21"}); got != "+46 from Oct 1 to Oct 20 · 286 documents" {
+			t.Errorf("range: %q", got)
+		}
+		if got := grown(func(r *metrics.Result) { rng(r); cov(r) }, views.Params{Since: "2026-10-01", Until: "2026-10-21"}); got != "+46 in the 90 days the server keeps · 286 documents" {
+			t.Errorf("range and covered: %q", got)
+		}
+		if got := grown(func(r *metrics.Result) { r.Window.Days = 0 }, views.Params{}); got != "+46 in the window · 286 documents" {
+			t.Errorf("no days: %q", got)
+		}
+	})
+	t.Run("no time known", func(t *testing.T) {
+		r := scenarioNamed(t, "serverdown")
+		r.Server.LastOK = nil
+		c := glanceCard(t, r)
+		if st := c.first("div.state.st-watch"); st == nil || st.text() != "Memory server not answering." {
+			t.Errorf("state %v", st)
 		}
 	})
 }
@@ -303,6 +361,16 @@ func TestLatelyLinks(t *testing.T) {
 	}
 	if c := card.first("details.cli code"); c == nil || c.text() != "backsight stats sessions --limit 5" {
 		t.Errorf("CLI %v", c)
+	}
+
+	// A row with no project: a dash, no link.
+	r.Tables.Lately[2].Project = ""
+	card = renderOverview(t, r).first("section.card[aria-labelledby=w-lately]")
+	if links := card.find("a.trunc"); len(links) != 4 {
+		t.Errorf("%d project links, want 4 (the projectless row has none)", len(links))
+	}
+	if cells := card.find("tbody tr"); cells[2].find("td")[1].text() != "—" {
+		t.Errorf("projectless cell %q, want a dash", cells[2].find("td")[1].text())
 	}
 
 	// No row: no table, and a sentence.
