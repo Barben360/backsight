@@ -342,7 +342,7 @@ func richCost(r *metrics.Result) {
 
 func TestCostCards(t *testing.T) {
 	n := pageNode(t, "cost", false, func(d *PageData) { richCost(d.V["cost"]) })
-	want := []string{"w-context-per_session", "w-context-split", "w-context-per_prompt", "w-recall-latency", "w-extraction-tokens"}
+	want := []string{"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens"}
 	if got := cardIDs(n); !slices.Equal(got, want) {
 		t.Fatalf("cards %v, want %v", got, want)
 	}
@@ -378,11 +378,24 @@ func TestCostCards(t *testing.T) {
 			t.Error("a part is not drawn")
 		}
 	})
-	t.Run("the per-prompt figure", func(t *testing.T) {
-		c := cardOf(t, n, "w-context-per_prompt")
-		f := c.first("div.fig")
-		if f == nil || !strings.Contains(f.text(), "1.5 k chars") && !strings.Contains(f.text(), "1,500") || !strings.Contains(f.text(), "high · typical 640 chars") {
-			t.Errorf("figure %+v", f)
+	t.Run("the strip of key figures", func(t *testing.T) {
+		type fig struct{ lab, v, sub string }
+		var got []fig
+		for _, f := range n.find("main div.figs div.fig") {
+			got = append(got, fig{f.first("span.lab").text(), f.first("span.v").text(), f.first("span.s").text()})
+		}
+		want := []fig{
+			{"Context added per session", "9,000 chars", "high · typical 2,100 chars · ≈ 2,250 tokens"},
+			{"Context added per prompt that got memory", "1,500 chars", "high · typical 640 chars"},
+			{"Time memory adds to a prompt", "1.9 s", "slowest 1 in 20 · typical 420 ms"},
+			{"Time of a memory search", "1.9 s", "slowest 1 in 20 · typical 420 ms"},
+			{"What the server's model spent (cost)", "$186.40", "server, all PCs · last 30 days"}}
+		if !slices.Equal(got, want) {
+			t.Errorf("strip %q, want %q", got, want)
+		}
+		// The strip precedes the cards.
+		if st := n.first("div.figs"); st.Parent.Name != "main" || len(n.find("div.figs")) != 1 {
+			t.Error("strip placement")
 		}
 	})
 	t.Run("latency", func(t *testing.T) {
@@ -394,7 +407,7 @@ func TestCostCards(t *testing.T) {
 		for _, x := range c.find("text.thr-t") {
 			limit = x.text()
 		}
-		if limit != "2.5 s" {
+		if limit != "2.5 s (prompts)" {
 			t.Errorf("limit label %q", limit)
 		}
 		if got := len(c.find("polyline.s-latency")) + len(c.find("polyline.s-search-latency")); got != 2 {
@@ -408,26 +421,27 @@ func TestCostCards(t *testing.T) {
 		c := cardOf(t, n, "w-extraction-tokens")
 		var table *node
 		for _, tb := range c.find("table.tbl") {
-			if strings.HasPrefix(tb.text(), "Day Server task") {
+			if strings.HasPrefix(tb.text(), "Server task") {
 				table = tb
 			}
 		}
 		if table == nil {
 			t.Fatal("no extraction table")
 		}
-		rows := table.find("tbody tr")
-		if len(rows) != 3 {
-			t.Fatalf("%d rows, want the tables' 3", len(rows))
+		var rows []string
+		for _, r := range table.find("tbody tr") {
+			rows = append(rows, r.text())
 		}
-		if got := rows[0].text(); got != "2026-10-05 saving notes 100 50 10 $1.50" {
-			t.Errorf("row 0 %q", got)
+		want := []string{"saving notes 400 60 40 $3.50", "summarising 200 0 20 —", "all tasks 600 60 60 $186.40"}
+		if !slices.Equal(rows, want) {
+			t.Errorf("rows %q, want %q", rows, want)
 		}
-		if got := rows[1].text(); got != "2026-10-05 summarising 200 0 20 —" {
-			t.Errorf("row 1 (no price) %q", got)
+		if table.first("tr.total") == nil {
+			t.Error("no total row")
 		}
-		fig := c.first("div.figs div.fig")
-		if fig == nil || !strings.Contains(fig.text(), "$186.40") {
-			t.Errorf("cost figure %+v", fig)
+		// The days by task stay in the chart's own table: one day-by-task table only.
+		if got := len(c.find("details.tblfb table")); got != 1 {
+			t.Errorf("%d chart tables", got)
 		}
 		if c.first("figure.chart") == nil {
 			t.Error("no chart of the tokens")
@@ -439,7 +453,7 @@ func TestCostCards(t *testing.T) {
 		if c.first("div.fig") == nil || !hasCode(c, "extraction.per_session") {
 			t.Errorf("per-session card: %q", c.text())
 		}
-		if n.first("#w-extraction-per_session") != nil {
+		if n.first("#w-extraction-per_session") != nil || n.first("#w-context-per_prompt") != nil {
 			t.Error("the per-session card shows without developer mode")
 		}
 	})
@@ -462,7 +476,7 @@ func TestLinesOfMetrics(t *testing.T) {
 	pt := func(day string, num, den int64) metrics.Point {
 		return metrics.Point{Day: day, Value: fp(float64(num) / float64(den)), Num: ip(num), Den: ip(den)}
 	}
-	used := view("used.turn_rate", pt("2026-10-05", 6, 13), pt("2026-10-06", 2, 4))
+	used := view("used.turn_rate", pt("2026-10-05", 2, 13), pt("2026-10-06", 1, 4))
 	titles := func(h string) []string {
 		var out []string
 		for _, r := range parseHTML(t, h).find("rect.hit") {
@@ -471,8 +485,11 @@ func TestLinesOfMetrics(t *testing.T) {
 		return out
 	}
 	got := titles(string(linesOf(en, "Used", "", true, used)))
-	if len(got) != 2 || !strings.HasPrefix(got[0], "Oct 5 · Used: 46 %") || !strings.HasSuffix(got[0], "turns: 13") || !strings.HasSuffix(got[1], "turns: 4") {
+	if len(got) != 2 || !strings.HasPrefix(got[0], "Oct 5 · Used: 15 %") || !strings.HasSuffix(got[0], "turns: 13") || !strings.HasSuffix(got[1], "turns: 4") {
 		t.Errorf("rate titles %q", got)
+	}
+	if !strings.Contains(string(linesOf(en, "Used", "", true, used)), ">100 %</text>") {
+		t.Error("a rate is not drawn from 0 to 100 %")
 	}
 	if !strings.Contains(string(linesOf(en, "Used", "", true, used)), `class="band`) {
 		t.Error("a rate has no interval band")
@@ -538,9 +555,6 @@ func TestXLabels(t *testing.T) {
 	v, _ := metricOf(&metrics.Result{Metrics: map[string]metrics.Metric{"recall.hit_rate": hourly}}, "recall.hit_rate")
 	if got := string(linesOf(en, "x", "", true, v)); !strings.Contains(got, "14:00 · Found") || !strings.Contains(got, "15:00 · Found") {
 		t.Errorf("hourly labels: %.500s", got)
-	}
-	if got := dayCell("2026-10-05T15:00+02:00"); got != "2026-10-05 15:00" {
-		t.Errorf("dayCell hour %q", got)
 	}
 }
 
@@ -622,4 +636,298 @@ func mustDef(t *testing.T, id string) metrics.Def {
 		t.Fatalf("no metric %s", id)
 	}
 	return d
+}
+
+// polylineClasses are the classes of the card's lines.
+func polylineClasses(c *node) []string {
+	var out []string
+	for _, p := range c.find("polyline") {
+		out = append(out, p.attr("class"))
+	}
+	return out
+}
+
+func TestQualityLeadsAndLegends(t *testing.T) {
+	n := pageNode(t, "quality", false, func(d *PageData) { richQuality(d.V["quality"]) })
+	legend := func(c *node) []string {
+		var out []string
+		for _, s := range c.find("figure.chart .legend span") {
+			out = append(out, s.text())
+		}
+		return out
+	}
+	leads := func(c *node) []string {
+		var out []string
+		for _, l := range c.find("div.row.lead div") {
+			out = append(out, l.text())
+		}
+		return out
+	}
+	used := cardOf(t, n, "w-used-turn_rate")
+	if w := []string{"Used", "Said what it used", "interval (95 %)", "faint bars: turns"}; !slices.Equal(legend(used), w) {
+		t.Errorf("used legend %q, want %q", legend(used), w)
+	}
+	if got := leads(used); len(got) != 2 || !strings.HasPrefix(got[0], "62 % ") || !strings.HasSuffix(got[0], "used by Claude") ||
+		!strings.HasPrefix(got[1], "90 % ") || !strings.HasSuffix(got[1], "said what it used") {
+		t.Errorf("used leads %q", got)
+	}
+	// The second line of a pair is dashed; each line has its own class.
+	if got := polylineClasses(used); !slices.Equal(got, []string{"ln s-used", "ln s-coverage ln-2"}) {
+		t.Errorf("used lines %q", got)
+	}
+	search := cardOf(t, n, "w-search-rate")
+	if w := []string{"Claude searched", "Searches that found nothing", "interval (95 %)", "faint bars: prompts"}; !slices.Equal(legend(search), w) {
+		t.Errorf("search legend %q, want %q", legend(search), w)
+	}
+	if got := leads(search); len(got) != 2 || !strings.HasPrefix(got[0], "24 % ") || !strings.HasPrefix(got[1], "13 % ") || !strings.HasSuffix(got[1], "found nothing") {
+		t.Errorf("search leads %q", got)
+	}
+	if got := polylineClasses(search); !slices.Equal(got, []string{"ln s-search", "ln s-empty ln-2"}) {
+		t.Errorf("search lines %q", got)
+	}
+	if got := polylineClasses(cardOf(t, n, "w-recall-hit_rate")); !slices.Equal(got, []string{"ln s-hit"}) {
+		t.Errorf("hit line %q", got)
+	}
+	if c := cardOf(t, n, "w-reported"); c.first("a[href=/bank]") == nil {
+		t.Error("no way to review the reported memories")
+	}
+}
+
+func TestOutcomeLegendClasses(t *testing.T) {
+	out := parseHTML(t, string(outcomesOf(en, "", []metrics.OutcomeDay{{Day: "2026-10-05", Used: 1, Ignored: 1, NotDeclared: 1, ShownOnly: 1, Pending: 1}})))
+	var got []string
+	for _, i := range out.find(".legend i") {
+		got = append(got, i.attr("class"))
+	}
+	if w := []string{"sw f-used", "sw f-ignored", "sw f-undeclared", "sw f-shown", "sw f-pending"}; !slices.Equal(got, w) {
+		t.Errorf("legend swatches %q, want %q", got, w)
+	}
+}
+
+func TestOutcomesFoot(t *testing.T) {
+	n := pageNode(t, "quality", false, nil)
+	var total int64
+	for _, r := range goldenResult(t, "quality").Tables.OutcomeMix {
+		total += r.Used + r.Ignored + r.NotDeclared + r.ShownOnly + r.Pending
+	}
+	if want := format3(total) + " shown"; !strings.Contains(cardOf(t, n, "w-outcomes").text(), want) {
+		t.Errorf("outcomes foot lacks %q: %q", want, cardOf(t, n, "w-outcomes").text())
+	}
+	one := pageNode(t, "quality", false, func(d *PageData) {
+		d.V["quality"].Tables.OutcomeMix = []metrics.OutcomeDay{{Day: "2026-10-05", Used: 1}}
+	})
+	if !strings.Contains(cardOf(t, one, "w-outcomes").text(), "1 memory shown") {
+		t.Errorf("singular: %q", cardOf(t, one, "w-outcomes").text())
+	}
+}
+
+func format3(n int64) string {
+	if n == 1 {
+		return "1 memory"
+	}
+	return en.Int(n) + " memories"
+}
+
+func TestRankingFollowsTheNoDataReason(t *testing.T) {
+	n := pageNode(t, "quality", true, func(d *PageData) {
+		for id, m := range d.V["quality"].Metrics {
+			m.Status, m.Reason, m.Value, m.Num, m.Den, m.Series, m.Extra = metrics.StatusNoData, metrics.ReasonFeedbackOff, nil, nil, nil, nil, nil
+			d.V["quality"].Metrics[id] = m
+		}
+		d.V["quality"].Tables.OutcomeMix = nil
+	})
+	c := cardOf(t, n, "w-ranking")
+	if !strings.Contains(c.text(), "Memory feedback is off") || !hasCode(c, "feedback.enabled") {
+		t.Errorf("ranking card: %q", c.text())
+	}
+	if strings.Contains(c.text(), "No turn used a ranked memory") || c.first("div.fig") != nil || c.first("figure.chart") != nil {
+		t.Errorf("ranking card draws on no data: %q", c.text())
+	}
+	if !hasCode(c, "used.rank") {
+		t.Error("the card names no metric in developer mode")
+	}
+}
+
+// longen gives every series n days from 2026-01-01.
+func longen(r *metrics.Result, n int) {
+	day := func(i int) string {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format("2006-01-02")
+	}
+	for id, m := range r.Metrics {
+		if len(m.Series) == 0 {
+			continue
+		}
+		tpl := m.Series[len(m.Series)-1]
+		m.Series = make([]metrics.Point, n)
+		for i := range m.Series {
+			m.Series[i] = tpl
+			m.Series[i].Day, m.Series[i].Partial = day(i), false
+		}
+		r.Metrics[id] = m
+	}
+	if len(r.Tables.OutcomeMix) > 0 {
+		tpl := r.Tables.OutcomeMix[len(r.Tables.OutcomeMix)-1]
+		r.Tables.OutcomeMix = make([]metrics.OutcomeDay, n)
+		for i := range r.Tables.OutcomeMix {
+			r.Tables.OutcomeMix[i] = tpl
+			r.Tables.OutcomeMix[i].Day, r.Tables.OutcomeMix[i].Partial = day(i), false
+		}
+	}
+}
+
+// Every chart tells where the rows it caps can be had: the page's command with --json.
+func TestChartsNameTheCommandUnderACappedTable(t *testing.T) {
+	check := func(name string, wantCharts int, edit func(d *PageData)) {
+		n := pageNode(t, name, false, edit)
+		more := 0
+		for _, fig := range n.find("figure.chart") {
+			if p := fig.first("p.tbl-more"); p != nil {
+				more++
+				if !hasCode(p, "backsight stats "+name+" --days 30 --json") {
+					t.Errorf("%s: capped table points at %q", name, p.text())
+				}
+			}
+		}
+		if more != wantCharts {
+			t.Errorf("%s: %d charts with a capped table, want %d", name, more, wantCharts)
+		}
+	}
+	check("quality", 5, func(d *PageData) { richQuality(d.V["quality"]); longen(d.V["quality"], 130) })
+	check("cost", 3, func(d *PageData) {
+		richCost(d.V["cost"])
+		longen(d.V["cost"], 130)
+		d.V["cost"].Tables.Extraction = nil
+		for i := 0; i < 130; i++ {
+			d.V["cost"].Tables.Extraction = append(d.V["cost"].Tables.Extraction,
+				metrics.ExtractionRow{Day: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format("2006-01-02"), Operation: "retain", Input: 1})
+		}
+	})
+}
+
+func TestReportedHostileLinks(t *testing.T) {
+	n := pageNode(t, "quality", false, func(d *PageData) {
+		d.V["quality"].Tables.Reported = []metrics.ReportedRow{{MemoryID: "m<1>", Verdict: "wrong", Session: `ses/../y"z`, Project: "p/../q r?x=1", At: d.V["quality"].GeneratedAt}}
+	})
+	row := cardOf(t, n, "w-reported").first("tbody tr")
+	cells := row.find("td")
+	if got := cells[2].first("a").attr("href"); got != "/projects/p%2F..%2Fq%20r%3Fx=1" {
+		t.Errorf("project href %q", got)
+	}
+	if got := cells[3].first("a").attr("href"); got != "/sessions/ses%2F..%2Fy%22z" {
+		t.Errorf("session href %q", got)
+	}
+	if got := cells[0].first("a").attr("href"); got != "/memories/m%3C1%3E" {
+		t.Errorf("memory href %q", got)
+	}
+}
+
+func TestExtractionTableIsCappedAndTotalled(t *testing.T) {
+	n := pageNode(t, "cost", false, func(d *PageData) {
+		richCost(d.V["cost"])
+		d.V["cost"].Tables.Extraction = nil
+		for i := 0; i < 130; i++ {
+			d.V["cost"].Tables.Extraction = append(d.V["cost"].Tables.Extraction,
+				metrics.ExtractionRow{Day: "2026-10-05", Operation: "task" + en.Int(int64(i)), Input: 2, Output: 1})
+		}
+	})
+	c := cardOf(t, n, "w-extraction-tokens")
+	var table *node
+	for _, tb := range c.find("table.tbl") {
+		if strings.HasPrefix(tb.text(), "Server task") {
+			table = tb
+		}
+	}
+	if got := len(table.find("tbody tr.total")); got != 1 {
+		t.Fatalf("%d total rows", got)
+	}
+	if got := len(table.find("tbody tr")); got != 121 {
+		t.Errorf("%d rows, want 120 tasks and the total", got)
+	}
+	if !strings.Contains(table.first("tr.total").text(), "all tasks 260 0 130") {
+		t.Errorf("total over all 130 tasks: %q", table.first("tr.total").text())
+	}
+	if p := c.first("p.tbl-more"); p == nil || !strings.Contains(p.text(), "Showing 120 of 130 tasks") {
+		t.Errorf("cap note %+v", p)
+	}
+	if got := len(table.find("th.r")); got != 4 {
+		t.Errorf("%d right-aligned headers", got)
+	}
+	if n.first("a[href=/pipeline]") == nil {
+		t.Error("no link to the crashed steps")
+	}
+}
+
+func TestLatencyLimitBelongsToRecall(t *testing.T) {
+	pt := func(day string, p95 float64) metrics.Point {
+		return metrics.Point{Day: day, N: ip(3), P95: fp(p95)}
+	}
+	mk := func(id string) MetricView {
+		v, _ := metricOf(&metrics.Result{Metrics: map[string]metrics.Metric{id: {Value: fp(1), Series: []metrics.Point{pt("2026-10-05", 2300), pt("2026-10-06", 900)}}}}, id)
+		return v
+	}
+	only := parseHTML(t, string(latencyOf(en, "", mk("search.latency"))))
+	if only.first("line.thr") != nil {
+		t.Error("recall's limit drawn over the search line alone")
+	}
+	if got := only.first("rect.hit").first("title").text(); !strings.HasSuffix(got, "searches: 3") {
+		t.Errorf("bars of a search chart: %q", got)
+	}
+	both := parseHTML(t, string(latencyOf(en, "", mk("search.latency"), mk("recall.latency"))))
+	if both.first("line.thr") == nil {
+		t.Error("recall's limit missing")
+	}
+	// Only the percentile of a day is missing: the day's value stands in.
+	v, _ := metricOf(&metrics.Result{Metrics: map[string]metrics.Metric{"recall.latency": {Value: fp(1), Series: []metrics.Point{
+		{Day: "2026-10-05", Value: fp(1500)}, {Day: "2026-10-06", Value: fp(800)}}}}}, "recall.latency")
+	if got := string(latencyOf(en, "", v)); !strings.Contains(got, "slowest 1 in 20: 1.5 s") {
+		t.Errorf("value fallback: %.300s", got)
+	}
+}
+
+func TestLongLatencyLinesMergeByMax(t *testing.T) {
+	var ps []metrics.Point
+	for i := 0; i < 1000; i++ {
+		v := 100.0
+		if i%2 == 1 {
+			v = 900
+		}
+		ps = append(ps, metrics.Point{Day: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format("2006-01-02"), Value: fp(v), N: ip(1)})
+	}
+	v, _ := metricOf(&metrics.Result{Metrics: map[string]metrics.Metric{"recall.latency": {Value: fp(1), Series: ps}}}, "recall.latency")
+	title := parseHTML(t, string(linesOf(en, "x", "", false, v))).first("rect.hit").first("title").text()
+	if !strings.Contains(title, "900 ms") {
+		t.Errorf("merged positions are not the slowest of them: %q", title)
+	}
+}
+
+func TestHistogramLabelsAndEmptyOther(t *testing.T) {
+	n := pageNode(t, "cost", false, func(d *PageData) { richCost(d.V["cost"]) })
+	bars := cardOf(t, n, "w-context-per_session").find("rect.f-seq1")
+	first, last := bars[0].first("title").text(), bars[len(bars)-1].first("title").text()
+	if !strings.HasPrefix(first, "0–1 k: ") || !strings.HasPrefix(last, "20 k+: ") {
+		t.Errorf("bin labels %q … %q", first, last)
+	}
+	only := parseHTML(t, string(extractionOf(en, "", []metrics.ExtractionRow{{Day: "2026-10-05", Operation: "other", Input: 5}})))
+	var legend []string
+	for _, s := range only.find(".legend span") {
+		legend = append(legend, s.text())
+	}
+	if !slices.Equal(legend, []string{"other"}) {
+		t.Errorf("a server task named other: legend %q", legend)
+	}
+}
+
+func TestOutcomePathsAreInPathOrder(t *testing.T) {
+	rows := []metrics.OutcomeDay{{Day: "2026-10-05", ByPath: map[string]metrics.OutcomeDay{
+		"search": {Used: 1}, "prompt": {Used: 1}, "gate": {Used: 1}, "briefing": {Used: 1}, "read": {Used: 1}}}}
+	want := []string{"at session start", "before a question", "added to the prompt", "opened by Claude", "Claude's search"}
+	for i := 0; i < 30; i++ {
+		var got []string
+		for _, c := range outcomePaths(en, "", rows) {
+			got = append(got, c.Name)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("run %d: %q, want %q", i, got, want)
+		}
+	}
 }

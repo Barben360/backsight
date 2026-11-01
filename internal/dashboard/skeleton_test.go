@@ -59,7 +59,7 @@ func TestVisibleText(t *testing.T) {
 var pageMetrics = map[string][]string{
 	"overview": {"bank.size"}, // the six tiles have their own checks (tileTexts); the growth and the kinds are TestGlance's
 	"quality":  {"used.turn_rate", "declare.coverage", "recall.hit_rate", "recall.empty_reasons", "search.rate", "search.empty_rate"},
-	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens"}, // extraction.cost is a figure of the tokens card: TestCostCards
+	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens", "extraction.cost"},
 	"bank":     {"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "notes.stored", "bank.churn", "stale.never_used", "stale.hidden", "stale.reported"},
 	"pipeline": {"pipeline.flow", "retain.outcomes", "local.backlog", "server.queue", "server.extraction_delay", "hooks.failures", "jobs.last_run"},
 	"system":   {"doctor.check", "server.reach", "jobs.last_run", "local.backlog"},
@@ -67,7 +67,8 @@ var pageMetrics = map[string][]string{
 
 // drawnInOtherCard are metrics a card shows beside the metric that asks its
 // question: they have no card, hence no question, of their own.
-var drawnInOtherCard = map[string]bool{"declare.coverage": true, "search.empty_rate": true, "search.latency": true}
+var drawnInOtherCard = map[string]bool{"declare.coverage": true, "search.empty_rate": true, "search.latency": true,
+	"context.per_prompt": true, "extraction.cost": true}
 
 var devMetrics = []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"}
 
@@ -114,7 +115,13 @@ func TestPagesShowTheViewsNumbers(t *testing.T) {
 			if page == "overview" { // the card asks its own question
 				question = "How big is the memory?"
 			}
-			if !drawnInOtherCard[id] && !strings.Contains(text, question) {
+			switch {
+			case drawnInOtherCard[id] && page == "cost": // a figure of the strip: its label is always there
+				if !strings.Contains(text, views.Label(def)) {
+					t.Errorf("%s lacks the label of %s: %q", page, id, views.Label(def))
+				}
+			case drawnInOtherCard[id]: // a line of another card: TestQualityLeadsAndLegends, on real values
+			case !strings.Contains(text, question):
 				t.Errorf("%s lacks the question of %s: %q", page, id, question)
 			}
 			m, found := res.Metrics[id]
@@ -230,6 +237,13 @@ func TestServerDownMarksServerSections(t *testing.T) {
 					sec = card.text()
 				}
 			}
+			if sec == "" { // a figure of the Cost strip: found by its label
+				for _, f := range parseHTML(t, b).find("div.fig") {
+					if lab := f.first("span.lab"); lab != nil && lab.text() == views.Label(def) {
+						sec = f.text()
+					}
+				}
+			}
 			if !strings.Contains(strings.ToLower(sec), "memory server not answering") {
 				t.Errorf("/%s: the section of %s is not marked: %q", page, id, sec)
 			}
@@ -271,7 +285,8 @@ func TestDevWidgetsOnlyInDevMode(t *testing.T) {
 	plain, dev := get(""), get("v1.system.1.0")
 	for _, id := range devMetrics {
 		def, _ := metrics.DefOf(id)
-		if strings.Contains(visibleText(plain), views.Label(def)) || strings.Contains(plain, "<code>"+id+"</code>") {
+		if strings.Contains(visibleText(plain), views.Label(def)) || strings.Contains(plain, "<code>"+id+"</code>") ||
+			strings.Contains(plain, `<code class="term">`+id+`</code>`) {
 			t.Errorf("without the preference the page shows %s", id)
 		}
 		if !strings.Contains(visibleText(dev), views.Label(def)) {
@@ -527,7 +542,10 @@ func TestTablesShowWordsNotStoredValues(t *testing.T) {
 	for name, edit := range pages {
 		b := render(t, name, func(d *PageData) { edit(d) })
 		// The ⓘ popovers are the catalog's own prose, which names the stored values it counts.
-		text := visibleText(popovers.ReplaceAllString(b, ""))
+		text := visibleText(b)
+		if name == "quality" { // its popovers say "outdated" in the catalog's prose
+			text = visibleText(popovers.ReplaceAllString(b, ""))
+		}
 		for _, w := range want[name] {
 			if !strings.Contains(b, w) && !strings.Contains(text, w) {
 				t.Errorf("%s lacks %q", name, w)

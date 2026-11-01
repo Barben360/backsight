@@ -1,27 +1,27 @@
 {{/* views: cost */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the cards of cost (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd; Extraction adds Rows: Day, Task, Input, Cached, Output, Cost). Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency, extraction.tokens, extraction.cost, .V.cost.Tables.Extraction, and with developer mode extraction.per_session. */}}
-{{with cost .}}<div class="grid-2">
+{{/* widgets: the cards of cost (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd; Extraction adds Rows and Total: Task, Input, Cached, Output, Cost; Strip is a list of Fig). Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency, extraction.tokens, extraction.cost, .V.cost.Tables.Extraction, and with developer mode extraction.per_session. */}}
+{{with cost .}}<div class="figs">
+{{range .Strip}}{{template "fig" .}}{{end}}</div>
+<div class="grid-2">
 {{template "pcard" .Context}}
 {{template "pcard" .Split}}
 </div>
 <div class="grid-2">
-{{template "pcard" .PerPrompt}}
 {{template "pcard" .Latency}}
-</div>
-<div class="grid-2">
 {{with .Extraction}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{range .Charts}}{{.HTML}}
-{{end}}{{if .Figs}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
 {{end}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Day</th><th>Server task</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
+<thead><tr><th>Server task</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr><td>{{.Day}}</td><td>{{.Task}}</td><td class="r">{{.Input}}</td><td class="r">{{.Cached}}</td><td class="r">{{.Output}}</td><td class="r">{{.Cost}}</td></tr>
+{{range .Rows}}<tr><td>{{.Task}}</td><td class="r">{{.Input}}</td><td class="r">{{.Cached}}</td><td class="r">{{.Output}}</td><td class="r">{{.Cost}}</td></tr>
+{{end}}{{with .Total}}<tr class="total"><td>{{.Task}}</td><td class="r">{{.Input}}</td><td class="r">{{.Cached}}</td><td class="r">{{.Output}}</td><td class="r">{{.Cost}}</td></tr>
 {{end}}</tbody></table></div>
-{{end}}{{template "card-close" .Head}}{{end}}
-{{with .PerSession}}{{template "pcard" .}}
-{{end}}</div>
-<p class="small muted">Steps that crashed are on <a href="/pipeline">Pipeline</a>.</p>
+{{if gt .Count .Shown}}<p class="tbl-more">Showing {{.Shown}} of {{.Count}} tasks. Every task: <code>{{.More}}</code></p>
+{{end}}{{end}}{{template "card-close" .Head}}{{end}}
+</div>
+{{with .PerSession}}<div class="grid-2">{{template "pcard" .}}</div>
+{{end}}<p class="small muted">Steps that crashed are on <a href="/pipeline">Pipeline</a>.</p>
 {{end}}
 {{template "foot" .}}

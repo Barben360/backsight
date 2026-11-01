@@ -2,7 +2,9 @@ package dashboard
 
 import (
 	"slices"
+	"strings"
 
+	"github.com/Barben360/backsight/internal/dashboard/chart"
 	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
@@ -25,6 +27,7 @@ type Card struct {
 	Extras  []string // lines under the charts: what the numbers are made of
 	Hint    string
 	HintCmd string
+	Foot    string   // a muted line under everything; "" none
 	Dev     []string // the ids of the card's metrics, in developer mode
 }
 
@@ -265,8 +268,12 @@ func topEmpty(v MetricView) string {
 
 // outcomesCard is what became of the memories shown, per day.
 func (d PageData) outcomesCard(r *metrics.Result, used MetricView) Card {
+	term := ""
+	if d.Frame.Prefs.Dev {
+		term = "used.share_confident"
+	}
 	h := withInfo(fixedHead("outcomes", "What did Claude do with the memories shown?", "machine", d.CLI),
-		"About this chart", "Where memory went, per day", "used.share_confident",
+		"About this chart", "Where memory went, per day", term,
 		"Each memory shown, by what Claude said about it at the end of the turn. Pending: the turn has not ended yet. Memories forgotten since are left out.")
 	c := Card{Head: h}
 	var total int64
@@ -278,6 +285,7 @@ func (d PageData) outcomesCard(r *metrics.Result, used MetricView) Card {
 		return c
 	}
 	rows := r.Tables.OutcomeMix
+	c.Foot = format.Count(d.L, total, "memory", "memories") + " shown"
 	c.Charts = []PathChart{{HTML: outcomesOf(d.L, d.more(), rows)}}
 	if paths := outcomePaths(d.L, d.more(), rows); d.Frame.Prefs.Dev && len(paths) > 0 {
 		c.Charts[0].Name = "All paths"
@@ -293,33 +301,75 @@ func (d PageData) rankingCard(r *metrics.Result) *Card {
 	c := Card{Head: h}
 	var vs []MetricView
 	for _, id := range []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"} {
-		v := d.view(r, id)
-		vs = append(vs, v)
+		vs = append(vs, d.view(r, id))
+	}
+	c.Dev = d.devIDs(vs...)
+	// Without a number among them, the card says why (feedback off, ...) and draws nothing.
+	if c.Note = d.noData(vs...); c.Note.Text != "" {
+		return &c
+	}
+	for _, v := range vs {
 		c.Figs = append(c.Figs, figOf(v, d.L))
 	}
-	c.Charts = []PathChart{{HTML: rankHistOf(d.L, d.more(), d.view(r, "used.rank"))}}
+	if rank := d.view(r, "used.rank"); hasValue(rank) {
+		c.Charts = []PathChart{{HTML: rankHistOf(d.L, d.more(), rank)}}
+	}
 	c.Extras = extrasOf(slices.DeleteFunc(slices.Clone(vs), func(v MetricView) bool {
 		return v.ID != "used.rank" && v.ID != "used.by_path" && v.ID != "recall.by_lang"
 	})...)
 	return &c
 }
 
-// CostPage is the Cost page.
+// CostPage is the Cost page: the strip of key figures, then the cards.
 type CostPage struct {
-	Context, Split, PerPrompt, Latency Card
-	Extraction                         ExtractionCard
-	PerSession                         *Card // developer mode
+	Strip                   []Fig
+	Context, Split, Latency Card
+	Extraction              ExtractionCard
+	PerSession              *Card // developer mode
 }
 
 // ExtractionCard is the server's model spend: the tokens by day and the
-// table behind them.
+// table of what each task cost.
 type ExtractionCard struct {
 	Card
-	Rows []ExtractionLine
+	Rows  []ExtractionLine
+	Total ExtractionLine
+	More  string // the command listing every task, under a capped table
+	Shown int    // rows shown of Count
+	Count int
 }
 
 // ExtractionLine is a row of that table.
-type ExtractionLine struct{ Day, Task, Input, Cached, Output, Cost string }
+type ExtractionLine struct{ Task, Input, Cached, Output, Cost string }
+
+// taskSum is a task's tokens and cost over the window.
+type taskSum struct {
+	op                    string
+	input, cached, output int64
+	cost                  float64
+	priced                bool
+}
+
+// foldTasks adds the day-by-task rows up per task, in the order the tasks
+// are first seen.
+func foldTasks(rows []metrics.ExtractionRow) []taskSum {
+	var out []taskSum
+	idx := map[string]int{}
+	for _, r := range rows {
+		i, ok := idx[r.Operation]
+		if !ok {
+			i = len(out)
+			idx[r.Operation] = i
+			out = append(out, taskSum{op: r.Operation})
+		}
+		t := &out[i]
+		t.input, t.cached, t.output = t.input+r.Input, t.cached+r.Cached, t.output+r.Output
+		if r.Cost != nil {
+			t.cost, t.priced = t.cost+*r.Cost, true
+		}
+	}
+	return out
+}
 
 // partOrder are the parts of a session's context, bottom of the bars first.
 var (
@@ -337,6 +387,7 @@ func costOf(d PageData) CostPage {
 	rl, sl := d.view(r, "recall.latency"), d.view(r, "search.latency")
 	tokens, price := d.view(r, "extraction.tokens"), d.view(r, "extraction.cost")
 	var c CostPage
+	c.Strip = d.strip(perSession, perPrompt, rl, sl, price)
 
 	c.Context = Card{Head: headOf(perSession, d.CLI, l, "", p), Word: word(perSession), Note: d.noData(perSession), Dev: d.devIDs(perSession)}
 	if c.Context.Note.Text == "" {
@@ -354,15 +405,6 @@ func costOf(d PageData) CostPage {
 	if c.Split.Note.Text == "" {
 		c.Split.Charts = []PathChart{{HTML: partsOf(l, "Characters added, per day, at session start and before prompts", d.more(), perSession,
 			splitOrder, splitWords, []string{"f-seq1", "f-seq2"}, "")}}
-	}
-
-	c.PerPrompt = Card{Head: headOf(perPrompt, d.CLI, l, "", p), Word: word(perPrompt), Note: d.noData(perPrompt)}
-	if c.PerPrompt.Note.Text == "" {
-		f := figOf(perPrompt, l)
-		if p50, ok := extraAs[float64](perPrompt.M, "p50"); ok {
-			f.Sub = "high · typical " + l.Size(p50, "chars")
-		}
-		c.PerPrompt.Figs = []Fig{f}
 	}
 
 	c.Latency = Card{Head: headOf(rl, d.CLI, l, "", p), Word: word(rl), Note: d.noData(rl, sl), Dev: d.devIDs(rl, sl)}
@@ -385,15 +427,36 @@ func costOf(d PageData) CostPage {
 		}
 		c.Extraction.Extras = extrasOf(tokens, price)
 		c.Extraction.Charts = []PathChart{{HTML: extractionOf(l, d.more(), r.Tables.Extraction)}}
-		c.Extraction.Figs = []Fig{figOf(price, l)}
 		cur, _ := price.M.Extra["currency"].(string)
-		for _, row := range r.Tables.Extraction {
-			cost := dash
-			if row.Cost != nil {
-				cost = l.Money(*row.Cost, cur)
+		money := func(v float64, ok bool) string {
+			if !ok {
+				return dash
 			}
-			c.Extraction.Rows = append(c.Extraction.Rows, ExtractionLine{Day: dayCell(row.Day), Task: views.Word(views.OperationWords, row.Operation),
-				Input: l.Int(row.Input), Cached: l.Int(row.Cached), Output: l.Int(row.Output), Cost: cost})
+			return l.Money(v, cur)
+		}
+		tasks := foldTasks(r.Tables.Extraction)
+		var all taskSum
+		for _, t := range tasks {
+			all.input, all.cached, all.output = all.input+t.input, all.cached+t.cached, all.output+t.output
+			all.cost, all.priced = all.cost+t.cost, all.priced || t.priced
+		}
+		if price.M.Value != nil { // the price of the whole window, as the tokens card's figure says it
+			all.cost, all.priced = *price.M.Value, true
+		}
+		line := func(name string, t taskSum) ExtractionLine {
+			return ExtractionLine{Task: name, Input: l.Int(t.input), Cached: l.Int(t.cached), Output: l.Int(t.output), Cost: money(t.cost, t.priced)}
+		}
+		c.Extraction.Count = len(tasks)
+		for i, t := range tasks {
+			if i == chart.MaxTableRows {
+				break
+			}
+			c.Extraction.Rows = append(c.Extraction.Rows, line(views.Word(views.OperationWords, t.op), t))
+		}
+		c.Extraction.Shown = len(c.Extraction.Rows)
+		c.Extraction.More = d.more()
+		if len(tasks) > 0 {
+			c.Extraction.Total = line("all tasks", all)
 		}
 	}
 
@@ -408,10 +471,29 @@ func costOf(d PageData) CostPage {
 	return c
 }
 
-// dayCell is a bucket key as a table shows it: the day, or the day and hour.
-func dayCell(key string) string {
-	if len(key) > len(dayKey) && key[len(dayKey)] == 'T' {
-		return key[:len(dayKey)] + " " + xName(key)
+// strip is the row of key figures at the top of the Cost page.
+func (d PageData) strip(perSession, perPrompt, rl, sl, price MetricView) []Fig {
+	l := d.L
+	var out []Fig
+	for _, v := range []MetricView{perSession, perPrompt, rl, sl, price} {
+		f := figOf(v, l)
+		p50, ok := extraAs[float64](v.M, "p50")
+		switch {
+		case v.ID == "extraction.cost":
+			f.Sub = "server, all PCs · " + d.frame().Window
+		case hasValue(v) && ok && v.Def.Unit == "ms":
+			f.Sub = "slowest 1 in 20 · typical " + l.Duration(p50)
+		case hasValue(v) && ok:
+			f.Sub = "high · typical " + l.Size(p50, "chars")
+			if tk, ok := extraAs[int64](v.M, "tokens_p95"); ok {
+				f.Sub += " · ≈ " + l.Int(tk) + " tokens"
+			}
+		}
+		if !hasValue(v) { // the reason there is no number
+			n := d.noData(v)
+			f.Sub = strings.TrimSpace(n.Text + n.Code + n.Close)
+		}
+		out = append(out, f)
 	}
-	return key
+	return out
 }

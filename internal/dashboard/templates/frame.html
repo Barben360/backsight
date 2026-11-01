@@ -184,6 +184,7 @@
 {{end}}{{with .Extras}}<ul class="extras small sub">
 {{range .}}<li>{{.}}</li>
 {{end}}</ul>
+{{end}}{{with .Foot}}<p class="small muted">{{.}}</p>
 {{end}}{{with .Hint}}<p class="small muted">{{.}}</p>
 {{end}}{{with .HintCmd}}{{template "cmd" .}}{{end}}{{template "card-close" .Head}}{{end}}
 

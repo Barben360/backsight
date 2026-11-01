@@ -101,7 +101,7 @@ var lineStyle = map[string][2]string{
 
 // barNames is what the faint bars of a chart count, by its first metric.
 var barNames = map[string]string{
-	"used.turn_rate": "turns", "recall.hit_rate": "prompts", "search.rate": "prompts", "recall.latency": "prompts",
+	"used.turn_rate": "turns", "recall.hit_rate": "prompts", "search.rate": "prompts", "recall.latency": "prompts", "search.empty_rate": "searches",
 }
 
 func barName(id string) string {
@@ -207,7 +207,12 @@ func latencyOf(l format.Locale, more string, vs ...MetricView) template.HTML {
 		return c.HTML()
 	}
 	c.X = xsOf(longest(vs))
+	if vs[0].ID == "search.latency" {
+		c.NName = "searches"
+	}
+	recall := false
 	for _, v := range vs {
+		recall = recall || v.ID == "recall.latency"
 		class, name := styleOf(v)
 		s := chart.Series{Name: name + ", slowest 1 in 20", Class: class}
 		for _, p := range v.M.Series {
@@ -222,8 +227,9 @@ func latencyOf(l format.Locale, more string, vs ...MetricView) template.HTML {
 	for _, p := range vs[0].M.Series {
 		c.N = append(c.N, countOf(p.N))
 	}
-	if bad := latencyLimit(); bad != nil {
-		c.Limits = []chart.Limit{{Label: l.Duration(*bad), V: *bad, Class: "thr"}}
+	// The limit is recall's: it is drawn only where recall's latency is.
+	if bad := latencyLimit(); bad != nil && recall {
+		c.Limits = []chart.Limit{{Label: l.Duration(*bad) + " (prompts)", V: *bad, Class: "thr"}}
 	}
 	return c.HTML()
 }
@@ -332,8 +338,8 @@ type histBin struct {
 	N  int64  `json:"n"`
 }
 
-// thousands writes a number of characters in thousands: "2 k".
-func thousands(l format.Locale, v int64) string { return l.Fixed(float64(v)/1000, 0) + " k" }
+// thousands writes a number of characters in thousands: "2".
+func thousands(l format.Locale, v int64) string { return l.Fixed(float64(v)/1000, 0) }
 
 // contextHistOf is the sessions by the context they got, with the typical
 // and the high value marked.
@@ -344,9 +350,9 @@ func contextHistOf(l format.Locale, more string, v MetricView) template.HTML {
 	bins, _ := extraAs[[]histBin](v.M, "histogram")
 	var width int64
 	for _, b := range bins {
-		label := thousands(l, b.Lo) + "+"
+		label := thousands(l, b.Lo) + " k+"
 		if b.Hi != nil {
-			label = thousands(l, b.Lo) + "–" + thousands(l, *b.Hi)
+			label = thousands(l, b.Lo) + "–" + thousands(l, *b.Hi) + " k"
 			if width == 0 {
 				width = *b.Hi - b.Lo
 			}
@@ -386,6 +392,9 @@ func rankHistOf(l format.Locale, more string, v MetricView) template.HTML {
 
 // extractionOf is the server's model tokens per day, by task: the first
 // three tasks seen keep their own colour, the rest (and "other") share one.
+// The first day is not cut short: metrics.inWindow keeps the bucket that
+// straddles the window's start whole, so there is no dip to drop. A day
+// with no row is not on the axis.
 func extractionOf(l format.Locale, more string, rows []metrics.ExtractionRow) template.HTML {
 	var days, ops []string
 	tokens := map[[2]string]float64{}
