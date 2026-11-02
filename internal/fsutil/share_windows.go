@@ -59,6 +59,13 @@ func RemoveRetry(path string) error {
 	return retry(func() error { return os.Remove(path) })
 }
 
+// RenameRetry renames from to to with os.Rename (MoveFileEx, not renameRetry's
+// POSIX semantics: a running image can move), retrying for RetryFor while
+// from is held without FILE_SHARE_DELETE.
+func RenameRetry(from, to string) error {
+	return retry(func() error { return os.Rename(from, to) })
+}
+
 // renameInfo is FILE_RENAME_INFO (the Ex form's Flags in place of
 // ReplaceIfExists).
 type renameInfo struct {

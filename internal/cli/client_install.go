@@ -556,7 +556,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(out.Name(), dst); err != nil {
+	if err := fsutil.RenameRetry(out.Name(), dst); err != nil {
 		return err
 	}
 	ok = true

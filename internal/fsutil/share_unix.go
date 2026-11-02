@@ -11,6 +11,9 @@ func OpenShared(path string) (*os.File, error) { return os.Open(path) }
 // RemoveRetry removes path; Unix has no sharing violation to retry.
 func RemoveRetry(path string) error { return os.Remove(path) }
 
+// RenameRetry is os.Rename on Unix.
+func RenameRetry(from, to string) error { return os.Rename(from, to) }
+
 // renameRetry is os.Rename on Unix.
 func renameRetry(from, to string) error { return os.Rename(from, to) }
 
