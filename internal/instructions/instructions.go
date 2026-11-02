@@ -29,8 +29,10 @@ import (
 // every line printed to the user, memory_store and the verdicts hand back
 // theirs, the guide, the gate and the retro name theirs; v10: the update
 // skill, which the doctor and memory skills point to for an update;
-// v11: the doctor and memory skills read `stats overview` and allow only the read-only stats views).
-const Version = "v11"
+// v11: the doctor and memory skills read `stats overview` and allow only the read-only stats views;
+// v12: a prompt that points at an issue, PR or link is read before searching: the pointer line, the
+// guide and the reminder say so).
+const Version = "v12"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -48,6 +50,7 @@ const (
 	guideHead = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject, topic + intent word: \"docker subnet pitfall\"). " +
 		"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
 		"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
+		"An issue, PR or link in the prompt: read it first, then search its content. " +
 		"Results are hints: verify them. "
 	guideTail = "Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"); when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
 		"User-wide rules override conflicting project facts. Answer in the user's language. " +
@@ -58,7 +61,7 @@ const (
 		"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call; when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
 		"`memory_read` shows one memory with the facts it was built from."
 	reminderHead = "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, " +
-		"call `memory_search` first"
+		"call `memory_search` first (an issue, PR or link in it: read it first, then search its content)"
 )
 
 // Guide is the SessionStart guide (≤ 1 200 chars, E6).
@@ -97,6 +100,19 @@ func For(feedback bool) Texts {
 		return Texts{Guide: Guide, ShortGuide: ShortGuide, Reminder: Reminder, RecallEnd: CreditAsk, SearchEnd: SearchCreditAsk}
 	}
 	return Texts{Guide: GuideCite, ShortGuide: ShortGuideCite, Reminder: ReminderCite, RecallEnd: RecallCite, SearchEnd: SearchCite}
+}
+
+// pointerRefs: at most this many references are named in the pointer line.
+const pointerRefs = 3
+
+// Pointer replaces the recall on a prompt that only points at an issue, a
+// pull request or a link: what to search is in its content, not its text.
+func Pointer(refs []string) string {
+	if len(refs) > pointerRefs {
+		refs = refs[:pointerRefs]
+	}
+	return "Memory: this prompt points at " + strings.Join(refs, ", ") + ". Read it first, then call `memory_search` with queries built from its content " +
+		"(topic + intent word), not from the link."
 }
 
 // Nudge is the quiet-prompt nudge: several prompts without any search.

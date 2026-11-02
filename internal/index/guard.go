@@ -46,7 +46,7 @@ var configKeyRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}(\.[a-z][a-z0-9_]{0,4
 // internal/hook).
 var (
 	promptDecisions = []string{"recall", "skip"}
-	promptReasons   = []string{"machine", "too_short", "same_topic", "gap", "budget", "topic_shift", "breaker", "maintenance", "first"}
+	promptReasons   = []string{"machine", "too_short", "same_topic", "gap", "budget", "topic_shift", "breaker", "maintenance", "first", "pointer"}
 	promptEmpty     = []string{"no_candidates", "below_floor", "all_seen", "capped"}
 	detectors       = []string{"rule", "approval"}
 	gateDecisions   = []string{"deny", "allow"}

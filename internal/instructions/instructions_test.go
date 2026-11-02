@@ -30,6 +30,7 @@ func TestSizes(t *testing.T) {
 		{"search description", SearchDescription, 1000},
 		{"store description", StoreDescription, 1400},
 		{"read description", ReadDescription, 300},
+		{"pointer line", Pointer([]string{"https://github.com/o/r/issues/1", "https://github.com/o/r/pull/2", "o/r#3"}), 300},
 	} {
 		if n := utf8.RuneCountInString(c.text); n > c.max || n == 0 {
 			t.Errorf("%s: %d chars (max %d)", c.name, n, c.max)
@@ -58,7 +59,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v11" {
+	if Version != "v12" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -367,6 +368,7 @@ var wordings = map[string]string{
 	"v9":  "a53915333ea092b317d01464304f17d79053635c57bdffca975896af0542f32c",
 	"v10": "951a7ad31110632dda7081ea584084a93ecb0ede29141181d32ff0fb8f0a1295",
 	"v11": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
+	"v12": "8e8aec126cbede943fcee5c75d31a2a9e781059316444c66255602ae4c94c9a0",
 }
 
 func wordingHash() string {
@@ -377,7 +379,7 @@ func wordingHash() string {
 		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
 		SavedLine("p", "k"), UpdatedLine("p", "k"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
 		HiddenLine("wrong", "p", "i", true), HiddenLine("outdated", "p", "i", false), NotRetiredLine("p", "i", "r", true), NotRetiredLine("p", "i", "r", false),
-		NothingLine, RetroLine}
+		NothingLine, RetroLine, Pointer([]string{"#1", "https://example.com/2"})}
 	for _, feedback := range []bool{true, false} {
 		x := For(feedback)
 		texts = append(texts, x.Guide, x.ShortGuide, x.Reminder, x.RecallEnd, x.SearchEnd)
@@ -450,5 +452,26 @@ func TestMemorySkillListsTheOverview(t *testing.T) {
 		if s.Name == "memory" && !strings.Contains(s.Body, "/s stats overview") {
 			t.Errorf("memory skill lacks stats overview: %s", s.Body)
 		}
+	}
+}
+
+// A prompt that only points at an issue or a link: read it, then search
+// its content. The reminder and the guide say so; the pointer line names
+// at most three references.
+func TestPointerWording(t *testing.T) {
+	for _, feedback := range []bool{true, false} {
+		x := For(feedback)
+		for name, text := range map[string]string{"guide": x.Guide, "reminder": x.Reminder} {
+			if !strings.Contains(text, "issue, PR or link") || !strings.Contains(text, "read it first, then search its content") {
+				t.Errorf("%s (feedback %v) does not say to read a pointed-at issue first: %s", name, feedback, text)
+			}
+		}
+	}
+	p := Pointer([]string{"#1", "#2", "#3", "https://example.com/4"})
+	if !strings.Contains(p, "#1, #2, #3.") || strings.Contains(p, "example.com") || !strings.Contains(p, "Read it first") {
+		t.Errorf("pointer line: %s", p)
+	}
+	if n := utf8.RuneCountInString(Pointer([]string{"https://github.com/Barben360/backsight/issues/144"})); n > 300 {
+		t.Errorf("pointer line: %d chars (max 300)", n)
 	}
 }

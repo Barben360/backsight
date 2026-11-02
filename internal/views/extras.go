@@ -36,7 +36,7 @@ var (
 	SkipWords = map[string]string{
 		"machine": "a background session", "too_short": "too short", "same_topic": "same topic as before", "gap": "too soon after the last recall",
 		"budget": "over the size limit", "topic_shift": "topic changed", "breaker": "memory server paused", "maintenance": "while backsight was being serviced",
-		"first": "start of a session", "other": "other", "unknown": "reason not recorded",
+		"first": "start of a session", "pointer": "only a link, read before searching", "other": "other", "unknown": "reason not recorded",
 	}
 	FailureKindWords = map[string]string{
 		"panic": "crashed", "fatal": "stopped on an error", "timeout": "ran too long", "killed": "was stopped", "exit": "exited with an error",
