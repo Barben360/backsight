@@ -120,7 +120,9 @@ func TestUpdateApplyIndexTextNamesNoMigrationID(t *testing.T) {
 	if code != output.OK || !strings.Contains(out, "done     index: migrated the metrics index (1 change)\n") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if strings.Contains(out+errOut, "0002") {
+	// "0002-test", not "0002": temp paths in the output can hold "0002"
+	// (issue #162).
+	if strings.Contains(out+errOut, "0002-test") {
 		t.Errorf("a migration id in the text:\n%s%s", out, errOut)
 	}
 	if v := indexUserVersion(t, pathsOf(home)); v != 2 {
