@@ -2,7 +2,7 @@
 {{/*
   The frame every page shares. Fields read: .Frame (Title, Path, Version,
   HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
-  Prefs, Scope, Generated, Window, RenderedAt, RenderMS) and .Loc. No Windows (the text page): no window
+  Prefs, Scope, Generated, Window, Custom, CustomMenu, RenderedAt, RenderMS) and .Loc. No Windows (the text page): no window
   links and no project filter. Nav is sliced by position: 0-5 the
   questions, 5-8 Browse, 8-9 System, 9- the developer pair.
 */}}
@@ -48,7 +48,7 @@
 </details>
 {{end}}</nav>
 <div class="tools">
-{{if .Frame.Windows}}<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+{{if .Frame.Windows}}<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}{{with .Frame.Custom}}{{template "wpick" .}}{{end}}</nav>
 <details class="menu proj">
 <summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short"{{if .Frame.ProjectInput}} title="{{plain .Frame.ProjectInput}}"{{end}}>{{if .Frame.ProjectInput}}{{clip (plain .Frame.ProjectInput)}}{{else}}All projects{{end}}</span><span class="caret" aria-hidden="true">▾</span></summary>
 <div class="menu-pop right wide">
@@ -72,11 +72,11 @@
 {{end}}{{with $g.Hint}}<span class="hint">{{.}}</span>
 {{end}}{{end}}</div>
 </details>
-<details class="menu navmenu">
+<details class="menu navmenu"{{with .Frame.Custom}}{{if .Err}} open{{end}}{{end}}>
 <summary class="btn"><span class="i i-menu"></span>Menu</summary>
 <div class="menu-pop right wider">
 {{if .Frame.Windows}}<span class="grp">Window</span>
-<nav class="seg" aria-label="Window (menu)">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+<nav class="seg" aria-label="Window (menu)">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}{{with .Frame.CustomMenu}}{{template "wpick" .}}{{end}}</nav>
 <span class="grp">Project</span>
 <a href="/projects"><span class="i i-filter"></span>{{if .Frame.ProjectInput}}{{clip (plain .Frame.ProjectInput)}}{{else}}All projects{{end}} <span class="caret" aria-hidden="true">▾</span></a>
 <hr>
@@ -101,6 +101,28 @@
 {{define "pagehead"}}<div class="page-head"><h1>{{.Frame.Title}}</h1>{{if .Frame.SessionHead}}{{with sessionpage .}}{{if .Found}}<div class="row small muted session-meta">{{template "projlink" .Project}}{{if .Span.Text}} · {{template "reltime" .Span}}{{end}} · {{.Turns}}{{if .Sent.Word}}<span class="pill st {{.Sent.Class}}">{{.Sent.Word}}</span>{{end}}</div>{{end}}{{end}}{{else}}{{with .Frame.Window}}<span class="muted">window: {{.}}</span>{{end}}{{end}}</div>{{end}}
 
 {{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+
+{{/*
+  wpick: the custom window picker, a GET form that works without a script;
+  reads a Custom (Action, Keep, From, To, Min, Max, Err, FromBad, ToBad,
+  Label, Aria, Current, ErrID, Pop). The Menu's copy has its own error id.
+*/}}
+{{define "wpick"}}<details class="wpick menu{{if .Current}} is-current{{end}}"{{if .Err}} open{{end}}>
+<summary aria-label="{{.Aria}}">{{.Label}} <span class="caret" aria-hidden="true">▾</span></summary>
+<div class="{{.Pop}}">
+<form class="wform" method="get" action="{{.Action}}">
+{{range .Keep}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
+{{end}}<span class="grp">Custom window</span>
+<div class="row">
+<label class="field">From<input type="date" name="from" value="{{.From}}" min="{{.Min}}" max="{{.Max}}"{{if .FromBad}} aria-invalid="true"{{end}}{{if .Err}} aria-describedby="{{.ErrID}}"{{end}}></label>
+<label class="field">To<input type="date" name="to" value="{{.To}}" min="{{.Min}}" max="{{.Max}}"{{if .ToBad}} aria-invalid="true"{{end}}{{if .Err}} aria-describedby="{{.ErrID}}"{{end}}></label>
+</div>
+{{if .Err}}<p class="ferr" id="{{.ErrID}}" role="alert"><span class="i i-bad" aria-hidden="true"></span><span>{{.Err}}</span></p>
+{{end}}<p class="fhint">Both days are included. Up to 13 months back, the history this PC keeps.</p>
+<div class="row"><button class="btn btn-primary" type="submit">Apply</button></div>
+</form>
+</div>
+</details>{{end}}
 
 {{/* seglink: a window link; choice: a preference choice, its mark shown. */}}
 {{define "seglink"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}
