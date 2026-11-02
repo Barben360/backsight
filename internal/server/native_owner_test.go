@@ -164,10 +164,15 @@ func TestNativeTakesOverTheUnitsOfAMovedHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered(t, mine, secrets)
+	// Read back as the owner check reads them (systemd's quoting doubles
+	// a Windows path's backslashes in Environment=).
 	for u, content := range unitFiles(t, mine) {
-		if strings.Contains(content, other.Root()) || !strings.Contains(content, mine.Root()) {
-			t.Errorf("%s still names the old directory:\n%s", u, content)
+		if r := unitRoot([]byte(content)); r == "" || !sameDir(r, mine.Root()) {
+			t.Errorf("%s runs from %q, not this home's %s:\n%s", u, r, mine.Root(), content)
 		}
+	}
+	if err := mine.CheckOwner(context.Background()); err != nil {
+		t.Errorf("the units taken over are refused: %v", err)
 	}
 }
 
