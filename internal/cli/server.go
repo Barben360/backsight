@@ -691,14 +691,6 @@ func newServerStartCmd(e *env) *cobra.Command {
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
 			}
-			// A maintenance lock whose owner is dead (its PID gone, or reused
-			// by a process started after the lock) is taken over: nothing
-			// else removes it (issue 285).
-			var notes []string
-			if h := state.Inspect(d.MaintenanceLock()); h != nil && h.Stale && state.BreakStale(h) == nil {
-				notes = append(notes, fmt.Sprintf("removed a maintenance lock left by %q (pid %d, since %s), whose process is gone",
-					h.Owner.Command, h.Owner.PID, h.Owner.Since.Format(time.RFC3339)))
-			}
 			unlock, err := serverLockFor(d, "server start", keyStep)
 			if err != nil {
 				return err
@@ -706,6 +698,15 @@ func newServerStartCmd(e *env) *cobra.Command {
 			defer unlock()
 			if err := ownProject(cmd.Context(), rt); err != nil {
 				return err
+			}
+			// A maintenance lock whose owner is dead (its PID gone, or reused
+			// by a process started after the lock) is taken over: nothing
+			// else removes it (issue 285). Only once the project is this
+			// install's: a refused start changes nothing (issue #144).
+			var notes []string
+			if h := state.Inspect(d.MaintenanceLock()); h != nil && h.Stale && state.BreakStale(h) == nil {
+				notes = append(notes, fmt.Sprintf("removed a maintenance lock left by %q (pid %d, since %s), whose process is gone",
+					h.Owner.Command, h.Owner.PID, h.Owner.Since.Format(time.RFC3339)))
 			}
 			// The marker again, under the locks: what it says now decides
 			// (a restore may have moved on since the first read).

@@ -16,6 +16,7 @@
 # server status
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "ps" "--all" "--format" "json"
 # backup create
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select version_num from alembic_version"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select extversion from pg_extension where extname = 'vector'"
@@ -37,7 +38,9 @@
 "rm" "-f" "-v" "backsight-verify-<rand>"
 # restore <archive>
 "ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select version_num from alembic_version"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select extversion from pg_extension where extname = 'vector'"
@@ -50,6 +53,7 @@
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "rm" "-f" "/tmp/backsight-<rand>.dump"
 "ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "stop" "hindsight"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "cp" "<home>/backsight/state/staging/verify-<rand>/db.dump" "db:/tmp/backsight-<rand>.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "dropdb" "-U" "hindsight" "--if-exists" "--force" "hindsight"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "createdb" "-U" "hindsight" "hindsight"
@@ -64,8 +68,10 @@
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "up" "-d" "--wait"
 # server upgrade
 "ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "pull" "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select version_num from alembic_version"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select extversion from pg_extension where extname = 'vector'"

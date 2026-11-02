@@ -232,3 +232,61 @@ func TestSameDirIgnoresCaseOnWindowsOnly(t *testing.T) {
 		t.Errorf("sameDir(%q, %q) = %v on %s", a, b, got, runtime.GOOS)
 	}
 }
+
+// A compose.yaml that cannot be read is not a moved home: another user's
+// install (a 0700 home) must stay refused (review of #157).
+func TestComposeRefusesAnUnreadableOtherInstall(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions and a non-root user")
+	}
+	base := t.TempDir()
+	mine := install(t, filepath.Join(base, "mine"))
+	locked := filepath.Join(base, "locked")
+	other := install(t, filepath.Join(locked, "server"))
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	r := &labelRunner{dirs: []string{other}}
+	err := (Compose{Dir: mine, Runner: r}).Up(context.Background())
+	var fe *ForeignProjectError
+	if !errors.As(err, &fe) {
+		t.Fatalf("got %v, want a ForeignProjectError", err)
+	}
+	if ch := r.changed(); len(ch) > 0 {
+		t.Errorf("changed containers: %v", ch)
+	}
+}
+
+// One container of its own does not make the project this install's.
+func TestComposeRefusesMixedContainers(t *testing.T) {
+	mine, other := install(t, filepath.Join(t.TempDir(), "mine")), install(t, filepath.Join(t.TempDir(), "other"))
+	r := &labelRunner{dirs: []string{mine, other}}
+	err := (Compose{Dir: mine, Runner: r}).Up(context.Background())
+	var fe *ForeignProjectError
+	if !errors.As(err, &fe) || fe.Other != other {
+		t.Fatalf("got %v, want a ForeignProjectError naming %s", err, other)
+	}
+}
+
+// The database's own paths: a restore never drops another install's
+// database, and the stale-dump cleanup leaves its container alone.
+func TestDatabaseLeavesAnotherInstallsContainerAlone(t *testing.T) {
+	mine, other := install(t, filepath.Join(t.TempDir(), "mine")), install(t, filepath.Join(t.TempDir(), "other"))
+	r := &labelRunner{dirs: []string{other}}
+	db := DB{Compose: Compose{Dir: mine, Runner: r}}
+	dropped, err := db.Restore(context.Background(), filepath.Join(mine, "db.dump"))
+	var fe *ForeignProjectError
+	if !errors.As(err, &fe) || dropped {
+		t.Errorf("restore: dropped %v, err %v", dropped, err)
+	}
+	r.calls = nil
+	if err := db.RemoveStaleDumps(context.Background()); err != nil {
+		t.Errorf("stale dumps: %v", err)
+	}
+	for _, c := range r.calls {
+		if c[0] != "ps" {
+			t.Errorf("docker ran %q", c)
+		}
+	}
+}

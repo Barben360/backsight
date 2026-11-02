@@ -171,3 +171,19 @@ func TestRotateRefusesAProjectAnotherInstallOwns(t *testing.T) {
 		t.Errorf("the server was started %d times", len(dk.keys))
 	}
 }
+
+// A refused start leaves even a dead owner's maintenance lock in place:
+// nothing was changed (review of #157).
+func TestRefusedStartKeepsAStaleMaintenanceLock(t *testing.T) {
+	home := devInstall(t, true)
+	f := withCompose(t)
+	other := otherInstall(t)
+	f.owners = []string{other}
+	writeDeadMaintenanceLock(t, home)
+	if code, out, errOut := run(t, "server", "start"); code != output.Blocked || !strings.Contains(out+errOut, other) {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if _, err := os.Stat(pathsOf(home).MaintenanceLock()); err != nil {
+		t.Errorf("the refused start removed the stale maintenance lock: %v", err)
+	}
+}

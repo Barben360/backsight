@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -40,10 +43,12 @@ func changes(sub []string) bool {
 
 // CheckOwner returns a *ForeignProjectError when the project's containers
 // come from another install's compose directory, one that still holds a
-// compose.yaml. No containers, containers from Dir (compared after
-// resolving symlinks) or without the label, and containers whose
+// compose.yaml. No containers, containers from Dir (the same directory,
+// whatever path reaches it) or without the label, and containers whose
 // directory no longer holds a compose.yaml (this install, moved or
-// renamed: its next up takes them over) are this install's to drive.
+// renamed: its next up takes them over) are this install's to drive. A
+// compose.yaml that cannot be looked at (another user's home) is
+// another install's: only one known to be gone is taken over.
 func (c Compose) CheckOwner(ctx context.Context) error {
 	args := []string{"ps", "--all", "--filter", "label=" + projectLabel + "=" + c.project(), "--format", `{{.Label "` + workingDirLabel + `"}}`}
 	var out []byte
@@ -58,7 +63,10 @@ func (c Compose) CheckOwner(ctx context.Context) error {
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		dir := strings.TrimSpace(line)
-		if dir == "" || sameDir(dir, c.Dir) || !fileExists(filepath.Join(dir, "compose.yaml")) {
+		if dir == "" || sameDir(dir, c.Dir) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, "compose.yaml")); errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		return &ForeignProjectError{Project: c.project(), Dir: c.Dir, Other: filepath.Clean(dir)}
@@ -66,9 +74,16 @@ func (c Compose) CheckOwner(ctx context.Context) error {
 	return nil
 }
 
-// sameDir compares two directories after resolving symlinks; Windows
-// paths ignore case.
+// sameDir reports whether two paths reach the same directory: the same
+// file when both exist (symlinks, bind mounts, a case-insensitive
+// filesystem), else the same path after resolving symlinks, without case
+// on Windows.
 func sameDir(a, b string) bool {
+	if sa, err := os.Stat(a); err == nil {
+		if sb, err := os.Stat(b); err == nil {
+			return os.SameFile(sa, sb)
+		}
+	}
 	a, b = resolved(a), resolved(b)
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
