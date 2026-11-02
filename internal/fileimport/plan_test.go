@@ -15,17 +15,17 @@ func TestBuildPlanSumsPerFile(t *testing.T) {
 		{Rel: "top.md", Chars: 10},
 	}}
 	plan := BuildPlan(s, nil, "src", "home", p)
-	want := retain.EstimateSession(30001, p).Add(retain.EstimateSession(30001, p)).Add(retain.EstimateSession(10, p))
+	want := retain.EstimateDocument(30001, p).Add(retain.EstimateDocument(30001, p)).Add(retain.EstimateDocument(10, p))
 	if plan.Total != want {
 		t.Errorf("total = %+v, want %+v (one estimate per file)", plan.Total, want)
 	}
-	if plan.Files != 3 || plan.Facts != 100 {
-		t.Errorf("files %d facts %d, want 3 and 100", plan.Files, plan.Facts)
+	if plan.Files != 3 || plan.Facts != 101 {
+		t.Errorf("files %d facts %d, want 3 and 101 (the short note counts one)", plan.Files, plan.Facts)
 	}
 	if len(plan.Folders) != 2 || plan.Folders[0].Folder != "A" || plan.Folders[1].Folder != "." {
 		t.Fatalf("folders = %+v", plan.Folders)
 	}
-	if plan.Folders[0].Files != 2 || plan.Folders[0].Facts != 100 || plan.Folders[1].Facts != 0 {
+	if plan.Folders[0].Files != 2 || plan.Folders[0].Facts != 100 || plan.Folders[1].Facts != 1 {
 		t.Errorf("folder counts = %+v", plan.Folders)
 	}
 	if !plan.PricesKnown || plan.Currency != "USD" || plan.Source != "src" || plan.Project != "home" || plan.Root != "/r" {
@@ -65,7 +65,7 @@ func TestBuildPlanEstimatesOnlyUnsent(t *testing.T) {
 	p := retain.Prices{Input: 1, Output: 2}
 	s := Scan{Files: []File{{Rel: "a.md", Chars: 6000}, {Rel: "b.md", Chars: 600}}}
 	plan := BuildPlan(s, func(f File) bool { return f.Rel != "a.md" }, "s", "p", p)
-	if plan.Files != 1 || plan.Total != retain.EstimateSession(600, p) || plan.Facts != 1 {
+	if plan.Files != 1 || plan.Total != retain.EstimateDocument(600, p) || plan.Facts != 1 {
 		t.Errorf("plan = files %d total %+v facts %d", plan.Files, plan.Total, plan.Facts)
 	}
 }
@@ -75,5 +75,17 @@ func TestBuildPlanSortsFoldersByTokens(t *testing.T) {
 	plan := BuildPlan(s, nil, "s", "p", retain.Prices{})
 	if plan.Folders[0].Folder != "big" {
 		t.Errorf("folders = %+v, want big first", plan.Folders)
+	}
+}
+
+func TestBuildPlanCountsAtLeastOneFactPerFile(t *testing.T) {
+	p := retain.Prices{Input: 1, Output: 2}
+	s := Scan{Files: []File{{Rel: "a.md", Chars: 176}, {Rel: "b.md", Chars: 85}}}
+	plan := BuildPlan(s, nil, "s", "p", p)
+	if plan.Facts != 2 {
+		t.Errorf("facts = %d, want one per short note", plan.Facts)
+	}
+	if want := retain.EstimateDocument(176, p).Add(retain.EstimateDocument(85, p)); plan.Total != want {
+		t.Errorf("total = %+v, want %+v", plan.Total, want)
 	}
 }

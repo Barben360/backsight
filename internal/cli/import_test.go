@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,5 +380,25 @@ func sendFakeDocument(t *testing.T, doc string, meta map[string]string) {
 	}
 	if err := cl.RetainNow(context.Background(), cfg.Server.Bank, []hindsight.RetainItem{{Content: "x", DocumentID: doc, Tags: []string{}, Metadata: meta}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestImportPlanTextShowsSmallAmounts(t *testing.T) {
+	cases := map[string]string{"0.004": "< 0.01 USD", "0": "0.00 USD", "1.234": "1.23 USD"}
+	for in, want := range cases {
+		var v float64
+		_, _ = fmt.Sscan(in, &v)
+		if got := importMoney(v, true, "USD"); got != want {
+			t.Errorf("importMoney(%s) = %q, want %q", in, got, want)
+		}
+	}
+	if got := importMoney(1, false, ""); got != "price unknown" {
+		t.Errorf("unknown price: %q", got)
+	}
+	if got := importDuration(20 * time.Second); got != "under a minute" {
+		t.Errorf("importDuration(20s) = %q", got)
+	}
+	if got := importDuration(90 * time.Minute); got != "about 1h30m" {
+		t.Errorf("importDuration(90m) = %q", got)
 	}
 }

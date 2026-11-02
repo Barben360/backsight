@@ -264,12 +264,7 @@ var skipLabels = map[string]string{
 func filesImportText(r filesImportResult) string {
 	var b strings.Builder
 	p := r.Plan
-	money := func(v float64) string {
-		if !p.PricesKnown {
-			return "price unknown"
-		}
-		return fmt.Sprintf("%.2f %s", v, p.Currency)
-	}
+	money := func(v float64) string { return importMoney(v, p.PricesKnown, p.Currency) }
 	fmt.Fprintf(&b, "%s (import %s, project %s)\n", p.Root, p.Source, p.Project)
 	if p.Files == 0 {
 		b.WriteString("nothing to send\n")
@@ -279,7 +274,7 @@ func filesImportText(r filesImportResult) string {
 			fmt.Fprintf(&b, "%-28s %6d %12d %8d %14s\n", truncate(f.Folder, 28), f.Files, f.Chars, f.Facts, money(f.Cost))
 		}
 		fmt.Fprintf(&b, "%-28s %6d %12d %8d %14s\n", "total", p.Files, p.Total.Chars, p.Facts, money(p.Total.Cost))
-		fmt.Fprintf(&b, "facts are approximate: the server decides; about %s of work\n", p.Total.Duration.Round(time.Minute))
+		fmt.Fprintf(&b, "facts are approximate: the server decides; %s of work on the server\n", importDuration(p.Total.Duration))
 	}
 	var skipped []string
 	for _, k := range []string{fileimport.SkipExtension, fileimport.SkipTooLarge, fileimport.SkipNotText, fileimport.SkipEmpty,
@@ -323,6 +318,25 @@ func filesImportText(r filesImportResult) string {
 		fmt.Fprintf(&b, "Queued: it is sent in the background, within %s. Follow it with `backsight import list`.\n", limit)
 	}
 	return b.String()
+}
+
+// importMoney is a cost for the plan's text.
+func importMoney(v float64, known bool, currency string) string {
+	switch {
+	case !known:
+		return "price unknown"
+	case v > 0 && v < 0.005:
+		return "< 0.01 " + currency
+	}
+	return fmt.Sprintf("%.2f %s", v, currency)
+}
+
+// importDuration is the plan's work time, to the minute.
+func importDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "under a minute"
+	}
+	return "about " + strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 }
 
 // truncate shortens s to n runes with "…".

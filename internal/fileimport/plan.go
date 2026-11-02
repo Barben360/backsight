@@ -60,8 +60,8 @@ func BuildPlan(s Scan, toSend func(File) bool, source, project string, p retain.
 			fp = &FolderPlan{Folder: folder}
 			folders[folder] = fp
 		}
-		e := retain.EstimateSession(f.Chars, p)
-		facts := retain.EstimatedFacts(f.Chars)
+		e := retain.EstimateDocument(f.Chars, p)
+		facts := retain.EstimatedDocumentFacts(f.Chars)
 		fp.Files++
 		fp.Facts += facts
 		fp.Estimate = fp.Add(e)
