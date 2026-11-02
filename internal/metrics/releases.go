@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -166,35 +165,6 @@ func bankSizeAt(e env, last time.Time) *int64 {
 	return ptr(max(0, total))
 }
 
-// settingsOf is every numeric field of the [recall] and [feedback] tables,
-// keyed recall.<key> and feedback.<key> (their toml keys); a boolean reads 0
-// or 1 and a string is left out.
-func settingsOf(cfg config.Config) map[string]float64 {
-	out := map[string]float64{}
-	for _, t := range []struct {
-		prefix string
-		v      any
-	}{{"recall.", cfg.Recall}, {"feedback.", cfg.Feedback}} {
-		rv := reflect.ValueOf(t.v)
-		for i := range rv.NumField() {
-			key, _, _ := strings.Cut(rv.Type().Field(i).Tag.Get("toml"), ",")
-			if key == "" || key == "-" {
-				continue
-			}
-			f := rv.Field(i)
-			switch f.Kind() {
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				out[t.prefix+key] = float64(f.Int())
-			case reflect.Float32, reflect.Float64:
-				out[t.prefix+key] = f.Float()
-			case reflect.Bool:
-				if f.Bool() {
-					out[t.prefix+key] = 1
-				} else {
-					out[t.prefix+key] = 0
-				}
-			}
-		}
-	}
-	return out
-}
+// settingsOf is every numeric field of the [recall] and [feedback] tables
+// (config.NumericSettings).
+func settingsOf(cfg config.Config) map[string]float64 { return config.NumericSettings(cfg) }

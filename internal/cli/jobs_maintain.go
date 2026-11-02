@@ -134,9 +134,54 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			if raw, err := json.MarshalIndent(snapshot, "", "  "); err == nil {
 				_ = fsutil.WriteAtomic(filepath.Join(d.State, "doctor-snapshot.json"), raw, 0o600)
 			}
+			maintainConfig(tw, now)
 			return finish()
 		},
 	}
+}
+
+// maintainConfig emits the numeric settings as a config event unless the
+// telemetry month files (the current and the previous) already hold one of
+// today's local date with the same hash: once a day, and again the same day
+// when a setting changed.
+func maintainConfig(tw *telemetry.Writer, clock func() time.Time) {
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		return
+	}
+	vals := config.NumericSettings(cfg)
+	sum := config.SettingsSHA256(vals)
+	at := clock()
+	dir := tw.Dir()
+	var lastTS time.Time
+	var lastSum string
+	for _, m := range []time.Time{at.UTC().AddDate(0, -1, 0), at.UTC()} {
+		raw, err := fsutil.ReadFileShared(filepath.Join(dir, "events-"+m.Format("2006-01")+".jsonl"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.Contains(line, `"config"`) {
+				continue
+			}
+			var ev struct {
+				Event  string `json:"event"`
+				TS     string `json:"ts"`
+				SHA256 string `json:"sha256"`
+			}
+			if json.Unmarshal([]byte(line), &ev) != nil || ev.Event != "config" {
+				continue
+			}
+			if ts, err := time.Parse(time.RFC3339Nano, ev.TS); err == nil && !ts.Before(lastTS) {
+				lastTS, lastSum = ts, ev.SHA256
+			}
+		}
+	}
+	day := func(t time.Time) string { return t.In(time.Local).Format("2006-01-02") }
+	if !lastTS.IsZero() && day(lastTS) == day(at) && lastSum == sum {
+		return
+	}
+	tw.WithClock(clock).Emit(telemetry.Config{SHA256: sum, Values: vals})
 }
 
 // maintainUpdate runs the update check against the configured source and

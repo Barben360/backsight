@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,9 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -857,5 +861,82 @@ func TestJobsTickHoldsSendsWhileTheProviderRejectsTheKey(t *testing.T) {
 	}
 	if e := state.LoadExtraction(pathsOf(home)); !e.HeldSince.IsZero() {
 		t.Errorf("hold not lifted: %+v", e)
+	}
+}
+
+// jobs maintain records the numeric settings once a local day, and again
+// the same day when a setting changed; the index reads them.
+func TestMaintainEmitsConfig(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = oldLocal })
+	home := devInstall(t, true)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600)
+	configs := func() int { return strings.Count(telemetryText(t, home), `"event":"config"`) }
+	maintain := func(at time.Time) {
+		t.Helper()
+		withClock(t, at)
+		if code, out, _ := run(t, "jobs", "maintain"); code != output.OK {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+	}
+	maintain(time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	if n := configs(); n != 1 {
+		t.Fatalf("%d config events after the first run, want 1", n)
+	}
+	maintain(time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC))
+	if n := configs(); n != 1 {
+		t.Errorf("%d config events after a second run the same day, want 1", n)
+	}
+	// The index ingests the event with the same keys.
+	ix, err := index.Open(context.Background(), indexOptions(pathsOf(home), home, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.CatchUp(context.Background(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]float64{}
+	err = ix.ReadTx(context.Background(), func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT key, value FROM tel_config_values`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var k string
+			var v float64
+			if err := rows.Scan(&k, &v); err != nil {
+				return err
+			}
+			keys[k] = v
+		}
+		return rows.Err()
+	})
+	_ = ix.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, _ := loadServerConfig()
+	if want := config.NumericSettings(cfg); !reflect.DeepEqual(keys, want) {
+		t.Errorf("tel_config_values %v, want %v", keys, want)
+	}
+	// A setting changed: one more, the same day.
+	raw, _ = os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[recall]\nprompt_hits = 7\n")...), 0o600)
+	maintain(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC))
+	if n := configs(); n != 2 {
+		t.Errorf("%d config events after a change, want 2", n)
+	}
+	maintain(time.Date(2026, 10, 25, 13, 0, 0, 0, time.UTC))
+	if n := configs(); n != 2 {
+		t.Errorf("%d config events after an unchanged run, want 2", n)
+	}
+	// The next local day: one more, the previous month's file included.
+	maintain(time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC))
+	if n := configs(); n != 3 {
+		t.Errorf("%d config events the next day, want 3", n)
 	}
 }
