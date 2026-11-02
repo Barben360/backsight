@@ -595,3 +595,46 @@ func TestSnapshotMetricsSayNoHistory(t *testing.T) {
 		}
 	}
 }
+
+func (x *fx) imp(at time.Time, action string, n int) {
+	x.t.Helper()
+	f := map[string]any{"action": action, "source": "0123456789abcdef", "files": n, "spent_cost": 0.5, "spent_tokens": 900}
+	if action == "purge" {
+		f = map[string]any{"action": action, "source": "0123456789abcdef", "documents": n}
+	}
+	x.tel(at, telemetry.Raw{Name: "import", Fields: f}, "", "")
+}
+
+// TestImportsSent: the files the sends of the window carried (10 + 5); a
+// pause or the end of a folder repeats files already counted, a plan or a
+// queue sends nothing. Every action but the plan is counted beside.
+func TestImportsSent(t *testing.T) {
+	x := newFx(t, fxNow)
+	base := fxNow.Add(-48 * time.Hour)
+	x.imp(base, "plan", 99)
+	x.imp(base.Add(time.Minute), "queue", 20)
+	x.imp(base.Add(2*time.Minute), "send", 10)
+	x.imp(base.Add(3*time.Minute), "send", 5)
+	x.imp(base.Add(3*time.Minute), "pause", 5)
+	x.imp(base.Add(4*time.Minute), "done", 20)
+	x.imp(base.Add(5*time.Minute), "purge", 20)
+	x.imp(fxNow.Add(-10*24*time.Hour), "send", 7) // before the window
+	m := bankOf(x, x.query(7))["imports.sent"]
+	if val(m) != 15 || m.Status != StatusOK {
+		t.Fatalf("sent = %v (%s), want 15", m.Value, m.Status)
+	}
+	if want := map[string]int64{"queue": 1, "send": 2, "pause": 1, "done": 1, "purge": 1}; !reflect.DeepEqual(m.Extra["by_action"], want) {
+		t.Errorf("by_action = %v, want %v", m.Extra["by_action"], want)
+	}
+	if m.Previous == nil || *m.Previous != 7 {
+		t.Errorf("previous = %v, want 7", m.Previous)
+	}
+}
+
+// TestImportsSentWithoutEvents: no import at all is no_events, and a
+// store event is not an import.
+func TestImportsSentWithoutEvents(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.store(fxNow.Add(-time.Hour), "saved", "decision", "alpha")
+	wantNoData(t, "imports.sent", bankOf(x, x.query(7))["imports.sent"], ReasonNoEvents)
+}

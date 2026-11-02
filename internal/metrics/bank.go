@@ -11,7 +11,7 @@ import (
 // memories (the store events and the journal). User-visible wording says
 // "memory".
 
-var bankIDs = []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "bank.churn", "notes.stored"}
+var bankIDs = []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "bank.churn", "notes.stored", "imports.sent"}
 
 func init() { register("bank", bankIDs, bank) }
 
@@ -84,6 +84,9 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 		return nil, nil, err
 	}
 	if err := bankStored(e, w, obs, met); err != nil {
+		return nil, nil, err
+	}
+	if err := bankImports(e, w, obs, met); err != nil {
 		return nil, nil, err
 	}
 	return obs, met, nil
@@ -354,5 +357,62 @@ WHERE ts >= ? AND ts < ? AND `+projectClause,
 	obs[id] = Observation{Den: n}
 	met[id] = Metric{Value: ptr(float64(byResult["saved"] + byResult["updated"])),
 		Extra: map[string]any{"by_result": byResult, "by_kind": byKind}}
+	return nil
+}
+
+// importActions are the import events imports.sent counts beside its
+// value (a plan sends nothing and writes nothing: left out).
+var importActions = []string{"queue", "send", "pause", "done", "purge"}
+
+// bankImports fills imports.sent: the files the import sends of the
+// window carried (this PC, decision 0081), and the import events by
+// action. A pause or a done repeats files a send already counted.
+func bankImports(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
+	const id = "imports.sent"
+	if e.src.Config.ServerOnly() {
+		obs[id], met[id] = Observation{Absent: true, Reason: ReasonServerOnlyHost}, Metric{}
+		return nil
+	}
+	rows, err := e.tx.QueryContext(e.ctx, `
+SELECT COALESCE(json_extract(fields, '$.action'), ''), COALESCE(json_extract(fields, '$.files'), 0), ts FROM events
+WHERE kind = 'import' AND ts < ? AND `+projectClause,
+		w.Until.UnixMilli(), e.q.Project, e.q.Project)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	byAction := map[string]int64{}
+	for _, a := range importActions {
+		byAction[a] = 0
+	}
+	var sent, sends int64
+	seen := false
+	for rows.Next() {
+		var action string
+		var files, ts int64
+		if err := rows.Scan(&action, &files, &ts); err != nil {
+			return err
+		}
+		seen = true
+		if ts < w.Since.UnixMilli() {
+			continue
+		}
+		if _, ok := byAction[action]; ok {
+			byAction[action]++
+		}
+		if action == "send" {
+			sent += files
+			sends++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !seen {
+		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, Metric{}
+		return nil
+	}
+	obs[id] = Observation{Den: sends}
+	met[id] = Metric{Value: ptr(float64(sent)), Extra: map[string]any{"by_action": byAction}}
 	return nil
 }

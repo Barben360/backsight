@@ -72,7 +72,7 @@ var (
 // payloadAllow lists, per kind without a table of its own, the fields its
 // events row keeps; every other field is dropped (default deny). Never an
 // error, a reason or anything that could hold text.
-var payloadAllow = map[string][]string{"failure_recall": {"decision", "ms"}}
+var payloadAllow = map[string][]string{"failure_recall": {"decision", "ms"}, "import": {"action", "files"}}
 
 // closedValue is s when set holds it, other when not, nil when empty.
 func closedValue(s string, set []string) any {

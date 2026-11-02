@@ -145,6 +145,7 @@ func TestWindowEdgesBank(t *testing.T) {
 	runEdges(t, []edgeCase{
 		{"retirements", bankIDs, func(x *fx, at time.Time) { x.retire(at, "forget") }, valOf("bank.churn")},
 		{"notes stored", bankIDs, func(x *fx, at time.Time) { x.store(at, "saved", "decision", "alpha") }, valOf("notes.stored")},
+		{"imports sent", bankIDs, func(x *fx, at time.Time) { x.imp(at, "send", 1) }, valOf("imports.sent")},
 	})
 }
 
