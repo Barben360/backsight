@@ -549,8 +549,9 @@ func TestWorkflowsBoundEveryJob(t *testing.T) {
 }
 
 // ci.yml runs the whole unit-test suite on Windows (M7 block 2): the job
-// exists and runs `go test ./...` uncached, whatever else it does, with
-// the time budgets' files on the runner's local disk (Task 12b).
+// exists and runs `go test ./...` uncached, one slice per matrix entry
+// (TestCISlicesRunEverySlice), with the time budgets' files on the
+// runner's local disk (Task 12b).
 func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 	for _, w := range workflows(t) {
 		if w.name != "ci.yml" {
@@ -560,11 +561,17 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 			if j.name != "test-windows" {
 				continue
 			}
-			if !strings.Contains(j.raw, "runs-on: windows-latest") || !strings.Contains(j.raw, "- run: go test ./... -count=1") {
+			if !strings.Contains(j.raw, "runs-on: windows-latest") || !strings.Contains(j.raw, "go test ./... -count=1") {
 				t.Errorf("ci.yml job test-windows does not run go test ./... -count=1 on windows-latest:\n%s", j.raw)
 			}
-			// internal/cli runs about 10 minutes there: go test's default
-			// bound per package would cut it.
+			// a slice runs its tests only; the pattern comes from the
+			// slicer, set -e stopping the step when it fails (an empty
+			// -run would run everything, unseen)
+			if !strings.Contains(j.raw, `pattern=$(go run ./scripts/testshard `) || !strings.Contains(j.raw, `-run "$pattern"`) || !strings.Contains(j.raw, "shell: bash") {
+				t.Errorf("ci.yml job test-windows does not run the slice testshard prints, in bash:\n%s", j.raw)
+			}
+			// a slow package: go test's default bound per package would
+			// cut it.
 			if m := regexp.MustCompile(`go test \./\.\.\. -count=1 -timeout (\d+)m\b`).FindStringSubmatch(j.raw); m == nil || atoi(m[1]) < 15 {
 				t.Errorf("ci.yml job test-windows does not give go test a timeout of 15 minutes or more (-timeout <n>m):\n%s", j.raw)
 			}
@@ -575,6 +582,120 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 		}
 	}
 	t.Error("ci.yml has no test-windows job")
+}
+
+// ciJobs is ci.yml's jobs by name.
+func ciJobs(t *testing.T) map[string]job {
+	t.Helper()
+	for _, w := range workflows(t) {
+		if w.name == "ci.yml" {
+			out := map[string]job{}
+			for _, j := range w.jobs {
+				out[j.name] = j
+			}
+			return out
+		}
+	}
+	t.Fatal("no ci.yml")
+	return nil
+}
+
+// A job running the tests in slices (scripts/testshard) runs every one of
+// them: its matrix lists 0 to total-1, the total it gives the slicer, and
+// one failing slice does not cancel the others' results.
+func TestCISlicesRunEverySlice(t *testing.T) {
+	total := regexp.MustCompile(`(?:SHARDS=|-total )(\d+)\b`)
+	matrix := regexp.MustCompile(`(?m)^        shard: \[([0-9, ]*)\]\s*$`)
+	sliced := 0
+	for name, j := range ciJobs(t) {
+		if !strings.Contains(j.raw, "scripts/testshard") && !strings.Contains(j.raw, "make test-shard") {
+			continue
+		}
+		sliced++
+		totals := total.FindAllStringSubmatch(j.raw, -1)
+		m := matrix.FindStringSubmatch(j.raw)
+		if len(totals) != 1 || m == nil {
+			t.Errorf("job %s: want one slice total and one shard matrix, found totals %v and matrix %v", name, totals, m)
+			continue
+		}
+		n := atoi(totals[0][1])
+		var want []string
+		for i := range n {
+			want = append(want, strconv.Itoa(i))
+		}
+		if got := strings.ReplaceAll(m[1], " ", ""); got != strings.Join(want, ",") || n < 2 {
+			t.Errorf("job %s: matrix shard [%s] for %d slices, want [%s]", name, m[1], n, strings.Join(want, ", "))
+		}
+		if !strings.Contains(j.raw, "fail-fast: false") {
+			t.Errorf("job %s: a failing slice cancels the others (fail-fast: false missing)", name)
+		}
+	}
+	if sliced < 2 {
+		t.Errorf("%d sliced jobs found, want test-race and test-windows: the check proves nothing", sliced)
+	}
+}
+
+// The required check "test" stands for every Linux test job, and for the
+// changes job, whose failure would skip the chains while their checks
+// pass as skipped: it runs whatever they ended with and fails unless all
+// passed.
+func TestCITestCheckNeedsEveryLinuxTestJob(t *testing.T) {
+	jobs := ciJobs(t)
+	test, ok := jobs["test"]
+	if !ok {
+		t.Fatal("ci.yml has no test job (a required check)")
+	}
+	m := regexp.MustCompile(`(?m)^    needs: \[([^\]]*)\]\s*$`).FindStringSubmatch(test.raw)
+	if m == nil {
+		t.Fatalf("ci.yml job test has no needs: [...] list:\n%s", test.raw)
+	}
+	needs := map[string]bool{}
+	for _, n := range strings.Split(m[1], ",") {
+		needs[strings.TrimSpace(n)] = true
+	}
+	runsTests := regexp.MustCompile(`make (test-shard|test-hooks|test-sweep|bench-index|cross)\b|ci-docs-only\.sh`)
+	found := 0
+	for name, j := range jobs {
+		if name == "test" || !runsTests.MatchString(j.raw) {
+			continue
+		}
+		found++
+		if !needs[name] {
+			t.Errorf("ci.yml job %s runs Linux tests or checks, but the required test job does not need it", name)
+		}
+	}
+	if found < 5 {
+		t.Errorf("%d jobs found for the test check, want changes, test-race, test-hooks, bench and checks: the check proves nothing", found)
+	}
+	if !regexp.MustCompile(`(?m)^    if: always\(\)\s*$`).MatchString(test.raw) || !strings.Contains(test.raw, `all(.[]; .result == "success")`) {
+		t.Errorf("ci.yml job test does not run always and fail unless every job it needs succeeded:\n%s", test.raw)
+	}
+}
+
+// docsOnlyGate is the one if: a chain job may have: it skips a pull
+// request that changes documentation alone (ci.yml changes).
+var docsOnlyGate = regexp.MustCompile(`(?m)^    if: needs\.changes\.outputs\.code == 'true'\s*$`)
+
+// withoutDocsOnlyGate is a job's header without its docs-only gate: any
+// if: left is one that may skip the job on a code change.
+func withoutDocsOnlyGate(header string) string {
+	return docsOnlyGate.ReplaceAllString(header, "")
+}
+
+// A docs-only pull request skips the jobs the docs cannot reach, and only
+// those: the sandbox tests and fresh-install search the embedded docs
+// (guide search), the required checks must run.
+func TestCIDocsOnlySkipsOnlyWhatDocsCannotReach(t *testing.T) {
+	want := map[string]bool{"test-windows": true, "m6-chain": true, "native-chain": true, "native-chain-windows": true}
+	for name, j := range ciJobs(t) {
+		gated := docsOnlyGate.MatchString(j.raw)
+		if gated != want[name] {
+			t.Errorf("ci.yml job %s: skipped for docs alone = %v, want %v", name, gated, want[name])
+		}
+		if gated && !regexp.MustCompile(`(?m)^    needs: changes\s*$`).MatchString(j.raw) {
+			t.Errorf("ci.yml job %s reads the changes job's output without needing it", name)
+		}
+	}
 }
 
 // atoi is s as a number, 0 when it is not one.

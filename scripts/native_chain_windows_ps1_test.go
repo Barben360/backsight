@@ -43,7 +43,8 @@ func ncwFunction(t *testing.T, src, name string) string {
 }
 
 // The CI proof (decision 0080): a job of its own on windows-latest with
-// no if: (nor continue-on-error) and the brief's 60 minutes, one step with
+// no if: but the docs-only gate (withoutDocsOnlyGate), nor
+// continue-on-error, and the brief's 60 minutes, one step with
 // no if: running the script, its project named after the slot, and native's
 // model cache keyed on the Windows lock, restored before the chain and
 // saved after it whatever happened.
@@ -69,7 +70,7 @@ func TestNativeChainWindowsRunsOnEveryPullRequest(t *testing.T) {
 		}
 	}
 	for _, key := range []string{"if", "continue-on-error"} {
-		if regexp.MustCompile(`(?m)^    ` + key + `:`).MatchString(header) {
+		if regexp.MustCompile(`(?m)^    ` + key + `:`).MatchString(withoutDocsOnlyGate(header)) {
 			t.Errorf("the native-chain-windows job has an %s: (it may not run, or not fail):\n%s", key, header)
 		}
 	}
