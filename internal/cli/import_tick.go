@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // tickImportLimit: at most this many imported files per tick, all
@@ -51,9 +52,47 @@ func (r importTickResult) String() string {
 	return msg
 }
 
+// acquireImport takes the lock every writer of the import manifests holds:
+// the tick while it sends, `import <folder>` while it merges, `import
+// purge` while it deletes.
+func acquireImport(d paths.Dirs, command string) (func(), error) {
+	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "job-import.lock"), command)
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = l.Release() }, nil
+}
+
+// emitImportTick records what a tick did for one folder: files sent, a
+// pause at the cap, the end of the folder.
+func emitImportTick(tw *telemetry.Writer, m *fileimport.Manifest, sent int, paused bool) {
+	if tw == nil {
+		return
+	}
+	spend := map[string]any{"source": m.Source, "files": sent, "spent_tokens": m.SpentTokens, "spent_cost": m.SpentCost}
+	if sent > 0 {
+		tw.Emit(telemetry.Raw{Name: "import", Fields: withAction(spend, "send")})
+	}
+	if paused {
+		tw.Emit(telemetry.Raw{Name: "import", Fields: withAction(spend, "pause")})
+	}
+	if sent > 0 && len(m.Unsent()) == 0 {
+		tw.Emit(telemetry.Raw{Name: "import", Fields: map[string]any{"action": "done", "source": m.Source, "files": len(m.Entries),
+			"spent_tokens": m.PriorTokens + m.SpentTokens, "spent_cost": m.PriorCost + m.SpentCost}})
+	}
+}
+
+func withAction(fields map[string]any, action string) map[string]any {
+	out := map[string]any{"action": action}
+	for k, v := range fields {
+		out[k] = v
+	}
+	return out
+}
+
 // filesImportInTick sends queued imported files, oldest queued folder
 // first, while no past sessions are queued, each folder within its cap.
-func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config) (importTickResult, error) {
+func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, tw *telemetry.Writer) (importTickResult, error) {
 	var r importTickResult
 	all, err := fileimport.ListManifests(d.ImportDir())
 	if err != nil || len(all) == 0 {
@@ -73,12 +112,17 @@ func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg
 		r.Waiting = "past_sessions"
 		return r, nil
 	}
-	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "job-import.lock"), "jobs tick")
+	release, err := acquireImport(d, "jobs tick")
 	if err != nil {
 		r.Waiting = "busy"
 		return r, nil
 	}
-	defer func() { _ = l.Release() }()
+	defer release()
+	// Read again under the lock: an import or a purge may have changed
+	// them since.
+	if all, err = fileimport.ListManifests(d.ImportDir()); err != nil {
+		return r, err
+	}
 	r.Left = 0
 	prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 	bank, tombs := cfg.Server.Bank, st.TombstonesOf(cfg.Server.Bank)
@@ -97,8 +141,10 @@ func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg
 			r.Left += left
 			continue
 		}
+		before := r
 		sent, err := sendImport(ctx, f.Client, d, m, bank, tombs, machineID, prices, &budget, &r)
 		r.Left += left - sent
+		emitImportTick(tw, m, r.Sent-before.Sent, len(r.Paused) > len(before.Paused))
 		if err != nil {
 			return r, err
 		}
@@ -125,6 +171,13 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 		if err != nil {
 			return done, err
 		}
+		if m.StartDay == "" {
+			// The spend counts from the first send, not from the queue: past
+			// sessions sent before it are not this import's.
+			m.StartDay = now().UTC().Format("2006-01-02")
+			t := days[m.StartDay]
+			m.StartBase = [4]int64{t.Input, t.Cached, t.Output, t.Thoughts}
+		}
 		m.SpentTokens, m.SpentCost = spendSince(days, m.StartDay, m.StartBase, prices)
 		if (m.MaxCost > 0 && m.SpentCost >= m.MaxCost) || (m.MaxTokens > 0 && m.SpentTokens >= m.MaxTokens) {
 			m.Paused = "budget"
@@ -139,10 +192,10 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 			return done, err
 		}
 		abs := filepath.Join(m.Root, filepath.FromSlash(e.Rel))
-		raw, redacted, _, err := fileimport.ReadContent(abs)
-		if err != nil {
-			// Gone, unreadable or no longer text: nothing is sent, what an
-			// earlier send stored stays.
+		raw, redacted, reason := fileimport.ReadForSend(abs)
+		if reason != "" {
+			// Gone, a link, too large, empty or no longer text: nothing is
+			// sent, what an earlier send stored stays.
 			e.Gone = true
 			r.Gone++
 			done++

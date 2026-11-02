@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -72,17 +73,9 @@ func ScanDir(root string, opt ScanOptions) (Scan, error) {
 	if opt.Now.IsZero() {
 		opt.Now = time.Now()
 	}
-	abs, err := filepath.Abs(root)
+	abs, err := ResolveRoot(root)
 	if err != nil {
 		return Scan{}, err
-	}
-	if abs, err = filepath.EvalSymlinks(abs); err != nil {
-		return Scan{}, fmt.Errorf("%s: %w", root, err)
-	}
-	if st, err := os.Stat(abs); err != nil {
-		return Scan{}, err
-	} else if !st.IsDir() {
-		return Scan{}, fmt.Errorf("%s is not a folder", root)
 	}
 	exts := map[string]bool{}
 	for _, e := range append(slices.Clone(DefaultExt), opt.Ext...) {
@@ -177,6 +170,60 @@ func ScanDir(root string, opt ScanOptions) (Scan, error) {
 		}
 	}
 	return s, nil
+}
+
+// ResolveRoot is root made absolute, its own links resolved; it must be
+// a folder.
+func ResolveRoot(root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	if abs, err = filepath.EvalSymlinks(abs); err != nil {
+		return "", fmt.Errorf("%s: %w", root, err)
+	}
+	if st, err := os.Stat(abs); err != nil {
+		return "", err
+	} else if !st.IsDir() {
+		return "", fmt.Errorf("%s is not a folder", root)
+	}
+	return abs, nil
+}
+
+// ReadForSend reads a queued file again just before it is sent, with the
+// scan's checks: a regular file (not a link, pipe or folder), at most 1 MB,
+// text, not empty after its frontmatter. reason is the skip reason when it
+// no longer qualifies; nothing else is read then.
+func ReadForSend(abs string) (raw []byte, redacted, reason string) {
+	info, err := os.Lstat(abs)
+	switch {
+	case err != nil:
+		return nil, "", SkipUnreadable
+	case info.Mode()&fs.ModeSymlink != 0:
+		return nil, "", SkipSymlink
+	case !info.Mode().IsRegular():
+		return nil, "", SkipUnreadable
+	case info.Size() > maxFileSize:
+		return nil, "", SkipTooLarge
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, "", SkipUnreadable
+	}
+	defer func() { _ = f.Close() }()
+	raw, err = io.ReadAll(io.LimitReader(f, maxFileSize+1))
+	switch {
+	case err != nil:
+		return nil, "", SkipUnreadable
+	case len(raw) > maxFileSize:
+		return nil, "", SkipTooLarge
+	case bytes.IndexByte(raw, 0) >= 0 || !utf8.Valid(raw):
+		return nil, "", SkipNotText
+	case len(bytes.TrimSpace(stripFrontmatter(raw))) == 0:
+		return nil, "", SkipEmpty
+	}
+	redacted, _ = redact.Text(string(raw))
+	return raw, redacted, ""
 }
 
 var errNotText = errors.New("not text")

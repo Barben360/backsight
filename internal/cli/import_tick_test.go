@@ -375,3 +375,136 @@ func fakeDocExists(t *testing.T, doc string) bool {
 	_, err = cl.GetDocument(context.Background(), bank, doc)
 	return err == nil
 }
+
+// --- final review fixes ---
+
+func TestImportRefusesWhileAnImportIsSending(t *testing.T) {
+	home, root, src := sentImport(t)
+	l, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "job-import.lock"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	if code, out, errOut := run(t, "import", root); code != output.Blocked {
+		t.Errorf("queue while sending: exit %d %s %s", code, out, errOut)
+	}
+	if code, out, errOut := run(t, "import", "purge", src, "--yes"); code != output.Blocked {
+		t.Errorf("purge while sending: exit %d %s %s", code, out, errOut)
+	}
+	if !fakeDocExists(t, "import:"+src+"/a.md") {
+		t.Error("a purge refused for the lock deleted a document")
+	}
+	if code, _, errOut := run(t, "import", root, "--plan"); code != 0 {
+		t.Errorf("a plan needs no lock: exit %d %s", code, errOut)
+	}
+}
+
+func TestTickImportBaseStartsAtFirstSend(t *testing.T) {
+	home, _ := queuedImport(t, map[string]string{"a.md": "alpha", "b.md": "beta"})
+	// Past sessions sent after the queue spend far more than this import's cap.
+	llmInput.Add(50_000_000)
+	tick(t)
+	if n := len(importDocs()); n != 2 {
+		t.Errorf("sent %d: the spend before the first send counted against the import", n)
+	}
+	if m := manifestOf(t, home); m.Paused != "" {
+		t.Errorf("paused %q", m.Paused)
+	}
+}
+
+func TestImportRerunStartsANewCapAndKeepsTheTotal(t *testing.T) {
+	home, root, _ := sentImport(t)
+	m := manifestOf(t, home)
+	m.SpentCost, m.SpentTokens = 3, 3000
+	_ = fileimport.SaveManifest(pathsOf(home).ImportDir(), m)
+	_ = os.WriteFile(filepath.Join(root, "c.md"), []byte("gamma"), 0o644)
+	llmInput.Add(50_000_000) // weeks of sessions since the first import
+	if code, _, errOut := run(t, "import", root); code != 0 {
+		t.Fatalf("rerun: %d %s", code, errOut)
+	}
+	m = manifestOf(t, home)
+	if m.StartDay != "" || m.SpentCost != 0 || m.PriorCost != 3 || m.PriorTokens != 3000 || m.MaxCost <= 0 {
+		t.Errorf("after rerun: start %q spent %v prior %v/%d cap %v", m.StartDay, m.SpentCost, m.PriorCost, m.PriorTokens, m.MaxCost)
+	}
+	tick(t)
+	if !slices.ContainsFunc(importDocs(), func(d string) bool { return strings.HasSuffix(d, "/c.md") }) {
+		t.Errorf("the new file was not sent: %v (paused %q)", importDocs(), manifestOf(t, home).Paused)
+	}
+}
+
+func TestTickRechecksFilesAtSend(t *testing.T) {
+	home, root := queuedImport(t, map[string]string{"big.md": "small", "link.md": "plain", "empty.md": "text", "ok.md": "fine"})
+	_ = os.WriteFile(filepath.Join(root, "big.md"), []byte(strings.Repeat("x", 1<<20+1)), 0o644)
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	_ = os.WriteFile(outside, []byte("outside the folder"), 0o644)
+	_ = os.Remove(filepath.Join(root, "link.md"))
+	linked := os.Symlink(outside, filepath.Join(root, "link.md")) == nil
+	_ = os.WriteFile(filepath.Join(root, "empty.md"), []byte("---\ntype: x\n---\n"), 0o644)
+	tick(t)
+	docs := importDocs()
+	if len(docs) != 1 || !strings.HasSuffix(docs[0], "/ok.md") {
+		t.Errorf("sent %v, want only ok.md", docs)
+	}
+	if slices.Contains(retainedContents, "outside the folder") {
+		t.Error("a link sent a file from outside the folder")
+	}
+	for _, e := range manifestOf(t, home).Entries {
+		if e.Rel != "ok.md" && (e.Sent || !e.Gone) && (e.Rel != "link.md" || linked) {
+			t.Errorf("%s = %+v, want set aside, not sent", e.Rel, e)
+		}
+	}
+}
+
+func TestImportTelemetryCoversSendDoneAndPurge(t *testing.T) {
+	home, _, src := sentImport(t)
+	actions := func() []string {
+		var out []string
+		for _, e := range eventsNamed(t, home, "import") {
+			out = append(out, e["action"].(string))
+		}
+		return out
+	}
+	if a := actions(); !slices.Contains(a, "send") || !slices.Contains(a, "done") {
+		t.Errorf("actions after the tick = %v", a)
+	}
+	for _, e := range eventsNamed(t, home, "import") {
+		if e["action"] == "send" && (e["files"] != float64(2) || e["source"] != src) {
+			t.Errorf("send event = %v", e)
+		}
+	}
+	run(t, "import", "purge", src, "--yes")
+	if a := actions(); !slices.Contains(a, "purge") {
+		t.Errorf("actions after purge = %v", a)
+	}
+}
+
+func TestTickImportEmitsPause(t *testing.T) {
+	home, _ := queuedImport(t, map[string]string{"a.md": "alpha", "b.md": "beta"}, "--max-tokens", "1")
+	llmPerRetain.Store(1000)
+	tick(t)
+	var paused bool
+	for _, e := range eventsNamed(t, home, "import") {
+		paused = paused || e["action"] == "pause"
+	}
+	if !paused {
+		t.Error("no pause event at the cap")
+	}
+}
+
+func TestImportRerunReusesSavedExclusions(t *testing.T) {
+	home, root := queuedImport(t, map[string]string{"a.md": "alpha", "SCRATCH/x.md": "draft", "e.jsonl": "{}"}, "--exclude", "SCRATCH/**", "--ext", "jsonl")
+	_ = os.WriteFile(filepath.Join(root, "SCRATCH", "y.md"), []byte("another draft"), 0o644)
+	code, out, errOut := run(t, "import", root)
+	if code != 0 || !strings.Contains(out, "SCRATCH/**") {
+		t.Fatalf("rerun: exit %d, text does not name the saved exclusions:\n%s %s", code, out, errOut)
+	}
+	m := manifestOf(t, home)
+	for _, e := range m.Entries {
+		if strings.HasPrefix(e.Rel, "SCRATCH/") {
+			t.Errorf("an excluded draft was queued: %s", e.Rel)
+		}
+	}
+	if !slices.ContainsFunc(m.Entries, func(e fileimport.Entry) bool { return e.Rel == "e.jsonl" && !e.Gone }) {
+		t.Errorf("the saved --ext was dropped: %+v", m.Entries)
+	}
+}

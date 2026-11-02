@@ -27,23 +27,27 @@ type Entry struct {
 
 // Manifest is what this machine knows of one imported folder.
 type Manifest struct {
-	Schema            int       `json:"schema"`
-	Source            string    `json:"source"`
-	Root              string    `json:"root"`
-	Project           string    `json:"project"`
-	Ext               []string  `json:"ext,omitempty"`
-	Exclude           []string  `json:"exclude,omitempty"`
-	QueuedAt          time.Time `json:"queued_at"`
-	MaxCost           float64   `json:"max_cost,omitempty"`
-	MaxTokens         int64     `json:"max_tokens,omitempty"`
-	Currency          string    `json:"currency,omitempty"`
-	SpentCost         float64   `json:"spent_cost"`
-	SpentTokens       int64     `json:"spent_tokens"`
-	StartDay          string    `json:"start_day"`
-	StartBase         [4]int64  `json:"start_base"`
-	Paused            string    `json:"paused,omitempty"` // budget | ""
-	AllowSubscription bool      `json:"allow_subscription,omitempty"`
-	Entries           []Entry   `json:"entries"` // sorted by Rel
+	Schema      int       `json:"schema"`
+	Source      string    `json:"source"`
+	Root        string    `json:"root"`
+	Project     string    `json:"project"`
+	Ext         []string  `json:"ext,omitempty"`
+	Exclude     []string  `json:"exclude,omitempty"`
+	QueuedAt    time.Time `json:"queued_at"`
+	MaxCost     float64   `json:"max_cost,omitempty"`
+	MaxTokens   int64     `json:"max_tokens,omitempty"`
+	Currency    string    `json:"currency,omitempty"`
+	SpentCost   float64   `json:"spent_cost"`
+	SpentTokens int64     `json:"spent_tokens"`
+	// PriorCost and PriorTokens: what earlier runs of this import spent;
+	// Spent* and the cap are the current run's.
+	PriorCost         float64  `json:"prior_cost,omitempty"`
+	PriorTokens       int64    `json:"prior_tokens,omitempty"`
+	StartDay          string   `json:"start_day"`
+	StartBase         [4]int64 `json:"start_base"`
+	Paused            string   `json:"paused,omitempty"` // budget | ""
+	AllowSubscription bool     `json:"allow_subscription,omitempty"`
+	Entries           []Entry  `json:"entries"` // sorted by Rel
 }
 
 // MergeResult counts what a new scan changed.

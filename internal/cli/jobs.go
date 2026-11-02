@@ -222,7 +222,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				}
 			}
 			if f.Hold == "" && otherServer(d, cfg) == nil {
-				ir, ierr := filesImportInTick(cmd.Context(), f, d, cfg)
+				ir, ierr := filesImportInTick(cmd.Context(), f, d, cfg, tw)
 				res.Import, res.importSent = ir.String(), ir.Sent
 				if ierr != nil {
 					res.Import = strings.TrimPrefix(res.Import+"; failed: "+redacted(ierr, sec).Error(), "; ")

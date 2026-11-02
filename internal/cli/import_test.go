@@ -91,7 +91,8 @@ func TestImportQueuesAndWritesManifest(t *testing.T) {
 		t.Fatalf("exit %d, data %+v, %s", code, env.Data, errOut)
 	}
 	m := manifestOf(t, home)
-	if len(m.Unsent()) != 2 || m.StartDay == "" || m.Project == "" {
+	// The spend base is set at the first send, not at the queue.
+	if len(m.Unsent()) != 2 || m.StartDay != "" || m.Project == "" {
 		t.Errorf("manifest = %+v", m)
 	}
 	if want := 1.5 * env.Data.Plan.Total.Cost; m.MaxCost != want || env.Data.MaxCost != want {

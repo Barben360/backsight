@@ -42,6 +42,9 @@ type filesImportResult struct {
 	MaxCost   float64                `json:"max_cost,omitempty"`
 	MaxTokens int64                  `json:"max_tokens,omitempty"`
 	Warnings  []string               `json:"warnings,omitempty"`
+	// Reused: the settings saved with this import, used again because the
+	// run gave none.
+	Reused []string `json:"reused,omitempty"`
 }
 
 func newImportCmd(e *env) *cobra.Command {
@@ -102,15 +105,46 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 			return blocked(err)
 		}
 	}
+	root, err := fileimport.ResolveRoot(folder)
+	if err != nil {
+		return &output.Error{Code: output.Usage, Message: err.Error()}
+	}
+	source := fileimport.SourceID(machineID, root)
+	if !fl.plan {
+		// One writer of the manifests at a time: a tick sending this folder
+		// would write its older copy back over this merge.
+		release, err := acquireImport(d, "import")
+		if err != nil {
+			return &output.Error{Code: output.Blocked, Message: "files of an import are being sent right now: run this again in a minute"}
+		}
+		defer release()
+	}
+	m, found, err := fileimport.LoadManifest(d.ImportDir(), source)
+	if err != nil {
+		return blocked(err)
+	}
+	res := filesImportResult{}
+	exclude := fl.exclude
 	exts := make([]string, 0, len(fl.ext))
 	for _, x := range fl.ext {
 		exts = append(exts, fileimport.NormalizeExt(x))
 	}
-	scan, err := fileimport.ScanDir(folder, fileimport.ScanOptions{Exclude: fl.exclude, Ext: exts, Now: now()})
+	if found && !cmd.Flags().Changed("exclude") && len(m.Exclude) > 0 {
+		exclude = m.Exclude
+		for _, g := range exclude {
+			res.Reused = append(res.Reused, "--exclude '"+g+"'")
+		}
+	}
+	if found && !cmd.Flags().Changed("ext") && len(m.Ext) > 0 {
+		exts = m.Ext
+		for _, x := range exts {
+			res.Reused = append(res.Reused, "--ext "+x)
+		}
+	}
+	scan, err := fileimport.ScanDir(root, fileimport.ScanOptions{Exclude: exclude, Ext: exts, Now: now()})
 	if err != nil {
 		return &output.Error{Code: output.Usage, Message: err.Error()}
 	}
-	source := fileimport.SourceID(machineID, scan.Root)
 	all, err := fileimport.ListManifests(d.ImportDir())
 	if err != nil {
 		return blocked(err)
@@ -124,7 +158,6 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 	if err != nil {
 		return blocked(err)
 	}
-	res := filesImportResult{}
 	unreachable := func(err error) error {
 		if fl.plan {
 			res.Warnings = appendOnce(res.Warnings, warnServerUnreachable)
@@ -133,10 +166,6 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 		return blocked(fmt.Errorf("cannot reach the memory server: %w", err))
 	}
 
-	m, found, err := fileimport.LoadManifest(d.ImportDir(), source)
-	if err != nil {
-		return blocked(err)
-	}
 	project := retain.CanonicalProject(cfg.Projects.Transverse, retain.TransverseKeyword)
 	if fl.project != "" {
 		project = retain.CanonicalProject(cfg.Projects.Transverse, fl.project)
@@ -186,22 +215,20 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 	if found && m.Paused == "budget" && !capGiven {
 		return &output.Error{Code: output.Partial, Message: fmt.Sprintf("import paused: budget reached (%.4f %s spent); rerun with a higher --max-cost or --max-tokens", m.SpentCost, m.Currency)}
 	}
-	if !found {
-		day := now().UTC().Format("2006-01-02")
-		days, err := cl.LLMTokensByDay(ctx, cfg.Server.Bank, "30d")
-		if err != nil {
-			return blocked(fmt.Errorf("cannot read the server's LLM usage, so the spending cap could not work: %w", err))
-		}
-		t := days[day]
-		m.QueuedAt, m.StartDay, m.StartBase = now().UTC(), day, [4]int64{t.Input, t.Cached, t.Output, t.Thoughts}
+	// Each run is a new spending window: what earlier runs spent is kept
+	// apart, the cap is this run's, and the spend counts from its first
+	// send (the tick sets the base then).
+	if found {
+		m.PriorCost, m.PriorTokens = m.PriorCost+m.SpentCost, m.PriorTokens+m.SpentTokens
+	} else {
+		m.QueuedAt = now().UTC()
 	}
-	if !found || capGiven {
-		m.MaxCost, m.MaxTokens = importCap(fl, res.Plan.Total, prices)
-		m.Paused = ""
-	}
+	m.SpentCost, m.SpentTokens, m.StartDay, m.StartBase = 0, 0, "", [4]int64{}
+	m.MaxCost, m.MaxTokens = importCap(fl, res.Plan.Total, prices)
+	m.Paused = ""
 	m.Currency = prices.Currency
 	m.AllowSubscription = m.AllowSubscription || fl.allowSubscription
-	m.Ext, m.Exclude = exts, fl.exclude
+	m.Ext, m.Exclude = exts, exclude
 	if err := fileimport.SaveManifest(d.ImportDir(), m); err != nil {
 		return blocked(err)
 	}
@@ -218,10 +245,10 @@ func importCap(fl filesImportFlags, est retain.Estimate, prices retain.Prices) (
 		return fl.maxCost, 0
 	case fl.maxTokens > 0:
 		return 0, fl.maxTokens
-	case prices.Known():
+	case prices.Known() && est.Cost > 0:
 		return 1.5 * est.Cost, 0
 	}
-	return 0, (est.InputTokens + est.OutputTokens) * 3 / 2
+	return 0, max((est.InputTokens+est.OutputTokens)*3/2, 1)
 }
 
 // hasImportStrategy reports whether the bank's settings name the import
@@ -299,6 +326,9 @@ func filesImportText(r filesImportResult) string {
 	if r.Merge.Unchanged+r.Merge.Changed+r.Merge.Gone > 0 {
 		fmt.Fprintf(&b, "since the last import: %d new, %d changed, %d unchanged, %d no longer in the folder (kept in memory)\n",
 			r.Merge.New, r.Merge.Changed, r.Merge.Unchanged, r.Merge.Gone)
+	}
+	if len(r.Reused) > 0 {
+		b.WriteString("using the settings saved with this import: " + strings.Join(r.Reused, " ") + " (give --exclude or --ext to change them)\n")
 	}
 	for _, w := range r.Warnings {
 		switch w {
@@ -390,7 +420,7 @@ func newImportListCmd(e *env) *cobra.Command {
 			out := make([]filesImportSource, 0, len(all))
 			for _, m := range all {
 				s := filesImportSource{Source: m.Source, Root: m.Root, Project: m.Project, Files: len(m.Entries),
-					SpentCost: m.SpentCost, MaxCost: m.MaxCost, MaxTokens: m.MaxTokens, Currency: m.Currency}
+					SpentCost: m.PriorCost + m.SpentCost, MaxCost: m.MaxCost, MaxTokens: m.MaxTokens, Currency: m.Currency}
 				for _, en := range m.Entries {
 					if en.Sent {
 						s.Sent++
@@ -471,6 +501,14 @@ func newImportPurgeCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if yes && !plan {
+				// Nothing is sent while the documents are listed and deleted.
+				release, err := acquireImport(d, "import purge")
+				if err != nil {
+					return &output.Error{Code: output.Blocked, Message: "files of an import are being sent right now: run this again in a minute"}
+				}
+				defer release()
+			}
 			cl, bank, gate, err := curateWriter()
 			if err != nil {
 				return err
@@ -523,6 +561,8 @@ func newImportPurgeCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res.Purged = true
+			telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version}).Emit(telemetry.Raw{Name: "import",
+				Fields: map[string]any{"action": "purge", "source": source, "documents": len(res.Documents)}})
 			return e.emit("import purge", res, func() string { return importPurgeText(res) })
 		},
 	}
