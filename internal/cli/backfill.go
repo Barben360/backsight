@@ -522,14 +522,21 @@ func measure(ctx context.Context, c *hindsight.Client, bank string, b *state.Bac
 	if err != nil {
 		return err
 	}
+	b.SpentTokens, b.SpentCost = spendSince(days, b.StartDay, b.StartBase, prices)
+	return nil
+}
+
+// spendSince is the bank's LLM use from startDay on: the start day above
+// its base (input, cached, output, thoughts), then every later day.
+func spendSince(days map[string]hindsight.LLMTokens, startDay string, startBase [4]int64, prices retain.Prices) (tokens int64, cost float64) {
 	var sum [4]int64
 	for day, t := range days {
 		v := [4]int64{t.Input, t.Cached, t.Output, t.Thoughts}
 		switch {
-		case day > b.StartDay:
-		case day == b.StartDay:
+		case day > startDay:
+		case day == startDay:
 			for i := range v {
-				v[i] = max(v[i]-b.StartBase[i], 0)
+				v[i] = max(v[i]-startBase[i], 0)
 			}
 		default:
 			continue
@@ -538,9 +545,7 @@ func measure(ctx context.Context, c *hindsight.Client, bank string, b *state.Bac
 			sum[i] += v[i]
 		}
 	}
-	b.SpentTokens = sum[0] + sum[2] + sum[3]
-	b.SpentCost = prices.Cost(sum[0], sum[1], sum[2], sum[3])
-	return nil
+	return sum[0] + sum[2] + sum[3], prices.Cost(sum[0], sum[1], sum[2], sum[3])
 }
 
 // waitQueue waits until the bank has at most limit queued or running
