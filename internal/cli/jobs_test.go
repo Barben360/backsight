@@ -1001,8 +1001,10 @@ func TestMaintainAppendsDoctorHistory(t *testing.T) {
 	if !reflect.DeepEqual(rec["checks"], map[string]any{"a": "ok", "b": "warn"}) || rec["kind"] != "run" {
 		t.Errorf("line %s", lines[0])
 	}
-	if strings.Contains(lines[0], "fine") || strings.Contains(lines[0], "backsight") && strings.Contains(lines[0], " x") {
-		t.Errorf("a summary or fix leaked: %s", lines[0])
+	for _, leak := range []string{"fine", `"x"`, `"d"`, "Summary", "Fix", "Detail"} {
+		if strings.Contains(lines[0], leak) {
+			t.Errorf("%q leaked into %s", leak, lines[0])
+		}
 	}
 	if !strings.Contains(out, `"doctor_history": "2 check(s)"`) {
 		t.Errorf("result:\n%s", out)

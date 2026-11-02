@@ -539,7 +539,7 @@ func newMemoryCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			began := time.Now()
+			began := now()
 			var live, forgotten, pages int64
 			findings := []scanFinding{}
 			// A plain forget keeps the text on the server (archive, exports):
@@ -548,13 +548,13 @@ func newMemoryCmd(e *env) *cobra.Command {
 			passes := []struct{ ft, state string }{{"world", ""}, {"experience", ""}, {"observation", ""}, {"world", "invalidated"}, {"experience", "invalidated"}}
 			for _, p := range passes {
 				err := cl.EachMemory(cmd.Context(), bank, p.ft, p.state, func(m hindsight.Memory) error {
-					if p.state != "" {
-						forgotten++
-					} else {
-						live++
-					}
 					red, kinds := redact.Text(m.Text)
 					if len(kinds) > 0 {
+						if p.state != "" {
+							forgotten++
+						} else {
+							live++
+						}
 						findings = append(findings, scanFinding{ID: m.ID, Type: p.ft, State: map[bool]string{true: "forgotten", false: "live"}[p.state != ""],
 							Project: recall.ProjectOf(m.Tags), Kinds: kinds, Preview: clip(red, 100)})
 					}
@@ -574,17 +574,17 @@ func newMemoryCmd(e *env) *cobra.Command {
 				if !strings.HasPrefix(m.ID, briefingModelPrefix) {
 					continue
 				}
-				pages++
 				if red, kinds := redact.Text(m.Content); len(kinds) > 0 {
+					pages++
 					findings = append(findings, scanFinding{ID: m.ID, Type: "briefing page", State: "live", Project: recall.ProjectOf(m.Tags), Kinds: kinds, Preview: clip(red, 100)})
 				}
 			}
-			// A complete scan only: counts, no id and no text. A write
+			// A complete scan only: counts of the suspects it flagged, no id and no text. A write
 			// failure never fails the scan.
 			if d, _, err := machine(); err == nil {
 				w := metricsfile.New(d.MetricsDir(), buildinfo.Version)
 				w.Now = now
-				_ = w.Append(metricsfile.Scan{Count: live + forgotten + pages, Live: live, Forgotten: forgotten, Pages: pages, MS: time.Since(began).Milliseconds()})
+				_ = w.Append(metricsfile.Scan{Count: live + forgotten + pages, Live: live, Forgotten: forgotten, Pages: pages, MS: max(now().Sub(began).Milliseconds(), 0)})
 			}
 			return e.emit("memory scan", findings, func() string {
 				if len(findings) == 0 {

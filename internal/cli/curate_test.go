@@ -860,9 +860,12 @@ func TestForgetWritesNothingAfterAConnect(t *testing.T) {
 func TestScanAppendsCountsOnly(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
-	listAnswer["world"] = `[{"id":"live-secret-id","text":"deploy with GITHUB_TOKEN=ghp_` + strings.Repeat("a1B2c3D4e5F6", 3) + `","fact_type":"world"},{"id":"live-clean-id","text":"clean sentence kept private","fact_type":"world"}]`
-	listAnswer["invalidated:world"] = `[{"id":"forgotten-id","text":"PGPASSWORD=Zz9yX8wV7u","fact_type":"world"}]`
-	mentalModels[briefingModelPrefix+"p1"] = `{"id":"` + briefingModelPrefix + `p1","content":"page text kept private","tags":["project:billing"]}`
+	secret := "GITHUB_TOKEN=ghp_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	listAnswer["world"] = `[{"id":"live-secret-id","text":"deploy with ` + secret + `","fact_type":"world"},{"id":"live-clean-id","text":"clean sentence kept private","fact_type":"world"}]`
+	listAnswer["observation"] = `[{"id":"obs-secret-id","text":"login with --password Sup3rS3cret9","fact_type":"observation"},{"id":"obs-clean-id","text":"clean observation","fact_type":"observation"}]`
+	listAnswer["invalidated:world"] = `[{"id":"forgotten-id","text":"PGPASSWORD=Zz9yX8wV7u","fact_type":"world"},{"id":"forgotten-clean-id","text":"clean forgotten fact","fact_type":"world"}]`
+	mentalModels[briefingModelPrefix+"p1"] = `{"id":"` + briefingModelPrefix + `p1","content":"page quoting ` + secret + `","tags":["project:billing"]}`
+	mentalModels[briefingModelPrefix+"p2"] = `{"id":"` + briefingModelPrefix + `p2","content":"clean page kept private","tags":["project:billing"]}`
 	mentalModels["someone-elses-page"] = `{"id":"someone-elses-page","content":"not ours","tags":[]}`
 	withClock(t, time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
 	if code, out, _ := run(t, "memory", "scan"); code != output.OK {
@@ -883,7 +886,7 @@ func TestScanAppendsCountsOnly(t *testing.T) {
 	if rec.Kind != "scan" || rec.Count != 4 || rec.Live != 2 || rec.Forgotten != 1 || rec.Pages != 1 || rec.MS < 0 {
 		t.Errorf("line %s", lines[0])
 	}
-	for _, leak := range []string{"live-secret-id", "live-clean-id", "forgotten-id", "private", "ghp_", "Zz9yX8wV7u", briefingModelPrefix} {
+	for _, leak := range []string{"-id", "private", "ghp_", "Zz9yX8wV7u", "Sup3rS3cret9", briefingModelPrefix} {
 		if strings.Contains(lines[0], leak) {
 			t.Errorf("%q leaked into %s", leak, lines[0])
 		}
