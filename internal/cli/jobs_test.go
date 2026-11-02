@@ -812,3 +812,50 @@ func TestTickLogsEachNoteItTried(t *testing.T) {
 		}
 	})
 }
+
+// While the provider rejects the server's LLM key, the server accepts
+// every session and then fails it, leaving nothing (issue 149). So a tick
+// whose bank's latest retain failed probes the provider: rejected, it
+// sends no session and no note, records the hold, and the session end's
+// flush and store hold too; once the key is fixed, the next tick's probe
+// passes and everything goes out.
+func TestJobsTickHoldsSendsWhileTheProviderRejectsTheKey(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	_, _ = notesOutbox(pathsOf(home)).Append(newTestNote())
+	old := fakeOperations
+	fakeOperations = []string{`{"id":"op1","operation_type":"retain","status":"failed","document_id":"conversation:x","created_at":"2026-10-24T09:55:00Z","updated_at":"2026-10-24T09:55:00Z"}`}
+	t.Cleanup(func() { fakeOperations = old })
+	extractFails.Store(true)
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	before := retained.Load()
+	code, out, errOut := run(t, "jobs", "tick")
+	if code != output.Partial || !strings.Contains(out, "rejects llm_api_key") || !strings.Contains(out, "queued 1") || retained.Load() != before {
+		t.Fatalf("held tick: exit %d, %d retained\n%s\n%s", code, retained.Load()-before, out, errOut)
+	}
+	if e := state.LoadExtraction(pathsOf(home)); e.HeldSince.IsZero() || !e.KeyRejected {
+		t.Fatalf("hold not recorded: %+v", e)
+	}
+	// The session end's flush and store read the record: nothing goes out.
+	if code, out, _ := run(t, "retain", "flush", "--session", "settled"); code == output.OK || !strings.Contains(out, "rejects llm_api_key") || retained.Load() != before {
+		t.Errorf("retain flush: exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	if _, out, _ := run(t, "store", "--kind", "decision", "--project", "billing", "Billing keeps PostgreSQL 16."); !strings.Contains(out, "queued") || !strings.Contains(out, "rejects llm_api_key") || retained.Load() != before {
+		t.Errorf("store: %d retained\n%s", retained.Load()-before, out)
+	}
+	extractFails.Store(false) // the key is fixed
+	withClock(t, time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC))
+	code, out, errOut = run(t, "jobs", "tick")
+	if code != output.OK || !strings.Contains(out, "sent:1") || !strings.Contains(out, "notes sent 2") || strings.Contains(out, "llm_api_key") {
+		t.Fatalf("tick after the fix: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if retained.Load() != before+3 {
+		t.Errorf("want 1 session + 2 notes retained, got %d", retained.Load()-before)
+	}
+	if e := state.LoadExtraction(pathsOf(home)); !e.HeldSince.IsZero() {
+		t.Errorf("hold not lifted: %+v", e)
+	}
+}

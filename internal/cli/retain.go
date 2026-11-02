@@ -134,8 +134,13 @@ func transcripts(home string) []string {
 var telemetryStatus = map[string]string{retain.Sent: "ok", retain.Retry: "retry", retain.Quarantined: "quarantined"}
 
 // flushAll runs the flusher over every transcript and logs telemetry for
-// what was attempted.
+// what was attempted. The extraction hold jobs tick recorded holds every
+// send (retain flush, the session end's detached flush): only the tick
+// probes the provider and lifts it.
 func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.Options, d paths.Dirs) []retain.Result {
+	if f.Hold == "" {
+		f.Hold = extractionHold(d, f.Bank)
+	}
 	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
 	var out []retain.Result
 	for _, file := range files {

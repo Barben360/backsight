@@ -40,6 +40,9 @@ type tickResult struct {
 	// Import: queued folder imports sent this tick (sent, left, paused).
 	Import     string `json:"import,omitempty"`
 	importSent int
+	// Extraction: why nothing was sent, while the server's extraction LLM
+	// fails (extractionGate); "" while sends go out.
+	Extraction string   `json:"extraction,omitempty"`
 	Index      string   `json:"index,omitempty"` // entity index: rebuilt | failed: <why>
 	Epoch      string   `json:"epoch,omitempty"` // restore epoch reconcile (decision 0044)
 	Pruned     []string `json:"briefings_pruned,omitempty"`
@@ -194,6 +197,17 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			res.Epoch = reconcile(cmd.Context(), f)
 			recordReach(d, cfg, herr) // after the reconcile: it records another server at the address
+			// After the reconcile, whose success clears f.Hold: an answering
+			// server that is the one joined is asked whether its extraction
+			// works; otherwise the recorded hold stands.
+			if herr == nil && otherServer(d, cfg) == nil && f.StartedOver() == nil {
+				res.Extraction = extractionGate(cmd.Context(), d, f.Client, cfg.Server.Bank, cfg.LLM.Provider, now())
+			} else {
+				res.Extraction = extractionHold(d, cfg.Server.Bank)
+			}
+			if f.Hold == "" {
+				f.Hold = res.Extraction
+			}
 			rep, failed := reportFlush(flushAll(cmd, f, files, retain.Options{}, d))
 			res.Sessions = rep.Counts
 			// Every unsent session, from the transcripts: a flush that stops
@@ -236,8 +250,13 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			} else {
 				ob := notesOutboxFor(d, cfg)
 				ob.Gate = f.StartedOver // queued notes go to the server this tick began with only
-				res.Notes, err = ob.Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
-				emitNoteEvents(d.State, res.Notes)
+				if res.Extraction != "" {
+					// The notes wait too: sent now, each would fail on the server.
+					res.Notes.Kept, _ = ob.Pending()
+				} else {
+					res.Notes, err = ob.Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+					emitNoteEvents(d.State, res.Notes)
+				}
 				// No note queued asks no gate: the deletes below look again.
 				if errors.Is(err, retain.ErrStartedOver) || errors.Is(f.StartedOver(), retain.ErrStartedOver) {
 					// The client is the old server's: nothing is written or
@@ -296,6 +315,9 @@ func tickText(r tickResult) string {
 		return "skipped: " + r.Reason + metrics + "\n"
 	}
 	msg := fmt.Sprintf("%s: sessions %v, notes sent %d, queued %d (%d ms)", r.Status, r.Sessions, r.Notes.Sent, r.Notes.Kept, r.MS)
+	if r.Extraction != "" {
+		msg += ", " + r.Extraction
+	}
 	if r.Backfill != "" {
 		msg += ", backfill " + r.Backfill
 	}

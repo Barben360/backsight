@@ -1272,3 +1272,72 @@ func TestSkipReasonTailnetServerAnswering(t *testing.T) {
 		t.Errorf("no server: %q", got)
 	}
 }
+
+// opsServer answers like fakeHandler, with failed operations in the stats
+// and the latest failed and completed retain ("" for none).
+func opsServer(t *testing.T, failedAt, completedAt string) *httptest.Server {
+	next := fakeHandler(map[string]reply{statsPath: {200, `{"total_nodes":3,"failed_operations":1748}`}})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/v1/default/banks/coding-agent%3A%3Amemoire/operations" || r.URL.Query().Get("type") != "retain" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		at := map[string]string{"failed": failedAt, "completed": completedAt}[r.URL.Query().Get("status")]
+		if at == "" {
+			_, _ = w.Write([]byte(`{"total":0,"operations":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"total":1,"operations":[{"id":"op","operation_type":"retain","status":"` + r.URL.Query().Get("status") + `","created_at":"` + at + `","updated_at":"` + at + `"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Failed operations say whether extraction fails now (the latest retain
+// failed: server llm check names the cause) or failed in the past (a
+// retain completed since: the sessions sent meanwhile may be missing);
+// "N failed operations" alone says neither (issue 149).
+func TestBankSaysWhetherExtractionFailsNow(t *testing.T) {
+	f := newFixture(t)
+	f.reference(opsServer(t, "2026-11-02T08:00:00Z", "2026-11-01T08:00:00Z").URL)
+	c := check(t, f.run(), "bank")
+	expect(t, c, Warn, "bank coding-agent::memoire")
+	if !strings.Contains(c.Detail, "1748 failed operations") || !strings.Contains(c.Detail, "the latest extraction failed (2026-11-02 08:00 UTC), none succeeded since") ||
+		!strings.Contains(c.Fix, "backsight server llm check") || !strings.Contains(c.Fix, "backsight secret set llm_api_key") {
+		t.Errorf("failing now: %+v", c)
+	}
+	f = newFixture(t)
+	f.reference(opsServer(t, "2026-11-01T08:00:00Z", "2026-11-02T08:00:00Z").URL)
+	c = check(t, f.run(), "bank")
+	expect(t, c, Warn, "bank coding-agent::memoire")
+	if !strings.Contains(c.Detail, "the last extraction failed 2026-11-01 08:00 UTC, they succeed since 2026-11-02 08:00 UTC") ||
+		!strings.Contains(c.Fix, "may be missing from memory") || strings.Contains(c.Fix, "llm_api_key") {
+		t.Errorf("failed in the past: %+v", c)
+	}
+}
+
+// A hold of this PC's sends (jobs tick found the provider rejecting the
+// key) is an error naming the key and its fix, and saying nothing is lost;
+// a hold of another bank is not this one's.
+func TestBankReportsTheExtractionHold(t *testing.T) {
+	srv := opsServer(t, "2026-11-02T08:00:00Z", "")
+	f := newFixture(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	since := time.Date(2026, 11, 2, 8, 15, 0, 0, time.UTC)
+	if err := state.SaveExtraction(f.env.Dirs, state.Extraction{Bank: "other", HeldSince: since, KeyRejected: true}); err != nil {
+		t.Fatal(err)
+	}
+	if c := check(t, f.run(), "bank"); c.Status != Warn || strings.Contains(c.Detail, "sending held") {
+		t.Errorf("another bank's hold: %+v", c)
+	}
+	if err := state.SaveExtraction(f.env.Dirs, state.Extraction{Bank: "coding-agent::memoire", HeldSince: since, KeyRejected: true}); err != nil {
+		t.Fatal(err)
+	}
+	c := check(t, f.run(), "bank")
+	expect(t, c, Error, "bank coding-agent::memoire")
+	if !strings.Contains(c.Detail, "sending held since 2026-11-02 08:15 UTC: the extraction LLM's provider rejects llm_api_key, so sessions and notes wait on this PC") ||
+		!strings.Contains(c.Fix, "backsight secret set llm_api_key, then backsight server render and backsight server start") || !strings.Contains(c.Fix, "backsight jobs tick") {
+		t.Errorf("held: %+v", c)
+	}
+}
