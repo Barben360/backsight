@@ -61,6 +61,7 @@ func newImportCmd(e *env) *cobra.Command {
 	cmd.Flags().Float64Var(&fl.maxCost, "max-cost", 0, "spending cap in the provider's currency (default 1.5 × the estimate)")
 	cmd.Flags().Int64Var(&fl.maxTokens, "max-tokens", 0, "token cap, for models without a price")
 	cmd.Flags().BoolVar(&fl.allowSubscription, "allow-subscription", false, "accept importing on the Claude subscription lane")
+	cmd.AddCommand(newImportListCmd(e), newImportPurgeCmd(e))
 	return cmd
 }
 
@@ -331,4 +332,231 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// filesImportSource is one imported folder, as `import list` shows it.
+type filesImportSource struct {
+	Source    string  `json:"source"`
+	Root      string  `json:"root"`
+	Project   string  `json:"project"`
+	Files     int     `json:"files"`
+	Sent      int     `json:"sent"`
+	Gone      int     `json:"gone"`
+	Status    string  `json:"status"`           // sending | waiting | paused | done
+	Reason    string  `json:"reason,omitempty"` // past_sessions | budget | subscription
+	SpentCost float64 `json:"spent_cost"`
+	MaxCost   float64 `json:"max_cost,omitempty"`
+	MaxTokens int64   `json:"max_tokens,omitempty"`
+	Currency  string  `json:"currency,omitempty"`
+}
+
+func newImportListCmd(e *env) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "Show each imported folder: files sent, what is left and why",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			cfg, _, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
+			all, err := fileimport.ListManifests(d.ImportDir())
+			if err != nil {
+				return blocked(err)
+			}
+			st, err := state.Load(d.StateFile())
+			if err != nil {
+				return blocked(err)
+			}
+			pending := st.Backfill != nil && len(st.Backfill.Sessions) > 0
+			out := make([]filesImportSource, 0, len(all))
+			for _, m := range all {
+				s := filesImportSource{Source: m.Source, Root: m.Root, Project: m.Project, Files: len(m.Entries),
+					SpentCost: m.SpentCost, MaxCost: m.MaxCost, MaxTokens: m.MaxTokens, Currency: m.Currency}
+				for _, en := range m.Entries {
+					if en.Sent {
+						s.Sent++
+					}
+					if en.Gone {
+						s.Gone++
+					}
+				}
+				switch {
+				case len(m.Unsent()) == 0:
+					s.Status = "done"
+				case m.Paused != "":
+					s.Status, s.Reason = "paused", m.Paused
+				case cfg.LLM.Provider == "claude-code" && !m.AllowSubscription:
+					s.Status, s.Reason = "paused", "subscription"
+				case pending:
+					s.Status, s.Reason = "waiting", "past_sessions"
+				default:
+					s.Status = "sending"
+				}
+				out = append(out, s)
+			}
+			return e.emit("import list", out, func() string { return importListText(out) })
+		},
+	}
+}
+
+func importListText(all []filesImportSource) string {
+	if len(all) == 0 {
+		return "no folder imported\n"
+	}
+	reasons := map[string]string{"past_sessions": "waits for past sessions to be sent", "budget": "spending cap reached: rerun backsight import <folder> with a higher --max-cost",
+		"subscription": "rerun backsight import <folder> --allow-subscription to send on your Claude subscription"}
+	var b strings.Builder
+	for _, s := range all {
+		fmt.Fprintf(&b, "%s  %s (project %s): %d/%d sent", s.Source, s.Root, s.Project, s.Sent, s.Files)
+		if s.Gone > 0 {
+			fmt.Fprintf(&b, ", %d no longer in the folder", s.Gone)
+		}
+		fmt.Fprintf(&b, ", %s", s.Status)
+		if r := reasons[s.Reason]; r != "" {
+			b.WriteString(": " + r)
+		}
+		if s.Currency != "" {
+			fmt.Fprintf(&b, "; spent %.2f %s", s.SpentCost, s.Currency)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// importPurgeResult is what `import purge` deletes or would delete.
+type importPurgeResult struct {
+	Source    string     `json:"source"`
+	Root      string     `json:"root,omitempty"`
+	Documents []purgeDoc `json:"documents"`
+	Purged    bool       `json:"purged"`
+	Note      string     `json:"note,omitempty"`
+}
+
+func newImportPurgeCmd(e *env) *cobra.Command {
+	var plan, yes bool
+	cmd := &cobra.Command{
+		Use:   "purge <import id>",
+		Short: "Delete for good everything an imported folder put in the memory",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			all, err := fileimport.ListManifests(d.ImportDir())
+			if err != nil {
+				return blocked(err)
+			}
+			source, root, err := resolveImportSource(args[0], all)
+			if err != nil {
+				return err
+			}
+			cl, bank, gate, err := curateWriter()
+			if err != nil {
+				return err
+			}
+			ids := map[string]bool{}
+			prefix := fileimport.DocumentPrefix + source + "/"
+			docs, err := cl.ListDocuments(ctx, bank)
+			if err != nil {
+				return blocked(err)
+			}
+			for _, doc := range docs {
+				if strings.HasPrefix(doc.ID, prefix) {
+					ids[doc.ID] = true
+				}
+			}
+			for _, m := range all {
+				if m.Source == source {
+					for _, en := range m.Entries {
+						ids[en.Document] = true
+					}
+				}
+			}
+			list := make([]string, 0, len(ids))
+			for id := range ids {
+				list = append(list, id)
+			}
+			res := importPurgeResult{Source: source, Root: root}
+			if res.Documents, err = purgeDocumentsByID(ctx, cl, bank, list, true); err != nil {
+				return blocked(err)
+			}
+			if res.Documents == nil {
+				res.Documents = []purgeDoc{}
+			}
+			if plan {
+				return e.emit("import purge", res, func() string { return importPurgeText(res) })
+			}
+			if !yes {
+				return e.report("import purge", res, func() string { return importPurgeText(res) }, &output.Error{Code: output.NeedsUser,
+					Message: "purging deletes the documents listed (every memory extracted from them): confirm with backsight import purge " + source + " --yes",
+					Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight import purge " + source + " --yes", Why: "delete for good what is listed"}}})
+			}
+			if len(res.Documents) > 0 {
+				_, mirror, err := purgeWrite(ctx, cl, bank, gate, nil, res.Documents, nil, "run the same command again to finish")
+				if err != nil {
+					return err
+				}
+				res.Note = mirror
+			}
+			if err := fileimport.DeleteManifest(d.ImportDir(), source); err != nil {
+				return blocked(err)
+			}
+			res.Purged = true
+			return e.emit("import purge", res, func() string { return importPurgeText(res) })
+		},
+	}
+	cmd.Flags().BoolVar(&plan, "plan", false, "list what would be deleted; delete nothing")
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion")
+	return cmd
+}
+
+// resolveImportSource finds the import an id or a unique prefix of at
+// least 4 characters names.
+func resolveImportSource(arg string, all []fileimport.Manifest) (source, root string, err error) {
+	if len(arg) < 4 {
+		return "", "", &output.Error{Code: output.Usage, Message: "give at least 4 characters of the import id (backsight import list shows them)"}
+	}
+	var matches []fileimport.Manifest
+	for _, m := range all {
+		if strings.HasPrefix(m.Source, arg) {
+			matches = append(matches, m)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0].Source, matches[0].Root, nil
+	case 0:
+		if len(arg) == 12 {
+			return arg, "", nil // the manifest is gone; the server may still hold its documents
+		}
+		return "", "", &output.Error{Code: output.Usage, Message: "no import id starts with " + arg + " (backsight import list shows them)"}
+	}
+	var names []string
+	for _, m := range matches {
+		names = append(names, m.Source+" ("+m.Root+")")
+	}
+	return "", "", &output.Error{Code: output.Usage, Message: arg + " names several imports: " + strings.Join(names, ", ")}
+}
+
+func importPurgeText(r importPurgeResult) string {
+	var b strings.Builder
+	verb := "would delete"
+	if r.Purged {
+		verb = "deleted"
+	}
+	fmt.Fprintf(&b, "import %s %s: %s %d document(s)\n", r.Source, r.Root, verb, len(r.Documents))
+	for _, doc := range r.Documents {
+		fmt.Fprintf(&b, "  %s (%d memories)\n", doc.ID, doc.Memories)
+	}
+	if r.Note != "" {
+		b.WriteString(r.Note + "\n")
+	}
+	return b.String()
 }

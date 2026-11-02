@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/fileimport"
+	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -218,4 +223,155 @@ func mustRead(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+type listEnvelope struct {
+	Data []filesImportSource `json:"data"`
+}
+
+func TestImportListStatuses(t *testing.T) {
+	home := importHome(t)
+	fastBackfill(t)
+	d := pathsOf(home).ImportDir()
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for i, m := range []fileimport.Manifest{
+		{Schema: 1, Source: "aaaaaaaaaaaa", Root: "/r/a", Project: "p", Entries: []fileimport.Entry{{Rel: "x", Sent: true}, {Rel: "y", Sent: true, Gone: true}}},
+		{Schema: 1, Source: "bbbbbbbbbbbb", Root: "/r/b", Project: "p", Paused: "budget", SpentCost: 0.5, MaxCost: 0.4, Currency: "USD", Entries: []fileimport.Entry{{Rel: "x"}}},
+		{Schema: 1, Source: "cccccccccccc", Root: "/r/c", Project: "p", Entries: []fileimport.Entry{{Rel: "x"}, {Rel: "y", Sent: true}}},
+	} {
+		m.QueuedAt = base.Add(time.Duration(i) * time.Hour)
+		if err := fileimport.SaveManifest(d, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, out, _ := run(t, "import", "list", "--json")
+	var env listEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil || len(env.Data) != 3 {
+		t.Fatalf("list = %q %v", out, err)
+	}
+	a, b, c := env.Data[0], env.Data[1], env.Data[2]
+	if a.Source != "aaaaaaaaaaaa" || a.Status != "done" || a.Files != 2 || a.Sent != 2 || a.Gone != 1 {
+		t.Errorf("done source = %+v", a)
+	}
+	if b.Status != "paused" || b.Reason != "budget" || b.SpentCost != 0.5 || b.MaxCost != 0.4 {
+		t.Errorf("paused source = %+v", b)
+	}
+	if c.Status != "sending" || c.Sent != 1 {
+		t.Errorf("sending source = %+v", c)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Sessions: []string{"x.jsonl"}}
+		return nil
+	})
+	_, out, _ = run(t, "import", "list", "--json")
+	_ = json.Unmarshal([]byte(out), &env)
+	if c := env.Data[2]; c.Status != "waiting" || c.Reason != "past_sessions" {
+		t.Errorf("with past sessions pending: %+v", c)
+	}
+}
+
+// sentImport is a home whose folder of two files was imported and sent.
+func sentImport(t *testing.T) (home, root, src string) {
+	t.Helper()
+	home, root = queuedImport(t, map[string]string{"a.md": "alpha", "b.md": "beta"})
+	tick(t)
+	src = manifestOf(t, home).Source
+	if len(importDocs()) != 2 {
+		t.Fatalf("sent %v", importDocs())
+	}
+	return home, root, src
+}
+
+func TestImportPurgePlanListsDocuments(t *testing.T) {
+	_, _, src := sentImport(t)
+	code, out, errOut := run(t, "import", "purge", src, "--plan", "--json")
+	if code != 0 || !strings.Contains(out, "import:"+src+"/a.md") || !strings.Contains(out, "import:"+src+"/b.md") {
+		t.Fatalf("plan: exit %d %s %s", code, out, errOut)
+	}
+	if code, _, _ := run(t, "import", "purge", src); code != output.NeedsUser {
+		t.Errorf("without --yes: exit %d, want %d", code, output.NeedsUser)
+	}
+	if fakeDocExists(t, "import:"+src+"/a.md") == false {
+		t.Error("a plan or an unconfirmed purge deleted a document")
+	}
+}
+
+func TestImportPurgeDeletesOnlyThatSource(t *testing.T) {
+	home, _, src := sentImport(t)
+	sendFakeDocument(t, "conversation:keep", map[string]string{"session_id": "keep"})
+	sendFakeDocument(t, "import:ffffffffffff/other.md", map[string]string{"path": "other.md"})
+	if code, out, errOut := run(t, "import", "purge", src, "--yes"); code != 0 {
+		t.Fatalf("exit %d %s %s", code, out, errOut)
+	}
+	for doc, want := range map[string]bool{"import:" + src + "/a.md": false, "import:" + src + "/b.md": false, "conversation:keep": true, "import:ffffffffffff/other.md": true} {
+		if got := fakeDocExists(t, doc); got != want {
+			t.Errorf("%s exists = %v, want %v", doc, got, want)
+		}
+	}
+	st, _ := state.Load(pathsOf(home).StateFile())
+	var tombs []string
+	for _, tb := range st.TombstonesOf(serverBank(t)) {
+		tombs = append(tombs, tb.Document)
+	}
+	slices.Sort(tombs)
+	if !slices.Equal(tombs, []string{"import:" + src + "/a.md", "import:" + src + "/b.md"}) {
+		t.Errorf("tombstones = %v", tombs)
+	}
+	if !fakeDocExists(t, "backsight:tombstones") {
+		t.Error("the tombstones were not mirrored to the control bank")
+	}
+	if all, _ := fileimport.ListManifests(pathsOf(home).ImportDir()); len(all) != 0 {
+		t.Errorf("manifest kept after purge: %+v", all)
+	}
+}
+
+func TestImportPurgeByPrefix(t *testing.T) {
+	home, _, src := sentImport(t)
+	other := fileimport.Manifest{Schema: 1, Source: src[:3] + "zzzzzzzzz", Root: "/r/z", QueuedAt: time.Now()}
+	_ = fileimport.SaveManifest(pathsOf(home).ImportDir(), other)
+	if code, _, errOut := run(t, "import", "purge", src[:3], "--plan"); code != output.Usage {
+		t.Errorf("3 characters: exit %d %s", code, errOut)
+	}
+	if code, _, errOut := run(t, "import", "purge", src[:4], "--plan"); code != 0 {
+		t.Errorf("unique 4-character prefix: exit %d %s", code, errOut)
+	}
+	other.Source = src[:5] + "zzzzzzz"
+	_ = fileimport.SaveManifest(pathsOf(home).ImportDir(), other)
+	if code, _, errOut := run(t, "import", "purge", src[:5], "--plan"); code != output.Usage || !strings.Contains(errOut, src) {
+		t.Errorf("ambiguous prefix: exit %d %s", code, errOut)
+	}
+}
+
+func TestImportPurgeThenReimportUsesSuccessors(t *testing.T) {
+	_, root, src := sentImport(t)
+	if code, _, errOut := run(t, "import", "purge", src, "--yes"); code != 0 {
+		t.Fatalf("purge: %d %s", code, errOut)
+	}
+	if code, _, errOut := run(t, "import", root); code != 0 {
+		t.Fatalf("queue again: %d %s", code, errOut)
+	}
+	tick(t)
+	docs := importDocs()
+	if !slices.Contains(docs, "import:"+src+"/a.md#2") || !slices.Contains(docs, "import:"+src+"/b.md#2") {
+		t.Errorf("sent %v, want the successors", docs)
+	}
+}
+
+// fakeDocExists asks the fake server for a document (memory or control bank).
+func fakeDocExists(t *testing.T, doc string) bool {
+	t.Helper()
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bank := cfg.Server.Bank
+	if strings.HasPrefix(doc, "backsight:") {
+		bank = retain.ControlBank(bank)
+	}
+	_, err = cl.GetDocument(context.Background(), bank, doc)
+	return err == nil
 }
