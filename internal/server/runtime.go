@@ -456,15 +456,19 @@ func (d Docker) Delete(ctx context.Context) error {
 			volumes = append(volumes, v)
 		}
 	}
+	// Another install's server is never removed (issue #144).
+	if err := d.Compose.CheckOwner(ctx); err != nil {
+		return err
+	}
 	if noFile {
 		if err := d.removeContainers(ctx); err != nil {
 			return err
 		}
 	} else {
-		if _, err := d.Compose.run(ctx, "rm", "--stop", "--force", "-v"); err != nil {
+		if _, err := d.Compose.runChecked(ctx, "rm", "--stop", "--force", "-v"); err != nil {
 			return err
 		}
-		if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
+		if _, err := d.Compose.runChecked(ctx, "down", "--remove-orphans"); err != nil {
 			return err
 		}
 	}
@@ -483,7 +487,7 @@ func (d Docker) Delete(ctx context.Context) error {
 
 // removeContainers removes the project's containers, found by the label
 // Compose gives them, with their anonymous volumes: Delete's way without
-// compose.yaml.
+// compose.yaml, once it checked the owner.
 func (d Docker) removeContainers(ctx context.Context) error {
 	args := []string{"ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=" + d.Compose.project()}
 	var out []byte

@@ -381,6 +381,9 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		return &output.Error{Code: output.Blocked, Message: "the native database changed while restore waited for the lock (" + why + "): nothing was changed; " +
 			"run backsight restore " + res.Archive + " again"}
 	}
+	if err := ownProject(ctx, runtimeFor(cfg)); err != nil {
+		return err
+	}
 	add("lock", "done", d.MaintenanceLock()+", server.lock")
 
 	rt := ownGroupRuntime(cfg)

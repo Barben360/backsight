@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -73,6 +74,10 @@ func (d DB) Dump(ctx context.Context, dst string, tables []string) (map[string]i
 // dropped reports that the database was dropped: a failure before leaves
 // it as it was.
 func (d DB) Restore(ctx context.Context, src string) (dropped bool, err error) {
+	// Never another install's database (issue #144).
+	if err := d.Compose.CheckOwner(ctx); err != nil {
+		return false, err
+	}
 	tmp := "/tmp/backsight-" + randHex() + ".dump"
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
@@ -97,7 +102,15 @@ func (d DB) Restore(ctx context.Context, src string) (dropped bool, err error) {
 // RemoveStaleDumps removes the dumps a killed backup or restore left in the
 // database container (/tmp/backsight-*.dump: the memory in clear). The
 // caller holds the maintenance lock, so no dump is being made.
+// Another install's container is left alone: its dumps are its own
+// (issue #144).
 func (d DB) RemoveStaleDumps(ctx context.Context) error {
+	var fe *ForeignProjectError
+	if err := d.Compose.CheckOwner(ctx); errors.As(err, &fe) {
+		return nil
+	} else if err != nil {
+		return err
+	}
 	_, err := d.Compose.Exec(ctx, "db", "sh", "-c", "rm -f /tmp/backsight-*.dump")
 	return err
 }

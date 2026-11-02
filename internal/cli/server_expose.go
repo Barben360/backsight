@@ -225,6 +225,9 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 		return err
 	}
 	defer unlock()
+	if err := ownProject(ctx, rtNext); err != nil {
+		return err
+	}
 	if note != "" {
 		res.Notes = append(res.Notes, note)
 	}

@@ -131,6 +131,8 @@ func TestRecallPromptWithoutConfigNamesSetup(t *testing.T) {
 
 type fakeCompose struct {
 	calls        [][]string
+	owners       []string // the working dirs of the project's containers
+	ownerChecks  int      // owner checks (read-only), not in calls
 	ps           string
 	failOn       string // subcommand that fails like a port clash
 	volumeExists bool
@@ -143,6 +145,10 @@ func (f *fakeCompose) Run(_ context.Context, args ...string) ([]byte, error) {
 			return []byte(`[{"Name":"backsight_pg_data"}]`), nil
 		}
 		return []byte("Error: no such volume"), errors.New("exit status 1")
+	}
+	if args[0] == "ps" && slices.Contains(args, "--format") { // the owner check
+		f.ownerChecks++
+		return []byte(strings.Join(f.owners, "\n")), nil
 	}
 	f.calls = append(f.calls, args)
 	for _, a := range args {

@@ -112,6 +112,9 @@ type Env struct {
 	// ShimCopies lists the earlier copies of the shim a swap renamed and
 	// could not delete yet, current.exe.old-<n> (Windows; nil: not asked).
 	ShimCopies func() []string
+	// ComposeOwner checks that the Docker Compose project's containers are
+	// this install's (server.Compose.CheckOwner); nil: not asked.
+	ComposeOwner func(ctx context.Context) error
 	// GitBash reads what the git-bash check needs (Windows; nil: no check).
 	GitBash *GitBashProbe
 	InstallProbes
@@ -168,6 +171,9 @@ func Run(ctx context.Context, env Env) Report {
 		}
 	} else {
 		add(checkDocker(ctx, env))
+		if cfgErr == nil && cfg.Server.Mode == "local" && env.ComposeOwner != nil {
+			add(checkComposeOwner(ctx, env.ComposeOwner))
+		}
 	}
 	if env.Switch != nil {
 		if rs, kept := env.Switch(); rs != nil {
@@ -322,6 +328,28 @@ func checkDocker(ctx context.Context, env Env) Check {
 		c.Fix = "start Docker (systemctl start docker, or open Docker Desktop)"
 	default:
 		c.Status, c.Summary = OK, "Docker "+v
+	}
+	return c
+}
+
+// checkComposeOwner reports a Docker Compose project whose containers
+// another backsight install created (issue #144): every command that
+// changes the server refuses it.
+func checkComposeOwner(ctx context.Context, owner func(context.Context) error) Check {
+	c := Check{ID: "compose-owner"}
+	err := owner(ctx)
+	var fe *server.ForeignProjectError
+	switch {
+	case errors.As(err, &fe):
+		c.Status = Error
+		c.Summary = fmt.Sprintf("the Docker Compose project %q belongs to another backsight install, in %s: this install's server commands refuse it", fe.Project, fe.Other)
+		c.Detail = "this install's compose directory is " + fe.Dir
+		c.Fix = fmt.Sprintf("set server.project in config.toml to a name of its own, then backsight server install; if %s is an old copy of this install that nothing runs any more, delete %s",
+			fe.Other, filepath.Join(fe.Other, "compose.yaml"))
+	case err != nil:
+		c.Status, c.Summary, c.Detail = Info, "cannot tell which install owns the Docker Compose project", err.Error()
+	default:
+		c.Status, c.Summary = OK, "the Docker Compose project is this install's"
 	}
 	return c
 }

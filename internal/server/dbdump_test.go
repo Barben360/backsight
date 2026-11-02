@@ -38,8 +38,12 @@ func TestDBRestoreReplacesTheDatabase(t *testing.T) {
 	if dropped, err := db.Restore(context.Background(), "/state/staging/restore/db.dump"); err != nil || !dropped {
 		t.Fatal(dropped, err)
 	}
+	// The owner first: never another install's database (issue #144).
+	if len(r.calls) == 0 || r.calls[0] != strings.Join(ownerQuery("p"), " ") {
+		t.Fatalf("no owner check first: %q", r.calls)
+	}
 	var steps []string
-	for _, c := range r.calls {
+	for _, c := range r.calls[1:] {
 		_, sub, _ := strings.Cut(c, "compose.yaml ")
 		steps = append(steps, sub)
 	}

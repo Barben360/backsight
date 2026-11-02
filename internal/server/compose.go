@@ -116,7 +116,20 @@ func (c Compose) args(sub ...string) []string {
 	return append(a, sub...)
 }
 
+// run runs a compose subcommand. One that changes containers first
+// checks that this install owns the project (CheckOwner): it never
+// recreates or removes another install's server.
 func (c Compose) run(ctx context.Context, sub ...string) ([]byte, error) {
+	if changes(sub) {
+		if err := c.CheckOwner(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return c.runChecked(ctx, sub...)
+}
+
+// runChecked is run once the owner was checked.
+func (c Compose) runChecked(ctx context.Context, sub ...string) ([]byte, error) {
 	out, err := c.Runner.Run(ctx, c.args(sub...)...)
 	if err != nil {
 		return out, fmt.Errorf("docker compose %s: %w: %s", strings.Join(sub, " "), err, strings.TrimSpace(string(out)))

@@ -83,6 +83,7 @@ func TestDockerRuntimeSurface(t *testing.T) {
 	}
 	base := []string{"compose", "-p", "p1", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml")}
 	want := [][]string{
+		ownerQuery("p1"),
 		append(slices.Clone(base), "up", "-d", "--wait", "db"),
 		append(slices.Clone(base), "exec", "-T", "hindsight", "hindsight-admin", "rename-bank", "--from", "claude-memory", "--to", "backsight", "--dry-run"),
 	}

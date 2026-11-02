@@ -28,19 +28,27 @@ func TestComposeArgs(t *testing.T) {
 	if err := c.Up(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Each change to the containers first checks who owns the project.
+	if !reflect.DeepEqual(r.calls[0], ownerQuery("backsight")) {
+		t.Errorf("owner check: got %v", r.calls[0])
+	}
 	want := []string{"compose", "-p", "backsight", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml"), "up", "-d", "--wait"}
-	if !reflect.DeepEqual(r.calls[0], want) {
-		t.Errorf("got  %v\nwant %v", r.calls[0], want)
+	if !reflect.DeepEqual(r.calls[1], want) {
+		t.Errorf("got  %v\nwant %v", r.calls[1], want)
 	}
 	// A user override is merged after the generated file.
 	_ = os.WriteFile(filepath.Join(dir, "compose.override.yaml"), []byte("services: {}\n"), 0o644)
 	_ = c.Stop(context.Background())
 	want = []string{"compose", "-p", "backsight", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml"), "stop"}
-	if !reflect.DeepEqual(r.calls[1], want) {
-		t.Errorf("got  %v\nwant %v", r.calls[1], want)
+	if !reflect.DeepEqual(r.calls[3], want) {
+		t.Errorf("got  %v\nwant %v", r.calls[3], want)
 	}
+	// A pull changes no container: no owner check.
 	_ = c.Pull(context.Background())
-	if last := r.calls[2]; last[len(last)-1] != "pull" {
+	if len(r.calls) != 5 {
+		t.Fatalf("pull ran %d commands: %v", len(r.calls)-4, r.calls[4:])
+	}
+	if last := r.calls[4]; last[len(last)-1] != "pull" {
 		t.Errorf("pull: %v", last)
 	}
 }

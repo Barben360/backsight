@@ -167,6 +167,9 @@ func newServerTokenCmd(e *env) *cobra.Command {
 				return err
 			}
 			if rotate {
+				if err := ownProject(ctx, rt); err != nil { // issue #144
+					return err
+				}
 				if sec, v, err = rotateKey(ctx, d, cfg, sec, rt); err != nil {
 					return err
 				}

@@ -44,6 +44,19 @@ func realProbes(e *doctor.Env) {
 		eng, err := runtimeFor(config.Config{}).Engine(ctx)
 		return eng.Version, err
 	}
+	e.ComposeOwner = func(ctx context.Context) error {
+		cfg, err := config.Load(e.Dirs.ConfigFile(), e.Dirs, e.Home)
+		if err != nil {
+			return err
+		}
+		d, ok := runtimeFor(cfg).(server.Docker)
+		if !ok {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return d.CheckOwner(ctx)
+	}
 	e.GPUs = doctor.LocalGPUs
 	e.FreeBytes = doctor.FreeBytes
 	if runtime.GOOS == "linux" {

@@ -54,9 +54,10 @@ type restoreDocker struct {
 	// migrateImage: compose up of this hindsight image migrates the
 	// database (its rows become 99), whether it then starts or not.
 	migrateImage string
-	badVerify    bool   // the throwaway verify database counts one row less
-	failKey      string // compose up on this API key fails
-	sqlBanks     string // the bank ids the database lists (JSON), "" = the fake server's own
+	badVerify    bool     // the throwaway verify database counts one row less
+	failKey      string   // compose up on this API key fails
+	sqlBanks     string   // the bank ids the database lists (JSON), "" = the fake server's own
+	owners       []string // the working dirs of the project's containers (the owner check)
 }
 
 // upImage reads the hindsight image of the compose.yaml a `compose ... up`
@@ -97,6 +98,8 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	}
 	last := args[len(args)-1]
 	switch {
+	case args[0] == "ps" && strings.Contains(line, "--format"): // the owner check
+		return []byte(strings.Join(f.owners, "\n")), nil
 	case strings.Contains(line, "json_agg(bank_id"):
 		if f.sqlFails {
 			return []byte("connection refused"), os.ErrClosed

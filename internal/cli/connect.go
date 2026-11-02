@@ -1155,6 +1155,11 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		return err
 	}
 	defer unlock()
+	if own != nil { // stopped below: never another install's (issue #144)
+		if err := ownProject(ctx, own); err != nil {
+			return err
+		}
+	}
 	if situation == joinOther || situation == joinOwn { // the sends start over
 		if err := waitSends(ctx, d, "connect"); err != nil {
 			return err

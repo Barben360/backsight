@@ -1341,3 +1341,34 @@ func TestBankReportsTheExtractionHold(t *testing.T) {
 		t.Errorf("held: %+v", c)
 	}
 }
+
+// Issue #144: doctor reports a Compose project another install owns,
+// which every command that changes the server refuses; it changes
+// nothing itself.
+func TestComposeOwnerCheck(t *testing.T) {
+	f := newFixture(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n", 0o600)
+	other := filepath.Join(t.TempDir(), "other", "data", "server")
+	f.env.ComposeOwner = func(context.Context) error {
+		return &server.ForeignProjectError{Project: "backsight", Dir: "/mine", Other: other}
+	}
+	c := check(t, f.run(), "compose-owner")
+	expect(t, c, Error, "another backsight install")
+	if !strings.Contains(c.Summary+c.Detail, other) || !strings.Contains(c.Fix, "server.project") || !strings.Contains(c.Fix, filepath.Join(other, "compose.yaml")) {
+		t.Errorf("foreign: %+v", c)
+	}
+	f.env.ComposeOwner = func(context.Context) error { return nil }
+	expect(t, check(t, f.run(), "compose-owner"), OK, "this install")
+	// Docker down: the docker check says so; this one cannot tell.
+	f.env.ComposeOwner = func(context.Context) error { return errors.New("Cannot connect to the Docker daemon") }
+	expect(t, check(t, f.run(), "compose-owner"), Info, "cannot")
+	// Not asked on a remote or native install.
+	for _, cfg := range []string{"[server]\nmode = \"remote\"\nurl = \"http://10.0.0.2:8888\"\n", "[server]\nruntime = \"native\"\nurl = \"http://127.0.0.1:1\"\n"} {
+		put(t, f.env.Dirs.ConfigFile(), cfg, 0o600)
+		for _, got := range f.run().Checks {
+			if got.ID == "compose-owner" {
+				t.Errorf("%q: %+v", cfg, got)
+			}
+		}
+	}
+}
