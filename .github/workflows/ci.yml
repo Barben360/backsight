@@ -300,7 +300,6 @@ jobs:
           BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
         run: |
           go test -count=1 -v -run '^TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable$' ./internal/cli/ || true
-          if [ "$SHARD" = 2 ]; then go test -count=1 -timeout 20m ./internal/cli/ 2>&1 | grep -E 'DIAG|--- FAIL|^(ok|FAIL)' || true; fi
           pattern=$(go run ./scripts/testshard -index "$SHARD" -total 3 -- ./...)
           go test ./... -count=1 -timeout 20m -run "$pattern"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
