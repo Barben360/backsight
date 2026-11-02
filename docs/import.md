@@ -2,7 +2,7 @@
 
 `backsight import <folder>` sends a folder of notes into the memory: another tool's memory files (LifeOS, a notes vault, an export), or your own notes. Each file becomes one document, and the server extracts memories from it the same way it does from a session. Claude then recalls them like any other memory.
 
-Setup offers it too: answer yes to "Import memory files from another tool or a notes folder?" and give the folder. Setup shows the file count and the cost before you agree.
+Setup offers it too: answer yes to "Import memory files from another tool or a notes folder (Markdown and text files), in the background?" and give the folder. On the subscription lane (provider `claude-code`), that yes also accepts sending the folder on your subscription. Setup shows the file count and the cost before you agree.
 
 ## Preview first
 
@@ -28,13 +28,13 @@ The plan changes nothing. It shows, for each top-level folder, the files, charac
 backsight import ~/notes
 ```
 
-This only queues the folder. `jobs tick` sends up to 10 files each time it runs (every 15 minutes), after any past sessions still waiting to be sent. Nothing blocks your sessions in the meantime.
+This only queues the folder. `~` is your home folder, in any shell. `jobs tick` sends up to 10 files each time it runs (every 15 minutes), after any past sessions still waiting to be sent. Nothing blocks your sessions in the meantime.
 
 On the subscription lane (provider `claude-code`), add `--allow-subscription`: importing sends many files without you, which your plan's terms restrict.
 
 ## Cost and its cap
 
-Each import gets a spending cap: 1.5 times the plan's estimate by default, or `--max-cost X` (in the price's currency) or `--max-tokens N`. When the import reaches it, it pauses and nothing more is spent. To go on, run the same command with a higher cap:
+Each import gets a spending cap: 1.5 times the plan's estimate by default, or `--max-cost X` (in the price's currency) or `--max-tokens N`. When the import reaches it, it pauses and sends nothing more; the files already sent may still cost a little while the server extracts them. To go on, run the same command with a higher cap:
 
 ```
 backsight import ~/notes --max-cost 2

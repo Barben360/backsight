@@ -374,7 +374,8 @@ func bankImports(e env, w Window, obs map[string]Observation, met map[string]Met
 		return nil
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT COALESCE(json_extract(fields, '$.action'), ''), COALESCE(json_extract(fields, '$.files'), 0), ts FROM events
+SELECT CASE WHEN json_type(fields, '$.action') = 'text' THEN json_extract(fields, '$.action') ELSE '' END,
+	CASE WHEN json_type(fields, '$.files') = 'integer' THEN json_extract(fields, '$.files') ELSE 0 END, ts FROM events
 WHERE kind = 'import' AND ts < ? AND `+projectClause,
 		w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {

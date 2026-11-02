@@ -116,9 +116,9 @@ type Inputs struct {
 	// the cost to show; 0 sessions: no backfill question.
 	Backfill func(model string) (sessions int, cost string)
 	// Import checks a folder to import (decision 0081) and estimates it for
-	// a model: the files it would send and the cost to show. nil: no import
-	// question.
-	Import func(path, model string) (files int, cost string, err error)
+	// a model: the folder as an absolute path, the files it would send and
+	// the cost to show. nil: no import question.
+	Import func(path, model string) (folder string, files int, cost string, err error)
 	// DefaultRuntime replaces docker as the runtime's default: "native" on
 	// Windows x86_64 (decision 0080), "" elsewhere.
 	DefaultRuntime string
@@ -332,8 +332,12 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 	if in.Import != nil && !serverOnly {
-		if err := add(Question{ID: "import", Prompt: "Import memory files from another tool or a notes folder (Markdown and text files), in the background?", Default: "no", Recommended: "no",
-			Options: []Option{{Value: "no", Label: "no import"}, {Value: "yes", Label: "import a folder (asks which one)"}}}); err != nil {
+		iq := Question{ID: "import", Prompt: "Import memory files from another tool or a notes folder (Markdown and text files), in the background?", Default: "no", Recommended: "no",
+			Options: []Option{{Value: "no", Label: "no import"}, {Value: "yes", Label: "import a folder (asks which one)"}}}
+		if provider == "claude-code" {
+			iq.Options[1].Caveat = "a whole folder sent unattended on your subscription"
+		}
+		if err := add(iq); err != nil {
 			return nil, nil, err
 		}
 		if qs[len(qs)-1].Value == "yes" {
@@ -341,11 +345,14 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			if err := pick(&pq); err != nil {
 				return nil, nil, err
 			}
-			if pq.Value != "" {
-				n, cost, err := in.Import(pq.Value, model)
+			// Only this run's answer is checked: a saved folder deleted since
+			// must not stop every later setup (the import step reports it).
+			if pq.Value != "" && pq.Source == "answer" {
+				folder, n, cost, err := in.Import(pq.Value, model)
 				if err != nil {
-					return nil, nil, &UsageError{fmt.Sprintf("import_path=%s: %v", pq.Value, err)}
+					return nil, nil, &UsageError{fmt.Sprintf("import_path=%s: %v (answer import=no to skip the import)", pq.Value, err)}
 				}
+				pq.Value = folder
 				files := "files"
 				if n == 1 {
 					files = "file"

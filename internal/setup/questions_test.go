@@ -448,8 +448,8 @@ func TestRuntimeAnswerAgainstAConfig(t *testing.T) {
 	}
 }
 
-func importEstimate(files int, cost string, err error) func(string, string) (int, string, error) {
-	return func(string, string) (int, string, error) { return files, cost, err }
+func importEstimate(files int, cost string, err error) func(string, string) (string, int, string, error) {
+	return func(p, _ string) (string, int, string, error) { return p, files, cost, err }
 }
 
 func TestImportQuestionDefaultsToNo(t *testing.T) {
@@ -471,9 +471,9 @@ func TestImportQuestionDefaultsToNo(t *testing.T) {
 
 func TestImportPathAskedAfterYesWithItsCost(t *testing.T) {
 	var path, model string
-	est := func(p, m string) (int, string, error) {
+	est := func(p, m string) (string, int, string, error) {
 		path, model = p, m
-		return 3, "≈ 0.01 USD, capped at 0.02 USD", nil
+		return "/home/u/notes", 3, "≈ 0.01 USD, capped at 0.02 USD", nil
 	}
 	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "anthropic", "import": "yes"}, Import: est})
 	if err != nil {
@@ -488,7 +488,9 @@ func TestImportPathAskedAfterYesWithItsCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	q = find(t, qs, "import_path")
-	if path != "/notes" || model != "claude-haiku-5-5" || q.Value != "/notes" || len(q.Options) != 1 || q.Options[0].Cost != "≈ 0.01 USD, capped at 0.02 USD" || !strings.Contains(q.Options[0].Label, "3 file") {
+	// The answer is kept as the folder the estimate resolved: a rerun from
+	// another directory names the same folder.
+	if path != "/notes" || model != "claude-haiku-5-5" || q.Value != "/home/u/notes" || len(q.Options) != 1 || q.Options[0].Cost != "≈ 0.01 USD, capped at 0.02 USD" || !strings.Contains(q.Options[0].Label, "3 file") {
 		t.Errorf("estimate for %q/%q, question %+v", path, model, q)
 	}
 }
@@ -502,8 +504,39 @@ func TestImportPathMustBeAFolder(t *testing.T) {
 }
 
 func TestNoImportQuestionOnAServerOnlyHost(t *testing.T) {
-	qs, _, _ := Resolve(Inputs{Answers: map[string]string{"role": "server"}, Import: importEstimate(1, "", nil)})
-	if has(qs, "import") {
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"role": "server"}, Import: importEstimate(1, "", nil)})
+	if err != nil || has(qs, "import") {
 		t.Errorf("questions %v", ids(qs))
+	}
+}
+
+// A saved folder is not checked again: one deleted since the import must
+// not stop every later setup (the import step says what became of it).
+func TestSavedImportPathIsNotCheckedAgain(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Saved: map[string]string{"import": "yes", "import_path": "/gone"}, Import: importEstimate(0, "", errors.New("no such folder"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := find(t, qs, "import_path"); q.Value != "/gone" || q.Source != "saved" {
+		t.Errorf("import_path = %+v", q)
+	}
+}
+
+// On the subscription lane, yes carries the caveat the backfill has.
+func TestImportOnTheSubscriptionLaneHasACaveat(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "claude-code"}, Import: importEstimate(1, "", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range find(t, qs, "import").Options {
+		if (o.Value == "yes") != strings.Contains(o.Caveat, "subscription") {
+			t.Errorf("option %+v", o)
+		}
+	}
+	qs, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "deepseek"}, Import: importEstimate(1, "", nil)})
+	for _, o := range find(t, qs, "import").Options {
+		if o.Caveat != "" {
+			t.Errorf("caveat off the subscription lane: %+v", o)
+		}
 	}
 }

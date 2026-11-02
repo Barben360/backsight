@@ -26,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
@@ -2136,6 +2137,10 @@ func TestSetupImportsAFolder(t *testing.T) {
 	if !strings.Contains(strings.Join(env.Data.NextSteps, "\n"), "backsight import list") {
 		t.Errorf("next steps %q", env.Data.NextSteps)
 	}
+	// The saved answer is the folder itself, not the ~ form.
+	if rec, _ := setup.Load(pathsOf(home).SetupFile()); rec == nil || rec.Answers["import_path"] != notes {
+		t.Errorf("saved import_path %v", rec)
+	}
 }
 
 func TestSetupImportStartsOneTickBehindTheBackfill(t *testing.T) {
@@ -2153,7 +2158,8 @@ func TestSetupImportStartsOneTickBehindTheBackfill(t *testing.T) {
 			ticks++
 		}
 	}
-	if ticks != 1 || !slices.Contains(cmds, "import "+notes) {
+	backfilled := slices.ContainsFunc(cmds, func(c string) bool { return strings.HasPrefix(c, "retain backfill") })
+	if !backfilled || ticks != 1 || !slices.Contains(cmds, "import "+notes) {
 		t.Errorf("commands %v: want the import queued and one tick started", cmds)
 	}
 }
@@ -2202,5 +2208,80 @@ func TestSetupAsksAgainForAnImportFolder(t *testing.T) {
 	}
 	if !slices.Contains(f.commands(), "import "+notes) {
 		t.Errorf("commands %v", f.commands())
+	}
+}
+
+func importStep(t *testing.T, out string) setup.Step {
+	t.Helper()
+	for _, st := range parseSetup(t, out).Data.Steps {
+		if st.Name == "import" {
+			return st
+		}
+	}
+	t.Fatalf("no import step:\n%s", out)
+	return setup.Step{}
+}
+
+// A rerun after the folder was deleted goes through: the import step says
+// what became of it.
+func TestSetupRerunAfterTheImportFolderWentAway(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	notes := importFolder(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "import=yes", "--answer", "import_path="+notes, "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if err := os.RemoveAll(notes); err != nil {
+		t.Fatal(err)
+	}
+	f.calls = nil
+	code, out, errOut := run(t, "setup", "--answer", "consent=yes", "--answer", "scheduler=on", "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("rerun: exit %d\n%s%s", code, out, errOut)
+	}
+	if st := importStep(t, out); slices.ContainsFunc(f.commands(), func(c string) bool { return strings.HasPrefix(c, "import ") }) || st.Status != "skipped" || !strings.Contains(st.Detail, notes) {
+		t.Errorf("import step %+v, commands %v", st, f.commands())
+	}
+}
+
+// A folder this PC already imported is not queued again by a rerun: the
+// import command syncs it (a paused import would refuse without a cap).
+func TestSetupRerunLeavesAnImportedFolderAlone(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	notes := importFolder(t, home)
+	d := pathsOf(home)
+	id, err := retain.MachineID(d.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fileimport.SaveManifest(d.ImportDir(), fileimport.Manifest{Schema: 1, Source: fileimport.SourceID(id, notes), Root: notes, Project: "home", Paused: "budget"}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "import=yes", "--answer", "import_path="+notes, "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if st := importStep(t, out); slices.Contains(f.commands(), "import "+notes) || st.Status != "skipped" || !strings.Contains(st.Detail, "backsight import "+notes) {
+		t.Errorf("import step %+v, commands %v", st, f.commands())
+	}
+}
+
+// The import is an extra: when it cannot be queued, setup still ends,
+// and the step says what to run.
+func TestSetupGoesOnWhenTheImportCannotBeQueued(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	notes := importFolder(t, home)
+	f.fail["import"] = &output.Error{Code: output.Blocked, Message: "the server's memory settings do not know imported files yet"}
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "import=yes", "--answer", "import_path="+notes, "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if st := importStep(t, out); st.Status != "skipped" || !strings.Contains(st.Detail, "do not know imported files") || !strings.Contains(st.Detail, "backsight import "+notes) {
+		t.Errorf("import step %+v", st)
+	}
+	if strings.Contains(out, "being imported in the background") {
+		t.Error("next steps announce an import that was not queued")
 	}
 }

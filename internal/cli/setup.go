@@ -196,6 +196,9 @@ type setupEnv struct {
 	// taskAccepted: the pre-flight's probe task passed: the config step
 	// removes a server.start_on_session an earlier setup set.
 	taskAccepted bool
+	// importEsts: the import folder estimates of this run, by folder and
+	// model.
+	importEsts map[string]importEst
 }
 
 // setupGOOS and setupGOARCH are the machine setup chooses defaults for
@@ -654,20 +657,47 @@ func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, s
 	return n, fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Estimate.InputTokens+plan.Estimate.OutputTokens)/1000, model, plan.MaxTokens/1000, about)
 }
 
-// setupImportPath is the folder an import_path answer names: a leading ~
-// is the home folder (an --answer value reaches setup unexpanded).
-func setupImportPath(p, home string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
-		return filepath.Join(home, p[1:])
+// expandHome is p with a leading ~ read as the home folder: a setup
+// answer, PowerShell, cmd or a quoted path leave it as typed.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
 	}
-	return p
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, p[1:])
+}
+
+// importEst is an import folder's estimate for one model.
+type importEst struct {
+	folder, cost string
+	files        int
+	err          error
 }
 
 // importEstimate scans the folder an import would read and prices its
 // files for model, with the cap the import would set (decision 0081); it
 // reads the folder only, never the server. A folder with no file to import
-// is refused: the answer is most likely the wrong folder.
-func (s *setupEnv) importEstimate(path, model string) (int, string, error) {
+// is refused: the answer is most likely the wrong folder. The folder comes
+// back absolute, so a rerun from another directory names the same one.
+// Each (folder, model) is scanned once per run: the questions are resolved
+// again after every answer.
+func (s *setupEnv) importEstimate(path, model string) (string, int, string, error) {
+	key := path + "\x00" + model
+	if e, ok := s.importEsts[key]; ok {
+		return e.folder, e.files, e.cost, e.err
+	}
+	e := s.scanImport(path, model)
+	if s.importEsts == nil {
+		s.importEsts = map[string]importEst{}
+	}
+	s.importEsts[key] = e
+	return e.folder, e.files, e.cost, e.err
+}
+
+func (s *setupEnv) scanImport(path, model string) importEst {
 	cfg := config.Default(s.dirs, s.home)
 	if s.cfg != nil {
 		cfg = *s.cfg
@@ -675,21 +705,21 @@ func (s *setupEnv) importEstimate(path, model string) (int, string, error) {
 	if model != cfg.LLM.Model { // the configured prices are another model's
 		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
 	}
-	scan, err := fileimport.ScanDir(setupImportPath(path, s.home), fileimport.ScanOptions{Now: now()})
+	scan, err := fileimport.ScanDir(expandHome(path), fileimport.ScanOptions{Now: now()})
 	if err != nil {
-		return 0, "", err
+		return importEst{err: err}
 	}
 	if len(scan.Files) == 0 {
-		return 0, "", fmt.Errorf("no Markdown or text file to import in it (backsight import %s --plan lists what it skips)", path)
+		return importEst{err: fmt.Errorf("no Markdown or text file to import in it (backsight import %s --plan lists what it skips)", scan.Root)}
 	}
 	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 	plan := fileimport.BuildPlan(scan, nil, "", "", prices)
 	maxCost, maxTokens := importCap(filesImportFlags{}, plan.Total, prices)
-	about := plan.Total.Duration.Round(time.Minute)
+	work := importDuration(plan.Total.Duration) + " of extraction"
 	if maxTokens == 0 {
-		return plan.Files, fmt.Sprintf("≈ %.2f %s, capped at %.2f %s, about %s", plan.Total.Cost, prices.Currency, maxCost, prices.Currency, about), nil
+		return importEst{folder: scan.Root, files: plan.Files, cost: fmt.Sprintf("≈ %s, capped at %s, %s", importMoney(plan.Total.Cost, true, prices.Currency), importMoney(maxCost, true, prices.Currency), work)}
 	}
-	return plan.Files, fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Total.InputTokens+plan.Total.OutputTokens)/1000, model, maxTokens/1000, about), nil
+	return importEst{folder: scan.Root, files: plan.Files, cost: fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, %s", (plan.Total.InputTokens+plan.Total.OutputTokens)/1000, model, maxTokens/1000, work)}
 }
 
 // preflightProbes reads this machine; tests replace it.
@@ -1203,13 +1233,28 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if answers["import"] != "yes" {
 				return setup.Step{Name: "import", Status: "skipped", Detail: "not asked for"}, nil
 			}
-			args := []string{"import", setupImportPath(answers["import_path"], s.home)}
+			// The import is an extra: what keeps it from being queued is
+			// said, with the command, and setup goes on.
+			folder := expandHome(answers["import_path"])
+			skip := func(why string) (setup.Step, error) {
+				return setup.Step{Name: "import", Status: "skipped", Detail: why}, nil
+			}
+			root, err := fileimport.ResolveRoot(folder)
+			if err != nil {
+				return skip(fmt.Sprintf("%s is no longer a folder (%v): nothing imported", folder, err))
+			}
+			if id := retain.ReadMachineID(s.dirs.State); id != "" {
+				if _, found, _ := fileimport.LoadManifest(s.dirs.ImportDir(), fileimport.SourceID(id, root)); found {
+					return skip("already imported: backsight import " + folder + " sends its new and changed files, backsight import list shows where it stands")
+				}
+			}
+			args := []string{"import", folder}
 			if answers["provider"] == "claude-code" {
 				args = append(args, "--allow-subscription") // answered yes past the caveat
 			}
 			out := subcommand(ctx, args...)
 			if out.Err != nil {
-				return setup.Step{}, out.Err
+				return skip(fmt.Sprintf("not queued: %s; run backsight import %s once that is fixed", strings.TrimSuffix(errMessage(out.Err), "."), folder))
 			}
 			var ir filesImportResult
 			_ = json.Unmarshal(out.Data, &ir)
@@ -1524,7 +1569,9 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	if answers["backfill"] == "yes" {
 		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
-	if answers["import"] == "yes" {
+	if slices.ContainsFunc(rec.Steps, func(st setup.Step) bool {
+		return st.Name == "import" && st.Status == "done" && !strings.HasPrefix(st.Detail, "0 ")
+	}) {
 		res.NextSteps = append(res.NextSteps, "your folder is being imported in the background: backsight import list shows its progress")
 	}
 	if answers["role"] == config.RoleServer {
@@ -1725,7 +1772,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	importDetail := "no import"
 	if a["import"] == "yes" {
 		importDetail = "backsight import " + a["import_path"] + ": queue its files for jobs tick"
-		if n, cost, err := s.importEstimate(a["import_path"], a["model"]); err == nil {
+		if _, n, cost, err := s.importEstimate(a["import_path"], a["model"]); err == nil {
 			importDetail = fmt.Sprintf("backsight import %s: queue %d file(s) for jobs tick (%s)", a["import_path"], n, cost)
 		}
 	}

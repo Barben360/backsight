@@ -638,3 +638,29 @@ func TestImportsSentWithoutEvents(t *testing.T) {
 	x.store(fxNow.Add(-time.Hour), "saved", "decision", "alpha")
 	wantNoData(t, "imports.sent", bankOf(x, x.query(7))["imports.sent"], ReasonNoEvents)
 }
+
+// TestImportsSentFollowsTheProjectFilter: an import counts under its own
+// project's filter, not under another one's.
+func TestImportsSentFollowsTheProjectFilter(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.tel(fxNow.Add(-time.Hour), telemetry.Raw{Name: "import", Fields: map[string]any{"action": "send", "files": 4}}, "", "alpha")
+	q := x.query(7)
+	q.Project = "alpha"
+	if m := bankOf(x, q)["imports.sent"]; val(m) != 4 {
+		t.Errorf("alpha: %v (%s), want 4", m.Value, m.Status)
+	}
+	q.Project = "beta"
+	wantNoData(t, "imports.sent", bankOf(x, q)["imports.sent"], ReasonNoEvents)
+}
+
+// TestImportsSentSurvivesAMalformedEvent: a files field that is not a
+// number counts 0; the bank's other numbers still compute.
+func TestImportsSentSurvivesAMalformedEvent(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.tel(fxNow.Add(-2*time.Hour), telemetry.Raw{Name: "import", Fields: map[string]any{"action": "send", "files": nil}}, "", "")
+	x.tel(fxNow.Add(-time.Hour), telemetry.Raw{Name: "import", Fields: map[string]any{"action": "send", "files": "many"}}, "", "")
+	x.imp(fxNow.Add(-time.Hour), "send", 3)
+	if m := bankOf(x, x.query(7))["imports.sent"]; val(m) != 3 || m.Status != StatusOK {
+		t.Errorf("sent = %v (%s), want 3", m.Value, m.Status)
+	}
+}

@@ -144,7 +144,7 @@ func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg
 		before := r
 		sent, err := sendImport(ctx, f.Client, d, m, bank, tombs, machineID, prices, &budget, &r)
 		r.Left += left - sent
-		emitImportTick(tw, m, r.Sent-before.Sent, len(r.Paused) > len(before.Paused))
+		emitImportTick(tw.For(m.Project), m, r.Sent-before.Sent, len(r.Paused) > len(before.Paused))
 		if err != nil {
 			return r, err
 		}

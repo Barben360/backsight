@@ -91,7 +91,7 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 | `reference`, only when another Hindsight integration is wired: unwire it | `retire`, `keep` | `retire` |
 | `backfill`, only when Claude Code keeps past sessions: import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
 | `import`: import a folder of notes or another tool's memory files ([import](import.md)) | `yes`, `no` | `no` |
-| `import_path`, only after `import=yes`: the folder (`~` is your home folder) | a folder | none, you must answer; setup checks it holds files to import and shows their count and cost |
+| `import_path`, only after `import=yes`: the folder (`~` is your home folder) | a folder | none, you must answer; setup checks it holds files to import and shows their count and cost. A rerun leaves a folder already imported alone (`backsight import <folder>` sends its new files) |
 | `consent`: go ahead with the plan | `yes`, `no` | none, you must answer |
 
 Notes on the choices:
