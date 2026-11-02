@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/metricsfile"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -25,10 +26,12 @@ import (
 const serverDailyTimeout = 3 * time.Second
 
 // The reach of the answers the step asks for: the memories series over 90
-// days, the LLM stats over 30.
+// days, the LLM stats over 30, each the window now − period.
 const (
-	serverDailySeries = "90d"
-	serverDailyLLM    = "30d"
+	serverDailySeries      = "90d"
+	serverDailyLLM         = "30d"
+	serverDailySeriesReach = 90 * 24 * time.Hour
+	serverDailyLLMReach    = 30 * 24 * time.Hour
 )
 
 // serverDailyOps are the LLM operations recorded per day: the line's key
@@ -45,26 +48,38 @@ type serverDailyReader interface {
 	LLMStats(context.Context, string, string) ([]hindsight.LLMBucket, error)
 }
 
-// serverDailyReaderFor is the configured server's GET-only client, nil
-// when no server is set up. Tests replace it.
-var serverDailyReaderFor = func() serverDailyReader {
+// serverDailyReaderFor is the configured server's GET-only client: nil
+// and no error when no server is set up (no config, or no server URL), an
+// error when the configuration cannot be read or names no usable server.
+// Tests replace it.
+var serverDailyReaderFor = func() (serverDailyReader, error) {
 	cfg, sec, err := loadServerConfig()
-	if err != nil || cfg.Server.URL == "" {
-		return nil
+	switch {
+	case output.CodeOf(err) == output.NeedsUser: // no config: backsight setup was not run
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case cfg.Server.URL == "":
+		return nil, nil
 	}
 	ro, err := hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, serverDailyTimeout)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return ro
+	return ro, nil
 }
 
 // maintainServerDaily is jobs maintain's server-daily step: its result
-// line, never an error.
+// line, never an error. A configuration it cannot read is a server not
+// reached (nothing is written: the record cannot tell the day's server).
 func maintainServerDaily(ctx context.Context, d paths.Dirs, clock func() time.Time) string {
+	r, err := serverDailyReaderFor()
+	if err != nil {
+		return "server daily: not reached (not_configured), 0 day(s)"
+	}
 	w := metricsfile.New(d.MetricsDir(), buildinfo.Version)
 	w.Now = clock
-	return collectServerDaily(ctx, w, serverDailyReaderFor(), clock(), time.Local)
+	return collectServerDaily(ctx, w, r, clock(), time.Local)
 }
 
 // boundedRead runs read under its own serverDailyTimeout context and
@@ -200,15 +215,16 @@ func collectServerDaily(ctx context.Context, w *metricsfile.Writer, r serverDail
 		}
 		recs = append(recs, serverSnapshot(today, stats, tags))
 	}
+	llmOK := true
+	for i, err := range llmErr {
+		if err != nil {
+			llm[i], llmOK = nil, false
+		}
+	}
 	if seriesErr != nil {
 		series = hindsight.Timeseries{}
 	}
-	for i, err := range llmErr {
-		if err != nil {
-			llm[i] = nil
-		}
-	}
-	days := serverDayLines(series, llm, utcDate(now), rec.buckets)
+	days := serverDayLines(series, seriesErr == nil, llm, llmOK, now, rec.buckets)
 	for _, d := range days {
 		recs = append(recs, d)
 	}
@@ -278,16 +294,29 @@ func serverSnapshot(day string, s hindsight.BankStats, tags []hindsight.TagCount
 	return snap
 }
 
-// serverDayLines are the day lines of every past full UTC day (before today)
-// the answers reach and the record lacks, oldest first, each with what
-// the answers say of it. Only daily buckets count: an answer in another
-// width gives no section.
-func serverDayLines(series hindsight.Timeseries, llm [][]hindsight.LLMBucket, today time.Time, recorded map[string]bool) []metricsfile.ServerDay {
+// serverDayLines are the day lines of every past full UTC day (before
+// today's) the answers reach and the record lacks, oldest first, each with
+// what the answers say of it, the record being permanent:
+//   - a source's earliest bucket is never used: the server's window starts
+//     at now − period, so that bucket may hold part of its day only (the
+//     day is an earlier run's, or a hole);
+//   - a day is written only when every source whose reach covers it
+//     answered this run (the series covers 90 days, the LLM stats, all
+//     four operations, 30): otherwise it waits for a later run, and at
+//     worst is written with new only once it leaves the 30-day reach;
+//   - only daily buckets count: an answer in another width gives no
+//     section.
+func serverDayLines(series hindsight.Timeseries, seriesOK bool, llm [][]hindsight.LLMBucket, llmOK bool, now time.Time, recorded map[string]bool) []metricsfile.ServerDay {
+	today := utcDate(now)
+	seriesFrom, llmFrom := utcDate(now.Add(-serverDailySeriesReach)), utcDate(now.Add(-serverDailyLLMReach))
 	byDay := map[time.Time]*metricsfile.ServerDay{}
 	line := func(t time.Time) *metricsfile.ServerDay {
 		b := t.UTC()
 		if !b.Equal(utcDate(b)) || !b.Before(today) || recorded[b.Format(time.DateOnly)] {
 			return nil
+		}
+		if (!seriesOK && !b.Before(seriesFrom)) || (!llmOK && !b.Before(llmFrom)) {
+			return nil // a source that covers the day did not answer
 		}
 		d := byDay[b]
 		if d == nil {
@@ -296,16 +325,40 @@ func serverDayLines(series hindsight.Timeseries, llm [][]hindsight.LLMBucket, to
 		}
 		return d
 	}
+	// earliest is the first bucket time of an answer (the zero time when
+	// it has none).
+	earliest := func(times []time.Time) time.Time {
+		var first time.Time
+		for _, t := range times {
+			if first.IsZero() || t.Before(first) {
+				first = t
+			}
+		}
+		return first
+	}
 	if series.Trunc == "day" {
+		times := make([]time.Time, 0, len(series.Buckets))
 		for _, b := range series.Buckets {
+			times = append(times, b.Time)
+		}
+		first := earliest(times)
+		for _, b := range series.Buckets {
+			if b.Time.Equal(first) {
+				continue
+			}
 			if d := line(b.Time); d != nil {
 				d.New = &metricsfile.KindCounts{World: b.World, Experience: b.Experience, Observation: b.Observation}
 			}
 		}
 	}
 	for i, o := range serverDailyOps {
+		times := make([]time.Time, 0, len(llm[i]))
 		for _, b := range llm[i] {
-			if b.Trunc != "day" {
+			times = append(times, b.Time)
+		}
+		first := earliest(times)
+		for _, b := range llm[i] {
+			if b.Trunc != "day" || b.Time.Equal(first) {
 				continue
 			}
 			d := line(b.Time)
