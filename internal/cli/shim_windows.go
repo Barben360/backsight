@@ -24,7 +24,9 @@ import (
 // takes its name, and the .old-<n> nobody runs any more are removed. Two
 // swaps in one run (update apply) therefore never collide on a held .old.
 // The signed checksums beside target follow the copy, so the shim checks
-// itself like any installed binary (SPEC §11.1).
+// itself like any installed binary (SPEC §11.1). A rename that meets a
+// handle without FILE_SHARE_DELETE (an antivirus scan, the loader) is
+// retried for fsutil.RetryFor.
 func pointShimWindows(target, shim string) error {
 	// Read everything first: a failure here changes nothing.
 	if _, err := os.Stat(target); err != nil {
@@ -59,7 +61,7 @@ func pointShimWindows(target, shim string) error {
 			if _, err := os.Lstat(cand); err == nil {
 				continue // held by a session, or not cleaned yet
 			}
-			if err := os.Rename(shim, cand); err != nil {
+			if err := fsutil.RenameRetry(shim, cand); err != nil {
 				return err
 			}
 			old = cand
@@ -68,7 +70,7 @@ func pointShimWindows(target, shim string) error {
 	}
 	if err := copyFile(target, shim, 0o755); err != nil {
 		if old != "" { // never leave the shim missing
-			if rerr := os.Rename(old, shim); rerr != nil {
+			if rerr := fsutil.RenameRetry(old, shim); rerr != nil {
 				err = errors.Join(err, fmt.Errorf("putting the previous shim back: %w", rerr))
 			}
 		}
@@ -79,7 +81,7 @@ func pointShimWindows(target, shim string) error {
 		if err := writeChecksums(filepath.Dir(shim), sums); err != nil {
 			err = errors.Join(err, writeChecksums(filepath.Dir(shim), prev))
 			if old != "" {
-				err = errors.Join(err, os.Remove(shim), os.Rename(old, shim))
+				err = errors.Join(err, os.Remove(shim), fsutil.RenameRetry(old, shim))
 			}
 			return err
 		}

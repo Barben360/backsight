@@ -136,3 +136,24 @@ func TestOpenSharedAbsent(t *testing.T) {
 		t.Errorf("err = %v, want not-exist", err)
 	}
 }
+
+// RenameRetry waits for a plain reader, within RetryFor.
+func TestRenameRetryWaitsForAPlainReader(t *testing.T) {
+	dir := t.TempDir()
+	from, to := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	if err := os.WriteFile(from, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shortRetry(t, 3*time.Second)
+	r, err := os.Open(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(300 * time.Millisecond); _ = r.Close() }()
+	if err := RenameRetry(from, to); err != nil {
+		t.Fatalf("rename after the reader closed: %v", err)
+	}
+	if b, _ := os.ReadFile(to); string(b) != "a" {
+		t.Errorf("target holds %q", b)
+	}
+}
