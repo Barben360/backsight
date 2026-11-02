@@ -229,7 +229,7 @@ When Claude uses a memory, it cites it:
 
 ## Coming from another tool
 
-Memory files from another tool (LifeOS, a notes vault, an export) or your own notes can go into the memory: `backsight import <folder> --plan` shows the files and the cost, then `backsight import <folder>` sends them in the background within a spending cap. [docs/import.md](docs/import.md) has the details and a LifeOS recipe.
+Memory files from another tool (LifeOS, a notes vault, an export) or your own notes can go into the memory: `backsight import ~/notes --plan` shows the files and the cost, then `backsight import ~/notes` sends them in the background within a spending cap. [docs/import.md](docs/import.md) has the details and a LifeOS recipe.
 
 ## Pause, turn off, uninstall
 
