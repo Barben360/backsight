@@ -81,7 +81,7 @@ func pointShimWindows(target, shim string) error {
 		if err := writeChecksums(filepath.Dir(shim), sums); err != nil {
 			err = errors.Join(err, writeChecksums(filepath.Dir(shim), prev))
 			if old != "" {
-				err = errors.Join(err, os.Remove(shim), fsutil.RenameRetry(old, shim))
+				err = errors.Join(err, fsutil.RemoveRetry(shim), fsutil.RenameRetry(old, shim))
 			}
 			return err
 		}

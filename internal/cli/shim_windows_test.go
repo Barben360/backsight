@@ -575,13 +575,40 @@ func TestPointShimGivesUpWhenTheHandleStays(t *testing.T) {
 	fsutil.RetryFor = 300 * time.Millisecond
 	t.Cleanup(func() { fsutil.RetryFor = was })
 	scanShim(t, shim)
+	start := time.Now()
 	if err := pointShim(v2, shim); err == nil {
 		t.Fatal("a handle that stays must fail the swap")
+	}
+	if d := time.Since(start); d < fsutil.RetryFor-50*time.Millisecond {
+		t.Errorf("gave up after %v, want it to retry for %v", d, fsutil.RetryFor)
 	}
 	if !sameBytes(t, shim, v1) {
 		t.Error("the shim must still be the previous version")
 	}
 	if got := olds(t, shim); len(got) != 0 {
 		t.Errorf("old copies %v", got)
+	}
+}
+
+// copyFile renames its temp file onto dst; a scanner holding dst without
+// FILE_SHARE_DELETE must be waited out, not fail the install.
+func TestCopyFileWaitsForAHandleOnTheDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := sleeper(t, filepath.Join(dir, "v1"), "1")
+	dst := filepath.Join(dir, "bin", "backsight.exe")
+	if err := copyFile(src, dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src2 := sleeper(t, filepath.Join(dir, "v2"), "2")
+	f := scanShim(t, dst)
+	go func() { time.Sleep(300 * time.Millisecond); _ = f.Close() }()
+	if err := copyFile(src2, dst, 0o755); err != nil {
+		t.Fatalf("copy onto a destination a scanner holds briefly: %v", err)
+	}
+	if !sameBytes(t, dst, src2) {
+		t.Error("the destination is not the new version")
+	}
+	if m, _ := filepath.Glob(filepath.Join(dir, "bin", ".*.tmp-*")); len(m) != 0 {
+		t.Errorf("temp files left: %v", m)
 	}
 }
