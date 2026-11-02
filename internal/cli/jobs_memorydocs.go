@@ -28,7 +28,7 @@ const (
 	memoryDocsDocReads  = 200
 	memoryDocsWorkers   = 4
 	memoryDocsPage      = 500   // items asked per page; the server may give fewer
-	memoryDocsHugeDay   = 50000 // above it, a day is read last, by the hour
+	memoryDocsHugeDay   = 50000 // above it (or above half the list calls in pages), a day is read last, by the hour
 	memoryDocsOpsPages  = 5     // operation pages read per status
 	memoryDocsBatch     = 4     // older days read at once by the backfill
 	// memoryDocsSentReach: the sends whose operations are recorded.
@@ -284,10 +284,13 @@ func pagesLeft(total, n int) int64 {
 // readSpan reads the memories created in [start, end), page after page,
 // each from the offset the items so far reached. With hugeCheck, a span
 // whose page 0 says it is over memoryDocsHugeDay, or needs more pages
-// than the run's whole budget, is not read further. After page 0 the
-// span reserves the pages it still needs, in its turn: when they are not
-// left, it is not read further (the next run reads it), so spans read at
-// once are never all cut part way. A reservation not spent goes back.
+// than half the run's list calls, is not read further (it is read by the
+// hour: an ordinary day then always fits a run). After page 0 the span
+// reserves the pages it still needs, in its turn: when they are not left,
+// it is not read further (the next run reads it), so spans read at once
+// are never all cut part way. Its later pages are only those reserved:
+// pages smaller than page 0 that spend them before the total cut the span
+// there. A reservation not spent goes back.
 func (m *mdRun) readSpan(ctx context.Context, start, end time.Time, hugeCheck bool, turn *mdTurn) mdSpan {
 	defer turn.take(nil) // whatever happens, the next span's turn comes
 	var s mdSpan
@@ -298,18 +301,21 @@ func (m *mdRun) readSpan(ctx context.Context, start, end time.Time, hugeCheck bo
 		var items []hindsight.ListedMemory
 		var total int
 		var err error
-		if reserved > 0 {
+		switch {
+		case offset == 0:
+			items, total, err = m.list(ctx, start, end, offset, memoryDocsPage)
+		case reserved > 0:
 			reserved--
 			items, total, err = m.call(ctx, start, end, offset, memoryDocsPage)
-		} else {
-			items, total, err = m.list(ctx, start, end, offset, memoryDocsPage)
+		default: // the reservation is spent before the total
+			return mdSpan{}
 		}
 		if err != nil {
 			return mdSpan{}
 		}
 		if offset == 0 {
 			s.total = total
-			if hugeCheck && (total > memoryDocsHugeDay || len(items) > 0 && (total+len(items)-1)/len(items) > memoryDocsListCalls) {
+			if hugeCheck && (total > memoryDocsHugeDay || len(items) > 0 && (total+len(items)-1)/len(items) > memoryDocsListCalls/2) {
 				return mdSpan{total: total, huge: true}
 			}
 			if need := pagesLeft(total, len(items)); need > 0 {

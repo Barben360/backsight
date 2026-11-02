@@ -1095,3 +1095,128 @@ func TestMemoryDocsDeadlineKeepsWholeDays(t *testing.T) {
 		t.Error("the cut day is listed")
 	}
 }
+
+// A day of more pages than half the run's list calls goes the hourly way
+// (an ordinary day then always fits a run); under that it is read whole.
+func TestMemoryDocsHalfTheBudgetIsHuge(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		n       int
+		windows bool
+	}{{"150 pages", 15000, true}, {"90 pages", 9000, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newMDEnv(t)
+			e.listedRange("2026-10-26", true)
+			e.listed(false, "2026-10-28", "2026-10-29")
+			fakeListCap = 100
+			setBank(bankDay("2026-10-27", c.n))
+			want := fmt.Sprintf("memory docs: 1 day(s) listed (%d memories), every day listed, 0 operation(s), 0 unit count(s)", c.n)
+			if got := e.run(mdAt); got != want {
+				t.Errorf("result %q, want %q", got, want)
+			}
+			var windows, days int
+			for _, q := range mdQueries() {
+				switch {
+				case strings.HasPrefix(q, "window 2026-10-27T"):
+					windows++
+				case strings.HasPrefix(q, "day 2026-10-27@"):
+					days++
+				}
+			}
+			if c.windows && (days != 1 || windows != 24*7) {
+				t.Errorf("%d day and %d window queries, want page 0 of the day then 24 windows of 7 pages", days, windows)
+			}
+			if !c.windows && (days != 90 || windows != 0) {
+				t.Errorf("%d day and %d window queries, want the day's 90 pages", days, windows)
+			}
+			lines := e.lines()
+			if mem, _ := memoriesOf(lines, "2026-10-27"); len(mem) != c.n {
+				t.Errorf("%d memory lines, want %d", len(mem), c.n)
+			}
+			if pos, ok := listedAt(lines)["2026-10-27"]; !ok || lines[pos]["n"] != float64(c.n) {
+				t.Errorf("listed %v", ok)
+			}
+		})
+	}
+}
+
+// Later pages smaller than page 0 spend the reservation before the total:
+// the day is cut there (no call beyond what it reserved), the other days
+// are written.
+func TestMemoryDocsSmallerPagesCutTheDay(t *testing.T) {
+	e := newMDEnv(t)
+	e.listedRange("2026-10-26", true)
+	e.listed(false, "2026-10-29")
+	setBank(bankDay("2026-10-27", 1000), bankDay("2026-10-28", 5))
+	fakeListPage = func(q url.Values, page []fakeMem, total int) ([]fakeMem, int, int) {
+		if q.Get("start_date") == "2026-10-27T00:00:00Z" && q.Get("offset") != "0" && len(page) > 250 {
+			page = page[:250]
+		}
+		return page, total, 0
+	}
+	if got, want := e.run(mdAt), "memory docs: 1 day(s) listed (5 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
+		t.Errorf("result %q, want %q", got, want)
+	}
+	if q := dayQueries(); !slices.Equal(q, []string{"day 2026-10-27@0/500", "day 2026-10-27@500/500", "day 2026-10-28@0/500"}) {
+		t.Errorf("day queries %v, want 27's page 0 and its one reserved page, then 28", q)
+	}
+	lines := e.lines()
+	if mem, _ := memoriesOf(lines, "2026-10-27"); len(mem) != 0 {
+		t.Errorf("%d memory lines of the cut day", len(mem))
+	}
+	if _, ok := listedAt(lines)["2026-10-28"]; !ok {
+		t.Error("28 not listed")
+	}
+}
+
+// mdPages is a reader answering one span of total memories with the
+// page sizes given by offset (absent: empty), counting its calls.
+type mdPages struct {
+	total int
+	sizes map[int]int
+	calls []int
+}
+
+func (p *mdPages) ListCreatedMemories(_ context.Context, _, _ time.Time, offset, _ int) ([]hindsight.ListedMemory, int, error) {
+	p.calls = append(p.calls, offset)
+	items := make([]hindsight.ListedMemory, p.sizes[offset])
+	for i := range items {
+		items[i] = hindsight.ListedMemory{ID: fmt.Sprintf("m%06d", offset+i), FactType: "world"}
+	}
+	return items, p.total, nil
+}
+
+func (*mdPages) RetainOperations(context.Context, string, int) ([]hindsight.Operation, error) {
+	return nil, nil
+}
+
+func (*mdPages) DocumentUnits(context.Context, string) (int, bool, error) { return 0, false, nil }
+
+// A span cut before its reservation is spent gives the rest back; one
+// whose reservation runs out stops there.
+func TestReadSpanReturnsItsReservation(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		sizes map[int]int
+		calls []int
+	}{
+		{"empty page", map[int]int{0: 500}, []int{0, 500}},                             // reserves 2, spends 1
+		{"smaller pages", map[int]int{0: 500, 500: 250, 750: 250}, []int{0, 500, 750}}, // reserves 2, spends 2, 1 000 of 1 500
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := &mdPages{total: 1500, sizes: c.sizes}
+			m := &mdRun{r: p}
+			m.lists.Store(10)
+			s := m.readSpan(context.Background(), mdAt, mdAt.Add(time.Hour), true, nil)
+			if s.whole {
+				t.Errorf("span read whole: %d items", len(s.items))
+			}
+			if !slices.Equal(p.calls, c.calls) {
+				t.Errorf("calls at offsets %v, want %v", p.calls, c.calls)
+			}
+			if left := m.lists.Load(); left != int64(10-len(c.calls)) {
+				t.Errorf("%d calls left, want %d (the reservation not spent goes back)", left, 10-len(c.calls))
+			}
+		})
+	}
+}
