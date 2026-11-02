@@ -2098,7 +2098,8 @@ func TestFreshConfigHasNoFeedbackSection(t *testing.T) {
 	}
 }
 
-// importFolder writes a notes folder of one Markdown file under home.
+// importFolder writes a notes folder of one Markdown file under home and
+// returns it resolved.
 func importFolder(t *testing.T, home string) string {
 	t.Helper()
 	dir := filepath.Join(home, "notes")
@@ -2108,7 +2109,13 @@ func importFolder(t *testing.T, home string) string {
 	if err := os.WriteFile(filepath.Join(dir, "go.md"), []byte("# Go\n\nWe pin Go 1.26 in every repository.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return dir
+	// The folder as setup resolves it: Windows' temp folder can come as a
+	// short 8.3 name, macOS's under a link.
+	root, err := fileimport.ResolveRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func TestSetupImportsAFolder(t *testing.T) {
