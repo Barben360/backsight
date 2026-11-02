@@ -191,7 +191,7 @@ func Run(ctx context.Context, env Env) Report {
 			add(checkSkew(srv.version))
 		}
 	}
-	bank := checkBank(ctx, cl, tg)
+	bank := checkBank(ctx, cl, tg, env.Dirs)
 	add(bank)
 	if bank.Status == OK || bank.Status == Warn {
 		add(checkUntagged(ctx, cl, tg.Bank))
@@ -400,7 +400,7 @@ func transport(t target.Target) (st Status, detail, fix string) {
 		"prefer a tailnet address (Tailscale: 100.x): on the server's host, backsight server expose --private <tailnet address> --out <file>; then here, backsight connect --token-file <file>"
 }
 
-func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Check {
+func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target, d paths.Dirs) Check {
 	c := Check{ID: "bank"}
 	if cl == nil {
 		c.Status, c.Summary = Info, "skipped: "
@@ -443,8 +443,41 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Chec
 		c.Status = Warn
 		c.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
 		c.Fix = "open the Hindsight UI operations page to see the provider errors"
+		if st.FailedOperations > 0 {
+			failedRetains(ctx, cl, t.Bank, &c)
+		}
+	}
+	// jobs tick holds this PC's sends while the provider fails (issue 149):
+	// the cause, and that nothing is lost meanwhile.
+	if e := state.LoadExtraction(d); t.Source == "config" && e.HeldFor(t.Bank) {
+		c.Status = Error
+		c.Detail = strings.TrimPrefix(c.Detail+"; "+e.Text(), "; ")
+		c.Fix = e.Fix()
 	}
 	return c
+}
+
+// failedRetains says whether the bank's failed operations are retains
+// failing now (the latest finished retain failed: what is sent meanwhile
+// is lost unless jobs tick holds it) or past ones (a retain completed
+// since). Two small reads; their failure keeps c as it is.
+func failedRetains(ctx context.Context, cl *hindsight.Client, bank string, c *Check) {
+	at := func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+	failed, anyFailed, err := cl.LatestOperation(ctx, bank, "failed", "retain")
+	if err != nil || !anyFailed {
+		return
+	}
+	completed, anyCompleted, err := cl.LatestOperation(ctx, bank, "completed", "retain")
+	if err != nil {
+		return
+	}
+	if !anyCompleted || failed.FinishedAt().After(completed.FinishedAt()) {
+		c.Detail += "; the latest extraction failed (" + at(failed.FinishedAt()) + "), none succeeded since"
+		c.Fix = "on the server's host, backsight server llm check names the cause; a rejected key: backsight secret set llm_api_key, then backsight server render and backsight server start"
+		return
+	}
+	c.Detail += "; the last extraction failed " + at(failed.FinishedAt()) + ", they succeed since " + at(completed.FinishedAt())
+	c.Fix = "the sessions sent while extraction failed may be missing from memory: backsight guide troubleshooting#extraction-fails-or-costs-too-much"
 }
 
 // checkBankConfig compares the bank's settings with backsight's template

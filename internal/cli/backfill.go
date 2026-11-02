@@ -96,7 +96,10 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				return err
 			}
 			if !fl.plan && !fl.queue {
-				if reconcile(cmd.Context(), f); f.Hold != "" {
+				if reconcile(cmd.Context(), f); f.Hold == "" {
+					f.Hold = extractionHold(d, cfg.Server.Bank)
+				}
+				if f.Hold != "" {
 					return &output.Error{Code: output.Partial, Message: f.Hold + "; rerun backsight retain backfill"}
 				}
 			}

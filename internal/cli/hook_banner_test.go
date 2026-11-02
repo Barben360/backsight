@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/testtool"
@@ -231,5 +232,31 @@ func TestSessionStartBannerAfterAnHourUnreachable(t *testing.T) {
 	recordMismatch(t, home)
 	if got := startBanner(t, home, "s4"); strings.Contains(got, "silent") || !strings.Contains(got, "different memory server") {
 		t.Errorf("mismatch: %q", got)
+	}
+}
+
+// A hold of the sends (the provider rejects the key) gets a line of its
+// own, read from the extraction record: sessions and notes wait here, and
+// the user must not believe they are stored. A hold of another bank, or
+// none, shows nothing.
+func TestSessionStartBannerShowsTheExtractionHold(t *testing.T) {
+	home := hookHome(t)
+	noticeShown(t, home)
+	clean := startBanner(t, home, "s1")
+	since := time.Date(2026, 11, 2, 7, 30, 0, 0, time.UTC)
+	d := pathsOf(home)
+	if err := state.SaveExtraction(d, state.Extraction{Bank: "another-bank", HeldSince: since, KeyRejected: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := startBanner(t, home, "s2"); got != clean {
+		t.Errorf("another bank's hold\n got %q\nwant %q", got, clean)
+	}
+	// The test install's config names no bank: the default one.
+	if err := state.SaveExtraction(d, state.Extraction{Bank: config.Default(d, home).Server.Bank, HeldSince: since, KeyRejected: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := clean + "\n⚠️ the extraction LLM's provider rejects llm_api_key since 2026-11-02 07:30 UTC: notes and sessions wait on this PC · run `backsight doctor`"
+	if got := startBanner(t, home, "s3"); got != want {
+		t.Errorf("held\n got %q\nwant %q", got, want)
 	}
 }

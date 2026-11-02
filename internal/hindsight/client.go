@@ -603,6 +603,34 @@ func (c *Client) Operations(ctx context.Context, bank, status string, limit int)
 	return out.Operations, out.Total, err
 }
 
+// FinishedAt is when o last changed: its update, else its creation.
+func (o Operation) FinishedAt() time.Time {
+	if !o.UpdatedAt.IsZero() {
+		return o.UpdatedAt
+	}
+	return o.CreatedAt
+}
+
+// LatestOperation is the bank's most recent operation with status and
+// type (retain, consolidation…); ok is false when there is none. The
+// server lists the most recent first; the latest of what it answers wins
+// all the same.
+func (c *Client) LatestOperation(ctx context.Context, bank, status, typ string) (op Operation, ok bool, err error) {
+	var out struct {
+		Operations []Operation `json:"operations"`
+	}
+	q := url.Values{"status": {status}, "type": {typ}, "limit": {"1"}}
+	if err := c.get(ctx, bankPath(bank, "/operations"), q, &out); err != nil {
+		return op, false, err
+	}
+	for _, o := range out.Operations {
+		if !ok || o.FinishedAt().After(op.FinishedAt()) {
+			op, ok = o, true
+		}
+	}
+	return op, ok, nil
+}
+
 func (c *Client) QueuedOperations(ctx context.Context, bank string) (int, error) {
 	n := 0
 	for _, status := range []string{"pending", "processing"} {

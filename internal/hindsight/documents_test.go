@@ -222,3 +222,28 @@ func TestQueuedOperationsOfPagesAndSaysWhenCut(t *testing.T) {
 		t.Errorf("cut: %v %v %d %v", err, complete, len(ops), offsets)
 	}
 }
+
+// The latest finished operation of one status and type: the query asks
+// for it alone, and the latest of what comes back wins (by its update,
+// else its creation). None listed: not found, no error.
+func TestLatestOperation(t *testing.T) {
+	var queries []string
+	answer := `{"total":2,"operations":[` +
+		`{"id":"old","operation_type":"retain","status":"failed","created_at":"2026-11-01T08:00:00","updated_at":"2026-11-01T08:01:00"},` +
+		`{"id":"new","operation_type":"retain","status":"failed","created_at":"2026-11-02T08:00:00","updated_at":null}]}`
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		_, _ = w.Write([]byte(answer))
+	})
+	op, ok, err := c.LatestOperation(context.Background(), "b", "failed", "retain")
+	if err != nil || !ok || op.ID != "new" || !op.FinishedAt().Equal(time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)) {
+		t.Fatalf("%+v %v %v", op, ok, err)
+	}
+	if len(queries) != 1 || queries[0] != "limit=1&status=failed&type=retain" {
+		t.Errorf("queries: %v", queries)
+	}
+	answer = `{"total":0,"operations":[]}`
+	if _, ok, err := c.LatestOperation(context.Background(), "b", "completed", "retain"); ok || err != nil {
+		t.Errorf("none: %v %v", ok, err)
+	}
+}
