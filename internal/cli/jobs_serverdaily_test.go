@@ -23,7 +23,9 @@ import (
 // sdFake is a server-daily reader whose answers the test sets. Buckets
 // are cut at the fake's clock like a server's: up to today's (UTC), back
 // to the bucket holding now − 90 days for the series and now − 30 days for
-// the LLM stats (a bucket the window covers in part only).
+// the LLM stats (a bucket the window covers in part only). An LLM answer
+// names its buckets' width (day when it has none), and its window's start
+// (now − 30 days) when llmStart is set.
 type sdFake struct {
 	mu        sync.Mutex
 	now       time.Time
@@ -35,6 +37,7 @@ type sdFake struct {
 	seriesErr error
 	llm       map[string][]hindsight.LLMBucket // by operation, "" = all
 	llmErr    map[string]error
+	llmStart  bool
 	block     bool // every call waits for its context, then longer
 	calls     []string
 }
@@ -79,16 +82,22 @@ func (f *sdFake) MemoriesTimeseries(_ context.Context, period string) (hindsight
 	return out, nil
 }
 
-func (f *sdFake) LLMStats(_ context.Context, period, op string) ([]hindsight.LLMBucket, error) {
+func (f *sdFake) LLMStatsWindow(_ context.Context, period, op string) (hindsight.LLMWindow, error) {
 	f.record("llm:" + period + ":" + op)
 	f.wait()
 	if err := f.llmErr[op]; err != nil {
-		return nil, err
+		return hindsight.LLMWindow{}, err
 	}
-	var out []hindsight.LLMBucket
-	for _, b := range f.llm[op] {
+	out := hindsight.LLMWindow{Trunc: "day"}
+	if f.llmStart {
+		out.Start = f.now.Add(-30 * 24 * time.Hour)
+	}
+	for i, b := range f.llm[op] {
+		if i == 0 {
+			out.Trunc = b.Trunc
+		}
 		if !b.Time.After(f.now) && !b.Time.Before(utcDay(f.now.Add(-30*24*time.Hour))) {
-			out = append(out, b)
+			out.Buckets = append(out.Buckets, b)
 		}
 	}
 	return out, nil
@@ -523,16 +532,38 @@ func TestServerDailySurvivesOddServers(t *testing.T) {
 			}
 		}
 	})
-	t.Run("hourly llm", func(t *testing.T) {
+	t.Run("hourly answers", func(t *testing.T) {
+		// Hourly LLM stats give no llm section, not even zeros; the
+		// series' days stand.
 		dir := t.TempDir()
 		f := healthyFake(t, at)
 		f.llm = llmDays(utcDay(at), 30, "hour", nil)
-		f.series = hindsight.Timeseries{Trunc: "day"} // nothing from the series either
-		if got := sdRun(t, dir, f, at, loc); got != "server daily: snapshot, 0 day(s)" {
+		if got := sdRun(t, dir, f, at, loc); got != "server daily: snapshot, 89 day(s)" {
 			t.Errorf("result %q", got)
 		}
-		if rec := readSD(t, dir); len(rec.days) != 0 {
-			t.Errorf("%d day lines from hourly buckets", len(rec.days))
+		for _, d := range readSD(t, dir).days {
+			if d["llm"] != nil || d["new"] == nil {
+				t.Fatalf("day %v, want new only", d)
+			}
+		}
+		// An hourly series gives nothing either.
+		dir = t.TempDir()
+		f.series = hindsight.Timeseries{Trunc: "hour", Buckets: seriesDays(utcDay(at), 30).Buckets}
+		if got := sdRun(t, dir, f, at, loc); got != "server daily: snapshot, 0 day(s)" {
+			t.Errorf("hourly series: result %q", got)
+		}
+	})
+	t.Run("buckets off the UTC day", func(t *testing.T) {
+		// Daily buckets cut at another midnight: the answer gives no
+		// section, never zeros in place of its counts.
+		dir := t.TempDir()
+		f := healthyFake(t, at)
+		f.llm = llmDays(utcDay(at).Add(-2*time.Hour), 30, "day", nil)
+		sdRun(t, dir, f, at, loc)
+		for _, d := range readSD(t, dir).days {
+			if d["llm"] != nil {
+				t.Fatalf("day %v from buckets at 22:00 UTC", d)
+			}
 		}
 	})
 	t.Run("blocking reader", func(t *testing.T) {
@@ -579,17 +610,41 @@ func TestServerDailyUsesGETOnly(t *testing.T) {
 		seen = append(seen, r.Method+" "+r.URL.Path)
 		mu.Unlock()
 	}
+	at := time.Date(2026, 10, 30, 4, 0, 0, 0, time.UTC)
+	fakeStatsNow = func() time.Time { return at }
+	llmOldInput.Store(77)
 	ro, err := hindsight.NewReadOnly("http://127.0.0.1:"+strconv.Itoa(port), "k", "b", 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	at := time.Now()
 	w := metricsfile.New(dir, "test")
+	w.Now = func() time.Time { return at }
 	// The fake's answers hold today's bucket and, for the LLM stats, one
-	// ten days back: each its answer's earliest, so no day line.
-	if got := collectServerDaily(context.Background(), w, ro, at, time.Local); got != "server daily: snapshot, 0 day(s)" {
+	// ten days back, their window starting at now − 30 days: every past day
+	// of the series' reach, the LLM stats' from 2026-10-01.
+	if got := collectServerDaily(context.Background(), w, ro, at, time.UTC); got != "server daily: snapshot, 89 day(s)" {
 		t.Errorf("result %q", got)
+	}
+	byBucket := map[string]map[string]any{}
+	for _, d := range readSD(t, dir).days {
+		byBucket[d["bucket"].(string)[:10]] = d
+	}
+	llmOf := func(day, op string) map[string]any {
+		l, _ := byBucket[day]["llm"].(map[string]any)
+		e, _ := l[op].(map[string]any)
+		return e
+	}
+	for _, op := range []string{"all", "retain", "consolidation", "refresh_mental_model"} {
+		if e := llmOf("2026-10-20", op); e == nil || e["input"] != 77.0 {
+			t.Errorf("2026-10-20 %s = %v, want the ten-days-back bucket (input 77)", op, e)
+		}
+		if e := llmOf("2026-10-01", op); e == nil || e["input"] != 0.0 || e["requests"] != 0.0 {
+			t.Errorf("2026-10-01 %s = %v, want an idle day's zeros", op, e)
+		}
+	}
+	if d := byBucket["2026-09-30"]; d == nil || d["llm"] != nil {
+		t.Errorf("2026-09-30 %v, want new only (the LLM window's start day)", d)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -640,10 +695,10 @@ func TestServerDailyConfigErrorIsAFailure(t *testing.T) {
 	}
 }
 
-// The first bucket of each answer may hold part of its day (the server's
-// window starts at now − period): it is never recorded. The day comes from
-// an earlier run that saw it whole, or stays a hole.
-func TestServerDailySkipsPartialEarliestBucket(t *testing.T) {
+// The day holding an answer's window start may hold part of its day (the
+// server's window starts at now − period): it is never recorded. The day
+// comes from an earlier run that saw it whole, or stays a hole.
+func TestServerDailySkipsTheWindowStartDay(t *testing.T) {
 	at := time.Date(2026, 10, 30, 4, 0, 0, 0, time.UTC)
 	loc := paris(t)
 	t.Run("one run", func(t *testing.T) {
@@ -681,6 +736,145 @@ func TestServerDailySkipsPartialEarliestBucket(t *testing.T) {
 		}
 		if d := byBucket["2026-09-30"]; d == nil || d["llm"] == nil {
 			t.Errorf("2026-09-30 %v, want the first run's LLM day", d)
+		}
+	})
+	// At 23:30 UTC the window starts at 23:30 30 days before. Named by the
+	// answer, the next day is whole; not named, now − 30 days + 1 h of
+	// clock skew falls on that next day, which is then skipped.
+	late := time.Date(2026, 10, 30, 23, 30, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		start   bool
+		withLLM string // the oldest day with llm
+	}{{"start named", true, "2026-10-01"}, {"start not named", false, "2026-10-02"}} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			f := healthyFake(t, late)
+			f.llmStart = c.start
+			sdRun(t, dir, f, late, loc)
+			var oldest string
+			for _, d := range readSD(t, dir).days {
+				if d["llm"] != nil {
+					oldest = d["bucket"].(string)[:10]
+					break
+				}
+			}
+			if oldest != c.withLLM {
+				t.Errorf("oldest day with llm %s, want %s", oldest, c.withLLM)
+			}
+		})
+	}
+}
+
+// The live LLM stats are sparse: an operation's first bucket can be a
+// whole day. Every day after the window's start day is recorded, the days
+// without a bucket as zeros.
+func TestServerDailySparseAnswers(t *testing.T) {
+	at := time.Date(2026, 10, 30, 4, 0, 0, 0, time.UTC)
+	loc := paris(t)
+	byBucket := func(rec sdLines) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		for _, d := range rec.days {
+			out[d["bucket"].(string)[:10]] = d
+		}
+		return out
+	}
+	ops := []string{"all", "retain", "consolidation", "refresh_mental_model"}
+	t.Run("llm yesterday and ten days back", func(t *testing.T) {
+		dir := t.TempDir()
+		f := healthyFake(t, at)
+		for op, bs := range f.llm {
+			var keep []hindsight.LLMBucket
+			for _, b := range bs {
+				if d := b.Time.Format(time.DateOnly); d == "2026-10-29" || d == "2026-10-20" {
+					keep = append(keep, b)
+				}
+			}
+			f.llm[op] = keep
+		}
+		if got := sdRun(t, dir, f, at, loc); got != "server daily: snapshot, 89 day(s)" {
+			t.Errorf("result %q", got)
+		}
+		days := byBucket(readSD(t, dir))
+		for _, day := range []string{"2026-10-20", "2026-10-29"} {
+			llm, _ := days[day]["llm"].(map[string]any)
+			for k, op := range ops {
+				e, _ := llm[op].(map[string]any)
+				if e["input"] != float64(100*(k+1)) || e["requests"] != 4.0 {
+					t.Errorf("%s %s = %v, want its bucket", day, op, e)
+				}
+			}
+		}
+		// Idle days in the window: each operation's zeros, no statuses.
+		zero := map[string]any{"input": 0.0, "output": 0.0, "cached": 0.0, "thoughts": 0.0, "requests": 0.0}
+		for _, day := range []string{"2026-10-01", "2026-10-19", "2026-10-21", "2026-10-28"} {
+			llm, _ := days[day]["llm"].(map[string]any)
+			for _, op := range ops {
+				if !reflect.DeepEqual(llm[op], zero) {
+					t.Errorf("%s %s = %v, want %v", day, op, llm[op], zero)
+				}
+			}
+		}
+		// The window's start day and the days before: no llm, zeros or not.
+		for _, day := range []string{"2026-09-30", "2026-09-29", "2026-08-02"} {
+			if d := days[day]; d == nil || d["llm"] != nil || d["new"] == nil {
+				t.Errorf("%s %v, want new only", day, d)
+			}
+		}
+	})
+	t.Run("series starting mid-window", func(t *testing.T) {
+		dir := t.TempDir()
+		f := healthyFake(t, at)
+		f.series = seriesDays(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC), 20) // 2026-10-10 … 2026-10-29
+		if got := sdRun(t, dir, f, at, loc); got != "server daily: snapshot, 89 day(s)" {
+			t.Errorf("result %q", got)
+		}
+		days := byBucket(readSD(t, dir))
+		if got := days["2026-10-10"]["new"]; !reflect.DeepEqual(got, map[string]any{"world": 1.0, "experience": 1.0, "observation": 2.0}) {
+			t.Errorf("2026-10-10 new %v, want the series' first bucket", got)
+		}
+		zero := map[string]any{"world": 0.0, "experience": 0.0, "observation": 0.0}
+		for _, day := range []string{"2026-08-02", "2026-09-15", "2026-10-09"} {
+			if got := days[day]["new"]; !reflect.DeepEqual(got, zero) {
+				t.Errorf("%s new %v, want an idle day's zeros", day, got)
+			}
+		}
+		if _, ok := days["2026-08-01"]; ok {
+			t.Error("the series' window start day (2026-08-01) recorded")
+		}
+	})
+	t.Run("a source not answering leaves its days absent", func(t *testing.T) {
+		// The LLM stats down for one operation: the days they cover wait,
+		// the older ones get the series' zeros and no llm.
+		dir := t.TempDir()
+		f := healthyFake(t, at)
+		f.series = hindsight.Timeseries{Trunc: "day"}
+		f.llmErr = map[string]error{"refresh_mental_model": hindsight.ErrTimeout}
+		if got := sdRun(t, dir, f, at, loc); got != "server daily: snapshot, 59 day(s)" {
+			t.Errorf("result %q", got)
+		}
+		rec := readSD(t, dir)
+		if b := newest(t, rec.buckets()); b != "2026-09-29" {
+			t.Errorf("newest bucket %s, want 2026-09-29", b)
+		}
+		for _, d := range rec.days {
+			if d["llm"] != nil || !reflect.DeepEqual(d["new"], map[string]any{"world": 0.0, "experience": 0.0, "observation": 0.0}) {
+				t.Fatalf("day %v, want the series' zeros only", d)
+			}
+		}
+		// Back the next hour: the days waiting are written, with zeros.
+		f.llmErr = nil
+		f.llm = map[string][]hindsight.LLMBucket{}
+		if got := sdRun(t, dir, f, at.Add(time.Hour), loc); got != "server daily: snapshot already taken, 30 day(s)" {
+			t.Errorf("next run: result %q", got)
+		}
+		rec = readSD(t, dir)
+		rec.noDuplicates(t)
+		for _, d := range rec.days[59:] {
+			llm, _ := d["llm"].(map[string]any)
+			if b := d["bucket"].(string)[:10]; b != "2026-09-30" && len(llm) != 4 {
+				t.Errorf("%s llm %v, want four operations' zeros", b, llm)
+			}
 		}
 	})
 }

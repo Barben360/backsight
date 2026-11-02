@@ -102,7 +102,7 @@ func TestReadOnlyExposesOnlyReads(t *testing.T) {
 		got = append(got, typ.Method(i).Name)
 	}
 	sort.Strings(got)
-	want := []string{"BankStats", "DocumentUnits", "LLMStats", "ListCreatedMemories", "MemoriesTimeseries", "Memory", "OperationsPage", "ProjectTags", "RetainOperations", "Version"}
+	want := []string{"BankStats", "DocumentUnits", "LLMStats", "LLMStatsWindow", "ListCreatedMemories", "MemoriesTimeseries", "Memory", "OperationsPage", "ProjectTags", "RetainOperations", "Version"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("methods = %v, want %v", got, want)
 	}
@@ -159,6 +159,15 @@ func TestReadOnlyDecodesTheShapes(t *testing.T) {
 	}
 	if lb[1].Thoughts != 0 || lb[1].Input != 400 {
 		t.Errorf("null thoughts: llm[1] = %+v", lb[1])
+	}
+
+	win, err := ro.LLMStatsWindow(ctx, "7d", "")
+	if err != nil || win.Trunc != "day" || len(win.Buckets) != 2 || win.Buckets[0].Input != 1000 {
+		t.Fatalf("llm window = %+v, %v", win, err)
+	}
+	// the window's start, a time with its offset: 17:00-07:00 is 00:00 UTC the next day
+	if want := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC); !win.Start.Equal(want) || win.Start.Location() != time.UTC {
+		t.Errorf("llm window start = %v, want %v in UTC", win.Start, want)
 	}
 
 	page, err := ro.OperationsPage(ctx, "", "", 3, 0)

@@ -32,6 +32,9 @@ const (
 	serverDailyLLM         = "30d"
 	serverDailySeriesReach = 90 * 24 * time.Hour
 	serverDailyLLMReach    = 30 * 24 * time.Hour
+	// serverDailySkew: the server's clock may be ahead of ours. A window
+	// that names no start is taken to start that much later.
+	serverDailySkew = time.Hour
 )
 
 // serverDailyOps are the LLM operations recorded per day: the line's key
@@ -45,7 +48,7 @@ type serverDailyReader interface {
 	BankStats(context.Context) (hindsight.BankStats, error)
 	ProjectTags(context.Context) ([]hindsight.TagCount, error)
 	MemoriesTimeseries(context.Context, string) (hindsight.Timeseries, error)
-	LLMStats(context.Context, string, string) ([]hindsight.LLMBucket, error)
+	LLMStatsWindow(context.Context, string, string) (hindsight.LLMWindow, error)
 }
 
 // readOnlyServer is the configured server's GET-only client, each call
@@ -188,7 +191,7 @@ func collectServerDaily(ctx context.Context, w *metricsfile.Writer, r serverDail
 		tagsErr   error
 		series    hindsight.Timeseries
 		seriesErr error
-		llm       = make([][]hindsight.LLMBucket, len(serverDailyOps))
+		llm       = make([]hindsight.LLMWindow, len(serverDailyOps))
 		llmErr    = make([]error, len(serverDailyOps))
 	)
 	if !rec.okToday { // the snapshot's reads, once a day
@@ -202,8 +205,8 @@ func collectServerDaily(ctx context.Context, w *metricsfile.Writer, r serverDail
 	})
 	for i, o := range serverDailyOps {
 		wg.Go(func() {
-			llm[i], llmErr[i] = boundedRead(ctx, func(c context.Context) ([]hindsight.LLMBucket, error) {
-				return r.LLMStats(c, serverDailyLLM, o.op)
+			llm[i], llmErr[i] = boundedRead(ctx, func(c context.Context) (hindsight.LLMWindow, error) {
+				return r.LLMStatsWindow(c, serverDailyLLM, o.op)
 			})
 		})
 	}
@@ -226,10 +229,10 @@ func collectServerDaily(ctx context.Context, w *metricsfile.Writer, r serverDail
 		}
 		recs = append(recs, serverSnapshot(today, stats, tags))
 	}
-	llmOK := true
+	llmOK := make([]bool, len(llmErr))
 	for i, err := range llmErr {
-		if err != nil {
-			llm[i], llmOK = nil, false
+		if llmOK[i] = err == nil; !llmOK[i] {
+			llm[i] = hindsight.LLMWindow{}
 		}
 	}
 	if seriesErr != nil {
@@ -308,25 +311,29 @@ func serverSnapshot(day string, s hindsight.BankStats, tags []hindsight.TagCount
 // serverDayLines are the day lines of every past full UTC day (before
 // today's) the answers reach and the record lacks, oldest first, each with
 // what the answers say of it, the record being permanent:
-//   - a source's earliest bucket is never used: the server's window starts
-//     at now − period, so that bucket may hold part of its day only (the
-//     day is an earlier run's, or a hole);
+//   - an answer covers the days after the one holding its window's start
+//     (the start it names, else now − period + serverDailySkew): that day
+//     and those before may hold part of their day only, they are never
+//     used (the day is an earlier run's, or a hole);
+//   - a day an answer covers without a bucket is a day without activity:
+//     its counts are written as zeros (the series' new, each LLM
+//     operation's entry with no statuses);
 //   - a day is written only when every source whose reach covers it
 //     answered this run (the series covers 90 days, the LLM stats, all
 //     four operations, 30): otherwise it waits for a later run, and at
 //     worst is written with new only once it leaves the 30-day reach;
-//   - only daily buckets count: an answer in another width gives no
-//     section.
-func serverDayLines(series hindsight.Timeseries, seriesOK bool, llm [][]hindsight.LLMBucket, llmOK bool, now time.Time, recorded map[string]bool) []metricsfile.ServerDay {
+//   - only UTC daily buckets count: an answer in another width, or with a
+//     bucket off a UTC day start, gives no section.
+func serverDayLines(series hindsight.Timeseries, seriesOK bool, llm []hindsight.LLMWindow, llmOK []bool, now time.Time, recorded map[string]bool) []metricsfile.ServerDay {
 	today := utcDate(now)
+	allLLM := !slices.Contains(llmOK, false)
 	seriesFrom, llmFrom := utcDate(now.Add(-serverDailySeriesReach)), utcDate(now.Add(-serverDailyLLMReach))
 	byDay := map[time.Time]*metricsfile.ServerDay{}
-	line := func(t time.Time) *metricsfile.ServerDay {
-		b := t.UTC()
-		if !b.Equal(utcDate(b)) || !b.Before(today) || recorded[b.Format(time.DateOnly)] {
+	line := func(b time.Time) *metricsfile.ServerDay {
+		if !b.Before(today) || recorded[b.Format(time.DateOnly)] {
 			return nil
 		}
-		if (!seriesOK && !b.Before(seriesFrom)) || (!llmOK && !b.Before(llmFrom)) {
+		if (!seriesOK && !b.Before(seriesFrom)) || (!allLLM && !b.Before(llmFrom)) {
 			return nil // a source that covers the day did not answer
 		}
 		d := byDay[b]
@@ -336,48 +343,72 @@ func serverDayLines(series hindsight.Timeseries, seriesOK bool, llm [][]hindsigh
 		}
 		return d
 	}
-	// earliest is the first bucket time of an answer (the zero time when
-	// it has none).
-	earliest := func(times []time.Time) time.Time {
-		var first time.Time
+	// covered are the days of an answer's window after the one holding
+	// its start, before today's; nil when its buckets are not UTC days.
+	covered := func(trunc string, times []time.Time, start time.Time, reach time.Duration) map[time.Time]bool {
+		if trunc != "day" {
+			return nil
+		}
 		for _, t := range times {
-			if first.IsZero() || t.Before(first) {
-				first = t
+			if !t.Equal(utcDate(t)) {
+				return nil
 			}
 		}
-		return first
+		if start.IsZero() {
+			start = now.Add(-reach + serverDailySkew)
+		}
+		out := map[time.Time]bool{}
+		for d := utcDate(start).AddDate(0, 0, 1); d.Before(today); d = d.AddDate(0, 0, 1) {
+			out[d] = true
+		}
+		return out
 	}
-	if series.Trunc == "day" {
+	if seriesOK {
 		times := make([]time.Time, 0, len(series.Buckets))
 		for _, b := range series.Buckets {
-			times = append(times, b.Time)
+			times = append(times, b.Time.UTC())
 		}
-		first := earliest(times)
-		for _, b := range series.Buckets {
-			if b.Time.Equal(first) {
+		days := covered(series.Trunc, times, time.Time{}, serverDailySeriesReach)
+		for d := range days {
+			if l := line(d); l != nil {
+				l.New = &metricsfile.KindCounts{}
+			}
+		}
+		for i, b := range series.Buckets {
+			if !days[times[i]] {
 				continue
 			}
-			if d := line(b.Time); d != nil {
+			if d := line(times[i]); d != nil {
 				d.New = &metricsfile.KindCounts{World: b.World, Experience: b.Experience, Observation: b.Observation}
 			}
 		}
 	}
 	for i, o := range serverDailyOps {
-		times := make([]time.Time, 0, len(llm[i]))
-		for _, b := range llm[i] {
-			times = append(times, b.Time)
+		if !llmOK[i] {
+			continue
 		}
-		first := earliest(times)
-		for _, b := range llm[i] {
-			if b.Trunc != "day" || b.Time.Equal(first) {
-				continue
-			}
-			d := line(b.Time)
+		w := llm[i]
+		times := make([]time.Time, 0, len(w.Buckets))
+		for _, b := range w.Buckets {
+			times = append(times, b.Time.UTC())
+		}
+		days := covered(w.Trunc, times, w.Start, serverDailyLLMReach)
+		set := func(t time.Time, v metricsfile.LLMDay) {
+			d := line(t)
 			if d == nil {
-				continue
+				return
 			}
 			if d.LLM == nil {
 				d.LLM = map[string]metricsfile.LLMDay{}
+			}
+			d.LLM[o.key] = v
+		}
+		for d := range days {
+			set(d, metricsfile.LLMDay{})
+		}
+		for j, b := range w.Buckets {
+			if !days[times[j]] {
+				continue
 			}
 			var st map[string]int64
 			for k, v := range b.Statuses {
@@ -389,7 +420,7 @@ func serverDayLines(series hindsight.Timeseries, seriesOK bool, llm [][]hindsigh
 				}
 				st[k] = v
 			}
-			d.LLM[o.key] = metricsfile.LLMDay{Input: b.Input, Output: b.Output, Cached: b.Cached, Thoughts: b.Thoughts, Requests: b.Total, Statuses: st}
+			set(times[j], metricsfile.LLMDay{Input: b.Input, Output: b.Output, Cached: b.Cached, Thoughts: b.Thoughts, Requests: b.Total, Statuses: st})
 		}
 	}
 	out := make([]metricsfile.ServerDay, 0, len(byDay))

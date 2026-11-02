@@ -362,6 +362,9 @@ var (
 	// fake accepted it).
 	fakeDocCreated   map[string]time.Time
 	bankConfigStatus atomic.Int32 // non-zero: bank claude-memory's /config answers this status
+	// fakeStatsNow is the clock of the LLM stats and the memories series
+	// (nil: time.Now).
+	fakeStatsNow func() time.Time
 	// fakeHook, when not nil, sees every request before the fake answers
 	// it (outside the fake's lock).
 	fakeHook func(r *http.Request)
@@ -389,6 +392,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	statsDown.Store(false)
 	llmThoughts.Store(0)
 	llmOldInput.Store(0)
+	fakeStatsNow = nil
 	llmPeriod = ""
 	extractFails.Store(false)
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
@@ -839,24 +843,38 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			// Like Hindsight 1.1.0: 1d or 30d; any other period is 7 days.
 			llmPeriod = r.URL.Query().Get("period")
-			day := time.Now().UTC().Format("2006-01-02")
+			now := time.Now().UTC()
+			if fakeStatsNow != nil {
+				now = fakeStatsNow().UTC()
+			}
+			day := now.Format("2006-01-02")
 			buckets := `{"time":"` + day + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) +
 				`,"output":0,"cached":0,"thoughts":` + strconv.FormatInt(llmThoughts.Load(), 10) + `}}`
 			if llmPeriod == "30d" {
-				old := time.Now().UTC().AddDate(0, 0, -10).Format("2006-01-02")
+				old := now.AddDate(0, 0, -10).Format("2006-01-02")
 				buckets += `,{"time":"` + old + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmOldInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}`
 			}
 			trunc := "" // a 1d answer is hourly on the server: left unnamed as before
 			if llmPeriod != "1d" {
 				trunc = `"trunc":"day",`
 			}
-			_, _ = w.Write([]byte(`{` + trunc + `"buckets":[` + buckets + `]}`))
+			// The window's start, as the server names it.
+			span := map[string]time.Duration{"1d": 24 * time.Hour, "30d": 30 * 24 * time.Hour}[llmPeriod]
+			if span == 0 {
+				span = 7 * 24 * time.Hour
+			}
+			start := `"start":"` + now.Add(-span).Format("2006-01-02T15:04:05.000000+00:00") + `",`
+			_, _ = w.Write([]byte(`{` + trunc + start + `"buckets":[` + buckets + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats/memories-timeseries"):
 			if fakeSeriesDown {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			day := time.Now().UTC().Format("2006-01-02")
+			now := time.Now().UTC()
+			if fakeStatsNow != nil {
+				now = fakeStatsNow().UTC()
+			}
+			day := now.Format("2006-01-02")
 			_, _ = w.Write([]byte(`{"period":"` + r.URL.Query().Get("period") + `","trunc":"day","buckets":[{"time":"` + day + `T00:00:00+00:00","world":1,"experience":0,"observation":2}]}`))
 		case strings.HasSuffix(r.URL.Path, "/operations") && fakeOperations != nil && (r.URL.Query().Get("status") == "failed" || r.URL.Query().Get("status") == "completed"):
 			var items []string

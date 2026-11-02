@@ -106,11 +106,27 @@ type LLMBucket struct {
 	Input, Output, Cached, Thoughts int64
 }
 
+// LLMWindow is one LLM stats answer: the bucket width it names ("hour",
+// "day"), the start of the window it covers (zero when it names none) and
+// its buckets.
+type LLMWindow struct {
+	Trunc   string
+	Start   time.Time
+	Buckets []LLMBucket
+}
+
 // LLMStats reads the LLM request counts and tokens over period (1d, 7d,
 // 30d), for one operation or, when operation is "", all of them.
 func (r *ReadOnly) LLMStats(ctx context.Context, period, operation string) ([]LLMBucket, error) {
+	w, err := r.LLMStatsWindow(ctx, period, operation)
+	return w.Buckets, err
+}
+
+// LLMStatsWindow is LLMStats with what the answer says of its window.
+func (r *ReadOnly) LLMStatsWindow(ctx context.Context, period, operation string) (LLMWindow, error) {
 	var raw struct {
 		Trunc   string `json:"trunc"`
+		Start   string `json:"start"`
 		Buckets []struct {
 			Time     string           `json:"time"`
 			Statuses map[string]int64 `json:"statuses"`
@@ -128,15 +144,15 @@ func (r *ReadOnly) LLMStats(ctx context.Context, period, operation string) ([]LL
 		q.Set("operation", operation)
 	}
 	if err := r.c.get(ctx, bankPath(r.bank, "/llm-requests/stats"), q, &raw); err != nil {
-		return nil, err
+		return LLMWindow{}, err
 	}
-	out := make([]LLMBucket, 0, len(raw.Buckets))
+	out := LLMWindow{Trunc: raw.Trunc, Start: serverTime(raw.Start), Buckets: make([]LLMBucket, 0, len(raw.Buckets))}
 	for _, b := range raw.Buckets {
 		lb := LLMBucket{Trunc: raw.Trunc, Time: serverTime(b.Time), Statuses: b.Statuses, Total: b.Total, Input: b.Tokens.Input, Output: b.Tokens.Output, Cached: b.Tokens.Cached}
 		if b.Tokens.Thoughts != nil {
 			lb.Thoughts = *b.Tokens.Thoughts
 		}
-		out = append(out, lb)
+		out.Buckets = append(out.Buckets, lb)
 	}
 	return out, nil
 }
