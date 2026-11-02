@@ -2,11 +2,11 @@
 # image: ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06
 # python: 3.11.17 (image: 3.11.17)
 # platform: x86_64-pc-windows-msvc
-# linux-lock: b9796eaa07b3
+# linux-lock: a94b26cd83b6
 # override: authlib==1.9.1 (image: 1.6.12)
 # override: dnspython==2.9.0 (image: 2.8.0)
-# override: fastmcp==3.4.11 (image: 3.2.0)
 # override: fastmcp-slim==3.4.11 (image: none)
+# override: fastmcp==3.4.11 (image: 3.2.0)
 # override: griffelib==2.4.1 (image: none)
 # override: joserfc==1.7.7 (image: none)
 # override: opentelemetry-api==1.45.1 (image: 1.44.0)
@@ -15,9 +15,9 @@
 # override: opentelemetry-exporter-otlp-proto-common==1.45.1 (image: 1.44.0)
 # override: opentelemetry-exporter-otlp-proto-http==1.45.1 (image: 1.44.0)
 # override: opentelemetry-exporter-prometheus==0.66b1 (image: 0.65b0)
-# override: opentelemetry-instrumentation==0.66b1 (image: 0.65b0)
 # override: opentelemetry-instrumentation-asgi==0.66b1 (image: 0.65b0)
 # override: opentelemetry-instrumentation-fastapi==0.66b1 (image: 0.65b0)
+# override: opentelemetry-instrumentation==0.66b1 (image: 0.65b0)
 # override: opentelemetry-proto==1.45.1 (image: 1.44.0)
 # override: opentelemetry-sdk==1.45.1 (image: 1.44.0)
 # override: opentelemetry-semantic-conventions==0.66b1 (image: 0.65b0)

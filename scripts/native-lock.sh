@@ -199,6 +199,9 @@ while IFS='=' read -r name _ ver; do
   fi
   echo "# override: $name==$ver (image: ${iv:-none})" >> "$work/override-header.txt"
 done < "$work/overrides.txt"
+# The header's order is the C locale's (byte order): --check compares it,
+# and another locale orders fastmcp and fastmcp-slim the other way.
+LC_ALL=C sort -o "$work/override-header.txt" "$work/override-header.txt"
 awk -F'==' -v ov="$work/overrides.txt" 'BEGIN { while ((getline l < ov) > 0) { split(l, a, "=="); o[a[1]] } }
   !($1 in o)' "$work/constraints.txt" | cat - "$work/overrides.txt" | sort > "$work/pins.txt"
 mv "$work/pins.txt" "$work/constraints.txt"

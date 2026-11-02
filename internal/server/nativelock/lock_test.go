@@ -119,8 +119,8 @@ func TestNativeLockIsTheGeneratedOne(t *testing.T) {
 // nothing may move the Linux one. A deliberate lock bump changes both
 // literals in the same commit.
 func TestLinuxLockUnchanged(t *testing.T) {
-	const wantSHA = "b9796eaa07b3bc58375d18b0910b2fb99de2a7cd10cb509abf78d2b42ef79e07"
-	const wantHash12 = "b9796eaa07b3"
+	const wantSHA = "a94b26cd83b6045b50814413624d9a1d122de2321d06da8b96a55b0c7da5d5a2"
+	const wantHash12 = "a94b26cd83b6"
 	sum := sha256.Sum256(Requirements)
 	if got := hex.EncodeToString(sum[:]); got != wantSHA {
 		t.Errorf("requirements-linux-amd64.txt sha256 %s, want %s", got, wantSHA)

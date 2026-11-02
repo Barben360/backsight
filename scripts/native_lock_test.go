@@ -202,6 +202,23 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 		}
 	})
 
+	// --check compares the header across machines: its order is bytes',
+	// not the locale's (en_US puts zope-interface before zope-interface-x,
+	// C after).
+	t.Run("the override lines are in byte order whatever the locale", func(t *testing.T) {
+		t.Setenv("LC_ALL", "en_US.UTF-8")
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		body := overBody + "zope-interface-x==1.0 \\\n    --hash=sha256:6666666666666666666666666666666666666666666666666666666666666666\n"
+		_, out, _, err := runNativeLockOv(t, overrides+"zope-interface-x==1.0: required by zope-interface 7.1\n", imageListing(tag), body, lock)
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		want := lockHeader + "# override: new-dep==2.0 (image: none)\n# override: zope-interface-x==1.0 (image: none)\n# override: zope-interface==7.1 (image: 7.0)\n"
+		if got, _ := os.ReadFile(lock); string(got) != want+body {
+			t.Errorf("lock:\n%s\nwant:\n%s", got, want+body)
+		}
+	})
+
 	t.Run("--check fails on a lock that does not record an override", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "lock.txt")
 		_ = os.WriteFile(lock, []byte(lockHeader+overBody), 0o644)
