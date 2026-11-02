@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/index/indexgen"
+	"github.com/Barben360/backsight/internal/metricsfile"
 )
 
 // The budgets' synthetic state is written by indexgen (shared with the
@@ -23,5 +24,28 @@ func TestGeneratorPromptReasons(t *testing.T) {
 	}
 	if !slices.Equal(indexgen.FailureKinds, failureKinds) {
 		t.Errorf("indexgen.FailureKinds = %v, the index's closed set is %v", indexgen.FailureKinds, failureKinds)
+	}
+}
+
+// TestCollectionFamiliesAgree: neither the index nor indexgen may import
+// internal/metricsfile (an import cycle through internal/instructions'
+// tests), so each names the families and their schema itself.
+func TestCollectionFamiliesAgree(t *testing.T) {
+	var kinds []string
+	for _, k := range sourceKinds[2:] {
+		kinds = append(kinds, k.prefix)
+	}
+	var want []string
+	for _, f := range metricsfile.Families {
+		want = append(want, f+"-")
+	}
+	if !slices.Equal(kinds, want) {
+		t.Errorf("index collection prefixes %v, metricsfile's families %v", kinds, want)
+	}
+	if !slices.Equal(indexgen.CollectionFamilies, metricsfile.Families) {
+		t.Errorf("indexgen.CollectionFamilies = %v, metricsfile.Families = %v", indexgen.CollectionFamilies, metricsfile.Families)
+	}
+	if collectionSchema != metricsfile.Schema {
+		t.Errorf("collectionSchema %d, metricsfile.Schema %d", collectionSchema, metricsfile.Schema)
 	}
 }

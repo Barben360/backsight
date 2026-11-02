@@ -247,7 +247,7 @@ func TestTickOnANewerIndexUsesItsSideFile(t *testing.T) {
 	_ = db.Close()
 	before, _ := os.ReadFile(main)
 	_, res := tickJSON(t)
-	if want := " (metrics-v1.db: a newer backsight's index is kept)"; !strings.HasPrefix(res.MetricsIndex, "caught up: ") || !strings.HasSuffix(res.MetricsIndex, want) {
+	if want := " (" + thisSide(t) + ": a newer backsight's index is kept)"; !strings.HasPrefix(res.MetricsIndex, "caught up: ") || !strings.HasSuffix(res.MetricsIndex, want) {
 		t.Errorf("metrics_index %q", res.MetricsIndex)
 	}
 	if after, _ := os.ReadFile(main); string(after) != string(before) {

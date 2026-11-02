@@ -20,19 +20,22 @@ import (
 
 // Spec sizes a synthetic state directory: Months of files holding
 // TelemetryPerYear and JournalPerYear lines a year, and a ledger of
-// Memories ids.
+// Memories ids. Collection adds the local collection's month files
+// (internal/metricsfile's families) over the same months, as a daily
+// jobs maintain writes them.
 type Spec struct {
 	Months           int
 	TelemetryPerYear int
 	JournalPerYear   int
 	Memories         int
 	Seed             uint64
+	Collection       bool
 }
 
 // Budget is the volume the budgets are measured on: 13 months, above a
 // year of the author's PC (the journal is about 4 % of the telemetry
 // there; 30 k lines a year is more).
-var Budget = Spec{Months: 13, TelemetryPerYear: 400_000, JournalPerYear: 30_000, Memories: 5_000, Seed: 1}
+var Budget = Spec{Months: 13, TelemetryPerYear: 400_000, JournalPerYear: 30_000, Memories: 5_000, Seed: 1, Collection: true}
 
 // Now is the fixed "now" of the generated state.
 var Now = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
@@ -219,6 +222,9 @@ func Generate(t testing.TB, stateDir string, s Spec) {
 				t.Fatal(err)
 			}
 		}
+	}
+	if s.Collection {
+		writeCollection(t, d, s, end)
 	}
 	mems := map[string]any{}
 	for i := 0; i < s.Memories; i++ {

@@ -73,7 +73,7 @@ func inspect(t *testing.T, o Options) Status {
 func TestInspectNotBuilt(t *testing.T) {
 	d := tempDirs(t)
 	st := inspect(t, opts(t, d, nil))
-	if st.Exists || st.Readable || st.Using != FileName || st.Head != 1 || st.Schema != 0 || st.Size != 0 {
+	if st.Exists || st.Readable || st.Using != FileName || st.Head != embeddedHead(t) || st.Schema != 0 || st.Size != 0 {
 		t.Errorf("%+v", st)
 	}
 	if len(st.Sources) != 0 || st.SideFiles != nil || st.AsideFiles != nil {
@@ -107,7 +107,7 @@ func TestInspectShowsItsState(t *testing.T) {
 		t.Error("Inspect ingested")
 	}
 
-	if !st.Exists || !st.Readable || st.Schema != 1 || st.Head != 1 || st.Pending != 0 || st.Newer || st.Using != FileName {
+	if head := embeddedHead(t); !st.Exists || !st.Readable || st.Schema != head || st.Head != head || st.Pending != 0 || st.Newer || st.Using != FileName {
 		t.Errorf("%+v", st)
 	}
 	if st.JournalMode != "wal" || st.Filesystem.Kind != FSLocal || st.Size <= 0 {

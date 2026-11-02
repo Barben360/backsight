@@ -14,13 +14,26 @@ import (
 	"testing/fstest"
 )
 
-var updateFixture = flag.Bool("update-fixture", false, "rewrite testdata/schema-0001.db")
+var updateFixture = flag.Bool("update-fixture", false, "write testdata/schema-NNNN.db of the registry's head")
 
-const fixturePath = "testdata/schema-0001.db"
+// fixturePath is the committed index file of schema head (one row in
+// each table of that schema), from the release that shipped it.
+func fixturePath(head int) string { return fmt.Sprintf("testdata/schema-%04d.db", head) }
+
+// embeddedHead is the head of this binary's registry.
+func embeddedHead(t *testing.T) int {
+	t.Helper()
+	reg, err := LoadRegistry(Embedded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Head(reg)
+}
 
 // released pins every shipped migration (each release adds its own).
 var released = map[string]string{
-	"0001-initial": "37f78317d2a3e98e9bf642e31337171222f525d2ecb7c6bf1b1d115097a9d331",
+	"0001-initial":    "37f78317d2a3e98e9bf642e31337171222f525d2ecb7c6bf1b1d115097a9d331",
+	"0002-collection": "4127a2cf1e608851e002cc4fe672db5cbdb65af1579260675d90c39da8001181",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -65,9 +78,21 @@ var schemaTables = []struct{ name, cols string }{
 	{"cursors", "source_file kind size offset head_len head_sha256 ingested_at last_ts missing"},
 	{"ingest_errors", "source_file offset reason at"},
 	{"meta", "key value"},
+	{"show_sets", rowKey + "ts session turn agent path flags"},
+	{"server_snapshots", rowKey + "ts day ok error world experience observation documents links observations ops_pending ops_processing ops_completed ops_failed ops_other consolidation_pending consolidation_failed last_consolidated_at"},
+	{"server_snapshot_projects", rowKey + "ts day project memories"},
+	{"server_days", rowKey + "ts bucket world experience observation"},
+	{"server_day_llm", rowKey + "ts bucket operation input output cached thoughts requests"},
+	{"server_day_llm_status", rowKey + "ts bucket operation status n"},
+	{"doctor_runs", rowKey + "ts check_id status"},
+	{"memory_docs", rowKey + "ts memory_id outcome doc_kind document session created_day fact_type"},
+	{"memory_days", rowKey + "ts day n complete"},
+	{"doc_ops", rowKey + "ts operation_id document session status created_at updated_at retries units"},
+	{"scans", rowKey + "ts count live forgotten pages ms"},
+	{"metrics_other", rowKey + "ts family kind"},
 }
 
-var schemaViews = []string{"turn_final_stop", "document_status"}
+var schemaViews = []string{"turn_final_stop", "document_status", "memory_doc", "memory_day", "memory_coverage", "doc_op", "server_day"}
 
 func TestReleasedMigrationsArePinned(t *testing.T) {
 	reg, err := LoadRegistry(Embedded)
@@ -82,8 +107,8 @@ func TestReleasedMigrationsArePinned(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
 	defer mustClose(t, ix)
-	if ix.Schema() != 1 {
-		t.Fatalf("schema %d, want 1", ix.Schema())
+	if ix.Schema() != 2 {
+		t.Fatalf("schema %d, want 2", ix.Schema())
 	}
 	for _, tc := range schemaTables {
 		got := columnsOf(t, ix.sh.w, tc.name)
@@ -119,7 +144,9 @@ var (
 		"document": "TEXT", "status": "TEXT", "hook": "TEXT", "kind": "TEXT", "turn": "TEXT", "base": "TEXT",
 		"applied": "TEXT", "path_rule": "TEXT", "result": "TEXT", "sha256": "TEXT", "memory_id": "TEXT",
 		"scope": "TEXT", "key": "TEXT", "fields": "TEXT", "agent": "TEXT", "path": "TEXT", "stop_check": "TEXT",
-		"note_id": "TEXT", "head_sha256": "TEXT",
+		"note_id": "TEXT", "head_sha256": "TEXT", "day": "TEXT", "error": "TEXT", "check_id": "TEXT",
+		"operation": "TEXT", "operation_id": "TEXT", "doc_kind": "TEXT", "created_day": "TEXT", "fact_type": "TEXT",
+		"family": "TEXT",
 
 		"offset": "INTEGER", "ts": "INTEGER", "n": "INTEGER", "plen": "INTEGER", "above": "INTEGER",
 		"injected": "INTEGER", "ids_n": "INTEGER", "ms": "INTEGER", "nudged": "INTEGER", "hinted": "INTEGER",
@@ -137,7 +164,14 @@ var (
 		"backup_verified_at": "INTEGER", "backup_ok": "INTEGER", "update_checked_at": "INTEGER",
 		"update_newer": "INTEGER", "update_check_failed": "INTEGER", "backfill_sessions": "INTEGER",
 		"backfill_paused": "INTEGER", "size": "INTEGER", "head_len": "INTEGER", "last_ts": "INTEGER",
-		"missing": "INTEGER",
+		"missing": "INTEGER", "world": "INTEGER", "experience": "INTEGER", "observation": "INTEGER",
+		"documents": "INTEGER", "links": "INTEGER", "observations": "INTEGER", "ops_pending": "INTEGER",
+		"ops_processing": "INTEGER", "ops_completed": "INTEGER", "ops_failed": "INTEGER", "ops_other": "INTEGER",
+		"consolidation_pending": "INTEGER", "consolidation_failed": "INTEGER", "last_consolidated_at": "INTEGER",
+		"memories": "INTEGER", "bucket": "INTEGER", "input": "INTEGER", "output": "INTEGER", "cached": "INTEGER",
+		"thoughts": "INTEGER", "requests": "INTEGER", "complete": "INTEGER", "created_at": "INTEGER",
+		"updated_at": "INTEGER", "retries": "INTEGER", "units": "INTEGER", "count": "INTEGER",
+		"forgotten": "INTEGER",
 
 		"top": "REAL", "reranker": "REAL", "boost": "REAL", "score_without_boost": "REAL",
 		"imported_credits": "REAL",
@@ -145,6 +179,7 @@ var (
 	typeOf = map[string]string{
 		"ledger.credits": "REAL", "ledger.misses": "REAL", // decayed weights
 		"tel_config_values.value": "REAL", "meta.value": "TEXT",
+		"scans.live": "INTEGER", // a count there, an enum in tel_tool
 	}
 )
 
@@ -275,6 +310,23 @@ func TestNullTimeRefused(t *testing.T) {
 	}
 }
 
+// collectionIndexes are the indexes of the tables of 0002 (X), in place of
+// the time and memory_id ones of 0001's row tables.
+var collectionIndexes = map[string][]string{
+	"show_sets":                {"ts"},
+	"server_snapshots":         {"day"},
+	"server_snapshot_projects": {"day"},
+	"server_days":              {"bucket"},
+	"server_day_llm":           {"bucket"},
+	"server_day_llm_status":    {"bucket"},
+	"doctor_runs":              {"ts"},
+	"memory_docs":              {"memory_id", "document", "session", "created_day"},
+	"memory_days":              {"day"},
+	"doc_ops":                  {"operation_id", "document"},
+	"scans":                    {"ts"},
+	"metrics_other":            {"ts"},
+}
+
 // TestSchemaIndexes: the indexes the dashboard queries rely on.
 func TestSchemaIndexes(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
@@ -283,6 +335,12 @@ func TestSchemaIndexes(t *testing.T) {
 	for _, tc := range schemaTables {
 		f := strings.Fields(tc.cols)
 		if !strings.HasPrefix(tc.cols, rowKey) || tc.name == "ingest_errors" {
+			continue
+		}
+		if cols, ok := collectionIndexes[tc.name]; ok {
+			for _, c := range cols {
+				want[tc.name] = append(want[tc.name], tc.name+"_"+c+":"+c)
+			}
 			continue
 		}
 		tcol := "ts"
@@ -449,7 +507,8 @@ func copyFile(t *testing.T, from, to string) {
 	}
 }
 
-// withTest is the embedded registry plus a test-only 0002 migration.
+// withTest is the embedded registry plus a test-only migration, numbered
+// head+1.
 func withTest(t *testing.T) fs.FS {
 	t.Helper()
 	m := fstest.MapFS{}
@@ -464,14 +523,38 @@ func withTest(t *testing.T) fs.FS {
 		}
 		m[e.Name()] = &fstest.MapFile{Data: b}
 	}
-	m["0002-test.sql"] = &fstest.MapFile{Data: []byte("ALTER TABLE shows ADD COLUMN extra INTEGER; CREATE INDEX shows_extra ON shows(extra);")}
+	m[fmt.Sprintf("%04d-test.sql", embeddedHead(t)+1)] = &fstest.MapFile{Data: []byte("ALTER TABLE shows ADD COLUMN extra INTEGER; CREATE INDEX shows_extra ON shows(extra);")}
 	return m
 }
 
-// TestSchemaFixture: the committed 0001 file, from the first release,
-// keeps its rows and equals a fresh build when opened with the registry,
-// and with a later migration on top.
+// fixtureCounts is the row count of each table of a fixture file, read
+// from a copy (the fixture itself is never opened).
+func fixtureCounts(t *testing.T, fixture string) map[string]int {
+	t.Helper()
+	cp := filepath.Join(t.TempDir(), "fixture.db")
+	copyFile(t, fixture, cp)
+	db, err := sql.Open(driverName, "file:"+cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	out := map[string]int{}
+	for _, n := range queryStrings(t, db, `SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`) {
+		var c int
+		if err := db.QueryRow("SELECT count(*) FROM " + n).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		out[n] = c
+	}
+	return out
+}
+
+// TestSchemaFixture: each committed testdata/schema-NNNN.db, from the
+// release that shipped schema NNNN, keeps its rows and equals a fresh
+// build when opened with the registry, and with a later migration on top;
+// the tables a later migration added are empty.
 func TestSchemaFixture(t *testing.T) {
+	head := embeddedHead(t)
 	if *updateFixture {
 		d := tempDirs(t)
 		ix := mustOpen(t, opts(t, d, nil))
@@ -480,43 +563,57 @@ func TestSchemaFixture(t *testing.T) {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
 		}
-		copyFile(t, mainFile(d), fixturePath)
-		t.Logf("wrote %s", fixturePath)
+		copyFile(t, mainFile(d), fixturePath(head))
+		t.Logf("wrote %s", fixturePath(head))
 	}
-	if _, err := os.Stat(fixturePath); err != nil {
-		t.Fatalf("%v: run with -update-fixture and commit it", err)
+	fixtures, err := filepath.Glob("testdata/schema-[0-9][0-9][0-9][0-9].db")
+	if err != nil {
+		t.Fatal(err)
 	}
-	fresh := func(reg fs.FS) ([]string, map[string]int) {
+	for v := 1; v <= head; v++ {
+		if !slices.Contains(fixtures, fixturePath(v)) {
+			t.Fatalf("%s is missing: run with -update-fixture at that release and commit it", fixturePath(v))
+		}
+	}
+	fresh := func(reg fs.FS) []string {
 		ix := mustOpen(t, opts(t, tempDirs(t), reg))
 		defer mustClose(t, ix)
-		return schemaOf(t, ix.sh.w), counts(t, ix.sh.w)
+		return schemaOf(t, ix.sh.w)
 	}
-	for _, tc := range []struct {
-		name string
-		reg  fs.FS
-		head int
-	}{{"released", nil, 1}, {"with a later migration", withTest(t), 2}} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := tempDirs(t)
-			copyFile(t, fixturePath, mainFile(d))
-			ix := mustOpen(t, opts(t, d, tc.reg))
-			defer mustClose(t, ix)
-			if ix.Schema() != tc.head {
-				t.Fatalf("schema %d, want %d", ix.Schema(), tc.head)
-			}
-			wantSchema, _ := fresh(tc.reg)
-			if got := schemaOf(t, ix.sh.w); !slices.Equal(got, wantSchema) {
-				t.Errorf("schema differs from a fresh build\n got %s\nwant %s", strings.Join(got, "\n"), strings.Join(wantSchema, "\n"))
-			}
-			got := counts(t, ix.sh.w)
-			for _, tbl := range schemaTables {
-				if got[tbl.name] != 1 {
-					t.Errorf("%s: %d rows kept, want 1", tbl.name, got[tbl.name])
+	for _, fixture := range fixtures {
+		before := fixtureCounts(t, fixture)
+		for _, tc := range []struct {
+			name string
+			reg  fs.FS
+			head int
+		}{{"released", nil, head}, {"with a later migration", withTest(t), head + 1}} {
+			t.Run(filepath.Base(fixture)+"/"+tc.name, func(t *testing.T) {
+				d := tempDirs(t)
+				copyFile(t, fixture, mainFile(d))
+				ix := mustOpen(t, opts(t, d, tc.reg))
+				defer mustClose(t, ix)
+				if ix.Schema() != tc.head {
+					t.Fatalf("schema %d, want %d", ix.Schema(), tc.head)
 				}
-			}
-			if want := tc.head; got["schema_migrations"] != want {
-				t.Errorf("schema_migrations %d rows, want %d", got["schema_migrations"], want)
-			}
-		})
+				if got, want := schemaOf(t, ix.sh.w), fresh(tc.reg); !slices.Equal(got, want) {
+					t.Errorf("schema differs from a fresh build\n got %s\nwant %s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+				}
+				got := counts(t, ix.sh.w)
+				for _, tbl := range schemaTables {
+					n, had := before[tbl.name]
+					switch {
+					case had && n != 1:
+						t.Errorf("%s: the fixture holds %d rows, want 1", tbl.name, n)
+					case had && got[tbl.name] != 1:
+						t.Errorf("%s: %d rows kept, want 1", tbl.name, got[tbl.name])
+					case !had && got[tbl.name] != 0:
+						t.Errorf("%s, added after the fixture: %d rows, want 0", tbl.name, got[tbl.name])
+					}
+				}
+				if want := tc.head; got["schema_migrations"] != want {
+					t.Errorf("schema_migrations %d rows, want %d", got["schema_migrations"], want)
+				}
+			})
+		}
 	}
 }
