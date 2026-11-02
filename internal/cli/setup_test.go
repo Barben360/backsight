@@ -20,6 +20,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/fileimport"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -42,8 +43,8 @@ type fakeSteps struct {
 func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 	f.calls = append(f.calls, args)
 	key := strings.Join(args[:min(2, len(args))], " ")
-	if args[0] == "verify" {
-		key = "verify"
+	if args[0] == "verify" || args[0] == "import" {
+		key = args[0]
 	}
 	if key == "server install" {
 		time.Sleep(f.slow)
@@ -76,6 +77,8 @@ func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 		data = verifyResult{Checks: []verifyCheck{{ID: "mcp", Status: "ok"}}}
 	case "retain backfill":
 		data = backfillResult{Total: 2, Queued: true}
+	case "import":
+		data = filesImportResult{Plan: fileimport.Plan{Files: 3}, Queued: true, MaxCost: 0.02}
 	}
 	raw, _ := json.Marshal(data)
 	return subResult{Data: raw}
@@ -453,8 +456,8 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 	withLLMKey(t, home)
 	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
 	// provider: 3 (openai), model: Enter, base URL: Enter, retention: keep,
-	// backups: 2 (off), backfill: no, then the go.
-	withStdin(t, "3\n\n\nkeep\n2\nno\ny\n")
+	// backups: 2 (off), backfill: no, import: Enter (no), then the go.
+	withStdin(t, "3\n\n\nkeep\n2\nno\n\ny\n")
 	stdinIsTerminal = func() bool { return true }
 	oldOut := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
@@ -479,7 +482,7 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 
 func TestSetupAtATerminalDeclines(t *testing.T) {
 	home, f := setupMachine(t)
-	withStdin(t, "1\n\n\n\nn\n")
+	withStdin(t, "1\n\n\n\n\nn\n")
 	stdinIsTerminal = func() bool { return true }
 	oldOut := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
@@ -959,13 +962,21 @@ func TestSetupSubscriptionLane(t *testing.T) {
 	if !strings.HasPrefix(last, "retain backfill --queue") || !strings.HasSuffix(last, "--allow-subscription") {
 		t.Errorf("an explicit backfill=yes on the subscription lane must allow it: %q", last)
 	}
+	notes := importFolder(t, home)
+	if code, out, _ := run(t, append(base, "--answer", "ack_subscription=yes", "--answer", "import=yes", "--answer", "import_path="+notes)...); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if !slices.Contains(f.commands(), "import "+notes+" --allow-subscription") {
+		t.Errorf("an explicit import=yes on the subscription lane must allow it: %v", f.commands())
+	}
 }
 
 func TestSetupAsksAgainAfterAnInvalidAnswer(t *testing.T) {
 	home, _ := setupMachine(t)
 	withLLMKey(t, home)
-	// provider 1, model Enter, retention Enter, backups "maybe" then 2, go.
-	withStdin(t, "1\n\n\nmaybe\n2\ny\n")
+	// provider 1, model Enter, retention Enter, backups "maybe" then 2,
+	// import Enter, go.
+	withStdin(t, "1\n\n\nmaybe\n2\n\ny\n")
 	stdinIsTerminal = func() bool { return true }
 	oldOut := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
@@ -1628,7 +1639,7 @@ func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
 	withLLMKey(t, home)
 	// The server step fails: the config stays setup's own, its answers open.
 	f.fail["server install"] = &output.Error{Code: output.NeedsUser, Message: "the deepseek API rejected the key in llm_api_key", Secrets: []string{"llm_api_key"}}
-	atATerminal(t, "1\n\n\n\ny\n") // deepseek, its model, retention, backups, go
+	atATerminal(t, "1\n\n\n\n\ny\n") // deepseek, its model, retention, backups, import, go
 	if code, out, errOut := run(t, "setup"); code != output.NeedsUser {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
@@ -1643,8 +1654,8 @@ func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
 
 	// --reconfigure asks again; Enter keeps the saved answer, a new one
 	// replaces it: openai (3), its model, its base URL, retention kept,
-	// backups off (2), go.
-	atATerminal(t, "3\n\n\n\n2\ny\n")
+	// backups off (2), import kept (no), go.
+	atATerminal(t, "3\n\n\n\n2\n\ny\n")
 	code, out, errOut := run(t, "setup", "--reconfigure")
 	if code != output.OK || !strings.Contains(out, "Which LLM") {
 		t.Fatalf("reconfigure: exit %d\n%s%s", code, out, errOut)
@@ -1659,8 +1670,8 @@ func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
 
 	// Once the server runs, the answers in config.toml are the server's:
 	// --reconfigure says where to change them, and asks the rest (the
-	// retention, then the go).
-	atATerminal(t, "\nn\n")
+	// retention and the import, then the go).
+	atATerminal(t, "\n\nn\n")
 	if code, out, _ := run(t, "setup", "--reconfigure"); code != output.OK || !strings.Contains(out, "kept from "+pathsOf(home).ConfigFile()+": provider=openai") {
 		t.Errorf("finished install: exit %d\n%s", code, out)
 	}
@@ -1988,7 +1999,7 @@ func TestSetupServerOnly(t *testing.T) {
 	}
 	env := parseSetup(t, out)
 	want := map[string]string{"secrets": "skipped", "config": "done", "server": "done", "docs": "done", "scheduler": "done",
-		"client": "skipped", "retention": "skipped", "verify": "skipped", "reference": "skipped", "backfill": "skipped"}
+		"client": "skipped", "retention": "skipped", "verify": "skipped", "reference": "skipped", "backfill": "skipped", "import": "skipped"}
 	got := map[string]string{}
 	for _, st := range env.Data.Steps {
 		got[st.Name] = st.Status
@@ -2083,5 +2094,113 @@ func TestFreshConfigHasNoFeedbackSection(t *testing.T) {
 		if err != nil || cfg.Feedback != config.Default(paths.Dirs{}, "/home/u").Feedback {
 			t.Errorf("fresh config: %v, feedback %+v", err, cfg.Feedback)
 		}
+	}
+}
+
+// importFolder writes a notes folder of one Markdown file under home.
+func importFolder(t *testing.T, home string) string {
+	t.Helper()
+	dir := filepath.Join(home, "notes")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.md"), []byte("# Go\n\nWe pin Go 1.26 in every repository.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestSetupImportsAFolder(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	notes := importFolder(t, home)
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "import=yes", "--answer", "import_path=~/notes", "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	cmds := f.commands()
+	i := slices.Index(cmds, "import "+notes)
+	if i < 0 || i+1 >= len(cmds) || cmds[i+1] != "jobs start tick" {
+		t.Fatalf("import not queued then started: %v", cmds)
+	}
+	env := parseSetup(t, out)
+	var step setup.Step
+	for _, st := range env.Data.Steps {
+		if st.Name == "import" {
+			step = st
+		}
+	}
+	if step.Status != "done" || !strings.Contains(step.Detail, "3 file(s)") {
+		t.Errorf("import step %+v", step)
+	}
+	if !strings.Contains(strings.Join(env.Data.NextSteps, "\n"), "backsight import list") {
+		t.Errorf("next steps %q", env.Data.NextSteps)
+	}
+}
+
+func TestSetupImportStartsOneTickBehindTheBackfill(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	notes := importFolder(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "backfill=yes", "--answer", "import=yes", "--answer", "import_path="+notes, "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	cmds := f.commands()
+	ticks := 0
+	for _, c := range cmds {
+		if c == "jobs start tick" {
+			ticks++
+		}
+	}
+	if ticks != 1 || !slices.Contains(cmds, "import "+notes) {
+		t.Errorf("commands %v: want the import queued and one tick started", cmds)
+	}
+}
+
+func TestSetupPlanShowsTheImport(t *testing.T) {
+	home, f := setupMachine(t)
+	notes := importFolder(t, home)
+	code, out, _ := run(t, "setup", "--plan", "--answer", "provider=deepseek", "--answer", "import=yes", "--answer", "import_path="+notes, "--json")
+	env := parseSetup(t, out)
+	if code != output.OK || len(f.calls) > 0 {
+		t.Fatalf("exit %d, commands %v\n%s", code, f.commands(), out)
+	}
+	for _, st := range env.Data.Steps {
+		if st.Name == "import" {
+			if st.Status != "planned" || !strings.Contains(st.Detail, notes) || !strings.Contains(st.Detail, "1 file") {
+				t.Errorf("import step %+v", st)
+			}
+			return
+		}
+	}
+	t.Errorf("no import step: %+v", env.Data.Steps)
+}
+
+func TestSetupRefusesAnImportPathThatIsNoFolder(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	for _, p := range []string{filepath.Join(home, "missing"), filepath.Join(home, "empty")} {
+		_ = os.MkdirAll(filepath.Join(home, "empty"), 0o700)
+		code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "import=yes", "--answer", "import_path="+p, "--non-interactive", "--json")
+		if code != output.Usage || !strings.Contains(out+errOut, "import_path=") || len(f.calls) > 0 {
+			t.Errorf("%s: exit %d, commands %v\n%s%s", p, code, f.commands(), out, errOut)
+		}
+	}
+}
+
+func TestSetupAsksAgainForAnImportFolder(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	notes := importFolder(t, home)
+	// deepseek, its model, retention, backups, import yes, a missing
+	// folder then the notes, go.
+	atATerminal(t, "1\n\n\n\nyes\n"+filepath.Join(home, "missing")+"\n"+notes+"\ny\n")
+	code, out, errOut := run(t, "setup")
+	if code != output.OK || !strings.Contains(out, "import_path=") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if !slices.Contains(f.commands(), "import "+notes) {
+		t.Errorf("commands %v", f.commands())
 	}
 }
