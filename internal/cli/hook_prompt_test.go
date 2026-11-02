@@ -178,6 +178,10 @@ func TestNudgeNamesTermsThePromptMentions(t *testing.T) {
 	if h := prompt(t, home, "s4", quiet); strings.Contains(h.Specific.Context, "No memory search") {
 		t.Error("nudged one prompt after a search")
 	}
+	_ = sessions(home).Update("s5", func(st *session.State) error { st.Prompts, st.LastInject = 3, 1; return nil })
+	if h := prompt(t, home, "s5", "Please fix issue https://github.com/o/r/issues/144 for PostgreSQL pgbouncer"); strings.Contains(h.Specific.Context, "No memory search") || !strings.Contains(h.Specific.Context, "issues/144") {
+		t.Errorf("a pointer prompt gets the pointer line, not the nudge:\n%s", h.Specific.Context)
+	}
 }
 
 func TestPostToolUseMarksTheSearchAndSeenIDs(t *testing.T) {
@@ -1010,5 +1014,82 @@ func TestRecallReadsOnlyTheCombinedCounts(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(pathsOf(home).State, "machine_id")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("recall created the machine id: %v", err)
+	}
+}
+
+func TestPointerRefs(t *testing.T) {
+	for _, c := range []struct {
+		prompt string
+		refs   []string
+	}{
+		{"Fix https://github.com/Barben360/backsight/issues/144", []string{"https://github.com/Barben360/backsight/issues/144"}},
+		{"fix issue #144 please", []string{"#144"}},
+		{"Regarde https://github.com/o/r/pull/12 et corrige", []string{"https://github.com/o/r/pull/12"}},
+		{"Review o/r#12 and https://example.com/a.", []string{"o/r#12", "https://example.com/a"}},
+		{"https://sentry.io/issues/9", []string{"https://sentry.io/issues/9"}},
+		// Content words around the link: the prompt says what it is about.
+		{"The billing PostgreSQL migration fails on https://ci.example.com/run/12 with a partial index error", nil},
+		{longPrompt, nil},
+		{"Fix the bug", nil},
+		{"#1 priority: billing PostgreSQL partial indexes", nil},
+	} {
+		if got := pointerRefs(c.prompt); !slices.Equal(got, c.refs) {
+			t.Errorf("pointerRefs(%q) = %q, want %q", c.prompt, got, c.refs)
+		}
+	}
+}
+
+func TestPointerPromptAsksToReadBeforeSearching(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	recallQueries = nil
+	url := "https://github.com/Barben360/backsight/issues/144"
+	c := prompt(t, home, "s1", "Fix "+url).Specific.Context
+	if strings.Contains(c, instructions.RecallHeader) || len(recallQueries) != 0 {
+		t.Errorf("a pointer prompt was searched (%q):\n%s", recallQueries, c)
+	}
+	if !strings.Contains(c, instructions.Pointer([]string{url})) || strings.Contains(c, instructions.Reminder) {
+		t.Errorf("want the pointer line and no search-first reminder:\n%s", c)
+	}
+	if !strings.Contains(telemetryText(t, home), `"reason":"pointer"`) {
+		t.Error("no pointer skip in telemetry")
+	}
+	// The prompt after it is still the session's first recall.
+	c = prompt(t, home, "s1", longPrompt).Specific.Context
+	st, _ := sessions(home).Load("s1")
+	if !strings.Contains(c, instructions.RecallHeader) || len(st.Injected) == 0 || st.Injected[0].Rule != "first" {
+		t.Errorf("the next prompt must recall as the first (state %+v):\n%s", st, c)
+	}
+}
+
+func TestPointerPromptKeepsTheGap(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	prompt(t, home, "s1", longPrompt) // 1: recall
+	prompt(t, home, "s1", "ok")
+	prompt(t, home, "s1", "ok")
+	recallQueries = nil
+	if c := prompt(t, home, "s1", "Now please fix https://github.com/Barben360/backsight/issues/144 thanks").Specific.Context; strings.Contains(c, instructions.RecallHeader) || len(recallQueries) != 0 {
+		t.Errorf("a pointer prompt past the gap was searched:\n%s", c)
+	}
+	recallAnswer = hits(0, 0.9)
+	c := prompt(t, home, "s1", longPrompt+" Also, which partial indexes did the migration add?").Specific.Context
+	st, _ := sessions(home).Load("s1")
+	if !strings.Contains(c, "memory m2") || st.Injected[len(st.Injected)-1].Rule != "gap" {
+		t.Errorf("the prompt after a pointer must recall on the gap (state %+v):\n%s", st, c)
+	}
+}
+
+// A reference in a follow-up that would not recall anyway ("ok merge
+// #152" right after a recall) gets no pointer line.
+func TestPointerLineOnlyWhereARecallWasDue(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	prompt(t, home, "s1", longPrompt)
+	if c := prompt(t, home, "s1", "ok merge #152").Specific.Context; strings.Contains(c, "#152") {
+		t.Errorf("a follow-up got the pointer line:\n%s", c)
+	}
+	if strings.Contains(telemetryText(t, home), `"reason":"pointer"`) {
+		t.Error("a follow-up was logged as a pointer skip")
 	}
 }

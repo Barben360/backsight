@@ -50,11 +50,25 @@ var (
 
 var wordRE = regexp.MustCompile(`[\pL\pN_]{4,}`)
 
+// refRE: a link, or an issue or pull request reference (#12, owner/repo#12).
+var refRE = regexp.MustCompile(`https?://[^\s<>()\[\]"'\x60]+|(?:[\w.-]+/[\w.-]+)?#\d+\b`)
+
+// pointerVerbs: the words that say what to do with a reference, not what
+// it is about.
+var pointerVerbs = map[string]bool{}
+
+// pointerMaxWords: below this many content words besides its references,
+// a prompt only points at something.
+const pointerMaxWords = 3
+
 var stopwords = map[string]bool{}
 
 func init() {
 	for _, w := range strings.Fields(`alors aussi avec dans pour mais donc comme cette entre faire fait sont être avoir plus tout tous sans sous très bien peut ainsi quand dont leur leurs nous vous elle elles notre votre autre autres quel quelle voir veux veut faut fais mettre avant après encore maintenant ensuite depuis chose choses that this with from have what when will your there their about which would could should into than then them also just like make need want does done been were being some other more only very here where please again`) {
 		stopwords[w] = true
+	}
+	for _, w := range strings.Fields(`issue issues ticket pull request review check look read implement handle solve close address investigate continue thanks merci regarde corrige traite implémente vérifie relis résous ferme`) {
+		pointerVerbs[w] = true
 	}
 	handlers["user-prompt-submit"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
 		h, ok := newHookEnv(ctx, input, readSide)
@@ -115,6 +129,33 @@ func overlap(a, b []string) float64 {
 		}
 	}
 	return float64(inter) / float64(len(a)+len(b)-inter)
+}
+
+// pointerRefs is the references of a prompt that only points at
+// something ("Fix https://…/issues/144", "regarde #12"): searching its
+// text finds little, the content behind the link says what it is about.
+// nil when the prompt has no reference or says enough by itself.
+func pointerRefs(prompt string) []string {
+	prompt = head(fenceRE.ReplaceAllString(prompt, " "), maxWordChars)
+	var refs []string
+	for _, r := range refRE.FindAllString(prompt, -1) {
+		if r = strings.TrimRight(r, ".,;:!?"); !slices.Contains(refs, r) {
+			refs = append(refs, r)
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	n := 0
+	for _, w := range words(refRE.ReplaceAllString(prompt, " ")) {
+		if !pointerVerbs[w] {
+			n++
+		}
+	}
+	if n >= pointerMaxWords {
+		return nil
+	}
+	return refs
 }
 
 // recallQuery: the prompt without fenced code, first QueryChars runes.
@@ -227,7 +268,15 @@ func (h *hookEnv) userPrompt() []byte {
 	var injected []session.Injection
 	banner := ""
 	ok, reason := h.decide(st, n, prompt)
+	var refs []string // only where a recall was due: a follow-up's "merge #152" is no new topic
+	if ok {
+		refs = pointerRefs(prompt)
+	}
 	switch {
+	case refs != nil:
+		// Not searched, and the gap does not restart: the prompt after
+		// the reading recalls as if this one had not been sent.
+		ok, reason = false, "pointer"
 	case ok && h.maintenance():
 		ok, reason = false, "maintenance"
 		if !st.Unavailable {
@@ -263,14 +312,18 @@ func (h *hookEnv) userPrompt() []byte {
 			h.journalShows("prompt", itemsFromHits(chosen), flags...)
 		}
 	}
-	if n == 1 && len([]rune(prompt)) >= rc.ReminderMinChars {
+	switch {
+	case refs != nil:
+		parts = append(parts, instructions.Pointer(refs))
+		ev.Hinted = true
+	case n == 1 && len([]rune(prompt)) >= rc.ReminderMinChars:
 		parts = append(parts, h.texts().Reminder)
 		ev.Hinted = true
 	}
 	nudged := false
 	// Quiet-prompt nudge (SPEC §10.2, C12): only when the prompt names at
 	// least two things the memory knows about.
-	if len(injected) == 0 && len([]rune(prompt)) >= rc.ReminderMinChars && n-1-max(st.SearchedPromptID, st.LastNudge) >= rc.QuietPrompts {
+	if refs == nil && len(injected) == 0 && len([]rune(prompt)) >= rc.ReminderMinChars && n-1-max(st.SearchedPromptID, st.LastNudge) >= rc.QuietPrompts {
 		if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 			if terms := idx.Mentioned(prompt, nudgeTerms); len(terms) >= 2 {
 				parts = append(parts, instructions.Nudge(terms))

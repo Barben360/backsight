@@ -43,7 +43,7 @@ func End() time.Time { return Now.Add(-20 * time.Minute) }
 
 // PromptReasons are the prompt reasons the lines carry: the index's closed
 // set (internal/index holds the same list; its tests check the two agree).
-var PromptReasons = []string{"machine", "too_short", "same_topic", "gap", "budget", "topic_shift", "breaker", "maintenance", "first"}
+var PromptReasons = []string{"machine", "too_short", "same_topic", "gap", "budget", "topic_shift", "breaker", "maintenance", "first", "pointer"}
 
 // FailureKinds are the hook failure kinds the lines carry: the index's
 // closed set (internal/index holds the same list; its tests check the two
