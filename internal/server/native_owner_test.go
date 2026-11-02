@@ -241,6 +241,7 @@ func TestNativeReadsAreNotGuarded(t *testing.T) {
 	if states, err := mine.UnitStates(ctx); err != nil || states[mine.DBUnit()] != "active" {
 		t.Errorf("unit states: %v, %v", states, err)
 	}
+	mine.Proc = t.TempDir() // an empty /proc on any host
 	if _, err := mine.Strays(); err != nil {
 		t.Errorf("strays refused: %v", err)
 	}
