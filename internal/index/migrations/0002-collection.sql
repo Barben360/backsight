@@ -159,7 +159,8 @@ CREATE TABLE memory_days (
 ) WITHOUT ROWID;
 CREATE INDEX memory_days_day ON memory_days(day);
 
--- memory-docs op: a retain operation of a session's document.
+-- memory-docs op: a retain operation of a session's document; no_units 1
+-- when its document was read and the server gave no count.
 CREATE TABLE doc_ops (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
@@ -172,6 +173,7 @@ CREATE TABLE doc_ops (
   updated_at INTEGER,
   retries INTEGER,
   units INTEGER,
+  no_units INTEGER,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
 CREATE INDEX doc_ops_operation_id ON doc_ops(operation_id);
@@ -233,7 +235,7 @@ CREATE VIEW memory_coverage AS
 
 -- The latest line of each retain operation.
 CREATE VIEW doc_op AS
-  SELECT operation_id, document, session, status, created_at, updated_at, retries, units, ts
+  SELECT operation_id, document, session, status, created_at, updated_at, retries, units, no_units, ts
   FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY operation_id ORDER BY ts DESC, source_file DESC, "offset" DESC) AS rn
         FROM doc_ops WHERE operation_id IS NOT NULL)
   WHERE rn = 1;

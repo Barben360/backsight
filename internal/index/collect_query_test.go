@@ -81,8 +81,9 @@ func TestSentDocuments(t *testing.T) {
 	}
 }
 
-// TestRecordedOperations: per operation its latest status, and whether
-// any of its lines holds the document's unit count.
+// TestRecordedOperations: per operation its latest status, whether any
+// of its lines holds the document's unit count, and whether one says the
+// server gave none.
 func TestRecordedOperations(t *testing.T) {
 	e := newEnv(t)
 	md := metricsfile.FamilyMemoryDocs
@@ -96,7 +97,9 @@ func TestRecordedOperations(t *testing.T) {
 	}
 	e.appendM(md, "2026-10", op(0, "o1", "pending", nil)+op(time.Second, "o1", "completed", nil)+
 		op(0, "o2", "completed", nil)+op(time.Second, "o2", "completed", 4)+
-		op(0, "o3", "failed", nil)+op(0, "o4", "completed", 0))
+		op(0, "o3", "failed", nil)+op(0, "o4", "completed", 0)+
+		op(0, "o5", "completed", nil)+mline("op", tsAt(time.Second), map[string]any{"operation": "o5", "document": "conversation:s1", "session": "s1",
+		"status": "completed", "created_at": "2026-10-29T10:00:00Z", "updated_at": "2026-10-29T10:01:00Z", "retries": 0, "no_units": true}))
 	e.ingest()
 	got, err := e.ix.RecordedOperations(context.Background())
 	if err != nil {
@@ -107,6 +110,7 @@ func TestRecordedOperations(t *testing.T) {
 		"o2": {Status: "completed", HasUnits: true},
 		"o3": {Status: "failed"},
 		"o4": {Status: "completed", HasUnits: true}, // 0 units is a count read
+		"o5": {Status: "completed", NoUnits: true},  // read, the server gave no count
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("recorded\n got %v\nwant %v", got, want)

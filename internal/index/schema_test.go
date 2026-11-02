@@ -33,7 +33,7 @@ func embeddedHead(t *testing.T) int {
 // released pins every shipped migration (each release adds its own).
 var released = map[string]string{
 	"0001-initial":    "37f78317d2a3e98e9bf642e31337171222f525d2ecb7c6bf1b1d115097a9d331",
-	"0002-collection": "4127a2cf1e608851e002cc4fe672db5cbdb65af1579260675d90c39da8001181",
+	"0002-collection": "71de9e2b47e97357ff58bd793ef4214e6a5b2aff71999383539b5b74278c9500",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -87,7 +87,7 @@ var schemaTables = []struct{ name, cols string }{
 	{"doctor_runs", rowKey + "ts check_id status"},
 	{"memory_docs", rowKey + "ts memory_id outcome doc_kind document session created_day fact_type"},
 	{"memory_days", rowKey + "ts day n complete"},
-	{"doc_ops", rowKey + "ts operation_id document session status created_at updated_at retries units"},
+	{"doc_ops", rowKey + "ts operation_id document session status created_at updated_at retries units no_units"},
 	{"scans", rowKey + "ts count live forgotten pages ms"},
 	{"metrics_other", rowKey + "ts family kind"},
 }
@@ -170,7 +170,7 @@ var (
 		"consolidation_pending": "INTEGER", "consolidation_failed": "INTEGER", "last_consolidated_at": "INTEGER",
 		"memories": "INTEGER", "bucket": "INTEGER", "input": "INTEGER", "output": "INTEGER", "cached": "INTEGER",
 		"thoughts": "INTEGER", "requests": "INTEGER", "complete": "INTEGER", "created_at": "INTEGER",
-		"updated_at": "INTEGER", "retries": "INTEGER", "units": "INTEGER", "count": "INTEGER",
+		"updated_at": "INTEGER", "retries": "INTEGER", "units": "INTEGER", "no_units": "INTEGER", "count": "INTEGER",
 		"forgotten": "INTEGER",
 
 		"top": "REAL", "reranker": "REAL", "boost": "REAL", "score_without_boost": "REAL",

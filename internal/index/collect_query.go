@@ -75,10 +75,12 @@ func (ix *Index) SentDocuments(ctx context.Context, since time.Time) ([]SentDocu
 }
 
 // RecordedOp is what the record holds of a retain operation: its latest
-// status, and whether a line of it holds the document's unit count.
+// status, whether a line of it holds the document's unit count, and
+// whether one says the server gave none.
 type RecordedOp struct {
 	Status   string
 	HasUnits bool
+	NoUnits  bool // read, and the server gave no count
 }
 
 // RecordedOperations is every operation of the doc_op view by id.
@@ -86,7 +88,8 @@ func (ix *Index) RecordedOperations(ctx context.Context) (map[string]RecordedOp,
 	out := map[string]RecordedOp{}
 	err := ix.ReadTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT d.operation_id, coalesce(d.status, ''),
-			EXISTS (SELECT 1 FROM doc_ops o WHERE o.operation_id = d.operation_id AND o.units IS NOT NULL)
+			EXISTS (SELECT 1 FROM doc_ops o WHERE o.operation_id = d.operation_id AND o.units IS NOT NULL),
+			EXISTS (SELECT 1 FROM doc_ops o WHERE o.operation_id = d.operation_id AND o.no_units = 1)
 			FROM doc_op d`)
 		if err != nil {
 			return err
@@ -94,11 +97,11 @@ func (ix *Index) RecordedOperations(ctx context.Context) (map[string]RecordedOp,
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var id, status string
-			var units int64
-			if err := rows.Scan(&id, &status, &units); err != nil {
+			var units, none int64
+			if err := rows.Scan(&id, &status, &units, &none); err != nil {
 				return err
 			}
-			out[id] = RecordedOp{Status: status, HasUnits: units == 1}
+			out[id] = RecordedOp{Status: status, HasUnits: units == 1, NoUnits: none == 1}
 		}
 		return rows.Err()
 	})

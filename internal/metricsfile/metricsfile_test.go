@@ -275,6 +275,8 @@ func TestMemoryDocRefusesNonSessionDocuments(t *testing.T) {
 		{"session mismatch", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "session", Document: "conversation:abc", Session: "zzz", FactType: "world"}, false},
 		{"op non-session", DocOp{Operation: "o", Document: "note:x", Session: "", Status: "pending"}, false},
 		{"op session", DocOp{Operation: "o", Document: "subagent:abc:def", Session: "abc", Status: "pending"}, true},
+		{"op without a count", DocOp{Operation: "o", Document: "conversation:abc", Session: "abc", Status: "completed", NoUnits: true}, true},
+		{"op units and no count", DocOp{Operation: "o", Document: "conversation:abc", Session: "abc", Status: "completed", Units: new(int64), NoUnits: true}, false},
 		{"gone is never written", MemoryDoc{Memory: "m1", Outcome: "gone", CreatedDay: "2026-10-29", DocKind: "none", FactType: "world"}, false},
 		{"created day missing", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "none", FactType: "world"}, false},
 		{"created day is a time", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29T10:00:00Z", DocKind: "none", FactType: "world"}, false},

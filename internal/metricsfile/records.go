@@ -117,6 +117,10 @@ type DocOp struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Retries   int       `json:"retries"`
 	Units     *int64    `json:"units,omitempty"`
+	// NoUnits: the document was read and the server gave no count (it is
+	// not read again for this operation); written only when true, never
+	// with Units.
+	NoUnits bool `json:"no_units,omitempty"`
 }
 
 // Scan is a scan-history/scan line (no id, no text).
@@ -284,6 +288,9 @@ func validate(r Record) error {
 		}
 		if err := enum("status", v.Status, opStatuses, false); err != nil {
 			return err
+		}
+		if v.NoUnits && v.Units != nil {
+			return fmt.Errorf("metricsfile: an op has units or no_units, not both")
 		}
 		return sessionDoc(v.Document, v.Session)
 	}

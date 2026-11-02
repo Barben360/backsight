@@ -403,7 +403,7 @@ func TestMemoryDocsRedoesAPartDay(t *testing.T) {
 			}
 			return page, total, 0
 		}
-		if got, want := e.run(mdAt), "memory docs: 2 day(s) listed (5 memories), 0 operation(s), 0 unit count(s)"; got != want {
+		if got, want := e.run(mdAt), "memory docs: 2 day(s) listed (5 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
 			t.Errorf("result %q, want %q", got, want)
 		}
 		lines := e.lines()
@@ -455,7 +455,7 @@ func TestMemoryDocsRedoesAPartDay(t *testing.T) {
 			}
 			return page, total, 0
 		}
-		if got, want := e.run(mdAt), "memory docs: 2 day(s) listed (5 memories), 0 operation(s), 0 unit count(s)"; got != want {
+		if got, want := e.run(mdAt), "memory docs: 2 day(s) listed (5 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
 			t.Errorf("result %q, want %q", got, want)
 		}
 		lines := e.lines()
@@ -560,8 +560,19 @@ func TestMemoryDocsSplitsAHugeDay(t *testing.T) {
 		if got, want := e.run(mdAt), "memory docs: 6 day(s) listed (18 memories), day 2026-10-27 too large, 150000 memories, 0 operation(s), 0 unit count(s)"; got != want {
 			t.Errorf("result %q, want %q", got, want)
 		}
-		if n := fakeCalls["GET /memories/list"]; n != 200 {
-			t.Errorf("%d list calls, want 200", n)
+		// The last hour's 300 pages do not fit what is left: its page 0
+		// only, no call spent on a window that cannot finish.
+		var last []string
+		for _, q := range mdQueries() {
+			if strings.HasPrefix(q, "window 2026-10-27T23:00:00Z/") {
+				last = append(last, q)
+			}
+		}
+		if !slices.Equal(last, []string{"window 2026-10-27T23:00:00Z/2026-10-28T00:00:00Z@0"}) {
+			t.Errorf("last hour's queries %v, want its page 0 only", last)
+		}
+		if n := fakeCalls["GET /memories/list"]; n != 35 {
+			t.Errorf("%d list calls, want 35 (2 checks, 3 days, 2 probes, 4 older days, 24 windows)", n)
 		}
 		lines := e.lines()
 		mem, at := memoriesOf(lines, "2026-10-27")
@@ -663,7 +674,7 @@ func TestMemoryDocsFollowsTheServersPageSize(t *testing.T) {
 			}
 			return page, total, 0
 		}
-		if got, want := e.run(mdAt), "memory docs: 0 day(s) listed (0 memories), 0 operation(s), 0 unit count(s)"; got != want {
+		if got, want := e.run(mdAt), "memory docs: 0 day(s) listed (0 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
 			t.Errorf("result %q, want %q", got, want)
 		}
 		lines := e.lines()
@@ -897,11 +908,21 @@ func TestMemoryDocsSurvivesOddServers(t *testing.T) {
 		if len(ops) != 1 {
 			t.Fatalf("op lines %v", ops)
 		}
-		if _, ok := ops[0]["units"]; ok {
-			t.Errorf("units recorded though the server gave none: %v", ops[0])
+		if _, ok := ops[0]["units"]; ok || ops[0]["no_units"] != true {
+			t.Errorf("op %v, want no units and no_units true (the server gave no count)", ops[0])
 		}
 		if bytes.Contains(e.raw(), []byte("canary")) {
 			t.Error("the record holds a text")
+		}
+		// A count the server does not give is not asked again.
+		if got, want := e.run(mdAt.Add(time.Hour)), "memory docs: 0 day(s) listed (0 memories), every day listed, 0 operation(s), 0 unit count(s)"; got != want {
+			t.Errorf("second run %q, want %q", got, want)
+		}
+		if n := fakeCalls["GET /documents/{id}"]; n != 1 {
+			t.Errorf("%d document reads over two runs, want 1", n)
+		}
+		if ops := mdKind(e.lines(), "op"); len(ops) != 1 {
+			t.Errorf("op lines after the second run %v, want 1", ops)
 		}
 	})
 	t.Run("every call times out", func(t *testing.T) {
@@ -997,5 +1018,80 @@ func TestMaintainRunsMemoryDocs(t *testing.T) {
 	}
 	if _, err := os.Stat(pathsOf(home).IndexDir()); !os.IsNotExist(err) {
 		t.Errorf("maintain created the index: %v", err)
+	}
+}
+
+// Days read at once share the run's calls: each reserves its pages after
+// page 0, oldest first, so days that do not all fit are not cut in step
+// (none would be whole): the oldest that fit are written, the rest wait.
+func TestMemoryDocsDoesNotStarveDays(t *testing.T) {
+	e := newMDEnv(t)
+	e.listedRange("2026-10-25", true)
+	fakeListCap = 100 // 60 pages a day
+	setBank(bankDay("2026-10-26", 6000), bankDay("2026-10-27", 6000), bankDay("2026-10-28", 6000), bankDay("2026-10-29", 6000))
+	if got, want := e.run(mdAt), "memory docs: 3 day(s) listed (18000 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
+		t.Errorf("result %q, want %q", got, want)
+	}
+	lines := e.lines()
+	la := listedAt(lines)
+	for _, d := range []string{"2026-10-26", "2026-10-27", "2026-10-28"} {
+		if mem, _ := memoriesOf(lines, d); len(mem) != 6000 {
+			t.Errorf("%s: %d memory lines, want 6000", d, len(mem))
+		}
+		if _, ok := la[d]; !ok {
+			t.Errorf("%s not listed", d)
+		}
+	}
+	if mem, _ := memoriesOf(lines, "2026-10-29"); len(mem) != 0 {
+		t.Errorf("%d memory lines of the day left", len(mem))
+	}
+	if q := dayQueries(); slices.Contains(q, "day 2026-10-29@100/500") {
+		t.Errorf("the day left was read past page 0: %v", q)
+	}
+	if got, want := e.run(mdAt.Add(time.Hour)), "memory docs: 1 day(s) listed (6000 memories), every day listed, 0 operation(s), 0 unit count(s)"; got != want {
+		t.Errorf("next run %q, want %q", got, want)
+	}
+	if mem, _ := memoriesOf(e.lines(), "2026-10-29"); len(mem) != 6000 {
+		t.Errorf("next run: %d memory lines of 29, want 6000", len(mem))
+	}
+}
+
+// The step's deadline in the middle of a run: the days read whole are
+// written, the day cut writes nothing and is left for the next run.
+func TestMemoryDocsDeadlineKeepsWholeDays(t *testing.T) {
+	old := memoryDocsStepTimeout
+	memoryDocsStepTimeout = time.Second
+	t.Cleanup(func() { memoryDocsStepTimeout = old })
+	e := newMDEnv(t)
+	e.listedRange("2026-10-26", true)
+	setBank(bankDay("2026-10-27", 3), bankDay("2026-10-28", 4), bankDay("2026-10-29", 600))
+	fakeHook = func(r *http.Request) {
+		if q := r.URL.Query(); q.Get("start_date") == "2026-10-29T00:00:00Z" && q.Get("offset") == "500" {
+			time.Sleep(2500 * time.Millisecond) // past the step's deadline, within the call's 3 s
+		}
+	}
+	start := time.Now()
+	got := e.run(mdAt)
+	if el := time.Since(start); el > 2300*time.Millisecond {
+		t.Errorf("step took %v, want about its 1 s deadline", el)
+	}
+	if want := "memory docs: 2 day(s) listed (7 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
+		t.Errorf("result %q, want %q", got, want)
+	}
+	lines := e.lines()
+	la := listedAt(lines)
+	for d, n := range map[string]int{"2026-10-27": 3, "2026-10-28": 4} {
+		if mem, _ := memoriesOf(lines, d); len(mem) != n {
+			t.Errorf("%s: %d memory lines, want %d", d, len(mem), n)
+		}
+		if _, ok := la[d]; !ok {
+			t.Errorf("%s not listed", d)
+		}
+	}
+	if mem, _ := memoriesOf(lines, "2026-10-29"); len(mem) != 0 {
+		t.Errorf("the cut day wrote %d memory lines", len(mem))
+	}
+	if _, ok := la["2026-10-29"]; ok {
+		t.Error("the cut day is listed")
 	}
 }

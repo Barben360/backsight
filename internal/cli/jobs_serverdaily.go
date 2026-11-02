@@ -48,11 +48,11 @@ type serverDailyReader interface {
 	LLMStats(context.Context, string, string) ([]hindsight.LLMBucket, error)
 }
 
-// serverDailyReaderFor is the configured server's GET-only client: nil
-// and no error when no server is set up (no config, or no server URL), an
-// error when the configuration cannot be read or names no usable server.
-// Tests replace it.
-var serverDailyReaderFor = func() (serverDailyReader, error) {
+// readOnlyServer is the configured server's GET-only client, each call
+// within serverDailyTimeout: nil and no error when no server is set up (no
+// config, or no server URL), an error when the configuration cannot be
+// read or names no usable server.
+func readOnlyServer() (*hindsight.ReadOnly, error) {
 	cfg, sec, err := loadServerConfig()
 	switch {
 	case output.CodeOf(err) == output.NeedsUser: // no config: backsight setup was not run
@@ -62,8 +62,14 @@ var serverDailyReaderFor = func() (serverDailyReader, error) {
 	case cfg.Server.URL == "":
 		return nil, nil
 	}
-	ro, err := hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, serverDailyTimeout)
-	if err != nil {
+	return hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, serverDailyTimeout)
+}
+
+// serverDailyReaderFor is readOnlyServer as the step's reader (a nil
+// client is a nil reader). Tests replace it.
+var serverDailyReaderFor = func() (serverDailyReader, error) {
+	ro, err := readOnlyServer()
+	if ro == nil {
 		return nil, err
 	}
 	return ro, nil
@@ -82,11 +88,16 @@ func maintainServerDaily(ctx context.Context, d paths.Dirs, clock func() time.Ti
 	return collectServerDaily(ctx, w, r, clock(), time.Local)
 }
 
-// boundedRead runs read under its own serverDailyTimeout context and
-// abandons it when that context ends: a reader that ignores its context
-// cannot hold the step. An abandoned read's result is never used.
+// boundedRead is boundedWithin serverDailyTimeout.
 func boundedRead[T any](ctx context.Context, read func(context.Context) (T, error)) (T, error) {
-	cctx, cancel := context.WithTimeout(ctx, serverDailyTimeout)
+	return boundedWithin(ctx, serverDailyTimeout, read)
+}
+
+// boundedWithin runs read under its own context bounded by d and abandons
+// it when that context ends: a reader that ignores its context cannot hold
+// the step. An abandoned read's result is never used.
+func boundedWithin[T any](ctx context.Context, d time.Duration, read func(context.Context) (T, error)) (T, error) {
+	cctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	type result struct {
 		v   T

@@ -16,7 +16,6 @@ import (
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/metricsfile"
-	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/session"
 )
@@ -61,21 +60,11 @@ type memoryDocsIndex interface {
 	RecordedOperations(context.Context) (map[string]index.RecordedOp, error)
 }
 
-// memoryDocsReaderFor is the configured server's GET-only client, as
-// serverDailyReaderFor: nil and no error when no server is set up. Tests
-// replace it.
+// memoryDocsReaderFor is readOnlyServer as the step's reader (a nil
+// client is a nil reader). Tests replace it.
 var memoryDocsReaderFor = func() (memoryDocsReader, error) {
-	cfg, sec, err := loadServerConfig()
-	switch {
-	case output.CodeOf(err) == output.NeedsUser:
-		return nil, nil
-	case err != nil:
-		return nil, err
-	case cfg.Server.URL == "":
-		return nil, nil
-	}
-	ro, err := hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, serverDailyTimeout)
-	if err != nil {
+	ro, err := readOnlyServer()
+	if ro == nil {
 		return nil, err
 	}
 	return ro, nil
@@ -167,7 +156,7 @@ type mdRun struct {
 	listed    map[string]bool // days with a listed line, earlier or now
 	complete  bool            // the record covers the bank
 	open      bool            // the backfill stopped before the bank's first day
-	left      bool            // a day was left unlisted for the next run
+	left      int             // days left unlisted for the next run
 	huge      []mdHuge        // days put off to the end of the run
 	tooLarge  []string        // the result's parts of the huge days not finished
 	nDays     int
@@ -189,33 +178,6 @@ type mdSpan struct {
 	huge  bool                     // a day put off (page 0 only read)
 }
 
-// boundedWithin is boundedRead with its own bound d.
-func boundedWithin[T any](ctx context.Context, d time.Duration, read func(context.Context) (T, error)) (T, error) {
-	cctx, cancel := context.WithTimeout(ctx, d)
-	defer cancel()
-	type result struct {
-		v   T
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		v, err := read(cctx)
-		done <- result{v, err}
-	}()
-	select {
-	case r := <-done:
-		return r.v, r.err
-	case <-cctx.Done():
-		select {
-		case r := <-done:
-			return r.v, r.err
-		default:
-		}
-		var zero T
-		return zero, cctx.Err()
-	}
-}
-
 // mdPool runs the jobs in order, at most memoryDocsWorkers at once.
 func mdPool(jobs []func()) {
 	sem := make(chan struct{}, memoryDocsWorkers)
@@ -230,13 +192,74 @@ func mdPool(jobs []func()) {
 	wg.Wait()
 }
 
+// mdTurn orders the reservations of spans read at once: a span decides
+// after the one dispatched before it, so the earlier (the older day going
+// forward, the newer going back) always goes first.
+type mdTurn struct {
+	prev, mine chan struct{}
+	once       sync.Once
+}
+
+// mdTurns are the turns of n spans, in their order.
+func mdTurns(n int) []*mdTurn {
+	out := make([]*mdTurn, n)
+	var prev chan struct{}
+	for i := range out {
+		out[i] = &mdTurn{prev: prev, mine: make(chan struct{})}
+		prev = out[i].mine
+	}
+	return out
+}
+
+// take runs decide (nil: nothing to decide) once the turn before has, then
+// lets the next one go; only its first call counts. A nil turn decides at
+// once.
+func (t *mdTurn) take(decide func()) {
+	if t == nil {
+		if decide != nil {
+			decide()
+		}
+		return
+	}
+	t.once.Do(func() {
+		if t.prev != nil {
+			<-t.prev
+		}
+		if decide != nil {
+			decide()
+		}
+		close(t.mine)
+	})
+}
+
+// reserve takes n list calls from what is left: all of them, or none.
+func (m *mdRun) reserve(n int64) bool {
+	for {
+		left := m.lists.Load()
+		if left < n {
+			return false
+		}
+		if m.lists.CompareAndSwap(left, left-n) {
+			return true
+		}
+	}
+}
+
 // list is one list call within the run's budget and the call's bound.
 func (m *mdRun) list(ctx context.Context, start, end time.Time, offset, limit int) ([]hindsight.ListedMemory, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	if m.lists.Add(-1) < 0 {
+	if !m.reserve(1) {
 		return nil, 0, errMDSpent
+	}
+	return m.call(ctx, start, end, offset, limit)
+}
+
+// call is one list call already paid for, within the call's bound.
+func (m *mdRun) call(ctx context.Context, start, end time.Time, offset, limit int) ([]hindsight.ListedMemory, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
 	}
 	type page struct {
 		items []hindsight.ListedMemory
@@ -249,15 +272,38 @@ func (m *mdRun) list(ctx context.Context, start, end time.Time, offset, limit in
 	return p.items, p.total, err
 }
 
+// pagesLeft is how many pages after page 0 a span of total needs at
+// page 0's size n.
+func pagesLeft(total, n int) int64 {
+	if n == 0 || total <= n {
+		return 0
+	}
+	return int64((total+n-1)/n - 1)
+}
+
 // readSpan reads the memories created in [start, end), page after page,
 // each from the offset the items so far reached. With hugeCheck, a span
 // whose page 0 says it is over memoryDocsHugeDay, or needs more pages
-// than the run's whole budget, is not read further.
-func (m *mdRun) readSpan(ctx context.Context, start, end time.Time, hugeCheck bool) mdSpan {
+// than the run's whole budget, is not read further. After page 0 the
+// span reserves the pages it still needs, in its turn: when they are not
+// left, it is not read further (the next run reads it), so spans read at
+// once are never all cut part way. A reservation not spent goes back.
+func (m *mdRun) readSpan(ctx context.Context, start, end time.Time, hugeCheck bool, turn *mdTurn) mdSpan {
+	defer turn.take(nil) // whatever happens, the next span's turn comes
 	var s mdSpan
+	var reserved int64
+	defer func() { m.lists.Add(reserved) }()
 	seen := map[string]bool{}
 	for offset := 0; ; {
-		items, total, err := m.list(ctx, start, end, offset, memoryDocsPage)
+		var items []hindsight.ListedMemory
+		var total int
+		var err error
+		if reserved > 0 {
+			reserved--
+			items, total, err = m.call(ctx, start, end, offset, memoryDocsPage)
+		} else {
+			items, total, err = m.list(ctx, start, end, offset, memoryDocsPage)
+		}
 		if err != nil {
 			return mdSpan{}
 		}
@@ -266,6 +312,17 @@ func (m *mdRun) readSpan(ctx context.Context, start, end time.Time, hugeCheck bo
 			if hugeCheck && (total > memoryDocsHugeDay || len(items) > 0 && (total+len(items)-1)/len(items) > memoryDocsListCalls) {
 				return mdSpan{total: total, huge: true}
 			}
+			if need := pagesLeft(total, len(items)); need > 0 {
+				turn.take(func() {
+					if m.reserve(need) {
+						reserved = need
+					}
+				})
+				if reserved == 0 {
+					return mdSpan{}
+				}
+			}
+			turn.take(nil)
 		}
 		if len(items) == 0 { // before the total: the span is not read whole
 			break
@@ -363,10 +420,10 @@ func (m *mdRun) filterChecks(ctx context.Context) string {
 // the order given; a huge day is put off to the end of the run, any other
 // waits for the next run.
 func (m *mdRun) readDays(ctx context.Context, days []time.Time) {
-	spans := make([]mdSpan, len(days))
+	spans, turns := make([]mdSpan, len(days)), mdTurns(len(days))
 	jobs := make([]func(), len(days))
 	for i, d := range days {
-		jobs[i] = func() { spans[i] = m.readSpan(ctx, d, d.AddDate(0, 0, 1), true) }
+		jobs[i] = func() { spans[i] = m.readSpan(ctx, d, d.AddDate(0, 0, 1), true, turns[i]) }
 	}
 	mdPool(jobs)
 	for i, d := range days {
@@ -375,11 +432,11 @@ func (m *mdRun) readDays(ctx context.Context, days []time.Time) {
 		case s.huge:
 			m.huge = append(m.huge, mdHuge{day: d, total: s.total})
 		case !s.whole:
-			m.left = true
+			m.left++
 		default:
 			recs := append(memoryLines(s.items, day), metricsfile.Listed{Day: day, N: int64(s.total)})
 			if m.append(recs...) != nil {
-				m.left = true
+				m.left++
 				continue
 			}
 			m.listed[day] = true
@@ -460,11 +517,11 @@ func (m *mdRun) hugeDays(ctx context.Context) {
 	for _, h := range m.huge {
 		day := h.day.Format(time.DateOnly)
 		var whole, written int
-		jobs := make([]func(), 24)
+		jobs, turns := make([]func(), 24), mdTurns(24)
 		for hr := range jobs {
 			jobs[hr] = func() {
 				start := h.day.Add(time.Duration(hr) * time.Hour)
-				s := m.readSpan(ctx, start, start.Add(time.Hour), false)
+				s := m.readSpan(ctx, start, start.Add(time.Hour), false, turns[hr])
 				if !s.whole || m.append(memoryLines(s.items, day)...) != nil {
 					return
 				}
@@ -490,8 +547,11 @@ func (m *mdRun) daysPart() string {
 	switch {
 	case !m.complete:
 		s += ", older days on the next run"
-	case !m.left && len(m.tooLarge) == 0:
+	case m.left == 0 && len(m.tooLarge) == 0:
 		s += ", every day listed"
+	}
+	if m.left > 0 {
+		s += fmt.Sprintf(", %d day(s) left for the next run", m.left)
 	}
 	for _, p := range m.tooLarge {
 		s += ", " + p
@@ -566,7 +626,7 @@ func (m *mdRun) operations(ctx context.Context, ix memoryDocsIndex) string {
 	// document, newest operations first, within the run's reads.
 	needs := func(op hindsight.Operation) bool {
 		rec, known := recorded[op.ID]
-		return mdOpStatus(op.Status) == "completed" && (!known || !rec.HasUnits)
+		return mdOpStatus(op.Status) == "completed" && (!known || !rec.HasUnits && !rec.NoUnits)
 	}
 	var docs []string
 	at := map[string]int{}
@@ -607,12 +667,14 @@ func (m *mdRun) operations(ctx context.Context, ix memoryDocsIndex) string {
 			case got.read && got.ok:
 				n := int64(got.n)
 				line.Units = &n
+			case got.read: // no count: remembered, not asked again
+				line.NoUnits = true
 			case !got.read:
 				k++
 			}
 		}
 		rec, known := recorded[op.ID]
-		if (known && rec.Status == status && line.Units == nil) || m.append(line) != nil {
+		if (known && rec.Status == status && line.Units == nil && !line.NoUnits) || m.append(line) != nil {
 			continue
 		}
 		o++

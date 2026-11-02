@@ -320,6 +320,11 @@ func (c collLine) op() ([]row, string) {
 	r.add("updated_at", timeValue(d, "updated_at"))
 	r.add("retries", d.integer("retries"))
 	r.add("units", d.integer("units"))
+	noUnits := d.boolean("no_units")
+	if noUnits == nil {
+		noUnits = int64(0) // written only when true
+	}
+	r.add("no_units", noUnits)
 	return []row{r}, ""
 }
 

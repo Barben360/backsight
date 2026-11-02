@@ -150,7 +150,7 @@ func TestCollectionLinesBecomeRows(t *testing.T) {
 	})
 	e.checkRows("doc_ops", `"offset"`, []map[string]any{{
 		"ts": ms0, "operation_id": "op-1", "document": "conversation:sess-1", "session": "sess-1", "status": "completed",
-		"created_at": mustMS("2026-10-30T10:00:00Z"), "updated_at": mustMS("2026-10-30T10:02:00.5Z"), "retries": 0, "units": 12,
+		"created_at": mustMS("2026-10-30T10:00:00Z"), "updated_at": mustMS("2026-10-30T10:02:00.5Z"), "retries": 0, "units": 12, "no_units": 0,
 	}})
 	e.checkRows("scans", `"offset"`, []map[string]any{{"ts": ms0, "count": 2, "live": 1, "forgotten": 1, "pages": 12, "ms": 3400}})
 	if n := e.count("metrics_other"); n != 0 {
@@ -189,7 +189,7 @@ func TestCollectionOmittedFieldsAreNull(t *testing.T) {
 		t.Errorf("%d rows of absent maps", n)
 	}
 	e.checkRows("doc_ops", `"offset"`, []map[string]any{{"ts": ms0, "operation_id": "op-2", "document": nil, "session": nil, "status": "pending",
-		"created_at": nil, "updated_at": nil, "retries": nil, "units": nil}})
+		"created_at": nil, "updated_at": nil, "retries": nil, "units": nil, "no_units": 0}})
 }
 
 func TestMemoryDaysViews(t *testing.T) {
@@ -355,7 +355,7 @@ func TestCollectionGuards(t *testing.T) {
 	}})
 	e.checkRows("doc_ops", `"offset"`, []map[string]any{{
 		"ts": ms0, "operation_id": "op-1", "document": nil, "session": "sess-1", "status": "other",
-		"created_at": nil, "updated_at": mustMS("2026-10-30T10:00:00Z"), "retries": nil, "units": nil,
+		"created_at": nil, "updated_at": mustMS("2026-10-30T10:00:00Z"), "retries": nil, "units": nil, "no_units": 0,
 	}})
 	e.checkRows("doctor_runs", "check_id", []map[string]any{
 		{"ts": ms0, "check_id": "index", "status": "warn"},
