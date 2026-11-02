@@ -58,6 +58,42 @@ func TestStylesheetIsTheDesigns(t *testing.T) {
 			kept = append(kept, l)
 		}
 	}
+	// The block 6 section follows the canvas-only simulation: all of it but
+	// the --hm token rules (they live in tokens.css) and the canvas-only
+	// .keys-shade rule.
+	b6 := -1
+	for i, l := range lines {
+		if strings.Contains(l, "Block 6 additions") && i > 0 && strings.HasPrefix(lines[i-1], "/* ====") {
+			b6 = i - 1
+		}
+	}
+	if b6 < 0 {
+		t.Fatal("reference/dashboard.css has no Block 6 additions section")
+	}
+	skip := false
+	for _, l := range lines[b6:] {
+		switch {
+		case strings.HasPrefix(l, "/* ---------- calendar heatmap steps"):
+			skip = true
+		case strings.HasPrefix(l, "/* ---------- density"):
+			skip = false
+		}
+		if skip || strings.HasPrefix(l, ".keys-shade ") {
+			continue
+		}
+		// Two comments name the block: the pages say no block number, so the
+		// shipped sheet words them without it (G-public).
+		l = strings.NewReplacer(
+			"Block 6 additions (draft). Every rule below", "Additions: calendar, density, shortcuts, markers. Every rule below",
+			"narrow: block 6 parts under", "narrow: the added parts under",
+		).Replace(l)
+		kept = append(kept, l)
+	}
+	for _, bad := range []string{"--hm-1:", "--hm-4:", ".keys-shade"} {
+		if strings.Contains(css, bad) {
+			t.Errorf("dashboard.css has %q: it belongs to tokens.css or the canvas only", bad)
+		}
+	}
 	pos, n := 0, 0
 	for _, rule := range strings.Split(strings.Join(kept, "\n"), "}") {
 		if strings.TrimSpace(rule) == "" {
@@ -70,7 +106,7 @@ func TestStylesheetIsTheDesigns(t *testing.T) {
 		pos += i + len(rule) + 1
 		n++
 	}
-	if n < 100 {
+	if n < 150 {
 		t.Errorf("only %d rules compared", n)
 	}
 }

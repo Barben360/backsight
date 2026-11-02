@@ -297,6 +297,11 @@ func TestForcedColors(t *testing.T) {
 		{".v-ico", "background", "CanvasText"},
 		{".chart svg rect.seg", "stroke", "CanvasText"},
 		{`.chart svg path.seg[class*="f-"]`, "stroke", "CanvasText"},
+		{".hm-c", "forced-color-adjust", "none"},
+		{".hm-c.q0", "border-color", "CanvasText"},
+		{".hm-c.none", "border-color", "CanvasText"},
+		{".chart .norun", "stroke", "CanvasText"},
+		{".chart .gap-band", "fill", "Canvas"},
 	} {
 		if !has(c[0], c[1], c[2]) {
 			t.Errorf("forced-colors: %q lacks %s: %s", c[0], c[1], c[2])
@@ -306,7 +311,7 @@ func TestForcedColors(t *testing.T) {
 	for _, r := range rules {
 		if r.At == "@media (forced-colors: active)" && r.declStarts("forced-color-adjust", "none") && !r.declStarts("background", "CanvasText") {
 			for _, s := range r.Sel {
-				if !strings.HasPrefix(s, ".chart svg") && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
+				if !strings.HasPrefix(s, ".chart svg") && s != ".hm-c" && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
 					t.Errorf("forced-colors: %q switches forced colours off", s)
 				}
 			}
