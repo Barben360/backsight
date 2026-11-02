@@ -240,8 +240,11 @@ func TestUpdateApplyPlanListsPendingIndexMigrations(t *testing.T) {
 		t.Errorf("calls %q", bins.calls)
 	}
 
+	// The text plan names no migration. "0002-test", not "0002": the
+	// output holds temp paths, whose random digits can contain "0002"
+	// (issue #162).
 	code, out, errOut = run(t, "update", "apply", "--plan", "--source", src)
-	if code != output.OK || !strings.Contains(out, "planned  index: would migrate the metrics index (1 change)\n") || strings.Contains(out+errOut, "0002") {
+	if code != output.OK || !strings.Contains(out, "planned  index: would migrate the metrics index (1 change)\n") || strings.Contains(out+errOut, "0002-test") {
 		t.Errorf("plan text: exit %d\n%s%s", code, out, errOut)
 	}
 }
