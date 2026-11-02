@@ -729,7 +729,11 @@ func TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable(t *testing.T
 		t.Fatalf("journal %v", files)
 	}
 	testtool.DenyRead(t, files[0])
-	_ = sessions(home).Update("S", func(st *session.State) error { st.Seen = []string{creditA}; return nil })
+	uerr := sessions(home).Update("S", func(st *session.State) error { st.Seen = []string{creditA}; return nil })
+	_, rerr := os.ReadFile(files[0])
+	st, lerr := session.Store{Dir: pathsOf(home).SessionsDir()}.Load("S")
+	ev, _, jerr := feedback.ReadSession(pathsOf(home).FeedbackDir(), "S", time.Now().AddDate(0, 0, -62))
+	t.Logf("DIAG update=%v readAfterDeny=%v seen=%v load=%v journalEvents=%d journalErr=%v now=%v", uerr, rerr, st.Seen, lerr, len(ev), jerr, now())
 	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.Contains(out, "From memory (proj · aaaaaaaa)") {
 		t.Errorf("%v %s", isErr, out)
 	}
