@@ -59,10 +59,16 @@ func TestAppendWritesCommonFields(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" {
 		st, err := os.Stat(path)
-		if err != nil || st.Mode().Perm() != 0o600 {
-			t.Fatalf("file mode %v, %v", st.Mode(), err)
+		if err != nil {
+			t.Fatal(err)
 		}
-		sd, _ := os.Stat(dir)
+		if st.Mode().Perm() != 0o600 {
+			t.Fatalf("file mode %v", st.Mode())
+		}
+		sd, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if sd.Mode().Perm() != 0o700 {
 			t.Fatalf("dir mode %v", sd.Mode().Perm())
 		}
@@ -240,9 +246,14 @@ func TestReadRecentSkipsTornLines(t *testing.T) {
 	if !reflect.DeepEqual(tss, want) {
 		t.Fatalf("got %v, want %v", tss, want)
 	}
-	// months=1 on the 31st must still reach the previous month with 2.
-	if got, _ := ReadRecent(dir, FamilyScanHistory, at, 1); len(got) != 2 {
-		t.Fatalf("months=1 gave %d lines", len(got))
+	// months=1 reads only the month of at (October), even on the 31st.
+	one, _ := ReadRecent(dir, FamilyScanHistory, at, 1)
+	var oneTS []string
+	for _, l := range one {
+		oneTS = append(oneTS, l.TS.Format(time.RFC3339))
+	}
+	if !reflect.DeepEqual(oneTS, want[1:]) {
+		t.Fatalf("months=1 gave %v, want %v", oneTS, want[1:])
 	}
 	if got, err := ReadRecent(dir, "memory-docs", at, 3); err != nil || len(got) != 0 {
 		t.Fatalf("absent family: %v, %v", got, err)
@@ -255,15 +266,21 @@ func TestMemoryDocRefusesNonSessionDocuments(t *testing.T) {
 		rec  Record
 		ok   bool
 	}{
-		{"session doc", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "session", Document: "conversation:abc@proj", Session: "abc", FactType: "world"}, true},
-		{"note doc kind only", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "note", FactType: "world"}, true},
-		{"note id", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "session", Document: "note:secret-title", FactType: "world"}, false},
-		{"note id with note kind", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "note", Document: "note:secret-title", FactType: "world"}, false},
-		{"session kind other id", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "session", Document: "import:x", FactType: "world"}, false},
-		{"session set for note", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "note", Session: "abc", FactType: "world"}, false},
-		{"session mismatch", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "session", Document: "conversation:abc", Session: "zzz", FactType: "world"}, false},
+		{"session doc", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "session", Document: "conversation:abc@proj", Session: "abc", FactType: "world"}, true},
+		{"note doc kind only", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "note", FactType: "world"}, true},
+		{"note id", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "session", Document: "note:secret-title", FactType: "world"}, false},
+		{"note id with note kind", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "note", Document: "note:secret-title", FactType: "world"}, false},
+		{"session kind other id", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "session", Document: "import:x", FactType: "world"}, false},
+		{"session set for note", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "note", Session: "abc", FactType: "world"}, false},
+		{"session mismatch", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "session", Document: "conversation:abc", Session: "zzz", FactType: "world"}, false},
 		{"op non-session", DocOp{Operation: "o", Document: "note:x", Session: "", Status: "pending"}, false},
 		{"op session", DocOp{Operation: "o", Document: "subagent:abc:def", Session: "abc", Status: "pending"}, true},
+		{"gone is never written", MemoryDoc{Memory: "m1", Outcome: "gone", CreatedDay: "2026-10-29", DocKind: "none", FactType: "world"}, false},
+		{"created day missing", MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "none", FactType: "world"}, false},
+		{"created day is a time", MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29T10:00:00Z", DocKind: "none", FactType: "world"}, false},
+		{"listed ok", Listed{Day: "2026-10-29", N: 3, Complete: true}, true},
+		{"listed bad day", Listed{Day: "yesterday", N: 3}, false},
+		{"listed negative", Listed{Day: "2026-10-29", N: -1}, false},
 		{"bad outcome", MemoryDoc{Memory: "m1", Outcome: "some free text", DocKind: "none", FactType: "world"}, false},
 		{"bad error", Snapshot{Day: "2026-10-30", Error: "dial tcp 10.0.0.1: refused"}, false},
 		{"bad day", Snapshot{Day: "today"}, false},
@@ -288,7 +305,7 @@ func TestMemoryDocRefusesNonSessionDocuments(t *testing.T) {
 	}
 	// Pointers are validated too.
 	w, _ := writerAt(t, time.Now())
-	if err := w.Append(&MemoryDoc{Memory: "m", Outcome: "found", DocKind: "session", Document: "note:x", FactType: "world"}); err == nil {
+	if err := w.Append(&MemoryDoc{Memory: "m", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "session", Document: "note:x", FactType: "world"}); err == nil {
 		t.Fatal("pointer record skipped validation")
 	}
 }
@@ -298,23 +315,25 @@ func TestMemoryDocRefusesNonSessionDocuments(t *testing.T) {
 // here with its guard.
 func TestRecordsHoldNoFreeText(t *testing.T) {
 	allow := map[string]string{
-		"Snapshot.Day":        "date",
-		"Snapshot.Error":      "enum",
-		"MemoryDoc.Memory":    "id",
-		"MemoryDoc.Document":  "id (session documents only)",
-		"MemoryDoc.Session":   "id",
-		"MemoryDoc.Outcome":   "enum",
-		"MemoryDoc.FactType":  "enum",
-		"MemoryDoc.DocKind":   "enum",
-		"DocOp.Operation":     "id",
-		"DocOp.Document":      "id (session documents only)",
-		"DocOp.Session":       "id",
-		"DocOp.Status":        "enum",
-		"DoctorRun.Checks[]":  "enum values (keys are check ids)",
-		"Snapshot.Ops{}":      "keys: names",
-		"Snapshot.Projects{}": "keys: names",
-		"LLMDay.Statuses{}":   "keys: names",
-		"ServerDay.LLM{}":     "keys: names",
+		"Snapshot.Day":         "date",
+		"Snapshot.Error":       "enum",
+		"MemoryDoc.Memory":     "id",
+		"MemoryDoc.CreatedDay": "date",
+		"Listed.Day":           "date",
+		"MemoryDoc.Document":   "id (session documents only)",
+		"MemoryDoc.Session":    "id",
+		"MemoryDoc.Outcome":    "enum",
+		"MemoryDoc.FactType":   "enum",
+		"MemoryDoc.DocKind":    "enum",
+		"DocOp.Operation":      "id",
+		"DocOp.Document":       "id (session documents only)",
+		"DocOp.Session":        "id",
+		"DocOp.Status":         "enum",
+		"DoctorRun.Checks[]":   "enum values (keys are check ids)",
+		"Snapshot.Ops{}":       "keys: names",
+		"Snapshot.Projects{}":  "keys: names",
+		"LLMDay.Statuses{}":    "keys: names",
+		"ServerDay.LLM{}":      "keys: names",
 	}
 	seen := map[string]bool{}
 	var walk func(rt reflect.Type)
@@ -363,12 +382,73 @@ func TestRecordsHoldNoFreeText(t *testing.T) {
 			}
 		}
 	}
-	for _, r := range []Record{Snapshot{}, ServerDay{}, DoctorRun{}, MemoryDoc{}, DocOp{}, Scan{}} {
+	for _, r := range []Record{Snapshot{}, ServerDay{}, DoctorRun{}, MemoryDoc{}, Listed{}, DocOp{}, Scan{}} {
 		walk(reflect.TypeOf(r))
 	}
 	for k := range allow {
 		if !seen[k] {
 			t.Errorf("allowlist entry %s matches no field", k)
+		}
+	}
+}
+
+func TestListedLine(t *testing.T) {
+	w, dir := writerAt(t, time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC))
+	if err := w.Append(Listed{Day: "2026-10-29", N: 2717}, Listed{Day: "2026-10-28", N: 0, Complete: true}); err != nil {
+		t.Fatal(err)
+	}
+	ls := lines(t, filepath.Join(dir, "memory-docs-2026-10.jsonl"))
+	if len(ls) != 2 || ls[0]["kind"] != "listed" || ls[0]["day"] != "2026-10-29" || ls[0]["n"] != 2717.0 {
+		t.Fatalf("lines = %v", ls)
+	}
+	if _, ok := ls[0]["complete"]; ok {
+		t.Error("complete=false must be omitted")
+	}
+	if ls[1]["complete"] != true || ls[1]["n"] != 0.0 {
+		t.Errorf("second line = %v", ls[1])
+	}
+}
+
+func TestMemoryLineCarriesCreatedDay(t *testing.T) {
+	w, dir := writerAt(t, time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC))
+	if err := w.Append(MemoryDoc{Memory: "m1", Outcome: "found", CreatedDay: "2026-10-29", DocKind: "none", FactType: "observation"}); err != nil {
+		t.Fatal(err)
+	}
+	m := lines(t, filepath.Join(dir, "memory-docs-2026-10.jsonl"))[0]
+	if m["created_day"] != "2026-10-29" || m["kind"] != "memory" {
+		t.Fatalf("line = %v", m)
+	}
+	if _, ok := m["created_at"]; ok {
+		t.Error("created_at must not be written")
+	}
+}
+
+func TestLargeIntegersStayExact(t *testing.T) {
+	w, dir := writerAt(t, time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC))
+	const big = int64(1<<62 + 1)
+	if err := w.Append(Scan{Count: big}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "scan-history-2026-10.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"count":4611686018427387905`) {
+		t.Fatalf("integer was rounded: %s", data)
+	}
+}
+
+func TestNilRecordIsAnErrorNotAPanic(t *testing.T) {
+	w, dir := writerAt(t, time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC))
+	for name, r := range map[string]Record{"nil interface": nil, "nil Scan": (*Scan)(nil), "nil MemoryDoc": (*MemoryDoc)(nil), "nil Listed": (*Listed)(nil)} {
+		if err := w.Append(Scan{}, r); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if _, err := os.Stat(dir); err == nil {
+		ents, _ := os.ReadDir(dir)
+		if len(ents) != 0 {
+			t.Fatalf("wrote %d files despite the refusals", len(ents))
 		}
 	}
 }

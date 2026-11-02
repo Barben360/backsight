@@ -5,6 +5,7 @@
 package metricsfile
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -58,7 +59,9 @@ func (w *Writer) Append(recs ...Record) error {
 			return err
 		}
 		fields := map[string]any{}
-		if err := json.Unmarshal(raw, &fields); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber() // integers above 2^53 stay exact
+		if err := dec.Decode(&fields); err != nil {
 			return err
 		}
 		fields["schema"] = Schema

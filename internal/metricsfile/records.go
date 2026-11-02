@@ -2,6 +2,7 @@ package metricsfile
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -87,13 +88,22 @@ type DoctorRun struct {
 // MemoryDoc is a memory-docs/memory line. Document and Session are set only
 // when DocKind is session; any other document is only its DocKind.
 type MemoryDoc struct {
-	Memory    string     `json:"memory"`
-	Outcome   string     `json:"outcome"` // found | gone
-	DocKind   string     `json:"doc_kind"`
-	Document  string     `json:"document,omitempty"`
-	Session   string     `json:"session,omitempty"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-	FactType  string     `json:"fact_type"`
+	Memory     string `json:"memory"`
+	Outcome    string `json:"outcome"` // found only: gone is derived at read time
+	DocKind    string `json:"doc_kind"`
+	Document   string `json:"document,omitempty"`
+	Session    string `json:"session,omitempty"`
+	CreatedDay string `json:"created_day"` // UTC date of the day list that returned the memory
+	FactType   string `json:"fact_type"`
+}
+
+// Listed is a memory-docs/listed line: a day's list was read in full. N is
+// the list's total for Day; Complete is written only when true (the server
+// holds no memory created on or before Day).
+type Listed struct {
+	Day      string `json:"day"` // UTC date
+	N        int64  `json:"n"`
+	Complete bool   `json:"complete,omitempty"`
 }
 
 // DocOp is a memory-docs/op line: one retain operation of a session's
@@ -126,6 +136,8 @@ func (DoctorRun) Family() string { return FamilyDoctorHistory }
 func (DoctorRun) Kind() string   { return "run" }
 func (MemoryDoc) Family() string { return FamilyMemoryDocs }
 func (MemoryDoc) Kind() string   { return "memory" }
+func (Listed) Family() string    { return FamilyMemoryDocs }
+func (Listed) Kind() string      { return "listed" }
 func (DocOp) Family() string     { return FamilyMemoryDocs }
 func (DocOp) Kind() string       { return "op" }
 func (Scan) Family() string      { return FamilyScanHistory }
@@ -135,7 +147,7 @@ func (Scan) Kind() string        { return "scan" }
 var (
 	snapshotErrors = []string{"not_configured", "timeout", "unreachable", "unauthorized", "not_found", "bad_response", "server_error"}
 	checkLevels    = []string{"ok", "info", "warn", "error"}
-	outcomes       = []string{"found", "gone"}
+	outcomes       = []string{"found"}
 	docKinds       = []string{"session", "note", "import", "other", "none"}
 	factTypes      = []string{"world", "experience", "observation", "other"}
 	opStatuses     = []string{"pending", "processing", "completed", "failed", "other"}
@@ -184,6 +196,9 @@ func sessionDoc(document, sid string) error {
 
 // validate refuses a record that could carry text or a non-session document.
 func validate(r Record) error {
+	if rv := reflect.ValueOf(r); r == nil || rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return fmt.Errorf("metricsfile: nil record")
+	}
 	switch v := r.(type) {
 	case *Snapshot:
 		return validate(*v)
@@ -197,6 +212,15 @@ func validate(r Record) error {
 		return validate(*v)
 	case *Scan:
 		return validate(*v)
+	case *Listed:
+		return validate(*v)
+	case Listed:
+		if !dayRE.MatchString(v.Day) {
+			return fmt.Errorf("metricsfile: listed day is not a date")
+		}
+		if v.N < 0 {
+			return fmt.Errorf("metricsfile: listed count is negative")
+		}
 	case Snapshot:
 		if !dayRE.MatchString(v.Day) {
 			return fmt.Errorf("metricsfile: snapshot day is not a date")
@@ -239,6 +263,9 @@ func validate(r Record) error {
 				return e
 			}
 		}
+		if !dayRE.MatchString(v.CreatedDay) {
+			return fmt.Errorf("metricsfile: created_day is not a date")
+		}
 		if v.Document != "" || v.Session != "" {
 			if v.DocKind != "session" {
 				return fmt.Errorf("metricsfile: a document or session is kept only for a session document")
@@ -277,8 +304,6 @@ func utc(r Record) Record {
 		return utc(*v)
 	case *ServerDay:
 		return utc(*v)
-	case *MemoryDoc:
-		return utc(*v)
 	case *DocOp:
 		return utc(*v)
 	case Snapshot:
@@ -286,9 +311,6 @@ func utc(r Record) Record {
 		return v
 	case ServerDay:
 		v.Bucket = v.Bucket.UTC()
-		return v
-	case MemoryDoc:
-		v.CreatedAt = t(v.CreatedAt)
 		return v
 	case DocOp:
 		v.CreatedAt, v.UpdatedAt = v.CreatedAt.UTC(), v.UpdatedAt.UTC()
