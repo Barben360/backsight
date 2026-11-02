@@ -31,7 +31,7 @@
       "page": {
         "limit": 50,
         "offset": 0,
-        "total": 38
+        "total": 39
       },
       "defs": [
         {
@@ -898,6 +898,35 @@
             "by_kind"
           ],
           "drill": "backsight stats bank",
+          "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "imports.sent",
+          "label": "Files imported",
+          "question": "How many files from an imported folder reached the memory?",
+          "definition": "Files sent from the folders given to backsight import, with the import events by action (queued, sent, paused at the cost cap, finished, removed).",
+          "unit": "count",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 0,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "none",
+          "scope": "machine",
+          "source": "telemetry",
+          "action": "A pause means a folder reached its cost cap; backsight import list shows which one.",
+          "command": "backsight import list",
+          "dev": false,
+          "family": "bank",
+          "series": "none",
+          "extra": [
+            "by_action"
+          ],
+          "drill": "backsight import list",
           "n": 0,
           "mdc": null
         },

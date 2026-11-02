@@ -115,6 +115,10 @@ type Inputs struct {
 	// Backfill estimates the sessions backfill would send for a model and
 	// the cost to show; 0 sessions: no backfill question.
 	Backfill func(model string) (sessions int, cost string)
+	// Import checks a folder to import (decision 0081) and estimates it for
+	// a model: the folder as an absolute path, the files it would send and
+	// the cost to show. nil: no import question.
+	Import func(path, model string) (folder string, files int, cost string, err error)
 	// DefaultRuntime replaces docker as the runtime's default: "native" on
 	// Windows x86_64 (decision 0080), "" elsewhere.
 	DefaultRuntime string
@@ -128,7 +132,7 @@ type Inputs struct {
 var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth, "runtime": "docker"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "import", "import_path", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -325,6 +329,37 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			if err := add(bq); err != nil {
 				return nil, nil, err
 			}
+		}
+	}
+	if in.Import != nil && !serverOnly {
+		iq := Question{ID: "import", Prompt: "Import memory files from another tool or a notes folder (Markdown and text files), in the background?", Default: "no", Recommended: "no",
+			Options: []Option{{Value: "no", Label: "no import"}, {Value: "yes", Label: "import a folder (asks which one)"}}}
+		if provider == "claude-code" {
+			iq.Options[1].Caveat = "a whole folder sent unattended on your subscription"
+		}
+		if err := add(iq); err != nil {
+			return nil, nil, err
+		}
+		if qs[len(qs)-1].Value == "yes" {
+			pq := Question{ID: "import_path", Prompt: "Folder to import (its subfolders too; backsight import <folder> --plan previews it)", Free: true, Required: true}
+			if err := pick(&pq); err != nil {
+				return nil, nil, err
+			}
+			// Only this run's answer is checked: a saved folder deleted since
+			// must not stop every later setup (the import step reports it).
+			if pq.Value != "" && pq.Source == "answer" {
+				folder, n, cost, err := in.Import(pq.Value, model)
+				if err != nil {
+					return nil, nil, &UsageError{fmt.Sprintf("import_path=%s: %v (answer import=no to skip the import)", pq.Value, err)}
+				}
+				pq.Value = folder
+				files := "files"
+				if n == 1 {
+					files = "file"
+				}
+				pq.Options = []Option{{Value: pq.Value, Label: fmt.Sprintf("%d %s to import, within a spending cap", n, files), Cost: cost}}
+			}
+			qs = append(qs, pq)
 		}
 	}
 	if err := add(Question{ID: "consent", Prompt: "Go ahead with this plan?", Required: true,

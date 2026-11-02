@@ -208,7 +208,7 @@ The agent never sees your LLM key: you type it yourself. Or install by hand:
    backsight setup
    ```
 
-   Setup checks the machine, asks a few questions (the LLM provider, how long Claude Code keeps transcripts, backups, importing past sessions), shows its plan and asks for your consent. It then asks for your provider key at a hidden prompt: keys are never passed as arguments. The first run downloads the server: several minutes on a home connection. If setup stops, fix what it says and run `backsight setup --resume`; [troubleshooting.md](docs/troubleshooting.md#setup-stopped) covers the usual causes.
+   Setup checks the machine, asks a few questions (the LLM provider, how long Claude Code keeps transcripts, backups, importing past sessions, importing a folder of notes), shows its plan and asks for your consent. It then asks for your provider key at a hidden prompt: keys are never passed as arguments. The first run downloads the server: several minutes on a home connection. If setup stops, fix what it says and run `backsight setup --resume`; [troubleshooting.md](docs/troubleshooting.md#setup-stopped) covers the usual causes.
 
 3. Restart Claude Code (or run `/reload-plugins` in it).
 
@@ -226,6 +226,10 @@ Every detail: [docs/install.md](docs/install.md).
 When Claude uses a memory, it cites it:
 
 > 🧠 **From memory (my-project · 0b4c2a52)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
+
+## Coming from another tool
+
+Memory files from another tool (LifeOS, a notes vault, an export) or your own notes can go into the memory: `backsight import ~/notes --plan` shows the files and the cost, then `backsight import ~/notes` sends them in the background within a spending cap. [docs/import.md](docs/import.md) has the details and a LifeOS recipe.
 
 ## Pause, turn off, uninstall
 
@@ -300,6 +304,7 @@ You mostly use Claude Code as before. Commands you may need:
 | [Windows](docs/windows.md) | backsight on Windows without administrator rights: install, the server's scheduled task and supervisor, updates, troubleshooting. |
 | [native runtime](docs/native-runtime.md) | The server without Docker: what it is, what it lacks, how to switch. |
 | [daily use](docs/daily-use.md) | Sessions, projects, skills, searching, storing, forgetting. |
+| [import](docs/import.md) | Importing a folder of notes or another tool's memory files, with a LifeOS recipe. |
 | [how it works](docs/how-it-works.md) | Recall, the question gate, the save detector, latency and context cost, the hooks. |
 | [configuration](docs/configuration.md) | Every `config.toml` key. |
 | [several PCs](docs/several-pcs.md) | One memory shared by your PCs: the host, joining, offline laptops, a lost laptop. |

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -444,5 +445,98 @@ func TestRuntimeAnswerAgainstAConfig(t *testing.T) {
 	}
 	if _, _, err := Resolve(Inputs{Config: &cfg, Answers: map[string]string{"runtime": "docker"}}); !errors.As(err, &ue) || !strings.Contains(ue.Msg, "backsight server runtime switch docker") {
 		t.Errorf("docker over native: %v", err)
+	}
+}
+
+func importEstimate(files int, cost string, err error) func(string, string) (string, int, string, error) {
+	return func(p, _ string) (string, int, string, error) { return p, files, cost, err }
+}
+
+func TestImportQuestionDefaultsToNo(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Import: importEstimate(3, "≈ 0.01 USD", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := find(t, qs, "import")
+	if q.Default != "no" || q.Recommended != "no" || q.Required {
+		t.Errorf("import question = %+v", q)
+	}
+	if has(qs, "import_path") {
+		t.Error("the folder is asked before the import is accepted")
+	}
+	if ids(qs)[len(qs)-1] != "consent" || slices.Index(ids(qs), "import") < slices.Index(ids(qs), "backups") {
+		t.Errorf("order = %v, want import late, consent last", ids(qs))
+	}
+}
+
+func TestImportPathAskedAfterYesWithItsCost(t *testing.T) {
+	var path, model string
+	est := func(p, m string) (string, int, string, error) {
+		path, model = p, m
+		return "/home/u/notes", 3, "≈ 0.01 USD, capped at 0.02 USD", nil
+	}
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "anthropic", "import": "yes"}, Import: est})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := find(t, qs, "import_path")
+	if !q.Free || !q.Required || q.Value != "" {
+		t.Errorf("import_path before an answer = %+v", q)
+	}
+	qs, _, err = Resolve(Inputs{Answers: map[string]string{"provider": "anthropic", "import": "yes", "import_path": "/notes"}, Import: est})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q = find(t, qs, "import_path")
+	// The answer is kept as the folder the estimate resolved: a rerun from
+	// another directory names the same folder.
+	if path != "/notes" || model != "claude-haiku-5-5" || q.Value != "/home/u/notes" || len(q.Options) != 1 || q.Options[0].Cost != "≈ 0.01 USD, capped at 0.02 USD" || !strings.Contains(q.Options[0].Label, "3 file") {
+		t.Errorf("estimate for %q/%q, question %+v", path, model, q)
+	}
+}
+
+func TestImportPathMustBeAFolder(t *testing.T) {
+	_, _, err := Resolve(Inputs{Answers: map[string]string{"import": "yes", "import_path": "/nope"}, Import: importEstimate(0, "", errors.New("not a folder"))})
+	var ue *UsageError
+	if !errors.As(err, &ue) || !strings.Contains(ue.Msg, "import_path=/nope") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestNoImportQuestionOnAServerOnlyHost(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"role": "server"}, Import: importEstimate(1, "", nil)})
+	if err != nil || has(qs, "import") {
+		t.Errorf("questions %v", ids(qs))
+	}
+}
+
+// A saved folder is not checked again: one deleted since the import must
+// not stop every later setup (the import step says what became of it).
+func TestSavedImportPathIsNotCheckedAgain(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Saved: map[string]string{"import": "yes", "import_path": "/gone"}, Import: importEstimate(0, "", errors.New("no such folder"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := find(t, qs, "import_path"); q.Value != "/gone" || q.Source != "saved" {
+		t.Errorf("import_path = %+v", q)
+	}
+}
+
+// On the subscription lane, yes carries the caveat the backfill has.
+func TestImportOnTheSubscriptionLaneHasACaveat(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "claude-code"}, Import: importEstimate(1, "", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range find(t, qs, "import").Options {
+		if (o.Value == "yes") != strings.Contains(o.Caveat, "subscription") {
+			t.Errorf("option %+v", o)
+		}
+	}
+	qs, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "deepseek"}, Import: importEstimate(1, "", nil)})
+	for _, o := range find(t, qs, "import").Options {
+		if o.Caveat != "" {
+			t.Errorf("caveat off the subscription lane: %+v", o)
+		}
 	}
 }

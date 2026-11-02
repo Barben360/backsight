@@ -281,6 +281,14 @@ var Catalog = withDrills([]Def{
 		Action:     "Many refusals mean Claude stores things the rules reject.",
 	},
 	{
+		ID: "imports.sent", Label: "Files imported", Unit: "count", Direction: "none", MinN: 0,
+		CI: "none", Scope: "machine", Source: "telemetry", Family: "bank", Series: "none", Command: "backsight import list",
+		Extra:      []string{"by_action"},
+		Question:   "How many files from an imported folder reached the memory?",
+		Definition: "Files sent from the folders given to backsight import, with the import events by action (queued, sent, paused at the cost cap, finished, removed).",
+		Action:     "A pause means a folder reached its cost cap; backsight import list shows which one.",
+	},
+	{
 		ID: "pipeline.flow", Label: "Sessions sent", Unit: "ratio", Direction: "up", MinN: 0,
 		ErrorClass: true, CI: "wilson", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily",
 		Command: "backsight doctor", Drill: "backsight stats pipeline",

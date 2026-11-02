@@ -61,7 +61,7 @@ var pageMetrics = map[string][]string{
 	"overview": {"bank.size"}, // the six tiles have their own checks (tileTexts); the growth and the kinds are TestGlance's
 	"quality":  {"used.turn_rate", "declare.coverage", "recall.hit_rate", "recall.empty_reasons", "search.rate", "search.empty_rate"},
 	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens", "extraction.cost"},
-	"bank":     {"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "notes.stored", "bank.churn", "stale.never_used", "stale.hidden", "stale.reported"},
+	"bank":     {"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "notes.stored", "bank.churn", "imports.sent", "stale.never_used", "stale.hidden", "stale.reported"},
 	"pipeline": {"pipeline.flow", "retain.outcomes", "local.backlog", "server.queue", "server.extraction_delay", "hooks.failures", "jobs.last_run"},
 	"system":   {"doctor.check", "server.reach", "jobs.last_run", "local.backlog"},
 }

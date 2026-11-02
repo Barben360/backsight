@@ -1,7 +1,7 @@
 {{/* views: bank */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the figures and cards of bank (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Projects adds Bars: Name, Full, Href, Count, W; Consolidation adds Rows, Info; Review adds Tabs: Title, Count, Question, Open, Rows, Note, Foot). Reads the metrics bank.size, bank.growth, bank.by_project, bank.consolidation, notes.stored, bank.churn, stale.never_used, stale.hidden, stale.reported, .V.bank.Tables.ByProject and .Review. */}}
+{{/* widgets: the figures and cards of bank (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Projects adds Bars: Name, Full, Href, Count, W; Consolidation adds Rows, Info; Review adds Tabs: Title, Count, Question, Open, Rows, Note, Foot). Reads the metrics bank.size, bank.growth, bank.by_project, bank.consolidation, notes.stored, bank.churn, imports.sent, stale.never_used, stale.hidden, stale.reported, .V.bank.Tables.ByProject and .Review. */}}
 {{with bankpage .}}<section aria-labelledby="w-bank-size">
 <h2 class="sr-only" id="w-bank-size">{{.StripTitle}}</h2>
 <div class="figs">
@@ -24,6 +24,7 @@
 {{end}}{{template "ctail" .Card}}{{template "card-close" .Head}}{{end}}
 {{template "pcard" .Notes}}
 {{template "pcard" .Churn}}
+{{template "pcard" .Imports}}
 </div>
 {{with .Review}}<section class="card" id="review" aria-labelledby="{{.Head.ID}}">
 {{template "card-head" .Head}}{{template "devids" .Card}}{{range .Tabs}}<details class="tabs" name="review"{{if .Open}} open{{end}}><summary>{{.Title}}{{with .Count}} <span class="count">{{.}}</span>{{end}}</summary>

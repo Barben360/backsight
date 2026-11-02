@@ -324,6 +324,20 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 - `backsight stats` shows the extraction tokens and cost of the last days.
 - A backfill paused on its budget: `backsight retain backfill --plan`, then `backsight retain backfill --max-cost <higher>`.
 
+## An import is paused or not moving
+
+`backsight import list` says where each imported folder stands ([import](import.md)); in the commands below, put your folder in place of `~/notes`:
+
+- **waits for past sessions to be sent**: a backfill is still queued. `jobs tick` sends the past sessions first, then the folder. Nothing to do.
+- **paused: spending cap reached**: the import spent its cap. `backsight import ~/notes --plan` shows what is left and its cost; `backsight import ~/notes --max-cost <higher>` (or `--max-tokens`) goes on.
+- **paused** on the subscription lane: run `backsight import ~/notes --allow-subscription` to accept sending it on your Claude subscription.
+- **sending**, but the count of files sent does not move:
+  - With no scheduler (`scheduler = off`), nothing sends on its own: run `backsight jobs tick`.
+  - While the server's model fails to extract, `jobs tick` holds every send, imports included, and `backsight doctor` says why. They resume once it extracts again.
+  - On a client, the import waits while another server answers at the joined address (`backsight doctor` warns).
+- `backsight import` stops with exit 20, "the server's memory settings do not know imported files yet": the server's backsight is older than this PC's. Update backsight on the server's computer, then run the import again.
+- A file you expected is not sent: `backsight import ~/notes --plan` lists the skipped files by reason (too large, not text, hidden, excluded, another extension).
+
 ## The metrics index
 
 The metrics index is a local SQLite file (`index/metrics.db` in the state directory) that backsight derives from the telemetry and feedback journal files; it holds counts and times, never text, and can always be built again. `backsight stats index` shows its state without changing anything.

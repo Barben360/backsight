@@ -83,6 +83,10 @@ func richBank(r *metrics.Result) {
 		m.Extra = map[string]any{"by_result": map[string]int64{"saved": 25, "updated": 6, "refused": 1},
 			"by_kind": map[string]int64{"decision": 14, "state": 6, "convention": 6, "pitfall": 5}}
 	})
+	give(r, "imports.sent", func(m *metrics.Metric) {
+		m.Value = fp(120)
+		m.Extra = map[string]any{"by_action": map[string]int64{"queue": 2, "send": 9, "pause": 1, "done": 1, "purge": 0}}
+	})
 	give(r, "bank.churn", func(m *metrics.Metric) {
 		m.Value = fp(9)
 		m.Extra = map[string]any{"forget": int64(2), "retire": int64(3), "hide": int64(3), "unhide": int64(1)}
@@ -105,7 +109,7 @@ func richBank(r *metrics.Result) {
 
 func TestBankCards(t *testing.T) {
 	n := pageNode(t, "bank", false, func(d *PageData) { richBank(d.V["bank"]) })
-	want := []string{"w-bank-size", "w-bank-growth", "w-bank-by_project", "w-bank-consolidation", "w-notes-stored", "w-bank-churn", "w-review"}
+	want := []string{"w-bank-size", "w-bank-growth", "w-bank-by_project", "w-bank-consolidation", "w-notes-stored", "w-bank-churn", "w-imports-sent", "w-review"}
 	if got := cardIDs(n); !slices.Equal(got, want) {
 		t.Fatalf("cards %v, want %v", got, want)
 	}
@@ -153,7 +157,7 @@ func TestBankCards(t *testing.T) {
 		if cardOf(t, n, "w-bank-growth").Parent != cardOf(t, n, "w-bank-by_project").Parent {
 			t.Error("growth and projects are not side by side")
 		}
-		for _, id := range []string{"w-bank-consolidation", "w-notes-stored", "w-bank-churn"} {
+		for _, id := range []string{"w-bank-consolidation", "w-notes-stored", "w-bank-churn", "w-imports-sent"} {
 			if pair(id) != "grid-3" || cardOf(t, n, id).Parent != cardOf(t, n, "w-bank-churn").Parent {
 				t.Errorf("%s sits in %q", id, pair(id))
 			}
@@ -1633,5 +1637,33 @@ func TestFixRoundSystem(t *testing.T) {
 		if got := lag(secs); got != want {
 			t.Errorf("lag %d: %q, want %q", secs, got, want)
 		}
+	}
+}
+
+func TestImportsCard(t *testing.T) {
+	c := cardOf(t, pageNode(t, "bank", false, func(d *PageData) { richBank(d.V["bank"]) }), "w-imports-sent")
+	if w := [][3]string{{"started", "2", ""}, {"finished", "1", ""}, {"paused at the cap", "1", ""}, {"removed", "0", ""}}; !slices.Equal(figsOf(c), w) {
+		t.Errorf("figures %q, want %q", figsOf(c), w)
+	}
+	if lead := c.first("div.row.lead"); lead == nil || !strings.HasPrefix(lead.text(), "120 ") {
+		t.Errorf("lead %v", lead)
+	}
+	if !strings.Contains(c.text(), "stopped at its cost cap") || !hasCode(c, "backsight import list") {
+		t.Errorf("a pause gives no command: %q", c.text())
+	}
+	// No pause: no hint.
+	c = cardOf(t, pageNode(t, "bank", false, func(d *PageData) {
+		richBank(d.V["bank"])
+		give(d.V["bank"], "imports.sent", func(m *metrics.Metric) {
+			m.Extra = map[string]any{"by_action": map[string]int64{"queue": 1, "send": 3, "pause": 0, "done": 1, "purge": 0}}
+		})
+	}), "w-imports-sent")
+	if strings.Contains(c.text(), "stopped at its cost cap") {
+		t.Errorf("a hint with no pause: %q", c.text())
+	}
+	// No number: the reason.
+	n := cardOf(t, pageNode(t, "bank", false, nil), "w-imports-sent")
+	if e := n.first("div.empty"); e == nil || !strings.Contains(e.text(), "Nothing recorded in the last 30 days.") || n.first("div.fig") != nil {
+		t.Errorf("no data: %q", n.text())
 	}
 }

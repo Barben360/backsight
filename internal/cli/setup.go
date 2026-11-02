@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/fileimport"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -195,6 +196,9 @@ type setupEnv struct {
 	// taskAccepted: the pre-flight's probe task passed: the config step
 	// removes a server.start_on_session an earlier setup set.
 	taskAccepted bool
+	// importEsts: the import folder estimates of this run, by folder and
+	// model.
+	importEsts map[string]importEst
 }
 
 // setupGOOS and setupGOARCH are the machine setup chooses defaults for
@@ -463,7 +467,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			}
 		}
 	}
-	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime()}
+	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime()}
 	// --reconfigure: the questions the last run answered are asked again,
 	// their answers the defaults; the hidden answers (ports, project) stay.
 	prev := map[string]string{}
@@ -520,7 +524,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			trial[k] = val
 		}
 		trial[next.ID] = v
-		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs}); errors.As(err, &ue) {
+		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs, Import: s.importEstimate}); errors.As(err, &ue) {
 			fmt.Fprintln(s.e.stdout, "  "+ue.Msg)
 			continue
 		}
@@ -651,6 +655,71 @@ func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, s
 		return n, fmt.Sprintf("≈ %.2f %s, capped at %.2f %s, about %s", plan.Estimate.Cost, prices.Currency, plan.MaxCost, prices.Currency, about)
 	}
 	return n, fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Estimate.InputTokens+plan.Estimate.OutputTokens)/1000, model, plan.MaxTokens/1000, about)
+}
+
+// expandHome is p with a leading ~ read as the home folder: a setup
+// answer, PowerShell, cmd or a quoted path leave it as typed.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, p[1:])
+}
+
+// importEst is an import folder's estimate for one model.
+type importEst struct {
+	folder, cost string
+	files        int
+	err          error
+}
+
+// importEstimate scans the folder an import would read and prices its
+// files for model, with the cap the import would set (decision 0081); it
+// reads the folder only, never the server. A folder with no file to import
+// is refused: the answer is most likely the wrong folder. The folder comes
+// back absolute, so a rerun from another directory names the same one.
+// Each (folder, model) is scanned once per run: the questions are resolved
+// again after every answer.
+func (s *setupEnv) importEstimate(path, model string) (string, int, string, error) {
+	key := path + "\x00" + model
+	if e, ok := s.importEsts[key]; ok {
+		return e.folder, e.files, e.cost, e.err
+	}
+	e := s.scanImport(path, model)
+	if s.importEsts == nil {
+		s.importEsts = map[string]importEst{}
+	}
+	s.importEsts[key] = e
+	return e.folder, e.files, e.cost, e.err
+}
+
+func (s *setupEnv) scanImport(path, model string) importEst {
+	cfg := config.Default(s.dirs, s.home)
+	if s.cfg != nil {
+		cfg = *s.cfg
+	}
+	if model != cfg.LLM.Model { // the configured prices are another model's
+		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
+	}
+	scan, err := fileimport.ScanDir(expandHome(path), fileimport.ScanOptions{Now: now()})
+	if err != nil {
+		return importEst{err: err}
+	}
+	if len(scan.Files) == 0 {
+		return importEst{err: fmt.Errorf("no Markdown or text file to import in it (backsight import %s --plan lists what it skips)", scan.Root)}
+	}
+	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	plan := fileimport.BuildPlan(scan, nil, "", "", prices)
+	maxCost, maxTokens := importCap(filesImportFlags{}, plan.Total, prices)
+	work := importDuration(plan.Total.Duration) + " of extraction"
+	if maxTokens == 0 {
+		return importEst{folder: scan.Root, files: plan.Files, cost: fmt.Sprintf("≈ %s, capped at %s, %s", importMoney(plan.Total.Cost, true, prices.Currency), importMoney(maxCost, true, prices.Currency), work)}
+	}
+	return importEst{folder: scan.Root, files: plan.Files, cost: fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, %s", (plan.Total.InputTokens+plan.Total.OutputTokens)/1000, model, maxTokens/1000, work)}
 }
 
 // preflightProbes reads this machine; tests replace it.
@@ -840,6 +909,7 @@ type setupStep struct {
 }
 
 func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *bool) []setupStep {
+	ticked := false // a step started jobs tick: the next one's work waits in its queue
 	clientArgs := func(args ...string) []string {
 		if s.f.configDir != "" {
 			args = append(args, "--config-dir", s.f.configDir)
@@ -1153,10 +1223,56 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 				if start := subcommand(ctx, "jobs", "start", "tick"); start.Err != nil {
 					detail += "; the first tick could not be started now (" + start.Err.Error() + "): the timer starts it within 15 min"
 				} else {
+					ticked = true
 					detail = fmt.Sprintf("%d session(s) queued: the import started now, jobs tick sends them in the background", br.Total)
 				}
 			}
 			return setup.Step{Name: "backfill", Status: "done", Detail: detail}, nil
+		}},
+		{"import", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
+			if answers["import"] != "yes" {
+				return setup.Step{Name: "import", Status: "skipped", Detail: "not asked for"}, nil
+			}
+			// The import is an extra: what keeps it from being queued is
+			// said, with the command, and setup goes on.
+			folder := expandHome(answers["import_path"])
+			skip := func(why string) (setup.Step, error) {
+				return setup.Step{Name: "import", Status: "skipped", Detail: why}, nil
+			}
+			root, err := fileimport.ResolveRoot(folder)
+			if err != nil {
+				return skip(fmt.Sprintf("%s is no longer a folder (%v): nothing imported", folder, err))
+			}
+			if id := retain.ReadMachineID(s.dirs.State); id != "" {
+				if _, found, _ := fileimport.LoadManifest(s.dirs.ImportDir(), fileimport.SourceID(id, root)); found {
+					return skip("already imported: backsight import " + folder + " sends its new and changed files, backsight import list shows where it stands")
+				}
+			}
+			args := []string{"import", folder}
+			if answers["provider"] == "claude-code" {
+				args = append(args, "--allow-subscription") // answered yes past the caveat
+			}
+			out := subcommand(ctx, args...)
+			if out.Err != nil {
+				return skip(fmt.Sprintf("not queued: %s; run backsight import %s once that is fixed", strings.TrimSuffix(errMessage(out.Err), "."), folder))
+			}
+			var ir filesImportResult
+			_ = json.Unmarshal(out.Data, &ir)
+			detail := fmt.Sprintf("%d file(s) queued: jobs tick sends them in the background", ir.Plan.Files)
+			switch {
+			case ir.Plan.Files == 0:
+			case answers["scheduler"] == "off":
+				detail += "; with no scheduler, run backsight jobs tick to send them"
+			case ticked: // the backfill's tick sends them after its sessions
+			default:
+				if start := subcommand(ctx, "jobs", "start", "tick"); start.Err != nil {
+					detail += "; the first tick could not be started now (" + start.Err.Error() + "): the timer starts it within 15 min"
+				} else {
+					ticked = true
+					detail = fmt.Sprintf("%d file(s) queued: the import started now, jobs tick sends them in the background", ir.Plan.Files)
+				}
+			}
+			return setup.Step{Name: "import", Status: "done", Detail: detail}, nil
 		}},
 	}
 	if answers["role"] == config.RoleServer {
@@ -1171,7 +1287,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 
 // clientSteps wire Claude Code: a server-only host has none, they are
 // skipped there.
-var clientSteps = []string{"client", "retention", "verify", "reference", "backfill"}
+var clientSteps = []string{"client", "retention", "verify", "reference", "backfill", "import"}
 
 func serverOnlyStep(name string) setup.Step {
 	return setup.Step{Name: name, Status: "skipped", Detail: "server-only host"}
@@ -1453,6 +1569,11 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	if answers["backfill"] == "yes" {
 		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
+	if slices.ContainsFunc(rec.Steps, func(st setup.Step) bool {
+		return st.Name == "import" && st.Status == "done" && !strings.HasPrefix(st.Detail, "0 ")
+	}) {
+		res.NextSteps = append(res.NextSteps, "your folder is being imported in the background: backsight import list shows its progress")
+	}
 	if answers["role"] == config.RoleServer {
 		res.NextSteps = append(res.NextSteps, "open the server to your other PCs: backsight server expose --private <this host's LAN or tailnet address> --out <file> "+
 			"writes the connection token they join with (it holds the API key: carry it by hand, never through an agent; backsight server token writes it again)")
@@ -1648,6 +1769,13 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	if a["backfill"] == "yes" {
 		backfill = "queue past sessions for jobs tick"
 	}
+	importDetail := "no import"
+	if a["import"] == "yes" {
+		importDetail = "backsight import " + a["import_path"] + ": queue its files for jobs tick"
+		if _, n, cost, err := s.importEstimate(a["import_path"], a["model"]); err == nil {
+			importDetail = fmt.Sprintf("backsight import %s: queue %d file(s) for jobs tick (%s)", a["import_path"], n, cost)
+		}
+	}
 	serverStep := setup.Step{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])}
 	if a["runtime"] == "native" {
 		project := a["project"]
@@ -1677,6 +1805,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "verify", Status: "planned", Detail: "backsight verify: every hook, the MCP handshake, a round trip in a scratch bank"},
 		{Name: "reference", Status: "planned", Detail: reference},
 		{Name: "backfill", Status: "planned", Detail: backfill},
+		{Name: "import", Status: "planned", Detail: importDetail},
 	}
 	if a["role"] == config.RoleServer {
 		for i, st := range steps {

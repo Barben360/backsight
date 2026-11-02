@@ -71,7 +71,8 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 8. installs the background jobs (a timer every 15 minutes and a daily one) and, with backups on, generates your backup identity, the key backups are encrypted to;
 9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
 10. unwires an older Hindsight integration from Claude Code, if you chose to (see below);
-11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted, and starts the first `jobs tick` at once so the import begins before setup ends.
+11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted, and starts the first `jobs tick` at once so the import begins before setup ends;
+12. queues the folder of notes you gave for import ([import](import.md)), if you accepted, and starts the first `jobs tick` if the backfill did not.
 
 The first run downloads about 2.4 GB: the server images (about 1.2 GB, with Docker's progress shown), then the embedding models at the server's first start (about 1.2 GB; setup prints the time spent while it waits). Expect several minutes on a home connection. Every step is journaled: if setup stops, `backsight setup --resume` continues where it stopped, the server it started included.
 
@@ -89,6 +90,8 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 | `backups`: daily encrypted backups | `on`, `off` | `on` |
 | `reference`, only when another Hindsight integration is wired: unwire it | `retire`, `keep` | `retire` |
 | `backfill`, only when Claude Code keeps past sessions: import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
+| `import`: import a folder of notes or another tool's memory files ([import](import.md)) | `yes`, `no` | `no` |
+| `import_path`, only after `import=yes`: the folder (`~` is your home folder) | a folder | none, you must answer; setup checks it holds files to import and shows their count and cost. A rerun leaves a folder already imported alone (`backsight import <folder>` sends its new files) |
 | `consent`: go ahead with the plan | `yes`, `no` | none, you must answer |
 
 Notes on the choices:
@@ -195,7 +198,7 @@ A machine that only holds the shared memory for your other PCs, a home server or
 backsight setup --role server
 ```
 
-Setup writes `role = "server"` under `[server]` in `config.toml`, installs the server, the documentation bank and the scheduler entries, and skips what wires Claude Code: its pre-flight does not look for the `claude` command, it asks neither the retention, the reference nor the backfill question, and its `client`, `retention`, `verify`, `reference` and `backfill` steps read `skipped: server-only host`. Both scheduled jobs are installed: `jobs maintain` makes the daily backup, and `jobs tick` starts the server again once its private address is back after a reboot. `backsight doctor` reports the checks that look at Claude Code as `not a client: server-only host`. `backsight setup --undo` reverses what setup did there.
+Setup writes `role = "server"` under `[server]` in `config.toml`, installs the server, the documentation bank and the scheduler entries, and skips what wires Claude Code: its pre-flight does not look for the `claude` command, it skips the questions about retention, an older Hindsight install, backfill and import, and its `client`, `retention`, `verify`, `reference`, `backfill` and `import` steps read `skipped: server-only host`. Both scheduled jobs are installed: `jobs maintain` makes the daily backup, and `jobs tick` starts the server again once its private address is back after a reboot. `backsight doctor` reports the checks that look at Claude Code as `not a client: server-only host`. `backsight setup --undo` reverses what setup did there.
 
 Then open the server to your other PCs with `backsight server expose --private <address>` (a tailnet address keeps the API key encrypted), which hands out the connection token they join with; `backsight server token` writes it again. The token holds the API key: carry it to the other PC yourself. Joining, offline laptops and a lost laptop: [several-pcs.md](several-pcs.md).
 

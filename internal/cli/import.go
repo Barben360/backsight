@@ -83,6 +83,7 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 			return &output.Error{Code: output.Usage, Message: fmt.Sprintf("--exclude %q is not a valid pattern: %v", g, err)}
 		}
 	}
+	folder = expandHome(folder)
 	if st, err := os.Stat(folder); err != nil || !st.IsDir() {
 		return &output.Error{Code: output.Usage, Message: folder + " is not a folder"}
 	}
@@ -206,7 +207,7 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 			return err
 		}
 	}
-	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version, Project: res.Plan.Project})
 	if fl.plan {
 		tw.Emit(importEvent("plan", res.Plan))
 		return e.emit("import", res, func() string { return filesImportText(res) })
@@ -524,8 +525,10 @@ func newImportPurgeCmd(e *env) *cobra.Command {
 					ids[doc.ID] = true
 				}
 			}
+			project := ""
 			for _, m := range all {
 				if m.Source == source {
+					project = m.Project
 					for _, en := range m.Entries {
 						ids[en.Document] = true
 					}
@@ -561,7 +564,7 @@ func newImportPurgeCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res.Purged = true
-			telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version}).Emit(telemetry.Raw{Name: "import",
+			telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version, Project: project}).Emit(telemetry.Raw{Name: "import",
 				Fields: map[string]any{"action": "purge", "source": source, "documents": len(res.Documents)}})
 			return e.emit("import purge", res, func() string { return importPurgeText(res) })
 		},

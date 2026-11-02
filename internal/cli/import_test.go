@@ -324,6 +324,11 @@ func TestImportEmitsNoPathsInTelemetry(t *testing.T) {
 	if len(evs) != 2 || evs[0]["action"] != "plan" || evs[1]["action"] != "queue" {
 		t.Errorf("import events = %v", evs)
 	}
+	for _, e := range evs {
+		if p := manifestOf(t, home).Project; p == "" || e["project"] != p {
+			t.Errorf("%v event project %v, want %q", e["action"], e["project"], p)
+		}
+	}
 	text := telemetryText(t, home)
 	if strings.Contains(text, root) || strings.Contains(text, "secret-name-zq") {
 		t.Error("telemetry holds the folder or a file name")
@@ -401,5 +406,22 @@ func TestImportPlanTextShowsSmallAmounts(t *testing.T) {
 	}
 	if got := importDuration(90 * time.Minute); got != "about 1h30m" {
 		t.Errorf("importDuration(90m) = %q", got)
+	}
+}
+
+// A shell that leaves ~ alone (PowerShell, cmd, a quoted path) still names
+// the home folder.
+func TestImportExpandsTheHomeFolder(t *testing.T) {
+	home := importHome(t)
+	if err := os.MkdirAll(filepath.Join(home, "notes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "notes", "a.md"), []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"~/notes", "~" + string(filepath.Separator) + "notes"} {
+		if code, env, errOut := importFiles(t, p, "--plan"); code != output.OK || env.Data.Plan.Files != 1 {
+			t.Errorf("%s: exit %d, %d files (%s)", p, code, env.Data.Plan.Files, errOut)
+		}
 	}
 }

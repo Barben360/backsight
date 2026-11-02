@@ -35,6 +35,17 @@ func New(stateDir string, c Common) *Writer {
 	return &Writer{dir: filepath.Join(stateDir, "telemetry"), common: c, now: time.Now}
 }
 
+// For is a Writer whose events name project instead of w's (an import's
+// events carry the import's project, not the command's). nil stays nil.
+func (w *Writer) For(project string) *Writer {
+	if w == nil {
+		return nil
+	}
+	c := w.common
+	c.Project = project
+	return &Writer{dir: w.dir, common: c, now: w.now}
+}
+
 // Failures counts events that could not be written by this Writer.
 func (w *Writer) Failures() int64 { return w.failures.Load() }
 

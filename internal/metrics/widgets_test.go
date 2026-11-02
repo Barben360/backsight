@@ -112,6 +112,7 @@ func fullFx(t *testing.T) *fx {
 	x.tel(ago(3*time.Hour), telemetry.Job{Name: "maintain", Status: "done", MS: 900}, "", "")
 	x.store(ago(26*time.Hour), "saved", "decision", "alpha")
 	x.store(ago(27*time.Hour), "refused", "", "alpha")
+	x.imp(ago(28*time.Hour), "send", 4)
 	x.retire(ago(30*time.Hour), "forget")
 	x.retire(ago(50*time.Hour), "hide")
 

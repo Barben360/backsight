@@ -20,6 +20,7 @@ type BankPage struct {
 	Projects      ProjectsCard
 	Consolidation ConsolidationCard
 	Notes, Churn  Card
+	Imports       Card
 	Review        ReviewCard
 }
 
@@ -72,6 +73,9 @@ var reviewTabs = []struct {
 	{"stale.reported", func(r *metrics.Review) []metrics.ReviewRow { return r.Reported }, "No memory is reported wrong."},
 }
 
+// importFigs are the import events the imports card counts, in order.
+var importFigs = []struct{ action, label string }{{"queue", "started"}, {"done", "finished"}, {"pause", "paused at the cap"}, {"purge", "removed"}}
+
 // churnOrder are the actions on a memory, bottom of the bars first.
 var churnOrder = []string{"forget", "retire", "hide", "unhide"}
 
@@ -84,6 +88,7 @@ func bankOf(d PageData) BankPage {
 	size, growth := d.view(r, "bank.size"), d.view(r, "bank.growth")
 	byProject, cons := d.view(r, "bank.by_project"), d.view(r, "bank.consolidation")
 	notes, churn := d.view(r, "notes.stored"), d.view(r, "bank.churn")
+	imports := d.view(r, "imports.sent")
 	var b BankPage
 
 	b.StripTitle = size.Def.Question
@@ -156,6 +161,20 @@ func bankOf(d PageData) BankPage {
 		}
 		b.Churn.Charts = []PathChart{{HTML: partsOf(l, "Memories retired, hidden, restored or forgotten, per week", d.more(), churn, churnOrder,
 			wordsOf(churnOrder, func(k string) string { return wordOr(views.RetireWords, k, k) }), []string{"f-seq1", "f-seq2", "f-seq3", "f-neutral"}, "")}}
+	}
+
+	b.Imports = Card{Head: d.head(imports), Note: d.noData(imports), Dev: d.devIDs(imports)}
+	if b.Imports.Note.Text == "" {
+		if ld, ok := d.lead(imports, "files sent from imported folders"); ok {
+			b.Imports.Leads = []Lead{ld}
+		}
+		byAction, _ := extraAs[map[string]int64](imports.M, "by_action")
+		for _, f := range importFigs {
+			b.Imports.Figs = append(b.Imports.Figs, Fig{Label: f.label, Value: l.Int(byAction[f.action])})
+		}
+		if byAction["pause"] > 0 {
+			b.Imports.Hint, b.Imports.HintCmd = "A folder stopped at its cost cap; see which one and raise its cap:", "backsight import list"
+		}
 	}
 
 	b.Review = d.reviewOf(r)

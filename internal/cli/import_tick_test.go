@@ -472,9 +472,16 @@ func TestImportTelemetryCoversSendDoneAndPurge(t *testing.T) {
 			t.Errorf("send event = %v", e)
 		}
 	}
+	project := manifestOf(t, home).Project
 	run(t, "import", "purge", src, "--yes")
 	if a := actions(); !slices.Contains(a, "purge") {
 		t.Errorf("actions after purge = %v", a)
+	}
+	// Each event carries the import's project: stats filtered on it count it.
+	for _, e := range eventsNamed(t, home, "import") {
+		if project == "" || e["project"] != project {
+			t.Errorf("%v event project %v, want %q", e["action"], e["project"], project)
+		}
 	}
 }
 

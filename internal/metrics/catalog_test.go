@@ -56,6 +56,7 @@ var catalogRows = []catalogRow{
 	{"bank.consolidation", "Summaries waiting", "count", "none", 0, none, none, "", false, true, "none", "server", false, "bank", "none", "backsight doctor", "pending,failed,last_consolidated_at"},
 	{"bank.churn", "Retired, hidden, restored", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "weekly", "backsight memory stale", "forget,retire,hide,unhide"},
 	{"notes.stored", "Facts stored", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "none", "backsight stats bank", "by_result,by_kind"},
+	{"imports.sent", "Files imported", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "none", "backsight import list", "by_action"},
 	{"pipeline.flow", "Sessions sent", "ratio", "up", 0, none, none, "", false, true, "wilson", "machine", false, "pipeline", "daily", "backsight stats pipeline", "ok,failed,set_aside,waiting,backlog_oldest_ms"},
 	{"retain.outcomes", "Sends by result", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "daily", "backsight stats pipeline", "by_status,p95_ms"},
 	{"local.backlog", "Waiting on this PC", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "notes_queued,sessions_waiting,quarantined,oldest_ms"},
@@ -70,8 +71,8 @@ var catalogRows = []catalogRow{
 // A typo in any value of any row goes red: each Def is read back against the
 // row stated above, in order.
 func TestCatalogRows(t *testing.T) {
-	if len(catalogRows) != 38 || len(Catalog) != 38 {
-		t.Fatalf("rows: table %d, catalog %d, want 38 each", len(catalogRows), len(Catalog))
+	if len(catalogRows) != 39 || len(Catalog) != 39 {
+		t.Fatalf("rows: table %d, catalog %d, want 39 each", len(catalogRows), len(Catalog))
 	}
 	num := func(p *float64) float64 {
 		if p == nil {
@@ -110,7 +111,7 @@ func TestCatalogRows(t *testing.T) {
 // Where each row's data comes from (the index tables it reads).
 func TestCatalogSources(t *testing.T) {
 	want := map[string]string{}
-	for _, id := range []string{"recall.hit_rate", "recall.empty_reasons", "recall.by_lang", "search.rate", "search.empty_rate", "context.per_session", "context.per_prompt", "recall.latency", "search.latency", "hooks.failures", "notes.stored", "pipeline.flow", "retain.outcomes", "jobs.last_run"} {
+	for _, id := range []string{"recall.hit_rate", "recall.empty_reasons", "recall.by_lang", "search.rate", "search.empty_rate", "context.per_session", "context.per_prompt", "recall.latency", "search.latency", "hooks.failures", "notes.stored", "imports.sent", "pipeline.flow", "retain.outcomes", "jobs.last_run"} {
 		want[id] = "telemetry"
 	}
 	for _, id := range []string{"used.turn_rate", "declare.coverage", "used.rubber_stamp", "used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "verdict.wrong_rate", "bank.churn"} {

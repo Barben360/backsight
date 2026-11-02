@@ -51,6 +51,8 @@ backsight setup --questions --json
 
 Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `default`, `recommended`, `required`, and `asked`. Questions with `"asked": false` are already settled by an existing install's config or an earlier run: tell the user, don't ask again. If the provider answer changes, list the questions again: the model and other questions follow the provider.
 
+`import` defaults to `no`: ask whether the user has notes or another tool's memory files to bring in. On `yes`, list the questions again with `--answer import=yes`: `import_path` appears, and an answer naming a folder with nothing to import exits 2. Show the cost first with `backsight import /path/to/folder --plan --json` (see "Following the import of a folder" below).
+
 Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a machine without a systemd user session, such as a container: setup's pre-flight stops with exit 10 and asks for it; it also removes the entries an earlier run wrote, and `backsight setup --resume --answer scheduler=off` goes on from the earlier run without asking for consent again).
 
 The native runtime (no Docker, this PC only, no web UI; see [the native runtime](native-runtime.md)) is the default on Windows x86_64: nothing to add there. Its pre-flight there checks the path length and `%` in backsight's paths (the fix for both: the user sets `BACKSIGHT_HOME` to a short directory such as `C:\bs` and runs setup from that shell), the API port, `conhost --headless` and Task Scheduler; a `task` warning means a policy refused the server's scheduled task, and setup goes on without it (`server.start_on_session`: tell the user the server then runs until they log off and each Claude Code session starts it; see [Windows](windows.md#when-task-scheduler-refuses-the-task)). On Linux x86_64, only when the user asks for it: add `--runtime native` to every setup command (the same as the hidden answer `runtime=native`). Its pre-flight exits 10 when lingering is off, with the action `loginctl enable-linger` for the user to run, or when no systemd user session is reachable (an ssh login as that user is the way; `scheduler=off` does not help there).
@@ -78,7 +80,7 @@ Expect exit 10 the first time: the LLM key is not set. Ask the user to run `back
 On exit 0, `data` holds:
 - `steps`: what was done;
 - `restart_required`: if true, tell the user to restart Claude Code (or run `/reload-plugins`);
-- `next_steps`: relay each one (the backup key to save, the background backfill);
+- `next_steps`: relay each one (the backup key to save, the background backfill or import);
 - `try_first`: suggest it.
 
 ### Following the import of past sessions
@@ -86,6 +88,10 @@ On exit 0, `data` holds:
 When the user accepted the import, setup queued it and started the first `jobs tick`, which sends at most three sessions per run, every 15 minutes. `backsight retain backfill --status --json` reads its progress from this machine alone, without the server: `data.done`, `data.total`, `data.left`, `data.spent_cost` against `data.max_cost`, `data.running` (a backfill is sending now), `data.paused` and `data.finished`. Poll it every few minutes rather than in a tight loop.
 
 To finish the import now, with the user's go-ahead, run `backsight retain backfill --json` in the background. It blocks until the queue is empty, which can take hours (setup's `backfill` step and `backsight retain backfill --plan` give the estimate). Pass the same `--projects-dir` as setup's `backfill` step, and `--allow-subscription` on the `claude-code` provider: other filters start a new queue. After each session, a line `{"event":"progress","command":"retain backfill","step":"session","status","session","done","total","spent_cost","spent_tokens","currency"}` arrives on stderr; `"step":"queue"` or `"final"` with `"status":"waiting"` and a `detail` says it waits for the server. Exit 0 with `data.finished` means done; exit 40 means paused (`data.paused`: `budget` needs a higher `--max-cost`, which is the user's call; `interrupted` or `server` resume with a rerun).
+
+### Following the import of a folder
+
+When the user answered `import=yes` with `import_path=<folder>`, setup ran `backsight import <folder>`: the folder is queued, and `jobs tick` sends up to 10 files per run after any past sessions. Before answering, `backsight import /path/to/folder --plan --json` shows what would be sent and its cost (`data.plan.files`, `data.plan.total.cost`, `data.plan.skipped` by reason); propose `--exclude` patterns when the plan shows logs, archives or generated files, then run `backsight import /path/to/folder --exclude … --json` yourself instead of the setup answer. `backsight import list --json` gives each folder's `status` (`sending`, `waiting`, `paused`, `done`), `reason` (`past_sessions`, `budget`, `subscription`), `sent` out of `files`, and `spent_cost`. A `budget` pause needs a higher `--max-cost`, which is the user's call. [import](import.md) has a LifeOS recipe.
 
 `backsight doctor --json` checks the whole install at any time. About an hour after the user's first real session, `backsight verify --live --json` checks the real pipeline, read-only: exit 0 means this machine's latest settled session reached the server and an observation was consolidated from it; exit 40 means not yet, rerun after `data.wait_s` seconds; exit 20 means it failed, with `data.fix`. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
 
