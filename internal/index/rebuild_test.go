@@ -266,14 +266,14 @@ func TestRebuildOnANewerIndexRebuildsTheSideFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	side := filepath.Join(r.d.IndexDir(), SideFileName(1))
+	side := filepath.Join(r.d.IndexDir(), SideFileName(embeddedHead(t)))
 	if res.File != side {
 		t.Errorf("file %s", res.File)
 	}
 	if s, _ := fileSum(t, r.main()); s != sum {
 		t.Error("metrics.db changed")
 	}
-	if v := headerVersion(t, side); v != 1 {
+	if v := headerVersion(t, side); v != embeddedHead(t) {
 		t.Errorf("side file version %d", v)
 	}
 	ix = mustOpen(t, r.opts())

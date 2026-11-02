@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestMonthlyFilesUseUTC(t *testing.T) {
 // Every A.4 event names itself as the spec does.
 func TestEventNames(t *testing.T) {
 	cases := map[string]Event{"prompt": Prompt{}, "outcome": Outcome{}, "briefing": Briefing{}, "briefing_outcome": BriefingOutcome{},
-		"tool": Tool{}, "gate": Gate{}, "retain": Retain{}, "hook_failure": HookFailure{}, "job": Job{}, "credit_check": CreditCheck{}, "feedback_settle": FeedbackSettle{}, "dashboard": Dashboard{}}
+		"tool": Tool{}, "gate": Gate{}, "config": Config{}, "retain": Retain{}, "hook_failure": HookFailure{}, "job": Job{}, "credit_check": CreditCheck{}, "feedback_settle": FeedbackSettle{}, "dashboard": Dashboard{}}
 	for want, e := range cases {
 		if e.EventName() != want {
 			t.Errorf("%T: %q, want %q", e, e.EventName(), want)
@@ -189,5 +190,33 @@ func TestWireShapeOfNullableFields(t *testing.T) {
 	}
 	if v, ok := got[1]["credited"]; !ok || v != nil {
 		t.Errorf("outcome.credited must be present and null: %v", got[1])
+	}
+}
+
+// The config event is flat: the common fields, sha256 and one number per
+// setting, nothing nested and no other string.
+func TestConfigEventIsFlat(t *testing.T) {
+	dir := t.TempDir()
+	w := New(dir, common)
+	w.now = fixedClock("2026-10-24T09:30:00Z")
+	w.Emit(Config{SHA256: "abc", Values: map[string]float64{"recall.min_score": 0.5, "feedback.enabled": 1}})
+	got := lines(t, filepath.Join(dir, "telemetry", "events-2026-10.jsonl"))
+	if len(got) != 1 {
+		t.Fatalf("%d lines", len(got))
+	}
+	l := got[0]
+	if l["event"] != "config" || l["sha256"] != "abc" || l["recall.min_score"] != 0.5 || l["feedback.enabled"] != float64(1) {
+		t.Errorf("line %v", l)
+	}
+	for k, v := range l {
+		switch v.(type) {
+		case float64:
+		case string:
+			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "sha256"}, k) {
+				t.Errorf("string value under %s", k)
+			}
+		default:
+			t.Errorf("%s is %T, not flat", k, v)
+		}
 	}
 }

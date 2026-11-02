@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,9 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -857,5 +861,211 @@ func TestJobsTickHoldsSendsWhileTheProviderRejectsTheKey(t *testing.T) {
 	}
 	if e := state.LoadExtraction(pathsOf(home)); !e.HeldSince.IsZero() {
 		t.Errorf("hold not lifted: %+v", e)
+	}
+}
+
+// jobs maintain records the numeric settings once a local day, and again
+// the same day when a setting changed; the index reads them.
+func TestMaintainEmitsConfig(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = oldLocal })
+	home := devInstall(t, true)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600)
+	configs := func() int { return strings.Count(telemetryText(t, home), `"event":"config"`) }
+	maintain := func(at time.Time) {
+		t.Helper()
+		withClock(t, at)
+		if code, out, _ := run(t, "jobs", "maintain"); code != output.OK {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+	}
+	maintain(time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	if n := configs(); n != 1 {
+		t.Fatalf("%d config events after the first run, want 1", n)
+	}
+	maintain(time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC))
+	if n := configs(); n != 1 {
+		t.Errorf("%d config events after a second run the same day, want 1", n)
+	}
+	// The index ingests the event with the same keys.
+	ix, err := index.Open(context.Background(), indexOptions(pathsOf(home), home, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.CatchUp(context.Background(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]float64{}
+	err = ix.ReadTx(context.Background(), func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT key, value FROM tel_config_values`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var k string
+			var v float64
+			if err := rows.Scan(&k, &v); err != nil {
+				return err
+			}
+			keys[k] = v
+		}
+		return rows.Err()
+	})
+	_ = ix.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, _ := loadServerConfig()
+	if want := config.NumericSettings(cfg); !reflect.DeepEqual(keys, want) {
+		t.Errorf("tel_config_values %v, want %v", keys, want)
+	}
+	// A setting changed: one more, the same day.
+	raw, _ = os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[recall]\nprompt_hits = 7\n")...), 0o600)
+	maintain(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC))
+	if n := configs(); n != 2 {
+		t.Errorf("%d config events after a change, want 2", n)
+	}
+	maintain(time.Date(2026, 10, 25, 13, 0, 0, 0, time.UTC))
+	if n := configs(); n != 2 {
+		t.Errorf("%d config events after an unchanged run, want 2", n)
+	}
+	// The next local day: one more, the previous month's file included.
+	maintain(time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC))
+	if n := configs(); n != 3 {
+		t.Errorf("%d config events the next day, want 3", n)
+	}
+}
+
+// metricsLines reads the lines of one metrics family's month files.
+func metricsLines(t *testing.T, home, family string) []string {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).MetricsDir(), family+"-*.jsonl"))
+	var lines []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if l != "" {
+				lines = append(lines, l)
+			}
+		}
+	}
+	return lines
+}
+
+// maintainWithoutBackup is a dev install whose daily job takes no backup.
+func maintainWithoutBackup(t *testing.T) string {
+	t.Helper()
+	home := devInstall(t, true)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	if err := os.WriteFile(cfgPath, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// fixedMaintainDoctor replaces the health checks jobs maintain runs.
+func fixedMaintainDoctor(t *testing.T, checks ...doctor.Check) {
+	t.Helper()
+	old := doctorRun
+	doctorRun = func(context.Context, doctor.Env) doctor.Report { return doctor.Report{Checks: checks} }
+	t.Cleanup(func() { doctorRun = old })
+}
+
+// jobs maintain keeps one doctor-history line per run: the id and status of
+// every check, nothing else.
+func TestMaintainAppendsDoctorHistory(t *testing.T) {
+	home := maintainWithoutBackup(t)
+	fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK, Summary: "fine", Fix: "x"}, doctor.Check{ID: "b", Status: doctor.Warn, Detail: "d"})
+	withClock(t, time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	lines := metricsLines(t, home, "doctor-history")
+	if len(lines) != 1 {
+		t.Fatalf("%d doctor-history lines, want 1: %v", len(lines), lines)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rec["checks"], map[string]any{"a": "ok", "b": "warn"}) || rec["kind"] != "run" {
+		t.Errorf("line %s", lines[0])
+	}
+	for _, leak := range []string{"fine", `"x"`, `"d"`, "Summary", "Fix", "Detail"} {
+		if strings.Contains(lines[0], leak) {
+			t.Errorf("%q leaked into %s", leak, lines[0])
+		}
+	}
+	if !strings.Contains(out, `"doctor_history": "2 check(s)"`) {
+		t.Errorf("result:\n%s", out)
+	}
+	if _, text, _ := run(t, "jobs", "maintain"); !strings.Contains(text, ", doctor history 2 check(s)") {
+		t.Errorf("text:\n%s", text)
+	}
+}
+
+// A doctor-history file that cannot be written is a line of the result, not
+// a failed job.
+func TestMaintainSaysWhenTheDoctorHistoryIsNotWritten(t *testing.T) {
+	home := maintainWithoutBackup(t)
+	fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK})
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.State, 0o700)
+	if err := os.WriteFile(d.MetricsDir(), []byte("a file where the directory goes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK || !strings.Contains(out, `"doctor_history": "not written (`) {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if _, text, _ := run(t, "jobs", "maintain"); !strings.Contains(text, "doctor history: not written (") {
+		t.Errorf("text:\n%s", text)
+	}
+}
+
+// The upkeep removes metrics month files past the 13 months kept, and only
+// those.
+func TestMaintainRotatesMetricsFiles(t *testing.T) {
+	home := maintainWithoutBackup(t)
+	fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK})
+	mdir := pathsOf(home).MetricsDir()
+	_ = os.MkdirAll(mdir, 0o700)
+	for _, n := range []string{"doctor-history-2025-09.jsonl", "scan-history-2025-09.jsonl", "doctor-history-2025-10.jsonl", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(mdir, n), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withClock(t, time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	var env struct {
+		Data struct {
+			Rotated []string `json:"metrics_rotated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatal(err)
+	}
+	res := env.Data
+	slices.Sort(res.Rotated)
+	if want := []string{"doctor-history-2025-09.jsonl", "scan-history-2025-09.jsonl"}; !reflect.DeepEqual(res.Rotated, want) {
+		t.Errorf("metrics_rotated %v, want %v", res.Rotated, want)
+	}
+	for n, want := range map[string]bool{"doctor-history-2025-09.jsonl": false, "scan-history-2025-09.jsonl": false, "doctor-history-2025-10.jsonl": true, "notes.txt": true} {
+		if _, err := os.Stat(filepath.Join(mdir, n)); (err == nil) != want {
+			t.Errorf("%s present=%v, want %v", n, err == nil, want)
+		}
 	}
 }

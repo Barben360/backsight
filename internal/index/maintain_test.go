@@ -183,9 +183,9 @@ func TestMaintainRemovesLowerSideFiles(t *testing.T) {
 	ctx := context.Background()
 	d := tempDirs(t)
 	head2 := withTest(t)
-	build(t, opts(t, d, head2)) // metrics.db at 2
-	v1 := filepath.Join(d.IndexDir(), SideFileName(1))
-	v3 := filepath.Join(d.IndexDir(), SideFileName(3))
+	build(t, opts(t, d, head2)) // metrics.db at head+1
+	v1 := filepath.Join(d.IndexDir(), SideFileName(embeddedHead(t)))
+	v3 := filepath.Join(d.IndexDir(), SideFileName(embeddedHead(t)+2))
 	build(t, opts(t, d, nil)) // an older binary's side file
 	if _, err := os.Stat(v1); err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestMaintainRemovesLowerSideFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.SideKept, []string{SideFileName(1)}) || len(res.SideRemoved) != 0 {
+	if !slices.Equal(res.SideKept, []string{SideFileName(embeddedHead(t))}) || len(res.SideRemoved) != 0 {
 		t.Errorf("held: %+v", res)
 	}
 	if _, err := os.Stat(v1); err != nil {
@@ -225,7 +225,7 @@ func TestMaintainRemovesLowerSideFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.SideRemoved, []string{SideFileName(1)}) || len(res.SideKept) != 0 {
+	if !slices.Equal(res.SideRemoved, []string{SideFileName(embeddedHead(t))}) || len(res.SideKept) != 0 {
 		t.Errorf("released: %+v", res)
 	}
 	for _, sfx := range []string{"", "-wal", "-shm", "-journal"} {
@@ -257,7 +257,7 @@ func TestMaintainKeepsASideFileThisProcessHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.SideKept, []string{SideFileName(1)}) {
+	if !slices.Equal(res.SideKept, []string{SideFileName(embeddedHead(t))}) {
 		t.Errorf("%+v", res)
 	}
 }
@@ -291,7 +291,7 @@ func TestMaintainWithoutAnIndexCreatesNothing(t *testing.T) {
 		if _, err := Maintain(context.Background(), opts(t, d, nil)); err != nil {
 			t.Fatal(err)
 		}
-		absent(t, filepath.Join(d.IndexDir(), SideFileName(1)))
+		absent(t, filepath.Join(d.IndexDir(), SideFileName(embeddedHead(t))))
 		if s, _ := fileSum(t, mainFile(d)); s != sum {
 			t.Error("the newer metrics.db changed")
 		}

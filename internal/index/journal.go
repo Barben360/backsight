@@ -142,6 +142,14 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		r.add("binary_version", nameValue(e.Binary))
 		out = append(out, r)
 	case "shows":
+		set := jrow("show_sets", rel, off, 0, false) // the line's own row, its items after
+		set.add("ts", ts)
+		set.add("session", session)
+		set.add("turn", turn)
+		set.add("agent", agent)
+		set.add("path", closedValue(e.Path, showPaths))
+		set.add("flags", flagsValue(e.Flags))
+		out = append(out, set)
 		for i, s := range feedback.ShowsOf(e) {
 			it := e.Items[i]
 			r := jrow("shows", rel, off, i, true)

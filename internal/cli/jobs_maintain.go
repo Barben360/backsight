@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/release"
@@ -47,7 +48,16 @@ type maintainResult struct {
 	Rename string `json:"rename,omitempty"`
 	// MetricsIndex: the pruning of the metrics index (maintainIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
-	MS           int    `json:"ms"`
+	// MetricsRotated: the metrics month files removed past the months kept.
+	MetricsRotated []string `json:"metrics_rotated,omitempty"`
+	// DoctorHistory: "<n> check(s)" kept in the day's history line, or
+	// "not written (<class>)".
+	DoctorHistory string `json:"doctor_history,omitempty"`
+	// ServerDaily: the server-daily step's line (collectServerDaily).
+	ServerDaily string `json:"server_daily,omitempty"`
+	// MemoryDocs: the memory-docs step's line (collectMemoryDocs).
+	MemoryDocs string `json:"memory_docs,omitempty"`
+	MS         int    `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -96,6 +106,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				return finish()
 			}
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
+			res.MetricsRotated = metricsfile.Rotate(d.MetricsDir(), now(), metricsfile.KeepMonths)
 			res.MetricsIndex = maintainIndex(cmd.Context(), d, home)
 			archive, noBackup := "", "backup.enabled is off, and the moves wait for a backup"
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
@@ -123,7 +134,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
-			rep := runDoctor(cmd, d, home)
+			rep := doctorRun(cmd.Context(), doctorEnv(d, home))
 			// Not on a day the server consolidates moved memories again: the
 			// reading would be taken mid-way, and serve as next week's base.
 			if moved == 0 && serverSettled(cmd.Context()) {
@@ -134,9 +145,73 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			if raw, err := json.MarshalIndent(snapshot, "", "  "); err == nil {
 				_ = fsutil.WriteAtomic(filepath.Join(d.State, "doctor-snapshot.json"), raw, 0o600)
 			}
+			res.DoctorHistory = maintainDoctorHistory(d, rep, now)
+			res.ServerDaily = maintainServerDaily(cmd.Context(), d, now)
+			res.MemoryDocs = maintainMemoryDocs(cmd.Context(), d, home, now)
+			maintainConfig(tw, now)
 			return finish()
 		},
 	}
+}
+
+// maintainDoctorHistory keeps this run's check ids and statuses (nothing
+// else) as one doctor-history line. Interactive doctor runs are not kept.
+// A write failure is the returned text, never an error.
+func maintainDoctorHistory(d paths.Dirs, rep doctor.Report, clock func() time.Time) string {
+	checks := make(map[string]string, len(rep.Checks))
+	for _, c := range rep.Checks {
+		checks[c.ID] = string(c.Status)
+	}
+	w := metricsfile.New(d.MetricsDir(), buildinfo.Version)
+	w.Now = clock
+	if err := w.Append(metricsfile.DoctorRun{Checks: checks}); err != nil {
+		return "not written (" + writeClass(err) + ")"
+	}
+	return fmt.Sprintf("%d check(s)", len(checks))
+}
+
+// maintainConfig emits the numeric settings as a config event unless the
+// telemetry month files (the current and the previous) already hold one of
+// today's local date with the same hash: once a day, and again the same day
+// when a setting changed.
+func maintainConfig(tw *telemetry.Writer, clock func() time.Time) {
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		return
+	}
+	vals := config.NumericSettings(cfg)
+	sum := config.SettingsSHA256(vals)
+	at := clock()
+	dir := tw.Dir()
+	var lastTS time.Time
+	var lastSum string
+	for _, m := range []time.Time{at.UTC().AddDate(0, -1, 0), at.UTC()} {
+		raw, err := fsutil.ReadFileShared(filepath.Join(dir, "events-"+m.Format("2006-01")+".jsonl"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.Contains(line, `"config"`) {
+				continue
+			}
+			var ev struct {
+				Event  string `json:"event"`
+				TS     string `json:"ts"`
+				SHA256 string `json:"sha256"`
+			}
+			if json.Unmarshal([]byte(line), &ev) != nil || ev.Event != "config" {
+				continue
+			}
+			if ts, err := time.Parse(time.RFC3339Nano, ev.TS); err == nil && !ts.Before(lastTS) {
+				lastTS, lastSum = ts, ev.SHA256
+			}
+		}
+	}
+	day := func(t time.Time) string { return t.In(time.Local).Format("2006-01-02") }
+	if !lastTS.IsZero() && day(lastTS) == day(at) && lastSum == sum {
+		return
+	}
+	tw.WithClock(clock).Emit(telemetry.Config{SHA256: sum, Values: vals})
 }
 
 // maintainUpdate runs the update check against the configured source and
@@ -233,8 +308,21 @@ func maintainText(r maintainResult) string {
 	if r.MetricsIndex != "" {
 		metrics = ", metrics index " + r.MetricsIndex
 	}
-	return fmt.Sprintf("%s: %d telemetry file(s) rotated%s, backup %s, re-attribution %s%s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated), metrics,
-		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, r.MS)
+	history := ""
+	switch {
+	case strings.HasPrefix(r.DoctorHistory, "not written"):
+		history = ", doctor history: " + r.DoctorHistory
+	case r.DoctorHistory != "":
+		history = ", doctor history " + r.DoctorHistory
+	}
+	if r.ServerDaily != "" {
+		history += ", " + r.ServerDaily
+	}
+	if r.MemoryDocs != "" {
+		history += ", " + r.MemoryDocs
+	}
+	return fmt.Sprintf("%s: %d telemetry file(s) rotated%s, backup %s, re-attribution %s%s, update %s, doctor %s%s (%d ms)\n", r.Status, len(r.Rotated), metrics,
+		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, history, r.MS)
 }
 
 // maintainReattribute applies the moves in place of retain reattribute

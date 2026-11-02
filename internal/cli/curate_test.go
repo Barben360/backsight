@@ -855,3 +855,75 @@ func TestForgetWritesNothingAfterAConnect(t *testing.T) {
 		})
 	}
 }
+
+// A complete scan keeps its counts, and only counts: no id, no text.
+func TestScanAppendsCountsOnly(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	secret := "GITHUB_TOKEN=ghp_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	listAnswer["world"] = `[{"id":"live-secret-id","text":"deploy with ` + secret + `","fact_type":"world"},{"id":"live-clean-id","text":"clean sentence kept private","fact_type":"world"}]`
+	listAnswer["observation"] = `[{"id":"obs-secret-id","text":"login with --password Sup3rS3cret9","fact_type":"observation"},{"id":"obs-clean-id","text":"clean observation","fact_type":"observation"}]`
+	listAnswer["invalidated:world"] = `[{"id":"forgotten-id","text":"PGPASSWORD=Zz9yX8wV7u","fact_type":"world"},{"id":"forgotten-clean-id","text":"clean forgotten fact","fact_type":"world"}]`
+	mentalModels[briefingModelPrefix+"p1"] = `{"id":"` + briefingModelPrefix + `p1","content":"page quoting ` + secret + `","tags":["project:billing"]}`
+	mentalModels[briefingModelPrefix+"p2"] = `{"id":"` + briefingModelPrefix + `p2","content":"clean page kept private","tags":["project:billing"]}`
+	mentalModels["someone-elses-page"] = `{"id":"someone-elses-page","content":"not ours","tags":[]}`
+	withClock(t, time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	if code, out, _ := run(t, "memory", "scan"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	lines := metricsLines(t, home, "scan-history")
+	if len(lines) != 1 {
+		t.Fatalf("%d scan-history lines, want 1: %v", len(lines), lines)
+	}
+	var rec struct {
+		Kind                          string
+		Count, Live, Forgotten, Pages int64
+		MS                            int64
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Kind != "scan" || rec.Count != 4 || rec.Live != 2 || rec.Forgotten != 1 || rec.Pages != 1 || rec.MS < 0 {
+		t.Errorf("line %s", lines[0])
+	}
+	for _, leak := range []string{"-id", "private", "ghp_", "Zz9yX8wV7u", "Sup3rS3cret9", briefingModelPrefix} {
+		if strings.Contains(lines[0], leak) {
+			t.Errorf("%q leaked into %s", leak, lines[0])
+		}
+	}
+}
+
+// A scan that fails half-way says nothing about the bank: no line.
+func TestFailedScanAppendsNothing(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	var lists int
+	var mu sync.Mutex
+	pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/memories/list") {
+			return false
+		}
+		mu.Lock()
+		lists++
+		n := lists
+		mu.Unlock()
+		if n >= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return true
+		}
+		return false
+	}))
+	listAnswer["world"] = `[{"id":"w1","text":"a fact","fact_type":"world"}]`
+	code, _, _ := run(t, "memory", "scan")
+	if code != output.Blocked {
+		t.Errorf("exit %d, want %d", code, output.Blocked)
+	}
+	if lines := metricsLines(t, home, "scan-history"); len(lines) != 0 {
+		t.Errorf("a failed scan wrote %v", lines)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if lists < 2 {
+		t.Errorf("only %d list calls: the failure was not reached", lists)
+	}
+}

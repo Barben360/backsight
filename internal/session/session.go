@@ -160,6 +160,47 @@ var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 // ValidID says whether id can name a session (and its files).
 func ValidID(id string) bool { return idRE.MatchString(id) }
 
+// OfDocument is the session of a session's document: conversation:<sid>,
+// with an optional @<project> and a purge's #<n>, and
+// subagent:<sid>:<agent>. Notes (note:), imports (import:) and any other
+// id are no session's: ok is false.
+func OfDocument(id string) (sid string, ok bool) {
+	if rest, found := strings.CutPrefix(id, "conversation:"); found {
+		// a session id holds neither @ nor #: the first of them ends it
+		if i := strings.IndexAny(rest, "@#"); i >= 0 {
+			rest = rest[:i]
+		}
+		if ValidID(rest) {
+			return rest, true
+		}
+		return "", false
+	}
+	if rest, found := strings.CutPrefix(id, "subagent:"); found {
+		sid, agent, _ := strings.Cut(rest, ":")
+		if ValidID(sid) && ValidID(agent) {
+			return sid, true
+		}
+	}
+	return "", false
+}
+
+// KindOfDocument classifies a document id without keeping it: session (a
+// session's, OfDocument), note, import, other, or none for no document.
+func KindOfDocument(id string) string {
+	switch _, ok := OfDocument(id); {
+	case id == "":
+		return "none"
+	case ok:
+		return "session"
+	case strings.HasPrefix(id, "note:"):
+		return "note"
+	case strings.HasPrefix(id, "import:"):
+		return "import"
+	default:
+		return "other"
+	}
+}
+
 func checkID(id string) error {
 	if !idRE.MatchString(id) {
 		return fmt.Errorf("invalid session id %q", id)

@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,30 +12,23 @@ import (
 )
 
 // Free text of every source stays out of every view: the index fixture of
-// TestIndexHoldsNoCanary, plus a server that holds a memory's text, an
-// operation's error message and a project tag, and a doctor check whose
-// summary is a canary. Every view, every id form, --json and text, --dev:
+// TestIndexHoldsNoCanary, with the collection run on it (the day lists, the
+// operations, the scan, the doctor history), plus a server that holds a
+// memory's text, an operation's error message and a project tag, and a
+// doctor check whose summary is a canary. Every view, every id form, --json and text, --dev:
 // no canary in stdout or stderr, except the one memory text that `--text`
 // asks for.
 func TestStatsViewsHoldNoCanary(t *testing.T) {
 	home := canaryState(t)
-	port := fakeHindsight(t)
-	cfgPath := pathsOf(home).ConfigFile()
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, append(raw, []byte("\n[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\n")...), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	canaryServer(t, home)
+	canaryCollect(t, home)
 	const memText = "CANARY-MEMORY-TEXT"
 	memories["mem-allowed-2"] = `{"id":"mem-allowed-2","text":"` + memText + `","type":"world","tags":["project:` + ctlProject + `"]}`
 	projectEntities[ctlProject] = "[]"
 	now := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
-	fakeOperations = []string{
-		`{"id":"op1","operation_type":"retain","status":"failed","document_id":"doc1","created_at":"` + now + `","updated_at":"` + now + `","retry_count":2,"error_message":"CANARY-OPERROR"}`,
-		`{"id":"op2","operation_type":"retain","status":"completed","document_id":"doc2","created_at":"` + now + `","updated_at":"` + now + `","retry_count":0,"error_message":"CANARY-OPERROR"}`,
-	}
+	fakeOperations = append(fakeOperations,
+		`{"id":"op1","operation_type":"retain","status":"failed","document_id":"doc1","created_at":"`+now+`","updated_at":"`+now+`","retry_count":2,"error_message":"CANARY-OPERROR"}`,
+		`{"id":"op2","operation_type":"retain","status":"completed","document_id":"doc2","created_at":"`+now+`","updated_at":"`+now+`","retry_count":0,"error_message":"CANARY-OPERROR"}`)
 	oldDoctor := doctorRun
 	doctorRun = func(context.Context, doctor.Env) doctor.Report {
 		return doctor.Report{Checks: []doctor.Check{{ID: "server", Status: doctor.Warn, Summary: "CANARY-DOCTOR", Detail: "CANARY-DOCTOR", Fix: "backsight doctor"}}}
@@ -95,4 +86,8 @@ func TestStatsViewsHoldNoCanary(t *testing.T) {
 	if v.code != output.OK || !strings.Contains(v.raw, `"backsight doctor"`) {
 		t.Errorf("the doctor check did not reach the view: %s", v.raw)
 	}
+	// reading the views wrote nothing that holds a canary either
+	noCanaryInMetrics(t, home)
+	noServerTextOnDisk(t, "after the views", home)
+	noCanary(t, "after the views", home, ctlListed, ctlSessionA)
 }

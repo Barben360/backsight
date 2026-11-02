@@ -160,7 +160,7 @@ func TestStatsIndexNotBuilt(t *testing.T) {
 		code, out, _ = run(t, "stats", "index", "--json")
 		var st index.Status
 		jsonData(t, out, &st)
-		if code != output.OK || st.Exists || st.Readable || st.Head != 1 || st.Using != "metrics.db" {
+		if code != output.OK || st.Exists || st.Readable || st.Head != embeddedHead(t) || st.Using != "metrics.db" {
 			t.Errorf("update %v: exit %d %+v", withUpdate, code, st)
 		}
 		sameStateTree(t, "stats index", before, stateTree(t, d))
@@ -201,7 +201,7 @@ func TestStatsIndexShowsItsState(t *testing.T) {
 	if code != output.OK || errOut != "" {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if !st.Exists || !st.Readable || st.Schema != 1 || st.Head != 1 || st.Newer || st.Using != "metrics.db" || st.JournalMode != "wal" {
+	if head := embeddedHead(t); !st.Exists || !st.Readable || st.Schema != head || st.Head != head || st.Newer || st.Using != "metrics.db" || st.JournalMode != "wal" {
 		t.Errorf("%+v", st)
 	}
 	if st.Errors30d != 2 || st.Errors24h != 2 || st.ErrorsByReason["unparsable"] != 1 || st.ErrorsByReason["no_ts"] != 1 {
@@ -227,7 +227,7 @@ func TestStatsIndexShowsItsState(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	for _, re := range []string{
-		`(?m)^Index        metrics\.db \([^)]+, schema 1 of 1\)$`,
+		fmt.Sprintf(`(?m)^Index        metrics\.db \([^)]+, schema %[1]d of %[1]d\)$`, embeddedHead(t)),
 		`(?m)^Ingested     \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC \(lag \d+ s\)$`,
 		`(?m)^Sources      2 file\(s\), 1 behind, 1 gone \(rows kept\)$`,
 		`(?m)^Errors       2 line\(s\) skipped in the last 30 days \(no_ts 1, unparsable 1\)$`,
@@ -279,15 +279,46 @@ func TestStatsIndexOnACorruptIndex(t *testing.T) {
 	sameStateTree(t, "stats index", before, stateTree(t, d))
 }
 
-// testRegistry is a registry of two migrations: the real first one, and
-// a second that adds a table.
-func testRegistry(t *testing.T, second string) fs.FS {
+// embeddedHead is this binary's index schema head.
+func embeddedHead(t *testing.T) int {
 	t.Helper()
-	first, err := fs.ReadFile(index.Embedded, "0001-initial.sql")
+	reg, err := index.LoadRegistry(index.Embedded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fstest.MapFS{"0001-initial.sql": {Data: first}, "0002-test.sql": {Data: []byte(second)}}
+	return index.Head(reg)
+}
+
+// testMigration is the id of the migration testRegistry adds: head+1.
+func testMigration(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("%04d-test", embeddedHead(t)+1)
+}
+
+// thisSide is the side file of this binary's head (beside a newer index).
+func thisSide(t *testing.T) string {
+	t.Helper()
+	return index.SideFileName(embeddedHead(t))
+}
+
+// testRegistry is a newer binary's registry: the real migrations, and a
+// test one (testMigration) whose SQL is next.
+func testRegistry(t *testing.T, next string) fs.FS {
+	t.Helper()
+	reg := fstest.MapFS{}
+	ents, err := fs.ReadDir(index.Embedded, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		b, err := fs.ReadFile(index.Embedded, e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg[e.Name()] = &fstest.MapFile{Data: b}
+	}
+	reg[testMigration(t)+".sql"] = &fstest.MapFile{Data: []byte(next)}
+	return reg
 }
 
 func withRegistry(t *testing.T, reg fs.FS) {
@@ -300,10 +331,10 @@ func withRegistry(t *testing.T, reg fs.FS) {
 func TestStatsIndexNamesSideAndAsideFiles(t *testing.T) {
 	home := devInstall(t, true)
 	d := pathsOf(home)
-	// a newer backsight migrated metrics.db to schema 2
+	// a newer backsight migrated metrics.db to schema head+1
 	withRegistry(t, testRegistry(t, "CREATE TABLE later(x)"))
 	catchUpIndex(t, home)
-	indexRegistry = func() fs.FS { return index.Embedded } // this binary: head 1
+	indexRegistry = func() fs.FS { return index.Embedded } // this binary
 	catchUpIndex(t, home)                                  // builds its side file
 	if err := os.WriteFile(filepath.Join(d.IndexDir(), "metrics.db.corrupt"), []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
@@ -312,15 +343,15 @@ func TestStatsIndexNamesSideAndAsideFiles(t *testing.T) {
 	code, out, _ := run(t, "stats", "index", "--json")
 	var st index.Status
 	jsonData(t, out, &st)
-	if code != output.OK || !st.Newer || st.Using != "metrics-v1.db" || len(st.SideFiles) != 1 || st.SideFiles[0] != "metrics-v1.db" ||
-		len(st.AsideFiles) != 1 || st.AsideFiles[0] != "metrics.db.corrupt" || st.Schema != 1 {
+	if code != output.OK || !st.Newer || st.Using != thisSide(t) || len(st.SideFiles) != 1 || st.SideFiles[0] != thisSide(t) ||
+		len(st.AsideFiles) != 1 || st.AsideFiles[0] != "metrics.db.corrupt" || st.Schema != embeddedHead(t) {
 		t.Fatalf("exit %d %+v", code, st)
 	}
 	_, out, _ = run(t, "stats", "index")
 	for _, want := range []string{
-		"Index        metrics-v1.db (",
-		"Newer        a newer backsight's index: this one uses metrics-v1.db\n",
-		"Side files   metrics-v1.db\n",
+		"Index        " + thisSide(t) + " (",
+		"Newer        a newer backsight's index: this one uses " + thisSide(t) + "\n",
+		"Side files   " + thisSide(t) + "\n",
 		"Set aside    metrics.db.corrupt\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -566,23 +597,23 @@ func TestStatsIndexMigrate(t *testing.T) {
 		t.Errorf("up to date: exit %d %q", code, out)
 	}
 
-	// a binary of head 2
+	// a binary of head+1
 	withRegistry(t, testRegistry(t, "CREATE TABLE added(x)"))
 	writeIndexLines(t, d, monthOf(time.Now()), 2, time.Now()) // unread lines: migrate ingests nothing
 	before := stateTree(t, d)
 	code, out, _ := run(t, "stats", "index", "migrate", "--plan", "--json")
 	var res index.MigrateResult
 	jsonData(t, out, &res)
-	if code != output.OK || !res.Built || len(res.Pending) != 1 || res.Pending[0] != "0002-test" || len(res.Applied) != 0 {
+	if code != output.OK || !res.Built || len(res.Pending) != 1 || res.Pending[0] != testMigration(t) || len(res.Applied) != 0 {
 		t.Fatalf("plan: exit %d %+v", code, res)
 	}
-	if code, out, _ = run(t, "stats", "index", "migrate", "--plan"); code != output.OK || out != "metrics index: pending 0002-test\n" {
+	if code, out, _ = run(t, "stats", "index", "migrate", "--plan"); code != output.OK || out != "metrics index: pending "+testMigration(t)+"\n" {
 		t.Errorf("plan text: exit %d %q", code, out)
 	}
 	sameStateTree(t, "migrate --plan", before, stateTree(t, d))
 
 	code, out, errOut := run(t, "stats", "index", "migrate")
-	if code != output.OK || out != "metrics index: applied 0002-test\n" {
+	if code != output.OK || out != "metrics index: applied "+testMigration(t)+"\n" {
 		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
 	if got := indexCount(t, home, `SELECT count(*) FROM tel_prompt`); got != 3 {
@@ -663,7 +694,7 @@ func TestStatsIndexMigrateRecordsAFailure(t *testing.T) {
 	}
 	// a later success clears it
 	withRegistry(t, testRegistry(t, "CREATE TABLE fixed(x)"))
-	if code, out, _ := run(t, "stats", "index", "migrate"); code != output.OK || out != "metrics index: applied 0002-test\n" {
+	if code, out, _ := run(t, "stats", "index", "migrate"); code != output.OK || out != "metrics index: applied "+testMigration(t)+"\n" {
 		t.Fatalf("exit %d %q", code, out)
 	}
 	if st := migrateStatus(t, d); st["migrate_failed_at"] != nil || st["migrate_reason"] != nil {

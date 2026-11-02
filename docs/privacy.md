@@ -20,6 +20,21 @@ The views (`backsight stats overview`, `quality`, `sessions`…) read this index
 - Project names and session ids in it are local names (from your folders and Claude Code's session ids). They never leave this machine, `backsight report` included.
 - `backsight stats index rebuild` recreates it from the files on disk. `backsight uninstall --purge-local` deletes it.
 
+## The local record
+
+Four kinds of file in the `metrics/` folder of the state directory (`backsight paths` shows it) keep what the server only holds for a while, or does not keep at all. Each is one text file per month (`server-daily-2026-11.jsonl`, for example), one line per record. The metrics index reads them, and `backsight stats index rebuild` builds the index again from them; the daily job (`backsight jobs maintain`) deletes the months older than 13.
+
+| File | What it holds |
+|---|---|
+| `server-daily-` | Once a day, the server's counts: memories by kind, documents, links, the server's tasks by status, the number of memories per project (the project's name), and per past day the memories created and the tokens the server's language model used. When the server cannot be read, a line says so with a short word for the reason. |
+| `doctor-history-` | One line per daily job: the id and the status (ok, warning, error) of each doctor check. Not its message, and not the runs you start yourself. |
+| `memory-docs-` | For each memory the server lists as created on a day: its id, the day, its kind, and what its source is: for a conversation, its document's id (such as `conversation:<session>@<project>#<n>`, which names the session and its project) and the session's id; for a note, an imported file or anything else, only the word `note`, `import` or `other` (never a file's name or path), or `none`. It also holds the days already listed, and for the sessions this PC sent in the last 7 days, the server's task that stored each one (id, status, times, retries) and how many memories the document gave. |
+| `scan-history-` | One line per complete `backsight memory scan`: how many memories it flagged (stored, forgotten and briefing pages), how long it took. No id, no text. |
+
+- They hold ids, numbers, fixed words and times only: never the text of a memory, a prompt, an error or a document, never a file's name or path, never a setting's text or a key. Collecting them only reads the server: the calls are `GET` requests, each cut at 3 seconds.
+- They stay on this machine. `backsight report` never includes them, and `backsight uninstall --purge-local` deletes them with the index; a plain `backsight uninstall` keeps them.
+- The same daily job also adds one line to the usage log (`telemetry/`) a day, and again when you change a setting: the numeric and on-or-off settings of `[recall]` and `[feedback]`, and a hash of them, so the statistics can tell when a setting changed. A setting that is text is left out.
+
 ## The dashboard
 
 `backsight dashboard` serves the memory dashboard in a browser. It listens on `127.0.0.1` only. Its pages make no request outside the dashboard. The dashboard itself reads the memory server you configured (a memory's text only on "Show text") and runs the doctor's checks. The footer's help link opens GitHub only when you click it.

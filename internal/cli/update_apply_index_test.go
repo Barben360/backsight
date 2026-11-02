@@ -34,12 +34,12 @@ func indexUserVersion(t *testing.T, d paths.Dirs) int {
 	return v
 }
 
-// indexAtSchema1 builds metrics.db with this binary's registry (head 1)
-// and makes "0.2.0" a binary of head 2 (0002-test).
-func indexAtSchema1(t *testing.T, home string, bins *fakeBinaries) {
+// indexAtThisHead builds metrics.db with this binary's registry and makes
+// "0.2.0" a binary of head+1 (testMigration).
+func indexAtThisHead(t *testing.T, home string, bins *fakeBinaries) {
 	t.Helper()
 	catchUpIndex(t, home)
-	if v := indexUserVersion(t, pathsOf(home)); v != 1 {
+	if v := indexUserVersion(t, pathsOf(home)); v != embeddedHead(t) {
 		t.Fatalf("fixture at schema %d", v)
 	}
 	bins.indexes["0.2.0"] = testRegistry(t, "CREATE TABLE added(x)")
@@ -71,7 +71,7 @@ func TestUpdateApplyMigratesTheIndexAfterTheCommitPoint(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	var committed *bool
 	bins.before = func(_ context.Context, line string) {
 		if strings.HasPrefix(line, "0.2.0 stats index migrate") {
@@ -86,7 +86,7 @@ func TestUpdateApplyMigratesTheIndexAfterTheCommitPoint(t *testing.T) {
 	if code != output.OK || env.Data.RolledBack {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if v := indexUserVersion(t, d); v != 2 {
+	if v := indexUserVersion(t, d); v != embeddedHead(t)+1 {
 		t.Errorf("user_version %d", v)
 	}
 	if bins.ran("0.2.0 stats index migrate") != 1 {
@@ -101,7 +101,7 @@ func TestUpdateApplyMigratesTheIndexAfterTheCommitPoint(t *testing.T) {
 	if st.Status != "done" || st.Detail != "migrated the metrics index (1 change)" || iServer < 0 || iDocs < 0 || iIndex < iServer || iIndex < iDocs {
 		t.Errorf("steps %+v", env.Data.Steps)
 	}
-	if got := applyIndexData(t, out); !slices.Equal(got, []string{"0002-test"}) {
+	if got := applyIndexData(t, out); !slices.Equal(got, []string{testMigration(t)}) {
 		t.Errorf("index_migrations %q", got)
 	}
 	if slices.Contains(env.Data.Warnings, indexWarningFailed) {
@@ -115,17 +115,17 @@ func TestUpdateApplyIndexTextNamesNoMigrationID(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	code, out, errOut := run(t, "update", "apply", "--source", src)
 	if code != output.OK || !strings.Contains(out, "done     index: migrated the metrics index (1 change)\n") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	// "0002-test", not "0002": temp paths in the output can hold "0002"
-	// (issue #162).
-	if strings.Contains(out+errOut, "0002-test") {
+	// The whole id, not its number: temp paths in the output can hold
+	// its digits (issue #162).
+	if strings.Contains(out+errOut, testMigration(t)) {
 		t.Errorf("a migration id in the text:\n%s%s", out, errOut)
 	}
-	if v := indexUserVersion(t, pathsOf(home)); v != 2 {
+	if v := indexUserVersion(t, pathsOf(home)); v != embeddedHead(t)+1 {
 		t.Errorf("user_version %d", v)
 	}
 }
@@ -135,7 +135,7 @@ func TestUpdateApplyKeepsTheUpdateWhenTheIndexMigrationFails(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	bins.fail["0.2.0 stats index migrate"] = output.Blocked
 	bins.failStderr = "STDERR-CANARY /home/someone/secret/metrics.db\n"
 
@@ -162,7 +162,7 @@ func TestUpdateApplyKeepsTheUpdateWhenTheIndexMigrationFails(t *testing.T) {
 			t.Errorf("%q relayed:\n%s%s", canary, out, errOut)
 		}
 	}
-	if v := indexUserVersion(t, d); v != 1 {
+	if v := indexUserVersion(t, d); v != embeddedHead(t) {
 		t.Errorf("user_version %d", v)
 	}
 }
@@ -173,7 +173,7 @@ func TestUpdateApplyIndexWarningSaysWhyInFixedWords(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	old := indexMigrate
 	indexMigrate = func(context.Context, index.Options, bool) (index.MigrateResult, error) {
 		return index.MigrateResult{}, index.ErrInUse
@@ -197,7 +197,7 @@ func TestUpdateApplyRollbackNeverMeetsAMigratedIndex(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	dk.failImage, dk.migrateImage = newImage, newImage
 	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
 	env := decodeApply(t, out)
@@ -207,7 +207,7 @@ func TestUpdateApplyRollbackNeverMeetsAMigratedIndex(t *testing.T) {
 	if bins.ran("0.2.0 stats index migrate") != 0 {
 		t.Errorf("calls %q", bins.calls)
 	}
-	if v := indexUserVersion(t, d); v != 1 {
+	if v := indexUserVersion(t, d); v != embeddedHead(t) {
 		t.Errorf("user_version %d after a rollback", v)
 	}
 	if i, _ := applyStep(env.Data.Steps, "index"); i >= 0 {
@@ -220,7 +220,7 @@ func TestUpdateApplyPlanListsPendingIndexMigrations(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 
 	code, out, errOut := run(t, "update", "apply", "--plan", "--source", src, "--json")
 	env := decodeApply(t, out)
@@ -232,21 +232,21 @@ func TestUpdateApplyPlanListsPendingIndexMigrations(t *testing.T) {
 	if st.Status != "planned" || st.Detail != "would migrate the metrics index (1 change)" || iIndex < iSched {
 		t.Errorf("steps %+v", env.Data.Steps)
 	}
-	if got := applyIndexData(t, out); !slices.Equal(got, []string{"0002-test"}) {
+	if got := applyIndexData(t, out); !slices.Equal(got, []string{testMigration(t)}) {
 		t.Errorf("index_migrations %q", got)
 	}
-	if v := indexUserVersion(t, d); v != 1 {
+	if v := indexUserVersion(t, d); v != embeddedHead(t) {
 		t.Errorf("user_version %d after a plan", v)
 	}
 	if bins.ran("0.2.0 stats index migrate --plan") != 1 || bins.ran("0.2.0 stats index migrate") != 1 {
 		t.Errorf("calls %q", bins.calls)
 	}
 
-	// The text plan names no migration. "0002-test", not "0002": the
+	// The text plan names no migration. The whole id, not its number: the
 	// output holds temp paths, whose random digits can contain "0002"
 	// (issue #162).
 	code, out, errOut = run(t, "update", "apply", "--plan", "--source", src)
-	if code != output.OK || !strings.Contains(out, "planned  index: would migrate the metrics index (1 change)\n") || strings.Contains(out+errOut, "0002-test") {
+	if code != output.OK || !strings.Contains(out, "planned  index: would migrate the metrics index (1 change)\n") || strings.Contains(out+errOut, testMigration(t)) {
 		t.Errorf("plan text: exit %d\n%s%s", code, out, errOut)
 	}
 }
@@ -288,7 +288,7 @@ func TestUpdateApplyIndexUpToDate(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	catchUpIndex(t, home) // 0.2.0 has this binary's registry: head 1
+	catchUpIndex(t, home) // 0.2.0 has this binary's registry
 	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
 	if _, st := applyStep(decodeApply(t, out).Data.Steps, "index"); code != output.OK || st.Status != "skipped" || st.Detail != "the metrics index is up to date" {
 		t.Errorf("plan: exit %d\n%s", code, out)
@@ -325,7 +325,7 @@ func TestUpdateApplyIndexWithABinaryWithoutIt(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	bins.fail["0.2.0 stats index migrate"] = output.Usage
 	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
 	if _, st := applyStep(decodeApply(t, out).Data.Steps, "index"); code != output.OK || st.Status != "skipped" || st.Detail != "the new binary has no metrics index" {
@@ -344,7 +344,7 @@ func TestUpdateApplyPlanSkipsAnIndexItCannotList(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	bins.fail["0.2.0 stats index migrate --plan"] = output.Blocked
 	bins.failStderr = "STDERR-CANARY\n"
 	code, out, errOut := run(t, "update", "apply", "--plan", "--source", src, "--json")
@@ -363,7 +363,7 @@ func TestUpdateApplyIndexMigrationIsBounded(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	old := indexMigrateWait
 	t.Cleanup(func() { indexMigrateWait = old })
 	if old != 60*time.Second {
@@ -385,7 +385,7 @@ func TestUpdateApplyIndexMigrationGetsTheBound(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	indexAtSchema1(t, home, bins)
+	indexAtThisHead(t, home, bins)
 	old := indexMigrateWait
 	t.Cleanup(func() { indexMigrateWait = old })
 	indexMigrateWait = 7 * time.Second

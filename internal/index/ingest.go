@@ -39,7 +39,7 @@ var maxBatchBytes int64 = 64 << 20
 // kindTelemetry is the cursors kind of the telemetry month files.
 const kindTelemetry = "telemetry"
 
-// source is one month file (Kind: telemetry | journal): Rel, its path from the state directory with
+// source is one month file (Kind: a sourceKinds kind): Rel, its path from the state directory with
 // forward slashes, is the source_file of its rows and cursor.
 type source struct{ Rel, Path, Kind string }
 
@@ -59,6 +59,10 @@ type sourceKind struct {
 var sourceKinds = []sourceKind{
 	{kind: kindTelemetry, prefix: "events-", dir: paths.Dirs.TelemetryDir, rows: telemetryRows},
 	{kind: kindJournal, prefix: "journal-", dir: paths.Dirs.FeedbackDir, rows: journalRows},
+	{kind: kindServerDaily, prefix: familyServerDaily + "-", dir: paths.Dirs.MetricsDir, rows: collectionRows(familyServerDaily)},
+	{kind: kindDoctorHistory, prefix: familyDoctorHistory + "-", dir: paths.Dirs.MetricsDir, rows: collectionRows(familyDoctorHistory)},
+	{kind: kindMemoryDocs, prefix: familyMemoryDocs + "-", dir: paths.Dirs.MetricsDir, rows: collectionRows(familyMemoryDocs)},
+	{kind: kindScanHistory, prefix: familyScanHistory + "-", dir: paths.Dirs.MetricsDir, rows: collectionRows(familyScanHistory)},
 }
 
 func kindOf(kind string) (sourceKind, bool) {
@@ -80,7 +84,9 @@ var rowTables = []string{
 	"tel_hook_failure", "tel_job", "tel_attribution", "tel_store", "tel_dashboard",
 	"tel_config", "tel_ids", "tel_prompt_scopes", "tel_config_values", "events",
 	"turns", "shows", "settles", "credits", "stops", "retirements", "recalls",
-	"imports", "journal_other",
+	"imports", "journal_other", "show_sets", "server_snapshots", "server_snapshot_projects",
+	"server_days", "server_day_llm", "server_day_llm_status", "doctor_runs", "memory_docs",
+	"memory_days", "doc_ops", "scans", "metrics_other",
 }
 
 // afterBatch runs after each committed transaction (tests).

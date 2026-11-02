@@ -49,6 +49,9 @@ func (w *Writer) For(project string) *Writer {
 // Failures counts events that could not be written by this Writer.
 func (w *Writer) Failures() int64 { return w.failures.Load() }
 
+// Dir is the directory of the month files.
+func (w *Writer) Dir() string { return w.dir }
+
 func (w *Writer) currentFile() string { return w.file(w.now()) }
 
 func (w *Writer) file(t time.Time) string {
@@ -110,4 +113,10 @@ func (w *Writer) emit(e Event) error {
 		return werr
 	}
 	return cerr
+}
+
+// WithClock is a Writer like w that reads time from now (the month file
+// and ts of its events).
+func (w *Writer) WithClock(now func() time.Time) *Writer {
+	return &Writer{dir: w.dir, common: w.common, now: now}
 }

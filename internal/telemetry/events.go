@@ -1,5 +1,7 @@
 package telemetry
 
+import "encoding/json"
+
 // ScopeResult is one recall scope inside a prompt event.
 type ScopeResult struct {
 	OK  bool `json:"ok"`
@@ -189,3 +191,22 @@ func (Attribution) EventName() string     { return "attribution" }
 func (Job) EventName() string             { return "job" }
 func (Dashboard) EventName() string       { return "dashboard" }
 func (r Raw) EventName() string           { return r.Name }
+
+// Config is the numeric settings of the day: the hash of Values and one
+// key per setting (recall.<key>, feedback.<key>), emitted flat.
+type Config struct {
+	SHA256 string
+	Values map[string]float64
+}
+
+func (Config) EventName() string { return "config" }
+
+// MarshalJSON flattens: {"sha256": …, "recall.min_score": 0.5, …}.
+func (c Config) MarshalJSON() ([]byte, error) {
+	m := make(map[string]any, len(c.Values)+1)
+	for k, v := range c.Values {
+		m[k] = v
+	}
+	m["sha256"] = c.SHA256
+	return json.Marshal(m)
+}

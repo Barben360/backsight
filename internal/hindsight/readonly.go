@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -105,11 +106,27 @@ type LLMBucket struct {
 	Input, Output, Cached, Thoughts int64
 }
 
+// LLMWindow is one LLM stats answer: the bucket width it names ("hour",
+// "day"), the start of the window it covers (zero when it names none) and
+// its buckets.
+type LLMWindow struct {
+	Trunc   string
+	Start   time.Time
+	Buckets []LLMBucket
+}
+
 // LLMStats reads the LLM request counts and tokens over period (1d, 7d,
 // 30d), for one operation or, when operation is "", all of them.
 func (r *ReadOnly) LLMStats(ctx context.Context, period, operation string) ([]LLMBucket, error) {
+	w, err := r.LLMStatsWindow(ctx, period, operation)
+	return w.Buckets, err
+}
+
+// LLMStatsWindow is LLMStats with what the answer says of its window.
+func (r *ReadOnly) LLMStatsWindow(ctx context.Context, period, operation string) (LLMWindow, error) {
 	var raw struct {
 		Trunc   string `json:"trunc"`
+		Start   string `json:"start"`
 		Buckets []struct {
 			Time     string           `json:"time"`
 			Statuses map[string]int64 `json:"statuses"`
@@ -127,15 +144,15 @@ func (r *ReadOnly) LLMStats(ctx context.Context, period, operation string) ([]LL
 		q.Set("operation", operation)
 	}
 	if err := r.c.get(ctx, bankPath(r.bank, "/llm-requests/stats"), q, &raw); err != nil {
-		return nil, err
+		return LLMWindow{}, err
 	}
-	out := make([]LLMBucket, 0, len(raw.Buckets))
+	out := LLMWindow{Trunc: raw.Trunc, Start: serverTime(raw.Start), Buckets: make([]LLMBucket, 0, len(raw.Buckets))}
 	for _, b := range raw.Buckets {
 		lb := LLMBucket{Trunc: raw.Trunc, Time: serverTime(b.Time), Statuses: b.Statuses, Total: b.Total, Input: b.Tokens.Input, Output: b.Tokens.Output, Cached: b.Tokens.Cached}
 		if b.Tokens.Thoughts != nil {
 			lb.Thoughts = *b.Tokens.Thoughts
 		}
-		out = append(out, lb)
+		out.Buckets = append(out.Buckets, lb)
 	}
 	return out, nil
 }
@@ -163,4 +180,77 @@ func (r *ReadOnly) OperationsPage(ctx context.Context, status, typ string, limit
 		return OperationPage{}, err
 	}
 	return OperationPage{Total: raw.Total, Operations: raw.Operations}, nil
+}
+
+// ListedMemory is one item of a memory listing: its id, fact type and
+// document ("" when it has none, as observations). Nothing else of the
+// item is decoded: no text, context, entities, metadata or tags.
+type ListedMemory struct {
+	ID         string `json:"id"`
+	FactType   string `json:"fact_type"`
+	DocumentID string `json:"document_id"`
+}
+
+// ListCreatedMemories reads one page of the memories the server created in
+// [start, end), limit items from offset, and how many the window holds. A
+// zero start or end leaves that bound out. One request per call: the
+// caller pages.
+func (r *ReadOnly) ListCreatedMemories(ctx context.Context, start, end time.Time, offset, limit int) (items []ListedMemory, total int, err error) {
+	q := url.Values{"time_field": {"created_at"}, "limit": {strconv.Itoa(limit)}, "offset": {strconv.Itoa(offset)}}
+	if !start.IsZero() {
+		q.Set("start_date", start.UTC().Format(time.RFC3339))
+	}
+	if !end.IsZero() {
+		q.Set("end_date", end.UTC().Format(time.RFC3339))
+	}
+	var raw struct {
+		Total int            `json:"total"`
+		Items []ListedMemory `json:"items"`
+	}
+	if err := r.c.get(ctx, bankPath(r.bank, "/memories/list"), q, &raw); err != nil {
+		return nil, 0, err
+	}
+	return raw.Items, raw.Total, nil
+}
+
+// DocumentUnits reads how many memories a document made; ok is false when
+// the server gives no memory_unit_count. Only that count is decoded, never
+// the document's text. An *APIError of kind NotFound when absent.
+func (r *ReadOnly) DocumentUnits(ctx context.Context, id string) (units int, ok bool, err error) {
+	var raw struct {
+		Units *int `json:"memory_unit_count"`
+	}
+	path := bankPath(r.bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A"))
+	if err := r.c.get(ctx, path, nil, &raw); err != nil {
+		return 0, false, err
+	}
+	if raw.Units == nil {
+		return 0, false, nil
+	}
+	return *raw.Units, true, nil
+}
+
+// opsPage is the page size of RetainOperations.
+const opsPage = 100
+
+// RetainOperations lists the retain operations with status ("" = any), most
+// recent first, reading at most pages pages of opsPage. Operations of any
+// other type are dropped even when the server's type filter lets them by.
+func (r *ReadOnly) RetainOperations(ctx context.Context, status string, pages int) ([]Operation, error) {
+	var out []Operation
+	for p := range pages {
+		page, err := r.OperationsPage(ctx, status, "retain", opsPage, p*opsPage)
+		if err != nil {
+			return out, err
+		}
+		for _, o := range page.Operations {
+			if o.Type == "retain" {
+				out = append(out, o)
+			}
+		}
+		if len(page.Operations) < opsPage || (p+1)*opsPage >= page.Total {
+			break
+		}
+	}
+	return out, nil
 }

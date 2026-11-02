@@ -196,6 +196,113 @@ var (
 	fakeSeriesDown bool
 )
 
+// The created-day listing of the memory-docs step: fakeCreated is the bank
+// GET /memories/list?time_field=created_at lists, sorted by creation time
+// (nil: that listing answers like the plain one, empty); fakeListCap is
+// the largest page the fake returns (0: as asked); fakeListFilter makes
+// the fake ignore a bound ("none": both, "start": start_date);
+// fakeListStatus answers every such listing with that status;
+// fakeListPage, when set, may change a page before it is sent (its items,
+// total and a status, 0 for 200); fakeListLog is every such query, in
+// order. documentNoUnits are documents GET /documents/{id} answers without
+// memory_unit_count. fakeCalls counts the requests per endpoint
+// ("GET /memories/list", "GET /documents/{id}", …); fakeMaxInFlight is
+// the most requests the fake held at once; with fakeOverlap each created
+// day listing and document read waits (up to 20 ms) for 4 in flight.
+type fakeMem struct {
+	ID, FactType, Document string // "" leaves the field out, "<null>" sends null
+	Created                time.Time
+}
+
+var (
+	fakeCreated     []fakeMem
+	fakeListCap     int
+	fakeListFilter  string
+	fakeListStatus  int
+	fakeListPage    func(q url.Values, page []fakeMem, total int) ([]fakeMem, int, int)
+	fakeListLog     []url.Values
+	documentNoUnits map[string]bool
+	fakeCalls       map[string]int
+	fakeInFlight    atomic.Int64
+	fakeMaxInFlight atomic.Int64
+	fakeOverlap     atomic.Bool
+)
+
+// fakeEndpoint names a request's endpoint for fakeCalls: the bank-scoped
+// path with the id of a document or memory left out.
+func fakeEndpoint(r *http.Request) string {
+	p := r.URL.Path
+	if rest, ok := strings.CutPrefix(p, "/v1/default/banks/"); ok {
+		_, sub, _ := strings.Cut(rest, "/")
+		p = "/" + sub
+		switch {
+		case strings.HasPrefix(p, "/documents/"):
+			p = "/documents/{id}"
+		case strings.HasPrefix(p, "/memories/") && p != "/memories/list" && p != "/memories/recall":
+			p = "/memories/{id}"
+		}
+	}
+	return r.Method + " " + p
+}
+
+// createdListing answers GET /memories/list?time_field=created_at from
+// fakeCreated: the memories created in [start_date, end_date) (a bound
+// left out is open), limit items from offset, and their total.
+func createdListing(w http.ResponseWriter, q url.Values) {
+	fakeListLog = append(fakeListLog, q)
+	if fakeListStatus != 0 {
+		w.WriteHeader(fakeListStatus)
+		_, _ = w.Write([]byte(`{"detail":"not here"}`))
+		return
+	}
+	start, _ := time.Parse(time.RFC3339, q.Get("start_date"))
+	end, _ := time.Parse(time.RFC3339, q.Get("end_date"))
+	switch fakeListFilter {
+	case "none":
+		start, end = time.Time{}, time.Time{}
+	case "start":
+		start = time.Time{}
+	}
+	lo, hi := 0, len(fakeCreated)
+	if !start.IsZero() {
+		lo, _ = slices.BinarySearchFunc(fakeCreated, start, func(m fakeMem, t time.Time) int { return m.Created.Compare(t) })
+	}
+	if !end.IsZero() {
+		hi, _ = slices.BinarySearchFunc(fakeCreated, end, func(m fakeMem, t time.Time) int { return m.Created.Compare(t) })
+	}
+	window := fakeCreated[min(lo, hi):hi]
+	off, _ := strconv.Atoi(q.Get("offset"))
+	lim, _ := strconv.Atoi(q.Get("limit"))
+	if fakeListCap > 0 && lim > fakeListCap {
+		lim = fakeListCap
+	}
+	page, total, status := window[min(off, len(window)):min(off+lim, len(window))], len(window), 0
+	if fakeListPage != nil {
+		page, total, status = fakeListPage(q, page, total)
+	}
+	if status != 0 {
+		w.WriteHeader(status)
+		return
+	}
+	items := make([]map[string]any, 0, len(page))
+	for _, m := range page {
+		it := map[string]any{"id": m.ID, "text": "CANARY-LISTED-TEXT", "context": "CANARY-LISTED-CONTEXT", "tags": []string{"project:x", "CANARY-LISTED-TAG"},
+			"entities": []string{"CANARY-LISTED-ENTITY"}, "metadata": map[string]string{"note": "CANARY-LISTED-META"}, "chunk_id": "CANARY-LISTED-CHUNK",
+			"mentioned_at": m.Created.Add(-time.Hour).Format(time.RFC3339), "date": m.Created.Format(time.RFC3339)}
+		for k, v := range map[string]string{"fact_type": m.FactType, "document_id": m.Document} {
+			switch v {
+			case "":
+			case "<null>":
+				it[k] = nil
+			default:
+				it[k] = v
+			}
+		}
+		items = append(items, it)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": total, "limit": lim, "offset": off})
+}
+
 // statsDown makes the LLM usage endpoint fail; retainedTags records the
 // tags of every accepted item.
 var (
@@ -255,6 +362,9 @@ var (
 	// fake accepted it).
 	fakeDocCreated   map[string]time.Time
 	bankConfigStatus atomic.Int32 // non-zero: bank claude-memory's /config answers this status
+	// fakeStatsNow is the clock of the LLM stats and the memories series
+	// (nil: time.Now).
+	fakeStatsNow func() time.Time
 	// fakeHook, when not nil, sees every request before the fake answers
 	// it (outside the fake's lock).
 	fakeHook func(r *http.Request)
@@ -282,6 +392,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	statsDown.Store(false)
 	llmThoughts.Store(0)
 	llmOldInput.Store(0)
+	fakeStatsNow = nil
 	llmPeriod = ""
 	extractFails.Store(false)
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
@@ -310,6 +421,11 @@ func fakeHindsight(t *testing.T) (port int) {
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	fakeHook = nil
 	fakeOperations, fakeSeriesDown = nil, false
+	fakeCreated, fakeListCap, fakeListFilter, fakeListStatus, fakeListPage, fakeListLog = nil, 0, "", 0, nil, nil
+	documentNoUnits, fakeCalls = map[string]bool{}, map[string]int{}
+	fakeInFlight.Store(0)
+	fakeMaxInFlight.Store(0)
+	fakeOverlap.Store(false)
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
 	bankDocs := map[string]map[string]bool{}
@@ -344,8 +460,18 @@ func fakeHindsight(t *testing.T) (port int) {
 		if fakeHook != nil {
 			fakeHook(r)
 		}
+		n := fakeInFlight.Add(1)
+		defer fakeInFlight.Add(-1)
+		for m := fakeMaxInFlight.Load(); n > m && !fakeMaxInFlight.CompareAndSwap(m, n); m = fakeMaxInFlight.Load() {
+		}
+		if ep := fakeEndpoint(r); fakeOverlap.Load() && (ep == "GET /memories/list" || ep == "GET /documents/{id}") {
+			for until := time.Now().Add(20 * time.Millisecond); fakeInFlight.Load() < 4 && time.Now().Before(until); {
+				time.Sleep(time.Millisecond)
+			}
+		}
 		mu.Lock()
 		defer mu.Unlock()
+		fakeCalls[fakeEndpoint(r)]++
 		if rest, ok := strings.CutPrefix(r.URL.Path, "/v1/default/banks/"); ok {
 			bank, sub, _ := strings.Cut(rest, "/")
 			bankCalls = append(bankCalls, r.Method+" "+bank+" /"+sub)
@@ -455,6 +581,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				extra = `,"source_facts":` + recallSourceFacts
 			}
 			_, _ = w.Write([]byte(`{"results":` + recallAnswer + extra + `}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") == "created_at" && fakeCreated != nil:
+			createdListing(w, r.URL.Query())
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") != "":
 			// Like the server: only memories with a value on the asked
 			// time field (the fake's items carry updated_at, and
@@ -691,7 +819,11 @@ func fakeHindsight(t *testing.T) (port int) {
 				n, ok = documentUnits[id]
 			}
 			if ok {
-				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `}`))
+				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `,"original_text":"CANARY-DOC-TEXT"}`))
+				return
+			}
+			if documentNoUnits[id] {
+				_, _ = w.Write([]byte(`{"id":"` + id + `","original_text":"CANARY-DOC-TEXT"}`))
 				return
 			}
 			bank, _, _ = strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
@@ -711,20 +843,38 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			// Like Hindsight 1.1.0: 1d or 30d; any other period is 7 days.
 			llmPeriod = r.URL.Query().Get("period")
-			day := time.Now().UTC().Format("2006-01-02")
+			now := time.Now().UTC()
+			if fakeStatsNow != nil {
+				now = fakeStatsNow().UTC()
+			}
+			day := now.Format("2006-01-02")
 			buckets := `{"time":"` + day + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) +
 				`,"output":0,"cached":0,"thoughts":` + strconv.FormatInt(llmThoughts.Load(), 10) + `}}`
 			if llmPeriod == "30d" {
-				old := time.Now().UTC().AddDate(0, 0, -10).Format("2006-01-02")
+				old := now.AddDate(0, 0, -10).Format("2006-01-02")
 				buckets += `,{"time":"` + old + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmOldInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}`
 			}
-			_, _ = w.Write([]byte(`{"buckets":[` + buckets + `]}`))
+			trunc := "" // a 1d answer is hourly on the server: left unnamed as before
+			if llmPeriod != "1d" {
+				trunc = `"trunc":"day",`
+			}
+			// The window's start, as the server names it.
+			span := map[string]time.Duration{"1d": 24 * time.Hour, "30d": 30 * 24 * time.Hour}[llmPeriod]
+			if span == 0 {
+				span = 7 * 24 * time.Hour
+			}
+			start := `"start":"` + now.Add(-span).Format("2006-01-02T15:04:05.000000+00:00") + `",`
+			_, _ = w.Write([]byte(`{` + trunc + start + `"buckets":[` + buckets + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats/memories-timeseries"):
 			if fakeSeriesDown {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			day := time.Now().UTC().Format("2006-01-02")
+			now := time.Now().UTC()
+			if fakeStatsNow != nil {
+				now = fakeStatsNow().UTC()
+			}
+			day := now.Format("2006-01-02")
 			_, _ = w.Write([]byte(`{"period":"` + r.URL.Query().Get("period") + `","trunc":"day","buckets":[{"time":"` + day + `T00:00:00+00:00","world":1,"experience":0,"observation":2}]}`))
 		case strings.HasSuffix(r.URL.Path, "/operations") && fakeOperations != nil && (r.URL.Query().Get("status") == "failed" || r.URL.Query().Get("status") == "completed"):
 			var items []string
@@ -738,7 +888,12 @@ func fakeHindsight(t *testing.T) (port int) {
 					items = append(items, op)
 				}
 			}
-			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(len(items)) + `,"operations":[` + strings.Join(items, ",") + `]}`))
+			total := len(items)
+			if lim, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && lim > 0 { // paged like the server
+				off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+				items = items[min(off, len(items)):min(off+lim, len(items))]
+			}
+			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(total) + `,"operations":[` + strings.Join(items, ",") + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/operations"):
 			// Pending and processing are reported separately, like Hindsight;
 			// only pending drains as it is polled.
