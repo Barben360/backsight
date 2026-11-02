@@ -18,7 +18,9 @@ var updateFixture = flag.Bool("update-fixture", false, "write testdata/schema-NN
 
 // fixturePath is the committed index file of schema head (one row in
 // each table of that schema), from the release that shipped it.
-func fixturePath(head int) string { return fmt.Sprintf("testdata/schema-%04d.db", head) }
+func fixturePath(head int) string {
+	return filepath.Join("testdata", fmt.Sprintf("schema-%04d.db", head))
+}
 
 // embeddedHead is the head of this binary's registry.
 func embeddedHead(t *testing.T) int {
