@@ -601,7 +601,8 @@ func TestCopyFileWaitsForAHandleOnTheDestination(t *testing.T) {
 	}
 	src2 := sleeper(t, filepath.Join(dir, "v2"), "2")
 	f := scanShim(t, dst)
-	go func() { time.Sleep(300 * time.Millisecond); _ = f.Close() }()
+	// Held past the copy (about 0.7 s on a VM), released within RetryFor.
+	go func() { time.Sleep(1500 * time.Millisecond); _ = f.Close() }()
 	if err := copyFile(src2, dst, 0o755); err != nil {
 		t.Fatalf("copy onto a destination a scanner holds briefly: %v", err)
 	}
