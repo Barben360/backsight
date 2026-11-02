@@ -175,6 +175,9 @@ func (h *hookEnv) sessionStart() []byte {
 	if r := state.LoadReach(h.dirs); !mismatch && !answered && !r.FailingSince.IsZero() && now().Sub(r.FailingSince) > unreachableAfter {
 		banner += "\n" + instructions.UnreachableLine(r.FailingSince)
 	}
+	if e := state.LoadExtraction(h.dirs); !mismatch && h.cfg.Components.Write && e.HeldFor(h.cfg.Server.Bank) {
+		banner += "\n" + instructions.ExtractionHeldLine(e.HeldSince, e.KeyRejected)
+	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
 		banner += "\n" + instructions.QuarantineLine(len(held))
 	}

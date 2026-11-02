@@ -114,3 +114,13 @@ func OtherServerLine() string {
 func UnreachableLine(since time.Time) string {
 	return EmojiWarning + " memory server silent since " + since.UTC().Format("2006-01-02 15:04") + " UTC: notes and sessions wait on this PC · run `backsight doctor`"
 }
+
+// ExtractionHeldLine: jobs tick holds this PC's sends because the server's
+// extraction LLM fails (state.Extraction); what it would send waits here.
+func ExtractionHeldLine(since time.Time, keyRejected bool) string {
+	why := "the memory server's extraction LLM fails"
+	if keyRejected {
+		why = "the extraction LLM's provider rejects llm_api_key"
+	}
+	return EmojiWarning + " " + why + " since " + since.UTC().Format("2006-01-02 15:04") + " UTC: notes and sessions wait on this PC · run `backsight doctor`"
+}

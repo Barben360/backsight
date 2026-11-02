@@ -187,6 +187,8 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		res.Warning = "maintenance in progress: the note goes out after it"
 	} else if otherServer(d, cfg) != nil {
 		res.Warning = "a different server answers at the joined address: the note waits on this PC; run backsight doctor"
+	} else if hold := extractionHold(d, cfg.Server.Bank); hold != "" {
+		res.Warning = hold + ": the note goes out once it works again; run backsight doctor"
 	} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
 		fctx, cancel := context.WithTimeout(ctx, storeFlushBudget)
 		ob.Gate = sendsGate(d, generation)
