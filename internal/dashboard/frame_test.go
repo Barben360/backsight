@@ -310,7 +310,14 @@ func TestMenuRefreshProjectAndPreferencesHint(t *testing.T) {
 		t.Errorf("unfiltered Menu Project row %q", got)
 	}
 	hints := doc.find("span.hint")
-	if len(hints) != 1 || hints[0].text() != "Adds ranking, learned ranking and release detail." {
-		t.Errorf("preference hints %+v", hints)
+	var got []string
+	for _, h := range hints {
+		got = append(got, h.text())
+	}
+	want := []string{"Adds ranking, learned ranking and release detail.",
+		"Compact fits more on a screen; touch targets keep their size.",
+		"g then a letter opens a page; press ? to list them all."}
+	if !slices.Equal(got, want) {
+		t.Errorf("preference hints %q", got)
 	}
 }

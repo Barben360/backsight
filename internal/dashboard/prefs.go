@@ -16,23 +16,29 @@ const (
 // themes are the theme choices, in the order the menu shows them.
 var themes = []string{"system", "light", "dark"}
 
-// parsePrefs reads a cookie value (v1.<theme>.<dev>.<refresh>); anything
-// else is the defaults.
+// parsePrefs reads a cookie value (v1.<theme>.<dev>.<refresh>.<density>.<keys>,
+// or the four-field form of an older version, its density comfortable and
+// shortcuts off); anything else is the defaults.
 func parsePrefs(v string) Prefs {
 	def := Prefs{Theme: "system"}
 	parts := strings.Split(v, ".")
-	if len(parts) != 4 || parts[0] != "v1" {
+	if (len(parts) != 4 && len(parts) != 6) || parts[0] != "v1" {
 		return def
 	}
 	theme, dev, refresh := parts[1], parts[2], parts[3]
+	density, keys := "comfortable", "0"
+	if len(parts) == 6 {
+		density, keys = parts[4], parts[5]
+	}
 	known := false
 	for _, t := range themes {
 		known = known || t == theme
 	}
-	if !known || (dev != "0" && dev != "1") || (refresh != "0" && refresh != "1") {
+	if !known || (dev != "0" && dev != "1") || (refresh != "0" && refresh != "1") ||
+		(density != "comfortable" && density != "compact") || (keys != "0" && keys != "1") {
 		return def
 	}
-	return Prefs{Theme: theme, Dev: dev == "1", Refresh: refresh == "1"}
+	return Prefs{Theme: theme, Dev: dev == "1", Refresh: refresh == "1", Compact: density == "compact", Keys: keys == "1"}
 }
 
 // bit is a preference flag as its cookie digit.
@@ -45,7 +51,11 @@ func bit(b bool) string {
 
 // cookie is the cookie value that parsePrefs reads back.
 func (p Prefs) cookie() string {
-	return "v1." + p.Theme + "." + bit(p.Dev) + "." + bit(p.Refresh)
+	density := "comfortable"
+	if p.Compact {
+		density = "compact"
+	}
+	return "v1." + p.Theme + "." + bit(p.Dev) + "." + bit(p.Refresh) + "." + density + "." + bit(p.Keys)
 }
 
 // prefsOf is the reader's preferences, from the cookie.
@@ -58,7 +68,7 @@ func (s *Server) prefsOf(r *http.Request) Prefs {
 }
 
 // servePrefs changes one preference and sends the reader back: exactly
-// one of theme, dev and refresh besides back, back a local path.
+// one of theme, dev, refresh, density and keys besides back, back a local path.
 func (s *Server) servePrefs(w http.ResponseWriter, r *http.Request) {
 	prefs := s.prefsOf(r)
 	// Only a navigation sets a preference: not a HEAD, not a prefetch.
@@ -97,6 +107,10 @@ func (s *Server) servePrefs(w http.ResponseWriter, r *http.Request) {
 			prefs.Dev = v == "1"
 		case k == "refresh" && (v == "0" || v == "1"):
 			prefs.Refresh = v == "1"
+		case k == "density" && (v == "comfortable" || v == "compact"):
+			prefs.Compact = v == "compact"
+		case k == "keys" && (v == "0" || v == "1"):
+			prefs.Keys = v == "1"
 		default:
 			bad("That preference or value is not valid.")
 			return
