@@ -161,6 +161,8 @@ type Frame struct {
 	SessionHead                            bool      // the page head says the session's project, span and sent state, not a window
 	Window                                 string    // windowPhrase of the page's params and window; "" on the text and state pages
 	Catching                               string    // catchingOf the first view's freshness; "" when the history is read
+	Custom                                 *Custom   // the custom window picker; nil on a page without window links
+	CustomMenu                             *Custom   // its copy in the Menu
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -460,14 +462,29 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// filter must not read as no filter.
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		var p views.Params
+		var redirect string
+		var refused *Custom
 		if err != nil {
 			err = views.Usage("the query string is malformed")
 		} else {
 			q.Del("code")
-			p, err = views.FromValues(first, q)
+			// The custom window's from and to become since and until; only
+			// the pages that offer window links take them.
+			if hasPicker(spec, r) {
+				redirect, refused, err = pickWindow(r.URL.EscapedPath(), q, s.now())
+				q.Del("from")
+				q.Del("to")
+			}
+			if err == nil {
+				p, err = views.FromValues(first, q)
+			}
 		}
 		if err != nil {
 			s.statePage(w, r, http.StatusBadRequest, kindBad, title, prefs, sentence(err.Error()), 0)
+			return
+		}
+		if redirect != "" {
+			http.Redirect(w, r, redirect, http.StatusSeeOther)
 			return
 		}
 		if p.DevSet { // the query beats the preference for this request
@@ -523,6 +540,13 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 					// when it ran and how it was sent.
 					data.Frame.Window, data.Frame.SessionHead = "", true
 				}
+			}
+			if data.Frame.Windows != nil {
+				c := newCustom(data.Frame.Path, q, p, head.Window, s.now())
+				if refused != nil {
+					c.From, c.To, c.Err, c.FromBad, c.ToBad = refused.From, refused.To, refused.Err, refused.FromBad, refused.ToBad
+				}
+				data.Frame.Custom, data.Frame.CustomMenu = &c, c.inMenu()
 			}
 		}
 		body, err := renderPage(s.tpl, spec.Name, data)
