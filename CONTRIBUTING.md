@@ -37,8 +37,9 @@ The first `make check` downloads the modules and builds the race runtime: count 
 |---|---|
 | `make check` | the whole gate below, in one command |
 | `make build` | builds `bin/backsight` |
-| `make test` | runs every test with the race detector |
-| `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag |
+| `make test` | runs every test with the race detector, then the dashboard's page sweep without it |
+| `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`) |
+| `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag, and vets them with it for Linux and Windows |
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |
 | `make leaks` | scans the Git history for secrets |
@@ -58,7 +59,7 @@ Scripts that start a server (`scripts/sandbox.sh`, `scripts/fresh-install.sh` an
 
 ## The M6 VM bench
 
-`scripts/vm-bench.sh` proves on two libvirt VMs what several PCs sharing one memory need (decision 0073, block 4): `server install --ssh` to a fresh host, two clients on one server, a session never stored twice, a laptop offline, key rotation, restore and purge seen by both clients, and the prompt hook's latency at 0, 20 and 80 ms. It runs only by hand, when a change touches what clients share; never on CI, from a timer or a hook (it refuses when `CI` or `GITHUB_ACTIONS` is set). CI re-runs the dedup and rotation checks on every pull request with `scripts/m6-chain.sh` instead, client homes on the runner.
+`scripts/vm-bench.sh` proves on two libvirt VMs what several PCs sharing one memory need (decision 0073, block 4): `server install --ssh` to a fresh host, two clients on one server, a session never stored twice, a laptop offline, key rotation, restore and purge seen by both clients, and the prompt hook's latency at 0, 20 and 80 ms. It runs only by hand, when a change touches what clients share; never on CI, from a timer or a hook (it refuses when `CI` or `GITHUB_ACTIONS` is set). CI re-runs the dedup and rotation checks on every pull request that changes more than documentation with `scripts/m6-chain.sh` instead, client homes on the runner.
 
 Prerequisites: libvirt on `qemu:///system` with your user in the `libvirt` group, its `default` network and pool active, `virt-install` that knows `ubuntu24.04`, `xorriso`, `minisign`, `jq`, Go, and 16 GiB of `MemAvailable` and 80 GiB free in the pool (`up` refuses otherwise). `run` also needs the host's `npm` 11 or newer (Node 24): it installs client B's Claude Code under the bench's `cache/` with `npm install --allow-scripts`, which older npm lacks (`up` does not check it, so an older one fails at `run`, after the reset and the build).
 
@@ -83,6 +84,8 @@ Before every commit, `make check` must pass. It runs, and stops at the first fai
 - `gitleaks dir . --no-banner --redact`, when gitleaks is installed.
 
 Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) runs the tests, a signed snapshot release with a throwaway key, the sandbox tests and the fresh-install chain: setup from nothing, verify, store and search, backup and restore, update with rolled-back failures, undo and uninstall; and the M6 chain (`scripts/m6-chain.sh`): a server and two client homes, the dedup and key-rotation proofs.
+
+CI runs its jobs side by side: the race-detector tests in four slices (`make test-shard`), the Windows tests in three, and the `testhooks` run, the time budgets and the cross-compilation in jobs of their own; the required check `test` passes once all of the Linux ones have. A pull request that changes only documentation (the Markdown of `docs/` and of the repository's root, `scripts/ci-docs-only.sh`) skips the Windows tests, the M6 chain and the native chains; the sandbox tests and the fresh-install chain still run, as they search the embedded docs. A newer push to a pull request cancels its older run.
 
 ## Tests
 
