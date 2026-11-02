@@ -8,6 +8,10 @@
 #
 #   fresh             setup --runtime native --non-interactive; doctor has no error
 #   store             memories stored and recalled; backup create; backup verify
+#   second-home       a second home of the same project (its own BACKSIGHT_HOME, the same
+#                     user and unit directory): server render, start and stop exit 20 naming
+#                     the first install's directory; the units unchanged and active, the
+#                     server healthy
 #   to-docker         server runtime switch docker: no gate difference, overlap@10 recorded;
 #                     then server runtime clean removes server/native whole
 #   to-native         and back, from an install that never had native (uv, Python, the
@@ -48,7 +52,7 @@
 # Compose, Claude Code (setup wires it), jq, curl, uv's network (PyPI,
 # GitHub, Hugging Face) and Go (the builds).
 
-NC_LEGS=(fresh store to-docker to-native refusals upgrade-rollback switch-rollback lock)
+NC_LEGS=(fresh store second-home to-docker to-native refusals upgrade-rollback switch-rollback lock)
 
 # Hindsight's operational history: tables it appends to on every request
 # (a recall logs its embedding and reranking calls in llm_requests), so a
@@ -236,6 +240,36 @@ nc_leg_store() {
   nc_fingerprint "$work/fp-store.json"
   "$bin" server runtime fingerprint --keys "$work/keys-store.json" --json > "$work/keys-store.out" || { nc_show "$work/keys-store.out"; fail "server runtime fingerprint --keys failed"; }
   echo "3 notes stored and found, $(basename "$archive") verified ($(jq -r '[.data.restored[]] | add' "$work/backup-verify.json") rows)"
+}
+
+# The units are named after server.project alone, in the user's unit
+# directory: a second home (BACKSIGHT_HOME, a test install) of the same
+# user and project would rewrite, start or stop this install's. Each of
+# its server commands that would is refused before any change (exit 20),
+# naming this install's native directory and server.project; the units
+# stay as they are, active, and the server keeps answering.
+nc_leg_second_home() {
+  local other=$work/second cmd code u
+  mkdir -p "$other/config"
+  sed -e '/^compose_dir *=/d' "$BACKSIGHT_HOME/config/config.toml" > "$other/config/config.toml"
+  cp "$BACKSIGHT_HOME/config/secrets.toml" "$other/config/secrets.toml"
+  chmod 600 "$other/config/config.toml" "$other/config/secrets.toml"
+  grep -Eq "^project *= *\"$project\"" "$other/config/config.toml" || { nc_show "$other/config/config.toml"; fail "the second home's config.toml names no project $project"; }
+  for u in "$(nc_db)" "$(nc_srv)"; do cp "$unitdir/$u" "$work/second-$u"; done
+  for cmd in render start stop; do
+    code=0
+    BACKSIGHT_HOME=$other "$bin" server "$cmd" --json > "$work/second-$cmd.json" 2>&1 || code=$?
+    [ "$code" = 20 ] || { nc_show "$work/second-$cmd.json"; fail "a second home's server $cmd: exit $code, want 20"; }
+    jq -e --arg dir "$native" '.error.message | contains($dir) and contains("server.project")' "$work/second-$cmd.json" > /dev/null ||
+      { nc_show "$work/second-$cmd.json"; fail "the refusal of a second home's server $cmd does not name $native and server.project"; }
+  done
+  for u in "$(nc_db)" "$(nc_srv)"; do
+    cmp -s "$unitdir/$u" "$work/second-$u" || fail "a second home's refused commands changed $u"
+  done
+  nc_units is-active yes || fail "the units are not both active after a second home's refused commands"
+  nc_units is-enabled yes || fail "the units are not both enabled after a second home's refused commands"
+  nc_healthy || { nc_show "$work/status.json"; fail "the server is not healthy after a second home's refused commands"; }
+  echo "a second home's server render, start and stop refused (exit 20); $(nc_db) and $(nc_srv) unchanged, active; the server answers"
 }
 
 # nc_switch <to> <name>: the switch, consented; its JSON in $work/<name>.json.

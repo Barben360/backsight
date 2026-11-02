@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -40,6 +41,10 @@ type NativeFacts struct {
 	VenvDiff []string // name==version of the lock missing or other in the deployed venv's dist-info
 	Linger   string   // loginctl's Linger: yes | no
 	Refused  []string // *.refused-* instance dirs kept by restore
+	// Owner is server.Native.CheckOwner's: a *server.ForeignNativeError
+	// when another install runs the units, task or supervisor of this
+	// project.
+	Owner error
 	// Unread: check id → why its fact could not be read.
 	Unread map[string]error
 
@@ -77,7 +82,7 @@ type PrivatePath struct {
 }
 
 // nativeIDs are the native checks, in their order.
-var nativeIDs = []string{"native-unit", "native-fsync", "native-identity", "native-stray", "native-linger", "native-home", "native-venv"}
+var nativeIDs = []string{"native-unit", "native-fsync", "native-identity", "native-stray", "native-linger", "native-home", "native-venv", "native-owner"}
 
 // nativeChecks are a native install's checks (decision 0078): its units,
 // fsync, the database's identity, strays, linger, home's mode and the
@@ -106,11 +111,32 @@ func nativeChecks(ctx context.Context, probe func(context.Context) (NativeFacts,
 			checkNativeHome(f), checkNativeVenv(f), checkNativeDLLs(f), checkNativePrivate(f), checkPathLength(f),
 		}
 	}
+	out = append(out, checkNativeOwner(f))
 	for _, dir := range f.Refused {
 		out = append(out, Check{ID: "native-refused", Status: Info, Summary: "a database restore refused is kept in " + dir,
 			Detail: "restore moved it aside, never deleting it; delete it yourself once you no longer need it: " + removeDirCmd(f.Windows, dir)})
 	}
 	return append(out, webUICheck())
+}
+
+// checkNativeOwner reports the units, task or supervisor of this project
+// that another backsight install runs (a second home of the same
+// server.project): every command that changes the server refuses them.
+func checkNativeOwner(f NativeFacts) Check {
+	c := Check{ID: "native-owner"}
+	var fe *server.ForeignNativeError
+	switch {
+	case errors.As(f.Owner, &fe):
+		c.Status = Error
+		c.Summary = fmt.Sprintf("the native server of project %q (%s) belongs to another backsight install, in %s: this install's server commands refuse it", fe.Project, fe.What, fe.Other)
+		c.Detail = "this install's native directory is " + fe.Dir
+		c.Fix = fmt.Sprintf("set server.project in config.toml to a name of its own, then backsight server install; if %s is an old copy of this install that nothing runs any more, %s", fe.Other, fe.Free)
+	case f.Owner != nil:
+		c.Status, c.Summary, c.Detail = Error, "cannot tell which install owns the native server: its server commands refuse it", f.Owner.Error()
+	default:
+		c.Status, c.Summary = OK, "the native server is this install's"
+	}
+	return c
 }
 
 func webUICheck() Check {

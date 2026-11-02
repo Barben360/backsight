@@ -139,17 +139,18 @@ var printNote = func(s string) { fmt.Fprintln(noteOut, "note: "+s) }
 // runtimeFor is the server runtime of cfg.
 func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }
 
-// ownProject refuses, exit 20 and before anything changes, a Docker
-// Compose project whose containers another backsight install created
-// (issue #144): a second home without server.project would otherwise
-// recreate or remove the machine's main server. The native runtime has no
-// Compose project.
+// ownProject refuses, exit 20 and before anything changes, a server
+// another backsight install runs under the same server.project: a Docker
+// Compose project whose containers another install created (issue #144),
+// native units, a scheduled task or a supervisor another install's
+// directory runs (issue #158). A second home without server.project would
+// otherwise recreate, stop or remove the machine's main server.
 func ownProject(ctx context.Context, rt server.Runtime) error {
-	d, ok := rt.(server.Docker)
+	o, ok := rt.(interface{ CheckOwner(context.Context) error })
 	if !ok {
 		return nil
 	}
-	if err := d.CheckOwner(ctx); err != nil {
+	if err := o.CheckOwner(ctx); err != nil {
 		return &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
 	}
 	return nil
@@ -159,6 +160,10 @@ func blocked(err error) error {
 	var oe *output.Error
 	if errors.As(err, &oe) {
 		return err
+	}
+	var fe *server.ForeignNativeError // read before anything changed (Deployed)
+	if errors.As(err, &fe) {
+		return &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
 	}
 	return &output.Error{Code: output.Blocked, Message: err.Error()}
 }

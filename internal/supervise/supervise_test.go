@@ -231,6 +231,11 @@ func TestSuperviseStartsDBThenAPIAfterReady(t *testing.T) {
 	if st.Proto != Proto || st.Version != "9.9.9" || st.PID != os.Getpid() || st.Venv != x.cfg.Venv {
 		t.Errorf("status %+v: proto, version, pid or venv wrong", st)
 	}
+	// The native root it runs from: a second home of the same project
+	// tells its own supervisor from another install's by it.
+	if st.Root != x.dir {
+		t.Errorf("status names the root %q, want %q", st.Root, x.dir)
+	}
 	if err := os.WriteFile(x.file("ready"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}

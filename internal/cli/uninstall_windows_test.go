@@ -215,7 +215,15 @@ func TestUninstallLeavesNoTaskAndNoProcess(t *testing.T) {
 	ev := w.ev.all()
 	tick, maintain := w.ev.at(`schtasks /Delete /F /TN backsight\tick`), w.ev.at(`schtasks /Delete /F /TN backsight\maintain`)
 	disable, stop := w.ev.at(`schtasks /Change /TN \backsight\server /DISABLE`), w.ev.at("pipe backsight stop")
-	gone, server, folder := w.ev.at("pipe backsight status"), w.ev.at(`schtasks /Delete /F /TN \backsight\server`), w.ev.at("folder backsight")
+	server, folder := w.ev.at(`schtasks /Delete /F /TN \backsight\server`), w.ev.at("folder backsight")
+	// The supervisor gone: the first status after its stop (the owner
+	// check asks one before anything changes).
+	gone := -1
+	if stop >= 0 {
+		if i := slices.Index(ev[stop:], "pipe backsight status"); i >= 0 {
+			gone = stop + i
+		}
+	}
 	switch {
 	case tick < 0 || maintain < 0 || disable < 0 || stop < 0 || gone < 0 || server < 0 || folder < 0:
 		t.Fatalf("missing steps:\n%s", strings.Join(ev, "\n"))

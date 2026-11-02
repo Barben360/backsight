@@ -303,6 +303,10 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 	if !apply {
 		return c, nil
 	}
+	// Never another install's units (issue #158).
+	if err := n.checkOwnerNow(); err != nil {
+		return c, err
+	}
 	if err := n.ensureRoot(); err != nil {
 		return c, err
 	}
@@ -497,6 +501,10 @@ func (n Native) start(ctx context.Context, restart bool) error {
 	if n.Err != nil {
 		return n.Err
 	}
+	// First: another install's server unit names a venv that is not ours.
+	if err := n.CheckOwner(ctx); err != nil {
+		return err
+	}
 	if err := n.checkVenv(); err != nil {
 		return err
 	}
@@ -591,6 +599,9 @@ func (n Native) StartDatabase(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
 	}
+	if err := n.CheckOwner(ctx); err != nil {
+		return err
+	}
 	if err := n.guardStart(ctx); err != nil {
 		return err
 	}
@@ -627,13 +638,20 @@ func (n Native) StopAPI(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
 	}
+	if err := n.CheckOwner(ctx); err != nil {
+		return err
+	}
 	return n.host().StopAPI(ctx)
 }
 
 // Stop stops and disables both units: nothing starts at boot (RF 2).
+// Never another install's (CheckOwner).
 func (n Native) Stop(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
+	}
+	if err := n.CheckOwner(ctx); err != nil {
+		return err
 	}
 	return n.host().Stop(ctx)
 }
@@ -648,6 +666,11 @@ func (n Native) StopCmd() string { return n.host().StopCmd() }
 func (n Native) Delete(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
+	}
+	// Another install's units or task are never stopped or removed, and
+	// nothing of this one goes either (issue #158).
+	if err := n.CheckOwner(ctx); err != nil {
+		return err
 	}
 	h := n.host()
 	units := n.installedFiles()
@@ -778,6 +801,12 @@ func (n Native) Deployed() (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	if s, ok := h.(systemdHost); ok && s.otherUnit(raw) {
+		// Another install's unit (issue #158): its venv is not this
+		// install's. A moved home's is nothing deployed here yet: its
+		// next render takes the units over.
+		return "", s.foreignUnit(raw)
 	}
 	v, err := h.DeployedVenv(map[string][]byte{name: raw})
 	if err != nil {

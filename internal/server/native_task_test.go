@@ -263,6 +263,9 @@ type fakeTask struct {
 	stopPolls   int  // status answers after a stop before the pipe goes
 	notes       []string
 	detached    [][]string
+	// xml is what /Query /XML prints of the registered task (nil: a task
+	// whose XML names no program).
+	xml []byte
 }
 
 func (f *fakeTask) sys(c []string) ([]byte, error) {
@@ -280,6 +283,9 @@ func (f *fakeTask) sys(c []string) ([]byte, error) {
 		}
 		if !f.registered {
 			return notFound()
+		}
+		if slices.Contains(c, "/XML") {
+			return f.xml, nil
 		}
 	case slices.Contains(c, "/Create"):
 		if f.createFails {
@@ -1068,9 +1074,11 @@ func TestSetupPathStartsWithoutTheTask(t *testing.T) {
 				t.Fatalf("Start = %v, want the server started without its task", err)
 			}
 			got := f.ev.all()
-			if slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "schtasks ") }) ||
+			// The owner check's query reads the task: nothing else of
+			// schtasks runs.
+			if slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "schtasks ") && !strings.Contains(e, "/Query") }) ||
 				!slices.Contains(got, "pipe api-start") || len(f.detached) != 1 {
-				t.Errorf("Start did\n%s\nwant no schtasks, one detached start, the API started", strings.Join(got, "\n"))
+				t.Errorf("Start did\n%s\nwant no schtasks but the owner check's query, one detached start, the API started", strings.Join(got, "\n"))
 			}
 			if !slices.Equal(f.notes, []string{NoTaskNote}) {
 				t.Errorf("notes %q, want the no-task note", f.notes)

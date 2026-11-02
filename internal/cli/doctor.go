@@ -209,6 +209,7 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 	f.Fsync, err = n.Fsync(ctx)
 	unread("native-fsync", err)
 	f.Identity = n.CheckInstance(ctx)
+	f.Owner = n.CheckOwner(ctx)
 	strays, err := n.Strays()
 	unread("native-stray", err)
 	for _, s := range strays {

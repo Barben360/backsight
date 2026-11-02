@@ -60,7 +60,15 @@ func TestServerStopNamesTheTaskOnWindows(t *testing.T) {
 	if code != output.OK || !strings.Contains(out, `the scheduled task \backsight\server stays disabled`) {
 		t.Errorf("stop: exit %d\n%s%s", code, out, errOut)
 	}
-	if len(*calls) == 0 || !strings.Contains((*calls)[0], `schtasks /Change /TN \backsight\server /DISABLE`) {
+	// The owner check's queries read the task first: the first change is
+	// the disable.
+	var changes []string
+	for _, c := range *calls {
+		if !strings.Contains(c, "/Query") {
+			changes = append(changes, c)
+		}
+	}
+	if len(changes) == 0 || !strings.Contains(changes[0], `schtasks /Change /TN \backsight\server /DISABLE`) {
 		t.Errorf("schtasks calls %q", *calls)
 	}
 	nativeOn(t, home, "linux")

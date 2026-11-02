@@ -168,7 +168,7 @@ func TestNativeChainListsItsLegs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NATIVE_DRY=1: %v", err)
 	}
-	want := "fresh store to-docker to-native refusals upgrade-rollback switch-rollback lock"
+	want := "fresh store second-home to-docker to-native refusals upgrade-rollback switch-rollback lock"
 	if got := strings.Join(strings.Fields(string(out)), " "); got != want {
 		t.Errorf("legs listed: %q, want %q", got, want)
 	}

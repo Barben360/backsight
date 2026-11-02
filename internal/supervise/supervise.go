@@ -197,7 +197,7 @@ func Run(ctx context.Context, cfg Config, opts Options) error {
 	if opts.NoAPI {
 		api = stateStopped
 	}
-	s.st = Status{Proto: Proto, Version: opts.Version, PID: os.Getpid(), DB: stateStarting, API: api, Venv: cfg.Venv}
+	s.st = Status{Proto: Proto, Version: opts.Version, PID: os.Getpid(), DB: stateStarting, API: api, Venv: cfg.Venv, Root: s.root()}
 	l, err := listen(cfg.Project)
 	if err != nil {
 		return s.fail(fmt.Errorf("opening the supervisor's control channel: %w", err))

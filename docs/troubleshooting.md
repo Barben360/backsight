@@ -174,6 +174,22 @@ Docker Compose knows a project by its name alone, `server.project` (`backsight` 
 
 A home that was moved or renamed is not refused: its old directory no longer holds a `compose.yaml`, so its next start takes its containers over. The check compares directories after resolving symbolic links (and without case on Windows). When Docker cannot be asked, the command stops before any change, as it would stop at its first Docker call.
 
+## A server command says the native server belongs to another install
+
+The native runtime names what it installs for the whole user account after `server.project` alone: the systemd user units `<project>-db.service` and `<project>-server.service` on Linux; on Windows, the scheduled task `\<project>\server` and the supervisor that answers for the project. A second backsight home of the same user (`BACKSIGHT_HOME` set, a test install) that keeps the default name would rewrite the first install's units to its own directory, then start, stop or disable them; on Windows it would register the task again for itself, or stop the first install's supervisor. So before any command that writes, starts, stops or removes them (`server render`, `start`, `stop`, `install`, `upgrade`, `token --rotate`, setup's server step, `restore`, `uninstall`, a runtime switch or clean), backsight checks that they are this install's:
+
+- each unit names the native directory it runs from (`WorkingDirectory=`, and the database unit's `HOME`);
+- the task runs another install's program when its action names a backsight program other than this install's (`<data>\bin\…`);
+- the supervisor says which native directory it runs from.
+
+When they belong to another install whose directory still holds its `server.env` (or, for the task, whose program is still there), the command exits 20, nothing changed, and names that install's directory. doctor's `native-owner` check reports the same, changing nothing; `server status` and the other read-only commands are not refused.
+
+- This home is a second install: give it a project of its own, `project = "<name>"` under `[server]` in its `config.toml` (lowercase letters, digits, `-` and `_`), then `backsight server install`.
+- You meant to act on the other install: run the command from it (with its `BACKSIGHT_HOME`).
+- The other directory is an old copy of this install that nothing runs any more: do what the message says (on Linux, delete that copy's `server.env`; on Windows, delete the task with the `schtasks /Delete` command it gives) and run the command again; this install takes the units or the task over.
+
+A home that was moved or renamed is not refused: its old directory, or its old program, is gone, so its next `server render` or start takes the units or the task over. A unit file that cannot be read stops the command before any change. A supervisor from a backsight release older than this check does not say its directory: it is not refused, and the task check still applies.
+
 ## A command says to run it on the server's host
 
 `this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine, and the commands that manage it or write its banks only work there: [the list](commands.md#server). Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.
