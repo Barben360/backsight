@@ -43,6 +43,12 @@ The source is a note someone chose to store: keep every durable statement in it,
 const subagentRules = rules + `
 The source is the final report of a sub-agent. A report that only says work is in progress, being monitored or waiting, with no finding, cause, decision or delivered result, holds no fact. Keep findings with their cause, decisions with their reason, and what was delivered and where.`
 
+// importRules: a whole folder holds logs, statuses and drafts beside the
+// notes worth keeping, so imported files get a stricter rule than a note
+// someone chose to store.
+const importRules = rules + `
+The source is a file imported from another memory or notes tool. Keep durable statements (decisions, conventions, pitfalls, facts about people, projects and tools) with their reason. A log line, a status, a to-do or a draft without a conclusion holds no fact.`
+
 var kindValues = [][2]string{
 	{"decision", "A choice that was made, with its reason."},
 	{"correction", "A fact that replaces or invalidates an earlier one."},
@@ -64,7 +70,7 @@ func bankTemplate() map[string]any {
 		"retain_mission":          bankMission,
 		"retain_default_strategy": "conversation",
 		"retain_strategies": map[string]any{"conversation": strategy(conversationRules), "document": strategy(documentRules),
-			"subagent": strategy(subagentRules)},
+			"subagent": strategy(subagentRules), "import": strategy(importRules)},
 		"entity_labels": []map[string]any{{"key": "kind", "tag": true, "type": "multi-values", "optional": true,
 			"description": "What kind of knowledge the fact is.", "values": values}},
 		"entities_allow_free_form": true,
