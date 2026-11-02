@@ -55,7 +55,9 @@ type maintainResult struct {
 	DoctorHistory string `json:"doctor_history,omitempty"`
 	// ServerDaily: the server-daily step's line (collectServerDaily).
 	ServerDaily string `json:"server_daily,omitempty"`
-	MS          int    `json:"ms"`
+	// MemoryDocs: the memory-docs step's line (collectMemoryDocs).
+	MemoryDocs string `json:"memory_docs,omitempty"`
+	MS         int    `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -145,6 +147,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			}
 			res.DoctorHistory = maintainDoctorHistory(d, rep, now)
 			res.ServerDaily = maintainServerDaily(cmd.Context(), d, now)
+			res.MemoryDocs = maintainMemoryDocs(cmd.Context(), d, home, now)
 			maintainConfig(tw, now)
 			return finish()
 		},
@@ -314,6 +317,9 @@ func maintainText(r maintainResult) string {
 	}
 	if r.ServerDaily != "" {
 		history += ", " + r.ServerDaily
+	}
+	if r.MemoryDocs != "" {
+		history += ", " + r.MemoryDocs
 	}
 	return fmt.Sprintf("%s: %d telemetry file(s) rotated%s, backup %s, re-attribution %s%s, update %s, doctor %s%s (%d ms)\n", r.Status, len(r.Rotated), metrics,
 		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, history, r.MS)
