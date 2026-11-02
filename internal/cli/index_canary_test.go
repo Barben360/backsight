@@ -3,12 +3,21 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 )
@@ -21,6 +30,21 @@ var canaries = []string{
 	"CANARY-ENUM", "CANARY-UNKNOWN", "CANARY-CONFIG", "CANARY-MEMORY", "CANARY NOTE",
 	"CANARY-JOURNAL", "CANARY-SESSION", "CANARY-NOTE", "CANARY-STATE", "CANARY-TOML",
 	"CANARY-LEDGER",
+	// what the server holds: a listed memory's fields, a document's text,
+	// the path of an imported document, an operation's error, a scanned
+	// memory, a doctor check's summary; and the config's strings
+	"CANARY-LISTED-TEXT", "CANARY-LISTED-CONTEXT", "CANARY-LISTED-TAG", "CANARY-LISTED-ENTITY",
+	"CANARY-LISTED-META", "CANARY-LISTED-CHUNK", "CANARY-DOC-TEXT", "CANARY-DIR", "CANARY-FILE",
+	"CANARY-OPERROR", "CANARY-SCAN-TEXT", "CANARY-DOCTOR", "CANARY-CFG-",
+}
+
+// serverCanaries are the canaries only the server holds (and the config's
+// strings, which are in config.toml alone): nothing backsight writes
+// outside that file may carry one.
+var serverCanaries = []string{
+	"CANARY-LISTED-TEXT", "CANARY-LISTED-CONTEXT", "CANARY-LISTED-TAG", "CANARY-LISTED-ENTITY",
+	"CANARY-LISTED-META", "CANARY-LISTED-CHUNK", "CANARY-DOC-TEXT", "CANARY-DIR", "CANARY-FILE",
+	"CANARY-OPERROR", "CANARY-SCAN-TEXT",
 }
 
 func canaryFiles(t *testing.T, home string) []string {
@@ -48,8 +72,8 @@ const (
 )
 
 // noCanary fails when a canary is in the index files, or when a control
-// is not.
-func noCanary(t *testing.T, step, home string) {
+// (the two above and the extra ones) is not.
+func noCanary(t *testing.T, step, home string, extra ...string) {
 	t.Helper()
 	files := canaryFiles(t, home)
 	if len(files) == 0 {
@@ -63,7 +87,7 @@ func noCanary(t *testing.T, step, home string) {
 		}
 	}
 	joined := strings.Join(files, "\x00")
-	for _, want := range []string{ctlMemory, ctlProject} {
+	for _, want := range append([]string{ctlMemory, ctlProject}, extra...) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("%s: control %q not in the index file bytes", step, want)
 		}
@@ -166,10 +190,21 @@ func TestIndexHoldsNoCanary(t *testing.T) {
 	}
 	noCanary(t, "after the tick", home)
 
+	// The collection: what the job and the scan write, ingested.
+	canaryServer(t, home)
+	canaryCollect(t, home)
+	controls := []string{ctlListed, ctlSessionA}
+	noCanary(t, "after the collection", home, controls...)
+	noCanaryInMetrics(t, home)
+	noServerTextOnDisk(t, "after the collection", home)
+	theCollectedTablesFilled(t, "after the collection", home)
+	configEventHoldsNoString(t, home)
+
 	if code, out, errOut := run(t, "stats", "index", "rebuild", "--yes"); code != output.OK {
 		t.Fatalf("rebuild: exit %d\n%s%s", code, out, errOut)
 	}
-	noCanary(t, "after the rebuild", home)
+	noCanary(t, "after the rebuild", home, controls...)
+	theCollectedTablesFilled(t, "after the rebuild", home)
 
 	db, err := sql.Open("sqlite", filepath.Join(d.IndexDir(), "metrics.db"))
 	if err != nil {
@@ -181,7 +216,7 @@ func TestIndexHoldsNoCanary(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	noCanary(t, "after VACUUM", home)
+	noCanary(t, "after VACUUM", home, controls...)
 
 	code, out, errOut := run(t, "stats", "index", "--json")
 	if code != output.OK {
@@ -206,5 +241,322 @@ func writeTelemetryRaw(t *testing.T, dir, month, content string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "events-"+month+".jsonl"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// What the collection fixture holds that the checks look for: the ids of
+// the memories and sessions the server lists (they must reach the record:
+// they are controls), and the ids that must not reach the scan history.
+const (
+	ctlListed   = "mem-listed-ctl-5e8a" // a memory of a session document, one per day
+	ctlSessionA = "s-ctl-2b7e"          // a session whose retain completed, with units
+	ctlSessionB = "s-ctl-9d41"          // completed, the server gives no count
+	ctlSessionC = "s-ctl-c3f0"          // failed
+	ctlScanned  = "mem-scan-ctl-77b1"   // the memory the scan flags
+)
+
+// fixtureIDs are every memory id of the fixture.
+var fixtureIDs = []string{ctlMemory, "mem-allowed-2", "mem-allowed-3", ctlScanned}
+
+// canaryConfig writes config.toml: the fake server's address, backups and
+// the update source local, and a canary in every string setting that takes
+// any text (a setting with a closed set or a shape keeps its default, the
+// config's own validation decides). It returns how many strings carry one.
+func canaryConfig(t *testing.T, home string, port int) int {
+	t.Helper()
+	d := pathsOf(home)
+	cfg := config.Default(d, home)
+	cfg.Server.URL = "http://127.0.0.1:" + strconv.Itoa(port)
+	cfg.Server.UIPort = 19999
+	cfg.Backup.Enabled = false
+	n := 0
+	sections := reflect.ValueOf(&cfg).Elem()
+	for i := range sections.NumField() {
+		sec := sections.Field(i)
+		if sec.Kind() != reflect.Struct {
+			continue
+		}
+		for j := range sec.NumField() {
+			f := sec.Field(j)
+			name := "CANARY-CFG-" + sections.Type().Field(i).Name + "-" + sec.Type().Field(j).Name
+			switch sections.Type().Field(i).Name + "." + sec.Type().Field(j).Name {
+			case "Server.URL", "Server.Bank":
+				continue // the server this test talks to
+			case "LLM.Currency":
+				continue // the cost views show it by design: the unit of the amounts
+			}
+			var old reflect.Value
+			switch f.Kind() {
+			case reflect.String:
+				old = reflect.ValueOf(f.String())
+				f.SetString(name)
+			case reflect.Slice:
+				if f.Type().Elem().Kind() != reflect.String {
+					continue
+				}
+				old = reflect.ValueOf(f.Interface())
+				f.Set(reflect.Append(f, reflect.ValueOf(name)))
+			default:
+				continue
+			}
+			if err := cfg.Validate(); err != nil {
+				f.Set(old)
+				continue
+			}
+			n++
+		}
+	}
+	// the tripwire of the first fixture: a model name no ingest path reads
+	cfg.LLM.Model = "CANARY-TOML"
+	raw, err := toml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Parse(raw, "config.toml", d, home); err != nil {
+		t.Fatalf("the canary config does not load: %v", err)
+	}
+	if err := os.WriteFile(d.ConfigFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// canaryServer serves the fixture's server: the day lists of the two days
+// before today (a session document, an import document whose id is a path
+// of canary parts, a note, an observation without a document), three retain
+// operations of sessions this PC sent, a memory the scan flags, and canary
+// text in every field a read could decode; and points the install at it,
+// with a canary in every string setting.
+func canaryServer(t *testing.T, home string) {
+	t.Helper()
+	port := fakeHindsight(t)
+	if n := canaryConfig(t, home, port); n < 4 {
+		t.Fatalf("only %d string settings carry a canary", n)
+	} else {
+		t.Logf("%d string settings carry a canary", n)
+	}
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	for k := 2; k >= 1; k-- {
+		at := day.AddDate(0, 0, -k).Add(12 * time.Hour)
+		suffix := "-" + strconv.Itoa(k)
+		fakeCreated = append(fakeCreated,
+			fakeMem{ID: ctlListed + suffix, FactType: "world", Document: "conversation:" + ctlSessionA, Created: at},
+			fakeMem{ID: "mem-import-ctl" + suffix, FactType: "world", Document: "import:CANARY-DIR/CANARY-FILE.md", Created: at.Add(time.Minute)},
+			fakeMem{ID: "mem-note-ctl" + suffix, FactType: "experience", Document: "note:4f2a9c", Created: at.Add(2 * time.Minute)},
+			fakeMem{ID: "mem-obs-ctl" + suffix, FactType: "observation", Created: at.Add(3 * time.Minute)})
+	}
+	projectEntities[ctlProject] = "[]"
+	sent := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	op := func(id, status, sid string) string {
+		return `{"id":"` + id + `","operation_type":"retain","status":"` + status + `","document_id":"conversation:` + sid + `","created_at":"` + sent +
+			`","updated_at":"` + sent + `","retry_count":1,"error_message":"CANARY-OPERROR"}`
+	}
+	fakeOperations = []string{op("op-ctl-a", "completed", ctlSessionA), op("op-ctl-b", "completed", ctlSessionB), op("op-ctl-c", "failed", ctlSessionC)}
+	documentUnits["conversation:"+ctlSessionA] = 3
+	documentNoUnits["conversation:"+ctlSessionB] = true
+	// a memory whose text is a secret's shape: assembled, not a literal
+	// secret for gitleaks
+	listAnswer["world"] = `[{"id":"` + ctlScanned + `","text":"CANARY-SCAN-TEXT PGPASSWORD=Zz9y` + `X8wV7u","fact_type":"world","tags":["project:` + ctlProject + `"]}]`
+
+	// this PC sent the three sessions' documents an hour ago
+	d := pathsOf(home)
+	at := time.Now().UTC().Add(-time.Hour)
+	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-"+monthOf(at)+".jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	for _, sid := range []string{ctlSessionA, ctlSessionB, ctlSessionC} {
+		line := `{"event":"retain","ts":"` + at.Format(time.RFC3339Nano) + `","session":"` + sid + `","document":"conversation:` + sid + `","items":1,"status":"ok","ms":3}` + "\n"
+		if _, err := f.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// canaryCollect runs the collection the way the daily job does: the index
+// built and caught up, `jobs maintain` (the doctor, the server's daily
+// counts, the memory documents, the config event), `memory scan`, and the
+// index caught up with what they wrote. The doctor's one check carries a
+// canary in its summary.
+func canaryCollect(t *testing.T, home string) {
+	t.Helper()
+	d := pathsOf(home)
+	if got := tickIndex(context.Background(), d, home); !strings.HasPrefix(got, "caught up") {
+		t.Fatalf("tick before the collection: %s", got)
+	}
+	fixedMaintainDoctor(t, doctor.Check{ID: "server", Status: doctor.Warn, Summary: "CANARY-DOCTOR", Detail: "CANARY-DOCTOR", Fix: "backsight doctor"})
+	code, out, errOut := run(t, "jobs", "maintain", "--json")
+	if code != output.OK {
+		t.Fatalf("jobs maintain: exit %d\n%s%s", code, out, errOut)
+	}
+	var env struct {
+		Data struct {
+			DoctorHistory string `json:"doctor_history"`
+			ServerDaily   string `json:"server_daily"`
+			MemoryDocs    string `json:"memory_docs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(env.Data.DoctorHistory, "1 check") || !strings.HasPrefix(env.Data.ServerDaily, "server daily: snapshot") ||
+		!strings.Contains(env.Data.MemoryDocs, "day(s) listed") || !strings.Contains(env.Data.MemoryDocs, "3 operation(s)") {
+		t.Fatalf("the collection did not run: %+v", env.Data)
+	}
+	if code, out, errOut := run(t, "memory", "scan"); code != output.OK || !strings.Contains(out, ctlScanned) {
+		t.Fatalf("memory scan: exit %d\n%s%s", code, out, errOut)
+	}
+	if got := tickIndex(context.Background(), d, home); !strings.HasPrefix(got, "caught up") {
+		t.Fatalf("tick after the collection: %s", got)
+	}
+}
+
+// metricsFilesOf is every file under <state>/metrics by name.
+func metricsFilesOf(t *testing.T, home string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(pathsOf(home).MetricsDir(), func(p string, de fs.DirEntry, err error) error {
+		if err != nil || de.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		out[filepath.Base(p)] = string(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// noCanaryInMetrics fails when a canary is in a metrics file, a fixture's
+// memory id is in the scan history, or a control is not in the record: an
+// empty or unwritten record cannot pass.
+func noCanaryInMetrics(t *testing.T, home string) {
+	t.Helper()
+	files := metricsFilesOf(t, home)
+	var all []string
+	for name, b := range files {
+		all = append(all, b)
+		for _, c := range canaries {
+			if strings.Contains(b, c) {
+				t.Errorf("%q in metrics/%s", c, name)
+			}
+		}
+		if strings.HasPrefix(name, "scan-history-") {
+			for _, id := range fixtureIDs {
+				if strings.Contains(b, id) {
+					t.Errorf("the memory id %q in metrics/%s", id, name)
+				}
+			}
+		}
+	}
+	joined := strings.Join(all, "\n")
+	for _, ctl := range []string{ctlListed, ctlSessionA, `"doc_kind":"import"`, `"doc_kind":"note"`, `"doc_kind":"none"`, `"kind":"run"`, `"kind":"snapshot"`, `"kind":"scan"`} {
+		if !strings.Contains(joined, ctl) {
+			t.Errorf("control %s not in the metrics files:\n%s", ctl, joined)
+		}
+	}
+	for _, family := range []string{"server-daily-", "doctor-history-", "memory-docs-", "scan-history-"} {
+		found := false
+		for name := range files {
+			found = found || strings.HasPrefix(name, family)
+		}
+		if !found {
+			t.Errorf("no %s file written", family)
+		}
+	}
+}
+
+// noServerTextOnDisk fails when a canary only the server holds (or the
+// import document's path) is in any file under the install's home: what
+// backsight keeps never copies it. config.toml holds the config canaries.
+func noServerTextOnDisk(t *testing.T, step, home string) {
+	t.Helper()
+	files := 0
+	err := filepath.WalkDir(home, func(p string, de fs.DirEntry, err error) error {
+		if err != nil || !de.Type().IsRegular() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		files++
+		for _, c := range serverCanaries {
+			if strings.Contains(string(b), c) {
+				t.Errorf("%s: %q in %s", step, c, strings.TrimPrefix(p, home))
+			}
+		}
+		return nil
+	})
+	if err != nil || files == 0 {
+		t.Fatalf("%s: scanned %d files: %v", step, files, err)
+	}
+}
+
+// indexRows counts a table's rows in the index file.
+func indexRows(t *testing.T, home, table string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(pathsOf(home).IndexDir(), "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// theCollectedTablesFilled: the index holds what the record wrote, so a
+// scan of it is a scan of the collected data.
+func theCollectedTablesFilled(t *testing.T, step, home string) {
+	t.Helper()
+	for _, table := range []string{"server_snapshots", "doctor_runs", "memory_docs", "memory_days", "doc_ops", "scans"} {
+		if indexRows(t, home, table) == 0 {
+			t.Errorf("%s: no row in %s", step, table)
+		}
+	}
+}
+
+// configEventHoldsNoString: the config events the job wrote (the ones with
+// a hash) carry no string but the common fields (the event's name, its
+// time, the binary's version, the empty session, project and instruction
+// set of a job's event) and the hash.
+func configEventHoldsNoString(t *testing.T, home string) {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).TelemetryDir(), "events-*.jsonl"))
+	seen := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			var ev map[string]any
+			if json.Unmarshal([]byte(line), &ev) != nil || ev["event"] != "config" || ev["sha256"] == nil {
+				continue
+			}
+			seen++
+			for k, v := range ev {
+				str, isString := v.(string)
+				switch {
+				case !isString, k == "event", k == "ts", k == "sha256":
+				case (k == "session" || k == "project" || k == "v") && str == "":
+				case k == "binary_version" && str == buildinfo.Version:
+				default:
+					t.Errorf("config event: string value under %q: %q", k, str)
+				}
+			}
+			if h, _ := ev["sha256"].(string); len(h) != 64 {
+				t.Errorf("config event: sha256 %q", h)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Error("no config event was written by the job")
 	}
 }

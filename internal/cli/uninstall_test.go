@@ -18,7 +18,9 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
@@ -185,9 +187,28 @@ func TestUninstallPlanChangesNothing(t *testing.T) {
 	}
 }
 
+// writeMetricsRecord puts one line in each family of the local record
+// (<state>/metrics/) and returns the files.
+func writeMetricsRecord(t *testing.T, d paths.Dirs) []string {
+	t.Helper()
+	var files []string
+	for _, f := range metricsfile.Families {
+		p := filepath.Join(d.MetricsDir(), f+"-2026-10.jsonl")
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(`{"schema":1,"ts":"2026-10-25T10:00:00Z","kind":"x"}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, p)
+	}
+	return files
+}
+
 func TestUninstallRemovesEachPieceAndKeepsTheRest(t *testing.T) {
 	m := installMachine(t)
 	d := pathsOf(m.home)
+	record := writeMetricsRecord(t, d)
 	code, env, out := uninstall(t)
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -217,8 +238,9 @@ func TestUninstallRemovesEachPieceAndKeepsTheRest(t *testing.T) {
 	if r := env.Data.Retention; r == nil || r.Before != "30" || r.Action != "kept" {
 		t.Errorf("the old retention is not offered back: %+v", r)
 	}
-	// Config, secrets, state, the server and its data, and backups stay.
-	for _, p := range []string{d.ConfigFile(), d.SecretsFile(), d.StateFile(), filepath.Join(composeDir(m.home), "compose.yaml"), filepath.Join(composeDir(m.home), ".env")} {
+	// Config, secrets, state (its local record too), the server and its
+	// data, and backups stay.
+	for _, p := range append([]string{d.ConfigFile(), d.SecretsFile(), d.StateFile(), filepath.Join(composeDir(m.home), "compose.yaml"), filepath.Join(composeDir(m.home), ".env")}, record...) {
 		if !onDisk(p) {
 			t.Errorf("removed: %s", p)
 		}
@@ -428,6 +450,30 @@ func TestUninstallPurgeLocalKeepsBackupsAndTheirKey(t *testing.T) {
 	}
 	if readFile(t, inState) != "archive" || readFile(t, m.backup) != "age-encrypted archive" {
 		t.Error("a backup was removed")
+	}
+}
+
+// --purge-local deletes the local record with the rest of the state: the
+// month files of every family and the index built from them.
+func TestUninstallPurgeKeepsNothingOfMetrics(t *testing.T) {
+	m := installMachine(t)
+	d := pathsOf(m.home)
+	record := writeMetricsRecord(t, d)
+	index := filepath.Join(d.IndexDir(), "metrics.db")
+	if err := os.MkdirAll(d.IndexDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(index, []byte("index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, out := uninstall(t, "--purge-local")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, p := range append(record, d.MetricsDir(), index) {
+		if onDisk(p) {
+			t.Errorf("not purged: %s", p)
+		}
 	}
 }
 

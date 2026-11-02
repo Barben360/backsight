@@ -378,6 +378,15 @@ The metrics index is a local SQLite file (`index/metrics.db` in the state direct
 - **Two `ingested_at` dates.** In a view (`stats <view> --json`, field `index.ingested_at`) it is when the index was last caught up with the files; in `stats index --json` it is the last time lines were written into the index. A view can read newer than `stats index` when nothing new arrived.
 - **A newer index.** After a downgrade, `stats index` shows `Newer`: the index a newer backsight migrated is left alone, and this one works on a side file (`metrics-v<N>.db`) of its own.
 
+### A gap in the server's daily record
+
+The daily job (`backsight jobs maintain`) writes the server's counts to `metrics/server-daily-*.jsonl` in the state directory. A day with no count, or a line that says the server could not be read, means the job ran while the server was down or slow (each call is cut at 3 seconds), or did not run that day (the PC was off, or `backsight doctor` says the scheduler is stopped).
+
+- Past days come back by themselves: the server still holds its memory counts for 90 days and its token use for 30, and the next job writes the days the record lacks. A gap older than that stays.
+- Today's count cannot be made up later: a day without a reading stays marked as missing.
+- `backsight jobs maintain --json` shows the step's result (`server_daily`, `memory_docs`, `doctor_history`). `not reached (unreachable)` or `(timeout)`: start the server (`backsight server status`) and run `backsight jobs maintain` again. `no server set up`: run `backsight setup`. `the server cannot list memories by creation day`: the server ignores or does not offer that filter (an older Hindsight); the creation days and sources are recorded once the server is updated.
+- The record is read-only for you: do not edit the files. To start it again from nothing, delete the `metrics/` folder (the memory is not touched), then run `backsight stats index rebuild --yes`: it lists the months of the record it would drop from the index.
+
 ## The dashboard shows an error page
 
 | What you see | Why | What to do |

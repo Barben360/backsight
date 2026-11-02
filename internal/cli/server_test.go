@@ -286,7 +286,8 @@ func createdListing(w http.ResponseWriter, q url.Values) {
 	}
 	items := make([]map[string]any, 0, len(page))
 	for _, m := range page {
-		it := map[string]any{"id": m.ID, "text": "canary memory text", "context": "canary context", "tags": []string{"project:x"},
+		it := map[string]any{"id": m.ID, "text": "CANARY-LISTED-TEXT", "context": "CANARY-LISTED-CONTEXT", "tags": []string{"project:x", "CANARY-LISTED-TAG"},
+			"entities": []string{"CANARY-LISTED-ENTITY"}, "metadata": map[string]string{"note": "CANARY-LISTED-META"}, "chunk_id": "CANARY-LISTED-CHUNK",
 			"mentioned_at": m.Created.Add(-time.Hour).Format(time.RFC3339), "date": m.Created.Format(time.RFC3339)}
 		for k, v := range map[string]string{"fact_type": m.FactType, "document_id": m.Document} {
 			switch v {
@@ -814,11 +815,11 @@ func fakeHindsight(t *testing.T) (port int) {
 				n, ok = documentUnits[id]
 			}
 			if ok {
-				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `}`))
+				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `,"original_text":"CANARY-DOC-TEXT"}`))
 				return
 			}
 			if documentNoUnits[id] {
-				_, _ = w.Write([]byte(`{"id":"` + id + `","original_text":"canary document text"}`))
+				_, _ = w.Write([]byte(`{"id":"` + id + `","original_text":"CANARY-DOC-TEXT"}`))
 				return
 			}
 			bank, _, _ = strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
