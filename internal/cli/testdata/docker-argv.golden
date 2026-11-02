@@ -1,11 +1,17 @@
 # server install --api-port <port> --ui-port 19999
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "volume" "inspect" "backsight_pg_data"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "pull"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "up" "-d" "--wait"
 # server render
 # server start
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "up" "-d" "--wait"
 # server stop
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "stop"
 # server status
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "ps" "--all" "--format" "json"
@@ -30,6 +36,7 @@
 "exec" "backsight-verify-<rand>" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-c" "select count(*) from mental_models"
 "rm" "-f" "-v" "backsight-verify-<rand>"
 # restore <archive>
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select version_num from alembic_version"
@@ -41,6 +48,7 @@
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "pg_restore --data-only -t mental_models -f - /tmp/backsight-<rand>.dump | awk '/^COPY /{c=1;next} /^\\\\\\.$/{c=0} c{n++} END{print n+0}'"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "cp" "db:/tmp/backsight-<rand>.dump" "<home>/backsight/state/staging/backup-<rand>/db.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "rm" "-f" "/tmp/backsight-<rand>.dump"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "stop" "hindsight"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "cp" "<home>/backsight/state/staging/verify-<rand>/db.dump" "db:/tmp/backsight-<rand>.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "dropdb" "-U" "hindsight" "--if-exists" "--force" "hindsight"
@@ -50,9 +58,12 @@
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select count(*) from memory_units"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select count(*) from documents"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select count(*) from mental_models"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "up" "-d" "--wait"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "up" "-d" "--wait"
 # server upgrade
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "pull" "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
@@ -73,6 +84,7 @@
 "exec" "backsight-verify-<rand>" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-c" "select count(*) from documents"
 "exec" "backsight-verify-<rand>" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-c" "select count(*) from mental_models"
 "rm" "-f" "-v" "backsight-verify-<rand>"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "up" "-d" "--wait"
 # bank rename
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select coalesce(json_agg(bank_id order by bank_id), '[]'::json) from banks"
@@ -84,6 +96,8 @@
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "hindsight" "hindsight-admin" "rename-bank" "--from" "claude-memory-docs" "--to" "backsight-docs"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "hindsight" "hindsight-admin" "rename-bank" "--from" "claude-memory-control" "--to" "backsight-control"
 # uninstall --delete-data --answer confirm_bank=backsight
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
+"ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "rm" "--stop" "--force" "-v"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "down" "--remove-orphans"
 "volume" "rm" "backsight_pg_data"

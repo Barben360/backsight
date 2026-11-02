@@ -141,6 +141,9 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 		return &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	defer func() { _ = sl.Release() }()
+	if err := ownProject(ctx, rt); err != nil {
+		return err
+	}
 	add("lock", "done", d.MaintenanceLock()+", server.lock")
 
 	db := rt.Database()

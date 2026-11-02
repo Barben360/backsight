@@ -68,6 +68,7 @@ func TestDockerRuntimeDrivesCompose(t *testing.T) {
 	_, _ = d.Orchestrator(ctx)
 	base := []string{"compose", "-p", "p1", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml")}
 	want := [][]string{
+		ownerQuery("p1"),
 		append(append([]string{}, base...), "stop"),
 		append(append([]string{}, base...), "pull"),
 		append(append([]string{}, base...), "ps", "--all", "--format", "json"),
@@ -202,7 +203,7 @@ func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 	base := []string{"compose", "-p", "p1", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml")}
 	// The containers go first with their anonymous volumes (the database
 	// image declares one at /var/lib/postgresql), which down would leave.
-	want := [][]string{append(append([]string{}, base...), "rm", "--stop", "--force", "-v"), append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
+	want := [][]string{ownerQuery("p1"), append(append([]string{}, base...), "rm", "--stop", "--force", "-v"), append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Errorf("docker ran\n%q\nwant\n%q", r.calls, want)
 	}
@@ -430,7 +431,7 @@ func TestDockerDeleteWithoutComposeYAML(t *testing.T) {
 	if err := dk.Delete(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=p1"}, {"rm", "--force", "--volumes", "c1", "c2"},
+	want := [][]string{ownerQuery("p1"), {"ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=p1"}, {"rm", "--force", "--volumes", "c1", "c2"},
 		{"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Errorf("docker ran\n%q\nwant\n%q", r.calls, want)
@@ -440,7 +441,7 @@ func TestDockerDeleteWithoutComposeYAML(t *testing.T) {
 	if err := (Docker{Compose: Compose{Dir: dir, Runner: r, Project: "p1"}}).Delete(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 3 || r.calls[1][0] != "volume" || r.calls[2][0] != "volume" {
+	if len(r.calls) != 4 || r.calls[2][0] != "volume" || r.calls[3][0] != "volume" {
 		t.Errorf("docker ran %q", r.calls)
 	}
 	// A Docker that does not answer removes nothing.

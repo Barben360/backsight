@@ -420,6 +420,11 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	if err := switchInputsUnchanged(d, sha, cfg, sec, to); err != nil {
 		return res, err
 	}
+	for _, rt := range []server.Runtime{src, dst} { // the Docker one's project (issue #144)
+		if err := ownProject(ctx, rt); err != nil {
+			return res, err
+		}
+	}
 	add("lock", "done", d.MaintenanceLock()+", server.lock")
 	if cut != nil {
 		if err := putSourceBack(ctx, cfg, sec, cut); err != nil {

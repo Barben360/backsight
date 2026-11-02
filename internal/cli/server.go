@@ -139,6 +139,22 @@ var printNote = func(s string) { fmt.Fprintln(noteOut, "note: "+s) }
 // runtimeFor is the server runtime of cfg.
 func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }
 
+// ownProject refuses, exit 20 and before anything changes, a Docker
+// Compose project whose containers another backsight install created
+// (issue #144): a second home without server.project would otherwise
+// recreate or remove the machine's main server. The native runtime has no
+// Compose project.
+func ownProject(ctx context.Context, rt server.Runtime) error {
+	d, ok := rt.(server.Docker)
+	if !ok {
+		return nil
+	}
+	if err := d.CheckOwner(ctx); err != nil {
+		return &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
+	}
+	return nil
+}
+
 func blocked(err error) error {
 	var oe *output.Error
 	if errors.As(err, &oe) {
@@ -433,6 +449,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
+			if err := ownProject(cmd.Context(), runtimeFor(cfg)); err != nil {
+				return err
+			}
 
 			// 2. Secrets: server keys generated, the LLM key is the user's. A
 			// database volume keeps the password it was created with, so a
@@ -685,6 +704,9 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
+			if err := ownProject(cmd.Context(), rt); err != nil {
+				return err
+			}
 			// The marker again, under the locks: what it says now decides
 			// (a restore may have moved on since the first read).
 			if m, _ = state.ReadRestoreMarker(d); m == nil || (m.Step != state.PurgeStep && m.Step != state.KeyStep) {
@@ -774,6 +796,9 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
+			if err := ownProject(cmd.Context(), rt); err != nil {
+				return err
+			}
 			stop := rt.Stop
 			if n, ok := rt.(server.Native); ok {
 				stop = n.StopOnPurpose // marked first: the SessionStart fallback leaves it down

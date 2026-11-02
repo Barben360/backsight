@@ -91,6 +91,8 @@ type keyDocker struct {
 	keys []string // HINDSIGHT_API_TENANT_API_KEY of each compose up
 	only string
 	echo bool // with only: an up on another key fails, its output quoting that key
+	// owners: the working dirs of the project's containers (the owner check)
+	owners []string
 }
 
 func (f *keyDocker) Run(_ context.Context, args ...string) ([]byte, error) {
@@ -98,6 +100,8 @@ func (f *keyDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	defer f.mu.Unlock()
 	line := strings.Join(args, " ")
 	switch {
+	case args[0] == "ps" && strings.Contains(line, "--format"):
+		return []byte(strings.Join(f.owners, "\n")), nil
 	case strings.HasSuffix(line, "up -d --wait"):
 		k := upKey(args)
 		f.keys = append(f.keys, k)

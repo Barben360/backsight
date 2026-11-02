@@ -349,6 +349,13 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 				return res, err
 			}
 			held = append(held, unlock)
+			// Another install's server is never stopped or deleted, and
+			// nothing else goes either (issue #144).
+			if err := ownProject(ctx, runtimeFor(cfg)); err != nil {
+				releaseLocks()
+				cleanLocks(d, local)
+				return res, err
+			}
 		}
 	} else {
 		for _, name := range jobLocks {
