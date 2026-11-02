@@ -62,7 +62,7 @@ body{margin:0}
 </article>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"$preview":{"width":300,"height":400}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"ttr":{"editor":"enum","options":["none","ok","watch"],"default":"none"},"$preview":{"width":300,"height":400}}'>
 class Component extends DCLogic {
   renderVals() {
     const p = this.props;
@@ -162,6 +162,13 @@ class Component extends DCLogic {
     };
     const t = { ...base[slot], ...((S[sc] || healthy)[slot]) };
     if (t.unit === undefined) t.unit = base[slot].unit;
+    // Block 6 (opt-in, off for every block 3 artboard): the Flowing tile's subline becomes time to recall.
+    const ttr = p.ttr ?? 'none';
+    if (slot === 'flowing' && ttr !== 'none') {
+      // The value only: its watch shows on its own card on Pipeline, never on the tile.
+      t.sub = 'Session to recalled memory: typical ' + (ttr === 'watch' ? '1 d 3 h' : '1 d 2 h') + ' · ' + t.sub;
+      t.n = t.n + '; time to recall from ' + (ttr === 'watch' ? '109' : '118') + ' sessions recalled';
+    }
     t.nf = String(p.nf ?? false) === 'true';
     // sparkline geometry (188 x 32 box, 3 px padding)
     const vals = t.s || [];

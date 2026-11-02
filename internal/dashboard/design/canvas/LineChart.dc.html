@@ -29,6 +29,10 @@ body{margin:0}
       <line class="{{h.cls}}" x1="44" x2="672" y1="{{h.y}}" y2="{{h.y}}"></line>
       <text class="thr-t ta-e" x="670" y="{{h.ty}}">{{h.label}}</text>
     </sc-for>
+    <sc-for list="{{mk}}" as="k" hint-placeholder-count="0">
+      <line class="{{k.cls}}" x1="{{k.x}}" x2="{{k.x}}" y1="14" y2="200"><title>{{k.t}}</title></line>
+      <text class="mk-t {{k.anchor}}" x="{{k.tx}}" y="24">{{k.label}}</text>
+    </sc-for>
     <sc-for list="{{lines}}" as="l" hint-placeholder-count="2">
       <polyline class="ln {{l.cls}}" points="{{l.pts}}"></polyline>
     </sc-for>
@@ -57,7 +61,7 @@ body{margin:0}
 </figure>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"data":{"editor":"enum","options":["used","found","latency","search"],"default":"used"},"table":{"editor":"boolean","default":false},"$preview":{"width":720,"height":340}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"data":{"editor":"enum","options":["used","found","latency","search"],"default":"used"},"table":{"editor":"boolean","default":false},"markers":{"editor":"boolean","default":false},"$preview":{"width":720,"height":340}}'>
 class Component extends DCLogic {
   renderVals() {
     const theme = this.props.theme ?? 'light';
@@ -128,9 +132,15 @@ class Component extends DCLogic {
     if (band) legend.push({ sw: 'band-sw', label: 'interval (95 %)' });
     if (nser) legend.push({ sw: 'nb-sw', label: 'faint bars: ' + nser.name });
     thr.forEach((h) => { h.y = Y(h.v); h.ty = Y(h.v) - 5; });
-    const cols = series.map((s) => s.name).concat(nser ? ['n'] : []);
-    const rows = [...Array(N)].map((_, i) => ({ day: day(i), v: series.map((s) => (s.v[i] === null ? '—' : yfmt(s.v[i]))).concat(nser ? [String(nser.v[i])] : []) })).reverse().slice(0, 10);
-    return { theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', label, yt, nb, hasBand: !!band, band: bandPath, thr, lines, dots, xt, legend, cols, rows, tableOpen: String(this.props.table ?? false) === 'true' || undefined };
+    // Block 6 (opt-in, off for every block 3 artboard): release and setting markers.
+    const withMk = String(this.props.markers ?? false) === 'true';
+    const MK = withMk ? [{ d: 19, cls: 'cfg-mk', label: 'settings changed', t: 'Oct 20: settings changed (recall.min_score 0.5 → 0.55)' }, { d: 27, cls: 'rel-mk', label: 'v0.1.17-m7', t: 'Oct 28: backsight v0.1.17-m7 installed' }] : [];
+    const mk = MK.map((k) => ({ cls: k.cls, x: X(k.d).toFixed(1), tx: (k.cls === 'rel-mk' ? X(k.d) - 4 : X(k.d) + 4).toFixed(1), anchor: k.cls === 'rel-mk' ? 'ta-e' : '', label: k.label, t: k.t }));
+    if (withMk) { legend.push({ sw: 'sw-rel', label: 'new version' }); legend.push({ sw: 'sw-cfg', label: 'settings changed' }); }
+    const mkOf = (i) => { const k = MK.find((m) => m.d === i); return k ? k.label : ''; };
+    const cols = series.map((s) => s.name).concat(nser ? ['n'] : []).concat(withMk ? ['Marker'] : []);
+    const rows = [...Array(N)].map((_, i) => ({ day: day(i), v: series.map((s) => (s.v[i] === null ? '—' : yfmt(s.v[i]))).concat(nser ? [String(nser.v[i])] : []).concat(withMk ? [mkOf(i) || '—'] : []) })).reverse().slice(0, 10);
+    return { mk, theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', label, yt, nb, hasBand: !!band, band: bandPath, thr, lines, dots, xt, legend, cols, rows, tableOpen: String(this.props.table ?? false) === 'true' || undefined };
   }
 }
 </script>

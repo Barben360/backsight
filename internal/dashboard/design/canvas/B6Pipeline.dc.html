@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pipeline: time to recall</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="pipeline" b6="true" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is it flowing?</h1><span class="muted">window: last 7 days · the new card sits under “How long until a session becomes memories?”</span></div>
+  <dc-import name="B6Funnel" theme="inherit" state="normal" hint-size="100%,520px"></dc-import>
+
+  <h2 class="sec-h">The same card in its other states</h2>
+  <dc-import name="B6Funnel" theme="inherit" state="watch" hint-size="100%,580px"></dc-import>
+  <dc-import name="B6Funnel" theme="inherit" state="never" hint-size="100%,760px"></dc-import>
+  <dc-import name="B6Funnel" theme="inherit" state="few" hint-size="100%,300px"></dc-import>
+
+  <h2 class="sec-h">The Flowing tile on the Overview: time to recall becomes its subline</h2>
+  <div class="row" style="align-items: stretch; gap: 20px">
+    <div style="width: 300px"><dc-import name="Tile" theme="inherit" scenario="healthy" slot="flowing" ttr="ok" hint-size="100%,360px"></dc-import></div>
+    <div style="width: 300px"><dc-import name="Tile" theme="inherit" scenario="healthy" slot="flowing" ttr="watch" hint-size="100%,400px"></dc-import></div>
+    <div class="stack" style="max-width: 560px; gap: 12px">
+      <p class="small sub">The tile’s number and status stay those of sessions sent. Time to recall is a second line with its typical value only, left as ok (first tile) and in its watch week (second tile): no watch word or icon on the tile.</p>
+      <p class="small sub">Its watch shows only on its own card, above. “What should I do?” keeps a single item for slow extraction: the existing one, from the time to turn a session into memories (slowest 1 in 20 over 30 min).</p>
+      <p class="xs muted">The Flowing verdict is unchanged: it only reads failures and backlogs.</p>
+    </div>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":3200}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

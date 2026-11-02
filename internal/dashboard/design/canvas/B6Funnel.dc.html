@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Time to recall funnel</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<section class="card" aria-labelledby="{{hid}}">
+  <div class="card-head">
+    <h2 id="{{hid}}">How long until a session’s memories come back?</h2>
+    <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+    <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+    <span class="spacer"></span>
+    <span class="pill st {{st.cls}}">{{st.word}}</span>
+    <details class="info"><summary aria-label="About time to recall"><span class="i i-info"></span></summary><div class="pop"><b>From session to recalled memory</b><dl><dt>What</dt><dd>For each session sent in the window: from its last turn to its send, to the server turning it into memories, to the first time one of those memories was shown.</dd><dt>Limits</dt><dd>Watch when the slowest 1 in 20 takes over 1 h from sent to turned into memories.</dd><dt>Based on</dt><dd>{{basedOn}}</dd></dl><span class="term">pipeline.time_to_recall</span></div></details>
+    <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats pipeline --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+  </div>
+  <sc-if value="{{few}}" hint-placeholder-val="{{ false }}">
+    <div class="state st-few"><span class="i i-few"></span><span><b>Too few to time yet:</b> 4 sessions were recalled in the last 7 days, 20 are needed. The counts below are exact; the times are not shown.</span></div>
+  </sc-if>
+  <div class="funnel">
+    <div class="stage"><span class="lab">Sessions ended</span><span class="v">{{f.s1}}</span><span class="s">on this PC</span></div>
+    <div class="hopc"><span class="arr" aria-hidden="true">→</span><span>last turn → sent</span><b>{{f.h1}}</b><span>{{f.h1b}}</span></div>
+    <div class="stage"><span class="lab">Sent</span><span class="v">{{f.s2}}</span><span class="s">{{f.s2n}}</span></div>
+    <div class="hopc {{f.h2cls}}"><span class="arr" aria-hidden="true">→</span><span>sent → turned into memories</span><b>{{f.h2}}</b><span>{{f.h2b}}</span><sc-if value="{{watch}}" hint-placeholder-val="{{ false }}"><span class="st st-watch">watch</span></sc-if></div>
+    <div class="stage"><span class="lab">Turned into memories</span><span class="v">{{f.s3}}</span><span class="s">{{f.s3n}}</span></div>
+    <div class="hopc"><span class="arr" aria-hidden="true">→</span><span>first memory recalled</span><b>{{f.h3}}</b><span>{{f.h3b}}</span></div>
+    <div class="stage"><span class="lab">A memory from it recalled</span><span class="v">{{f.s4}}</span><span class="s">{{f.s4n}}</span></div>
+  </div>
+  <sc-if value="{{watch}}" hint-placeholder-val="{{ false }}">
+    <div class="state st-watch"><span class="i i-watch"></span><span><b>Slow to become memory:</b> 1 in 20 sessions took over 2 h 40 min to be turned into memories (watch over 1 h). Usually the server’s queue or its model. <code>backsight doctor</code> names the fix.</span></div>
+  </sc-if>
+  <sc-if value="{{timed}}" hint-placeholder-val="{{ true }}">
+    <figure class="chart">
+      <svg viewBox="0 0 1000 150" role="img" aria-label="{{aria}}">
+        <sc-for list="{{xt}}" as="x" hint-placeholder-count="6">
+          <line class="gl" x1="{{x.x}}" x2="{{x.x}}" y1="8" y2="122"></line>
+          <text class="ta-m" x="{{x.x}}" y="140">{{x.label}}</text>
+        </sc-for>
+        <sc-for list="{{hops}}" as="h" hint-placeholder-count="3">
+          <text class="ta-e lbl" x="200" y="{{h.ty}}">{{h.name}}</text>
+          <line class="rng" x1="{{h.x50}}" x2="{{h.x95}}" y1="{{h.y}}" y2="{{h.y}}"><title>{{h.t}}</title></line>
+          <circle class="rng-p50" cx="{{h.x50}}" cy="{{h.y}}" r="6"><title>{{h.t}}</title></circle>
+        </sc-for>
+        <line class="thr-w" x1="{{wx}}" x2="{{wx}}" y1="52" y2="84"></line>
+        <text class="lbl" x="{{wtx}}" y="98">watch 1 h</text>
+        <line class="bl" x1="210" x2="992" y1="122" y2="122"></line>
+      </svg>
+      <div class="legend"><span><svg viewBox="-6 -6 12 12" aria-hidden="true"><circle class="rng-p50" r="5"></circle></svg>typical (half took less)</span><span><i class="sw sw-line f-used" style="height: 6px; border-radius: 3px"></i>up to the slowest 1 in 20</span><span><i class="sw sw-dash" style="color: var(--watch)"></i>watch limit</span><span class="muted">Time scale is logarithmic: each step is about ten times longer.</span></div>
+      <details class="tblfb">
+        <summary>Show as a table</summary>
+        <table class="tbl">
+          <thead><tr><th>Step</th><th class="r">Typical</th><th class="r">Slowest 1 in 20</th><th class="r">Sessions timed</th></tr></thead>
+          <tbody><sc-for list="{{hops}}" as="h" hint-placeholder-count="3"><tr><td>{{h.name}}</td><td class="r">{{h.p50}}</td><td class="r">{{h.p95}}</td><td class="r">{{h.n}}</td></tr></sc-for>
+          <tr class="total"><td>Whole way, session to recalled memory</td><td class="r">{{f.tot}}</td><td class="r">{{f.tot95}}</td><td class="r">{{f.s4}}</td></tr></tbody>
+        </table>
+      </details>
+    </figure>
+    <p class="small sub">Whole way, from the end of a session to a memory of it being recalled: typical <b>{{f.tot}}</b>, slowest 1 in 20 <b>{{f.tot95}}</b>. Not the sum of the steps: each step is timed on its own sessions.</p>
+  </sc-if>
+  <sc-if value="{{never}}" hint-placeholder-val="{{ false }}">
+    <div class="stack" style="gap: 8px">
+      <h3 class="sec-h">Sent, never turned into memories (11)</h3>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Session</th><th>Project</th><th>Sent</th><th>On the server</th></tr></thead>
+          <tbody>
+            <tr><td><a class="idc" href="#">9e04c2b7</a></td><td><a href="#">project-a</a></td><td>5 d ago</td><td><span class="st st-watch">server task failed</span> after 3 tries</td></tr>
+            <tr><td><a class="idc" href="#">c1d8e5a0</a></td><td><a href="#">backsight</a></td><td>3 d ago</td><td>finished, no memory made</td></tr>
+            <tr><td><a class="idc" href="#">60fa21d9</a></td><td><a href="#">project-c</a></td><td>2 d ago</td><td>finished, no memory made</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="xs muted">A short session often holds nothing worth keeping: “no memory made” is normal. A failed task is on “What is waiting on the server?”. 8 more: <code>backsight stats sessions --has never_extracted</code>.</p>
+    </div>
+  </sc-if>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"state":{"editor":"enum","options":["normal","watch","never","few"],"default":"normal"},"$preview":{"width":1360,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const s = p.state ?? 'normal';
+    const watch = s === 'watch', never = s === 'never', few = s === 'few';
+    const F = {
+      normal: { s1: '192', s2: '188', s2n: '4 waiting or failed', s3: '184', s3n: '4 never turned into memories', s4: '118', s4n: '66 not recalled yet', h1: '6 min', h1b: '1 in 20: 22 min', h2: '3 min', h2b: '1 in 20: 18 min', h2cls: '', h3: '1 d 1 h', h3b: '1 in 20: 9 d', tot: '1 d 2 h', tot95: '9 d', m: [[6, 22], [3, 18], [1500, 12960]] },
+      watch: { s1: '192', s2: '188', s2n: '4 waiting or failed', s3: '181', s3n: '7 still on the server', s4: '109', s4n: '72 not recalled yet', h1: '6 min', h1b: '1 in 20: 22 min', h2: '24 min', h2b: '1 in 20: 2 h 40 min', h2cls: 'is-watch', h3: '1 d 1 h', h3b: '1 in 20: 9 d', tot: '1 d 3 h', tot95: '9 d', m: [[6, 22], [24, 160], [1500, 12960]] },
+      never: { s1: '192', s2: '188', s2n: '4 waiting or failed', s3: '177', s3n: '11 never turned into memories', s4: '112', s4n: '65 not recalled yet', h1: '6 min', h1b: '1 in 20: 22 min', h2: '3 min', h2b: '1 in 20: 19 min', h2cls: '', h3: '1 d 1 h', h3b: '1 in 20: 9 d', tot: '1 d 2 h', tot95: '9 d', m: [[6, 22], [3, 19], [1500, 12960]] },
+      few: { s1: '9', s2: '9', s2n: 'all sent', s3: '8', s3n: '1 still on the server', s4: '4', s4n: '4 not recalled yet', h1: '—', h1b: '9 timed, 20 needed', h2: '—', h2b: '8 timed, 20 needed', h2cls: '', h3: '—', h3b: '4 timed, 20 needed', tot: '—', tot95: '—', m: [] },
+    }[s];
+    const L = 210, R = 992, lmax = Math.log10(20160);
+    const X = (min) => L + (Math.log10(Math.max(1, min)) / lmax) * (R - L);
+    const fmt = (min) => min < 60 ? min + ' min' : (min < 1440 ? Math.floor(min / 60) + ' h' + (min % 60 ? ' ' + (min % 60) + ' min' : '') : Math.floor(min / 1440) + ' d' + (Math.floor((min % 1440) / 60) ? ' ' + Math.floor((min % 1440) / 60) + ' h' : ''));
+    const names = ['last turn → sent', 'sent → turned into memories', 'first memory recalled'];
+    const ns = [F.s2, F.s3, F.s4];
+    const hops = F.m.map((m, i) => ({ name: names[i], y: 30 + i * 36, ty: 34 + i * 36, x50: X(m[0]).toFixed(1), x95: X(m[1]).toFixed(1), p50: fmt(m[0]), p95: fmt(m[1]), n: ns[i], t: names[i] + ': typical ' + fmt(m[0]) + ', slowest 1 in 20 ' + fmt(m[1]) }));
+    const xt = [[1, '1 min'], [10, '10 min'], [60, '1 h'], [360, '6 h'], [1440, '1 d'], [10080, '7 d']].map((t) => ({ x: X(t[0]).toFixed(1), label: t[1] }));
+    const st = watch ? { cls: 'st-watch', word: 'watch' } : (few ? { cls: 'st-few', word: 'too few' } : { cls: 'st-ok', word: 'ok' });
+    return {
+      theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', hid: 'ttr-h-' + s,
+      f: F, hops, xt, st, watch, never, few, timed: !few,
+      wx: X(60).toFixed(1), wtx: (X(60) + 4).toFixed(1),
+      basedOn: few ? '4 sessions recalled (20 needed)' : F.s4 + ' sessions recalled in the window; each step on the sessions that reached it',
+      aria: 'Time for each step from session to recalled memory, typical and slowest 1 in 20, on a logarithmic time scale',
+    };
+  }
+}
+</script>
+</body>
+</html>

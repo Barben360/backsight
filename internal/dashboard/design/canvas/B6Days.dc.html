@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Days list with the calendar</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="none" b6="true" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>How did each day go?</h1><span class="muted">window: last 30 days</span></div>
+  <dc-import name="B6Heatmap" theme="inherit" metric="got" win="30" table="{{table}}" hint-size="100%,420px"></dc-import>
+  <section class="card" aria-labelledby="days-h">
+    <div class="card-head">
+      <h2 id="days-h">Days</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats days --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Day</th><th class="r">Sessions</th><th class="r">Prompts</th><th class="r">Memory lookups</th><th class="r">Got memory</th><th class="r">Used</th><th class="r">Wrong</th><th class="r">Context added</th><th class="r">Sent</th><th class="r">Send failed</th></tr></thead>
+        <tbody>
+          <tr><td><a href="#">Thu, Oct 30</a></td><td class="r">3</td><td class="r">22</td><td class="r">20</td><td class="r">6</td><td class="r">2</td><td class="r">0</td><td class="r">7,900</td><td class="r">2</td><td class="r">0</td></tr>
+          <tr><td><a href="#">Wed, Oct 29</a></td><td class="r">6</td><td class="r">29</td><td class="r">27</td><td class="r">9</td><td class="r">2</td><td class="r">0</td><td class="r">9,400</td><td class="r">6</td><td class="r">0</td></tr>
+          <tr><td><a href="#">Tue, Oct 28</a></td><td class="r">5</td><td class="r">31</td><td class="r">28</td><td class="r">8</td><td class="r">1</td><td class="r">1</td><td class="r">10 k</td><td class="r">5</td><td class="r">0</td></tr>
+          <tr><td><a href="#">Mon, Oct 27</a></td><td class="r">4</td><td class="r">19</td><td class="r">18</td><td class="r">5</td><td class="r">1</td><td class="r">0</td><td class="r">6,200</td><td class="r">4</td><td class="r">0</td></tr>
+          <tr><td><a href="#">Fri, Oct 24</a></td><td class="r">5</td><td class="r">27</td><td class="r">25</td><td class="r">7</td><td class="r">2</td><td class="r">0</td><td class="r">8,800</td><td class="r">5</td><td class="r">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="xs muted">Days with nothing recorded are left out of this list; the calendar shows them as dashed squares.</p>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"table":{"editor":"boolean","default":true},"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light', table: String(this.props.table ?? true) }; }
+}
+</script>
+</body>
+</html>

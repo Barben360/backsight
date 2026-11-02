@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Days calendar heatmap</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<section class="card" aria-labelledby="hm-h">
+  <div class="card-head">
+    <h2 id="hm-h">Which days did memory help?</h2>
+    <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+    <sc-if value="{{nf}}" hint-placeholder-val="{{ false }}"><span class="chip">project <b>backsight</b></span></sc-if>
+    <span class="spacer"></span>
+    <details class="info"><summary aria-label="About the days calendar"><span class="i i-info"></span></summary><div class="pop"><b>Which days did memory help?</b><dl><dt>What</dt><dd>One square per day for the last 13 months, coloured by the count you pick. A square links to that day.</dd><dt>Empty</dt><dd>A dashed square: nothing was recorded that day (no prompt on this PC). A grey square: there was activity, and the count is 0.</dd><dt>Marked</dt><dd>Today has a dark outline; the days of the selected window have a coloured ring.</dd></dl><span class="term">days view · recall.hit_rate num · used.turn_rate num</span></div></details>
+    <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats days --days 400</code><button class="copy" type="button" aria-label="Copy: backsight stats days --days 400"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+  </div>
+  <div class="row">
+    <span class="small sub">Colour by</span>
+    <nav class="seg" aria-label="Colour the days by">
+      <a href="#" aria-current="{{m.got}}">Prompts that got memory</a><a href="#" aria-current="{{m.used}}">Turns where Claude used memory</a><a href="#" aria-current="{{m.sessions}}">Sessions</a>
+    </nav>
+  </div>
+  <figure class="chart">
+    <div class="hm-box">
+      <div class="hm-wrap" role="group" aria-label="{{aria}}">
+        <span aria-hidden="true"></span>
+        <div class="hm-months" aria-hidden="true">
+          <sc-for list="{{months}}" as="mo" hint-placeholder-count="13"><span class="{{mo.w}}">{{mo.label}}</span></sc-for>
+        </div>
+        <div class="hm-dl" aria-hidden="true"><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span>Sun</span></div>
+        <div class="hm-dh" aria-hidden="true"><span></span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+        <div class="hm">
+          <sc-for list="{{weeks}}" as="wk" hint-placeholder-count="57">
+            <span class="hm-wk {{wk.old}}" aria-hidden="true">{{wk.label}}</span>
+            <sc-for list="{{wk.days}}" as="d" hint-placeholder-count="7">
+              <sc-if value="{{d.pad}}" hint-placeholder-val="{{ false }}"><span class="hm-c pad {{d.old}}" aria-hidden="true"></span></sc-if>
+              <sc-if value="{{d.real}}" hint-placeholder-val="{{ true }}"><a class="hm-c {{d.cls}}" href="#" tabindex="{{d.tab}}" aria-label="{{d.aria}}" title="{{d.aria}}"></a></sc-if>
+            </sc-for>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    <p class="hm-tip" aria-live="polite"><b>Wed, Oct 29:</b> 9 prompts got memory, of 29. <a href="#">Open the day →</a></p>
+    <div class="hm-legend">
+      <span class="ramp"><span>{{legendName}}:</span>
+        <span class="hm-c none" aria-hidden="true"></span><span>none recorded</span>
+        <span class="hm-c q0" aria-hidden="true"></span><span>0</span>
+        <span class="hm-c q1" aria-hidden="true"></span><span>{{l1}}</span>
+        <span class="hm-c q2" aria-hidden="true"></span><span>{{l2}}</span>
+        <span class="hm-c q3" aria-hidden="true"></span><span>{{l3}}</span>
+        <span class="hm-c q4" aria-hidden="true"></span><span>{{l4}}</span>
+      </span>
+      <span class="ramp"><span class="hm-c q2 today" aria-hidden="true"></span><span>today</span></span>
+      <span class="ramp"><span class="hm-c q2 inwin" aria-hidden="true"></span><span>in the window ({{winText}})</span></span>
+    </div>
+    <p class="xs muted">One Tab stop: arrow keys move from day to day, Enter opens it. On a small screen, the last 13 weeks; older days are in the table.</p>
+    <details class="tblfb" open="{{tableOpen}}">
+      <summary>Show as a table</summary>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Day</th><th class="r">Prompts</th><th class="r">Prompts that got memory</th><th class="r">Turns where Claude used memory</th><th class="r">Sessions</th></tr></thead>
+          <tbody><sc-for list="{{rows}}" as="r" hint-placeholder-count="10"><tr><td><a href="#">{{r.day}}</a></td><td class="r">{{r.p}}</td><td class="r">{{r.g}}</td><td class="r">{{r.u}}</td><td class="r">{{r.s}}</td></tr></sc-for></tbody>
+        </table>
+      </div>
+      <p class="tbl-more">The latest 120 days are here. <code>backsight stats days --days 400</code> lists every day.</p>
+    </details>
+  </figure>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"metric":{"editor":"enum","options":["got","used","sessions"],"default":"got"},"table":{"editor":"boolean","default":false},"focus":{"editor":"boolean","default":true},"win":{"editor":"enum","options":["7","30"],"default":"7"},"nf":{"editor":"boolean","default":false},"$preview":{"width":1100,"height":520}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const metric = p.metric ?? 'got';
+    const focus = String(p.focus ?? true) === 'true';
+    const win = String(p.win ?? '7');
+    const r = (i, s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
+    const MS = 86400000;
+    const start = Date.UTC(2025, 8, 29);           // Monday, Sep 29 2025
+    const today = Date.UTC(2026, 9, 30);           // Thursday, Oct 30 2026
+    const first = Date.UTC(2025, 10, 12);          // first prompt on this PC
+    const nW = 57;
+    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const fmt = (t) => { const d = new Date(t); return MON[d.getUTCMonth()] + ' ' + d.getUTCDate(); };
+    const winDays = win === '30' ? 30 : 7;
+    const q = (k, m) => {
+      if (m === 'sessions') return k === 0 ? 'q0' : (k <= 1 ? 'q1' : (k <= 3 ? 'q2' : (k <= 5 ? 'q3' : 'q4')));
+      if (m === 'used') return k === 0 ? 'q0' : (k <= 1 ? 'q1' : (k <= 2 ? 'q2' : (k <= 4 ? 'q3' : 'q4')));
+      return k === 0 ? 'q0' : (k <= 2 ? 'q1' : (k <= 5 ? 'q2' : (k <= 9 ? 'q3' : 'q4')));
+    };
+    const weeks = [], rows = [], months = [];
+    let prevMonth = -1, curMonth = null;
+    for (let w = 0; w < nW; w++) {
+      const mon = start + w * 7 * MS;
+      const md = new Date(mon);
+      if (md.getUTCMonth() !== prevMonth) {
+        if (curMonth) months.push(curMonth);
+        curMonth = { m: md.getUTCMonth(), n: 0 };
+        prevMonth = md.getUTCMonth();
+      }
+      curMonth.n++;
+      const old = w < nW - 13 ? 'hm-old' : '';
+      const days = [];
+      for (let d = 0; d < 7; d++) {
+        const t = mon + d * MS;
+        const i = w * 7 + d;
+        if (t > today) { days.push({ pad: true, real: false, old }); continue; }
+        const weekend = d >= 5;
+        const active = t >= first && !(weekend && r(i, 1) < 0.55) && r(i, 2) > 0.08;
+        const growth = Math.min(1, (t - first) / (MS * 120));
+        const prompts = active ? Math.round(6 + r(i, 3) * 30 * (0.4 + 0.6 * growth)) : 0;
+        const got = active ? Math.round(prompts * (0.1 + r(i, 4) * 0.25 * (0.3 + 0.7 * growth))) : 0;
+        const used = active ? Math.round(got * r(i, 5) * 0.5) : 0;
+        const sess = active ? 1 + Math.floor(r(i, 6) * 6) : 0;
+        const val = metric === 'used' ? used : (metric === 'sessions' ? sess : got);
+        const isToday = t === today;
+        const inWin = t > today - winDays * MS && t <= today;
+        const label = DOW[d] + ', ' + fmt(t) + ': ';
+        const what = metric === 'used' ? ' turns where Claude used memory' : (metric === 'sessions' ? ' sessions' : ' prompts got memory');
+        const aria = active ? label + val + what + (metric === 'got' ? ', of ' + prompts : '') : label + 'nothing recorded';
+        const cls = [active ? q(val, metric) : 'none', old, isToday ? 'today' : '', inWin ? 'inwin' : '', (focus && t === today - MS) ? 'is-focus' : ''].join(' ');
+        days.push({ pad: false, real: true, cls, aria: aria + (isToday ? ' (today)' : ''), tab: isToday ? '0' : '-1' });
+        if (t > today - 10 * MS) rows.unshift({ day: DOW[d] + ', ' + fmt(t), p: prompts || '—', g: active ? got : '—', u: active ? used : '—', s: active ? sess : '—' });
+      }
+      weeks.push({ label: fmt(mon), old, days });
+    }
+    months.push(curMonth);
+    const monthsOut = months.map((mo, k) => ({ w: 'hm-w' + Math.min(6, mo.n), label: (k === 0 && mo.n < 3) ? '' : MON[mo.m] }));
+    const L = {
+      got: ['Prompts that got memory', '1–2', '3–5', '6–9', '10+'],
+      used: ['Turns where Claude used memory', '1', '2', '3–4', '5+'],
+      sessions: ['Sessions', '1', '2–3', '4–5', '6+'],
+    }[metric];
+    return {
+      theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad',
+      m: { got: metric === 'got' ? 'true' : undefined, used: metric === 'used' ? 'true' : undefined, sessions: metric === 'sessions' ? 'true' : undefined },
+      weeks, months: monthsOut, rows: rows.slice(0, 10),
+      legendName: L[0], l1: L[1], l2: L[2], l3: L[3], l4: L[4],
+      winText: win === '30' ? 'last 30 days' : 'last 7 days',
+      aria: L[0] + ' per day, Sep 29 2025 to Oct 30 2026, one square per day; the table below lists the values',
+      tableOpen: String(p.table ?? false) === 'true' || undefined,
+      nf: String(p.nf ?? false) === 'true',
+    };
+  }
+}
+</script>
+</body>
+</html>

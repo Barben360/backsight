@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overview with the block 6 additions</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page {{dcls}}" data-theme="{{theme}}" style="position: relative">
+<dc-import name="TopBar" theme="inherit" active="overview" b6="true" density="{{density}}" keys="{{keys}}" open="{{open}}" custom="{{custom}}" scope="{{scope}}" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head">
+    <h1>Is my memory working?</h1>
+    <span class="muted">window: {{winPhrase}}</span>
+  </div>
+
+  <dc-import name="Banner" theme="inherit" variant="{{scenario}}" hint-size="100%,190px"></dc-import>
+
+  <div class="summary-row">
+    <p class="summary">In the last 7 days: <b>{{s.p}}</b> prompts got memory, Claude used it in <b>{{s.t}}</b> turns, about <b>{{s.k}}</b> tokens added; extraction cost <b>{{s.cost}}</b> <span class="muted">{{s.scope}}</span></p>
+    <button class="copy" type="button" aria-label="Copy summary: the numbers on this page as plain text, without any memory text"><span class="i i-sm i-copy"></span>Copy summary</button>
+  </div>
+
+  <div class="tgroups" aria-label="Key numbers">
+    <section class="tgroup"><h2 class="tgroup-h">Found</h2><div class="tgroup-tiles">
+      <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="found" hint-size="100%,330px"></dc-import>
+    </div></section>
+    <section class="tgroup"><h2 class="tgroup-h">Right</h2><div class="tgroup-tiles">
+      <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="used" hint-size="100%,330px"></dc-import>
+      <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="wrong" hint-size="100%,330px"></dc-import>
+    </div></section>
+    <section class="tgroup"><h2 class="tgroup-h">Cost</h2><div class="tgroup-tiles">
+      <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="context" hint-size="100%,330px"></dc-import>
+      <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="speed" hint-size="100%,330px"></dc-import>
+    </div></section>
+    <section class="tgroup"><h2 class="tgroup-h">Flowing</h2><div class="tgroup-tiles">
+      <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="flowing" ttr="ok" hint-size="100%,330px"></dc-import>
+    </div></section>
+  </div>
+
+  <div class="grid-main">
+    <section class="card" aria-labelledby="att-h">
+      <div class="card-head">
+        <h2 id="att-h">What should I do?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <span class="muted small">{{attCount}}</span>
+      </div>
+      <sc-if value="{{hasAtt}}" hint-placeholder-val="{{ false }}">
+        <ul class="att">
+          <sc-for list="{{att}}" as="a" hint-placeholder-count="1">
+            <li class="att-item">
+              <span class="pill st {{a.st}}">{{a.word}}</span>
+              <div class="body">
+                <p>{{a.text}}</p>
+                <div class="cmd"><code>{{a.cmd}}</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+                <details class="why"><summary>Why this matters</summary><div>{{a.why}}</div></details>
+              </div>
+            </li>
+          </sc-for>
+        </ul>
+      </sc-if>
+      <sc-if value="{{noAtt}}" hint-placeholder-val="{{ true }}">
+        <div class="empty"><span class="row"><span class="st st-ok">Nothing needs attention.</span></span><span class="small">Everything is within its usual range. Nothing to do.</span></div>
+      </sc-if>
+    </section>
+
+    <section class="card" aria-labelledby="late-h">
+      <div class="card-head">
+        <h2 id="late-h">What happened lately?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --limit 5</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
+          <tbody>
+            <tr><td><a class="idc" href="#">a41c09e2</a></td><td><a href="#">backsight</a></td><td>25 min ago</td><td class="r">10</td><td class="r">2</td><td class="r"><span class="st st-watch">1</span></td></tr>
+            <tr><td><a class="idc" href="#">5be2d7f0</a></td><td><a href="#">project-a</a></td><td>2 h ago</td><td class="r">4</td><td class="r">1</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="#">93c1a4e8</a></td><td><a href="#">backsight</a></td><td>5 h ago</td><td class="r">9</td><td class="r">3</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="#">d0f63b15</a></td><td><a href="#">project-c</a></td><td>yesterday</td><td class="r">3</td><td class="r">0</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="#">2e8a91c7</a></td><td><a href="#" class="trunc" title="project-d-shared-frontend-tools">project-d-shared-fronten…</a></td><td>2 d ago</td><td class="r">5</td><td class="r">1</td><td class="r">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-foot"><a href="#">All sessions →</a></div>
+    </section>
+  </div>
+
+  <div class="grid-main">
+    <section class="card" aria-labelledby="glance-h">
+      <div class="card-head">
+        <h2 id="glance-h">How big is the memory?</h2>
+        <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats bank</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <sc-if value="{{down}}" hint-placeholder-val="{{ false }}">
+        <div class="state st-watch"><span class="i i-server"></span><span>Memory server not answering since 09:12. Counts below are from 2 h ago.</span></div>
+      </sc-if>
+      <div class="glance">
+        <div class="glance-total"><span class="muted small">Memories</span><span class="v">1,284</span><span class="small sub">+46 in the last 7 days · 286 documents</span></div>
+        <div class="glance-kinds">
+          <svg class="kbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="Memories by kind: 212 summaries, 431 facts about you and your work, 641 facts from a session">
+            <rect class="f-summary" x="0" y="0" width="16.5" height="10"></rect>
+            <rect class="f-about" x="17" y="0" width="33.1" height="10"></rect>
+            <rect class="f-session" x="50.6" y="0" width="49.4" height="10"></rect>
+          </svg>
+          <div class="legend">
+            <span><i class="sw f-summary"></i>summary <b class="num">212</b></span>
+            <span><i class="sw f-about"></i>fact about you and your work <b class="num">431</b></span>
+            <span><i class="sw f-session"></i>fact from a session <b class="num">641</b></span>
+          </div>
+        </div>
+        <div class="glance-look">
+          <span class="muted small">Worth a look</span>
+          <div class="badges">
+            <a class="badge" href="#"><span class="i i-info"></span><b>7</b> often shown, never used</a>
+            <a class="badge" href="#"><span class="i i-info"></span><b>3</b> hidden</a>
+            <a class="badge" href="#"><span class="i i-info"></span><b>2</b> reported wrong</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <dc-import name="B6Helped" theme="inherit" state="{{helped}}" hint-size="100%,330px"></dc-import>
+  </div>
+
+  <dc-import name="B6Heatmap" theme="inherit" metric="got" hint-size="100%,420px"></dc-import>
+
+  <details class="why">
+    <summary>Summary as text</summary>
+    <pre class="sample">backsight · Is my memory working? · last 7 days (Oct 24 to Oct 30)
+Activity on this PC · memory on 127.0.0.1:18888
+
+Memory is working.
+  Found      ok      28 % of prompts got memory (21–35 %), +2 pts
+  …</pre>
+  </details>
+</main>
+<footer class="foot">
+  <div class="wrap">
+    <span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a>
+    <sc-if value="{{keysOn}}" hint-placeholder-val="{{ false }}"><button class="btn btn-quiet keyhint-btn" type="button" aria-keyshortcuts="?"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button></sc-if>
+    <span>Rendered at <time datetime="2026-10-30T15:44">15:44</time> in 84 ms</span>
+  </div>
+</footer>
+<sc-if value="{{overlay}}" hint-placeholder-val="{{ false }}">
+  <div class="keys-shade" style="position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; padding-top: 140px">
+    <div class="keys" role="dialog" aria-modal="true" aria-labelledby="keys-h">
+      <div class="keys-head"><h2 id="keys-h">Keyboard shortcuts</h2><button class="btn btn-quiet" type="button" aria-label="Close keyboard shortcuts">Close <kbd>Esc</kbd></button></div>
+      <dl>
+        <dt><kbd>g</kbd> <kbd>o</kbd></dt><dd>Overview</dd>
+        <dt><kbd>g</kbd> <kbd>q</kbd></dt><dd>Quality</dd>
+        <dt><kbd>g</kbd> <kbd>c</kbd></dt><dd>Cost</dd>
+        <dt><kbd>g</kbd> <kbd>b</kbd></dt><dd>Bank</dd>
+        <dt><kbd>g</kbd> <kbd>p</kbd></dt><dd>Pipeline</dd>
+        <dt><kbd>g</kbd> <kbd>s</kbd></dt><dd>System</dd>
+        <dt><kbd>/</kbd></dt><dd>Filter by project</dd>
+        <dt><kbd>r</kbd></dt><dd>Refresh this page</dd>
+        <dt><kbd>?</kbd></dt><dd>This list</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this list or an open menu</dd>
+      </dl>
+      <p class="xs muted">Press g, then the letter within a second. Keys do nothing while you type in a field. Turn shortcuts off in Preferences.</p>
+    </div>
+  </div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"scenario":{"editor":"enum","options":["healthy","serverdown"],"default":"healthy"},"density":{"editor":"enum","options":["comfortable","compact"],"default":"comfortable"},"keys":{"editor":"boolean","default":false},"overlay":{"editor":"boolean","default":false},"open":{"editor":"enum","options":["none","prefs","custom","menu","menucustom"],"default":"none"},"custom":{"editor":"enum","options":["none","applied","invalid"],"default":"none"},"helped":{"editor":"enum","options":["auto","normal","few","none","down"],"default":"auto"},"$preview":{"width":1440,"height":2300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const sc = p.scenario ?? 'healthy';
+    const density = p.density ?? 'comfortable';
+    const keysOn = String(p.keys ?? false) === 'true';
+    const overlay = String(p.overlay ?? false) === 'true';
+    const custom = p.custom ?? 'none';
+    const down = sc === 'serverdown';
+    const S = {
+      healthy: { p: '46', t: '10', k: '17 k', cost: '$43.62', scope: '(server, all PCs).' },
+      serverdown: { p: '12', t: '9', k: '11 k', cost: 'unknown', scope: '(the memory server is not answering).' },
+    };
+    const att = down ? [{ st: 'st-watch', word: 'watch', text: 'Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost.', cmd: 'backsight doctor', why: 'While the server is unreachable, prompts get no memory and sessions wait on this PC. They are sent on their own once it answers. After 24 h this becomes urgent.' }] : [];
+    const helped = (p.helped ?? 'auto') === 'auto' ? (down ? 'down' : 'normal') : p.helped;
+    return {
+      theme, scenario: sc, density, keys: keysOn ? 'true' : 'false', keysOn, overlay,
+      dcls: density === 'compact' ? 'd-compact' : '',
+      open: p.open ?? 'none', custom,
+      winPhrase: custom === 'applied' ? 'Oct 1 to Oct 7' : 'last 7 days',
+      scope: down ? 'serverdown' : 'ok', down,
+      s: S[sc] || S.healthy,
+      att, hasAtt: att.length > 0, noAtt: att.length === 0, attCount: att.length ? att.length + ' item' : '',
+      helped,
+    };
+  }
+}
+</script>
+</body>
+</html>
