@@ -12,6 +12,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
 )
@@ -190,33 +191,8 @@ func reattribute(ctx context.Context, f reattributeFlags, opt reattributeOptions
 		answered[r.Session] = true
 	}
 	if !opt.backedUp {
-		b, err := createBackup(ctx, nil)
-		if err != nil {
+		if res.Backup, err = verifiedBackup(ctx, d, cfg, "retain reattribute", f.resume(), answers["backup"] == "done"); err != nil {
 			return res, err
-		}
-		if b.Skipped != "" && answers["backup"] != "done" {
-			return res, &output.Error{Code: output.NeedsUser, Resume: f.resume() + " --answer backup=done",
-				Questions: []setup.Question{{ID: "backup", Required: true, Options: []setup.Option{{Value: "done", Label: "the server was backed up on its host"}},
-					Prompt: "the server is remote, so no backup was taken here: back it up on its host, then answer backup=done"}},
-				Message: "retain reattribute needs a backup first: " + b.Skipped + "; nothing was changed"}
-		}
-		if b.Skipped == "" {
-			// The first backup made the identity: read the secrets again.
-			if sec, err = config.LoadSecrets(d.SecretsFile()); err != nil {
-				return res, blocked(err)
-			}
-			_, _, ids, err := backupKeys(d, cfg, sec, false)
-			if err != nil {
-				return res, err
-			}
-			v, err := verifyArchive(ctx, d, cfg, ids, b.Path)
-			if err != nil || !v.OK {
-				if err == nil {
-					err = fmt.Errorf("the backup's counts differ from its manifest")
-				}
-				return res, &output.Error{Code: output.Blocked, Message: "the backup " + b.Path + " could not be verified, nothing was changed: " + err.Error()}
-			}
-			res.Backup = b.Path
 		}
 	}
 	l, note, err := acquireMaintenance(d, "retain reattribute")
@@ -367,4 +343,40 @@ func reattributeText(r reattributeResult) string {
 		b.WriteString("nothing to move\n")
 	}
 	return b.String()
+}
+
+// verifiedBackup takes a backup and verifies it before command deletes
+// documents; its path, "" when the server is remote and the user answered
+// backup=done (backedUpOnHost) after backing it up on its host.
+func verifiedBackup(ctx context.Context, d paths.Dirs, cfg config.Config, command, resume string, backedUpOnHost bool) (string, error) {
+	b, err := createBackup(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	if b.Skipped != "" {
+		if backedUpOnHost {
+			return "", nil
+		}
+		return "", &output.Error{Code: output.NeedsUser, Resume: resume + " --answer backup=done",
+			Questions: []setup.Question{{ID: "backup", Required: true, Options: []setup.Option{{Value: "done", Label: "the server was backed up on its host"}},
+				Prompt: "the server is remote, so no backup was taken here: back it up on its host, then answer backup=done"}},
+			Message: command + " needs a backup first: " + b.Skipped + "; nothing was changed"}
+	}
+	// The first backup made the identity: read the secrets again.
+	sec, err := config.LoadSecrets(d.SecretsFile())
+	if err != nil {
+		return "", blocked(err)
+	}
+	_, _, ids, err := backupKeys(d, cfg, sec, false)
+	if err != nil {
+		return "", err
+	}
+	v, err := verifyArchive(ctx, d, cfg, ids, b.Path)
+	if err != nil || !v.OK {
+		if err == nil {
+			err = fmt.Errorf("the backup's counts differ from its manifest")
+		}
+		return "", &output.Error{Code: output.Blocked, Message: "the backup " + b.Path + " could not be verified, nothing was changed: " + err.Error()}
+	}
+	return b.Path, nil
 }

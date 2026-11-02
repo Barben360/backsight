@@ -696,7 +696,7 @@ func TestDoctorReplaceUnconfirmedWarns(t *testing.T) {
 	c := check(t, f.run(), "replace-unconfirmed")
 	const ref = "troubleshooting#doctor-a-session-part-was-never-confirmed"
 	if c.Status != Warn || c.Detail != "1 session part(s) never confirmed on the server since 2026-10-25: 01234567/conversation:0123456789abcdef@beta" ||
-		c.Fix != "backsight guide "+ref {
+		c.Fix != "backsight retain resend-failed --plan lists the sessions to send again whole (backsight guide "+ref+")" {
 		t.Errorf("recent: %+v", c)
 	}
 	corpus, err := guide.Embedded()
@@ -1311,7 +1311,7 @@ func TestBankSaysWhetherExtractionFailsNow(t *testing.T) {
 	c = check(t, f.run(), "bank")
 	expect(t, c, Warn, "bank coding-agent::memoire")
 	if !strings.Contains(c.Detail, "the last extraction failed 2026-11-01 08:00 UTC, they succeed since 2026-11-02 08:00 UTC") ||
-		!strings.Contains(c.Fix, "may be missing from memory") || strings.Contains(c.Fix, "llm_api_key") {
+		!strings.Contains(c.Fix, "may be missing from memory") || !strings.Contains(c.Fix, "backsight retain resend-failed --plan") || strings.Contains(c.Fix, "llm_api_key") {
 		t.Errorf("failed in the past: %+v", c)
 	}
 }
