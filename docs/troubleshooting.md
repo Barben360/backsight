@@ -164,6 +164,16 @@ Wants=tailscaled.service
 
 To stop depending on the address, `backsight server expose --loopback` takes the server back to this machine only.
 
+## A server command says the Compose project belongs to another install
+
+Docker Compose knows a project by its name alone, `server.project` (`backsight` by default). A second backsight home on the same machine (`BACKSIGHT_HOME` set, a test install) that keeps the default name would drive the first install's server: recreate its containers from its own files, stop them, or delete them with their memories. So before any command that changes the server's containers (`server start`, `stop`, `install`, `expose`, `upgrade`, `token --rotate`, setup's server step, `restore`, `uninstall --stop` or `--delete-data`, a runtime switch or clean), backsight reads the directory Compose recorded on each of the project's containers (the `com.docker.compose.project.working_dir` label). When it is another install's server directory (one that holds a `compose.yaml`), the command exits 20, nothing changed, and names that directory. doctor's `compose-owner` check reports the same, changing nothing; `server status` and the other read-only commands are not refused.
+
+- This home is a second install: give it a project of its own, `project = "<name>"` under `[server]` in its `config.toml` (lowercase letters, digits, `-` and `_`), then `backsight server install`.
+- You meant to act on the other install: run the command from it (with its `BACKSIGHT_HOME`).
+- The other directory is an old copy of this install that nothing runs any more: delete its `compose.yaml` and run the command again; this install takes the project over.
+
+A home that was moved or renamed is not refused: its old directory no longer holds a `compose.yaml`, so its next start takes its containers over. The check compares directories after resolving symbolic links (and without case on Windows). When Docker cannot be asked, the command stops before any change, as it would stop at its first Docker call.
+
 ## A command says to run it on the server's host
 
 `this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine, and the commands that manage it or write its banks only work there: [the list](commands.md#server). Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.
