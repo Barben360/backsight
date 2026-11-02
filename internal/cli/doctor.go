@@ -221,6 +221,9 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 	}
 	unread("native-home", f.ReadHome(n.Home()))
 	v, err := n.Deployed()
+	if fe := (*server.ForeignNativeError)(nil); errors.As(err, &fe) {
+		err = nil // another install's unit: native-owner says so; this install's venv is the pin's
+	}
 	if v == "" {
 		v = n.Version()
 	}

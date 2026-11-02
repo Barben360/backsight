@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/testtool"
@@ -108,9 +110,25 @@ func TestNativeReadsAreNotRefusedOnAnotherInstallsUnits(t *testing.T) {
 	if _, out, errOut := run(t, "server", "status"); strings.Contains(out+errOut, "another backsight install") {
 		t.Errorf("status refused:\n%s%s", out, errOut)
 	}
-	_, out, errOut := run(t, "doctor")
-	if !strings.Contains(out+errOut, "native-owner") || !strings.Contains(out+errOut, other) {
-		t.Errorf("doctor does not report the other install's units:\n%s%s", out, errOut)
+	_, out, errOut := run(t, "doctor", "--json")
+	var env struct {
+		Data doctor.Report `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("doctor --json: %v\n%s%s", err, out, errOut)
+	}
+	var owner *doctor.Check
+	for i, c := range env.Data.Checks {
+		switch {
+		case c.ID == "native-owner":
+			owner = &env.Data.Checks[i]
+		case strings.Contains(c.Summary+c.Detail, other) || strings.Contains(c.Summary+c.Detail, "another backsight install"):
+			// Said once, by native-owner: native-venv does not repeat it.
+			t.Errorf("%s repeats the other install: %+v", c.ID, c)
+		}
+	}
+	if owner == nil || owner.Status != doctor.Error || !strings.Contains(owner.Summary, other) {
+		t.Errorf("doctor's native-owner does not report the other install: %+v", owner)
 	}
 }
 

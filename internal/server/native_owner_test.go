@@ -215,18 +215,63 @@ func TestNativeRefusesAnUnreadableUnit(t *testing.T) {
 	}
 }
 
-// Reading the units' state, their logs or doctor's facts is never
-// refused.
+// Reading the units' state, their logs, a plan's diff or doctor's facts
+// is never refused, and writes nothing.
 func TestNativeReadsAreNotGuarded(t *testing.T) {
-	mine, _, sys := twoHomes(t)
+	ctx := context.Background()
+	mine, other, sys := twoHomes(t)
+	before := unitFiles(t, other)
 	sys.Out = func(c []string) ([]byte, error) {
 		return []byte("ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n"), nil
 	}
-	if _, err := mine.Status(context.Background()); err != nil {
+	if _, err := mine.Status(ctx); err != nil {
 		t.Errorf("status refused: %v", err)
 	}
-	if _, err := mine.Logs(context.Background(), "db", 5); err != nil {
+	if _, err := mine.Logs(ctx, "db", 5); err != nil {
 		t.Errorf("logs refused: %v", err)
+	}
+	f, err := mine.Render(secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := mine.Diff(f); err != nil || !ch.Units {
+		t.Errorf("Diff: %+v, %v; want the units' change shown", ch, err)
+	}
+	// doctor's facts (cli's nativeFacts).
+	if states, err := mine.UnitStates(ctx); err != nil || states[mine.DBUnit()] != "active" {
+		t.Errorf("unit states: %v, %v", states, err)
+	}
+	if _, err := mine.Strays(); err != nil {
+		t.Errorf("strays refused: %v", err)
+	}
+	if got := unitFiles(t, other); !reflect.DeepEqual(got, before) || exists(mine.EnvFile()) {
+		t.Errorf("a read wrote: units changed %v, server.env written %v", !reflect.DeepEqual(got, before), exists(mine.EnvFile()))
+	}
+	for _, l := range sys.lines() {
+		if !strings.Contains(l, " show ") && !strings.HasPrefix(l, "journalctl ") {
+			t.Errorf("a read ran %s", l)
+		}
+	}
+}
+
+// A home path holding a % (systemd's specifier character, doubled in
+// both units) is read back exactly off either unit, and the install
+// drives its own units.
+func TestNativeReadsAPercentInItsPath(t *testing.T) {
+	n, sys, _ := nativeFixture(t, secrets)
+	n.Cfg.Server.ComposeDir = filepath.Join(t.TempDir(), "100%", "server")
+	completeVenv(t, n, n.Version())
+	installed(t, n, secrets)
+	for u, content := range unitFiles(t, n) {
+		if !strings.Contains(content, "100%%") {
+			t.Fatalf("%s does not double the %%:\n%s", u, content)
+		}
+		if got := unitRoot([]byte(content)); got != n.Root() {
+			t.Errorf("%s runs from %q, want %q", u, got, n.Root())
+		}
+	}
+	if err := n.Stop(context.Background()); err != nil || len(sys.Calls) == 0 {
+		t.Errorf("Stop: %v, asked systemd %q", err, sys.lines())
 	}
 }
 
@@ -306,26 +351,32 @@ func TestTaskHostRefusesAnotherInstallsSupervisor(t *testing.T) {
 	}
 }
 
-// This install's own task and supervisor are driven; so are those of a
-// home whose program or directory is gone (moved): taken over. A
-// supervisor too old to say its root, or a task whose XML names no
-// program, cannot be told: driven, as before.
+// This install's own task and supervisor are driven (their program and
+// server.env exist: only the same-directory test tells them apart); so
+// are those of a home whose program or directory is gone (moved): taken
+// over. A supervisor too old to say its root cannot be told: driven, as
+// before, even from a working directory holding a server.env.
 func TestTaskHostDrivesItsOwnTaskAndSupervisor(t *testing.T) {
+	ownShim := func(t *testing.T, h taskHost) { touch(t, h.n.shim(), 0o755) }
 	cases := map[string]func(t *testing.T, h taskHost, f *fakeTask){
 		"its own task": func(t *testing.T, h taskHost, f *fakeTask) {
+			ownShim(t, h)
 			f.xml = taskXMLFor(t, h.n.shim(), scheduler.TaskDirArgs(h.n.Env)...)
 		},
 		"its own task, other case": func(t *testing.T, h taskHost, f *fakeTask) {
 			if runtime.GOOS != "windows" {
 				t.Skip("paths ignore case on Windows only")
 			}
+			ownShim(t, h)
 			f.xml = taskXMLFor(t, strings.ToUpper(h.n.shim()))
 		},
 		"a moved home's task": func(t *testing.T, h taskHost, f *fakeTask) {
 			f.xml = taskXMLFor(t, filepath.Join(t.TempDir(), "gone", "data", "bin", "backsight.exe"))
 		},
-		"a task naming no program": func(t *testing.T, h taskHost, f *fakeTask) { f.xml = []byte("<Task/>") },
-		"its own supervisor":       func(t *testing.T, h taskHost, f *fakeTask) { f.st.Root = h.n.Root() },
+		"its own supervisor": func(t *testing.T, h taskHost, f *fakeTask) {
+			touch(t, h.n.EnvFile(), 0o600)
+			f.st.Root = h.n.Root()
+		},
 		"a moved home's supervisor": func(t *testing.T, h taskHost, f *fakeTask) {
 			f.st.Root = filepath.Join(t.TempDir(), "gone", "native")
 		},
@@ -335,7 +386,12 @@ func TestTaskHostDrivesItsOwnTaskAndSupervisor(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"a supervisor that names no root": func(t *testing.T, h taskHost, f *fakeTask) { f.st.Root = "" },
+		"a supervisor that names no root": func(t *testing.T, h taskHost, f *fakeTask) {
+			cwd := t.TempDir()
+			touch(t, filepath.Join(cwd, "server.env"), 0o600)
+			t.Chdir(cwd) // a relative server.env here must not count
+			f.st.Root = ""
+		},
 	}
 	for name, set := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -369,5 +425,116 @@ func TestSplitWindowsArgsReadsBackEscapeArg(t *testing.T) {
 		if got := splitWindowsArgs(strings.Join(quoted, " ")); !reflect.DeepEqual(got, argv) {
 			t.Errorf("splitWindowsArgs(%q) = %q, want %q", strings.Join(quoted, " "), got, argv)
 		}
+	}
+}
+
+// The program a task runs is conhost's --headless <program>; an XML that
+// names none (not a task, no action, another action) is no program.
+func TestTaskProgramReadsConhostsProgramOnly(t *testing.T) {
+	if got := taskProgram(taskXMLFor(t, `C:\a b\data\bin\backsight.exe`)); got != `C:\a b\data\bin\backsight.exe` {
+		t.Errorf("taskProgram of a server task = %q", got)
+	}
+	for _, raw := range []string{"", "not xml", "<Task/>",
+		"<Task><Actions><Exec><Arguments>server supervise</Arguments></Exec></Actions></Task>",
+		"<Task><Actions><Exec><Arguments>--headless</Arguments></Exec></Actions></Task>"} {
+		if got := taskProgram([]byte(raw)); got != "" {
+			t.Errorf("taskProgram(%q) = %q, want none", raw, got)
+		}
+	}
+}
+
+// writeTaskFile writes the file Task Scheduler keeps the task in.
+func writeTaskFile(t *testing.T, h taskHost, xml []byte) string {
+	t.Helper()
+	p := taskFileOf(h.n.TaskName())
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, xml, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// schtasks failing for a passing reason cannot tell a missing task: the
+// task's own file then says whose it is. Another install's is refused;
+// no file is no task (an install without one yet starts); a file that
+// cannot be read is driven as before.
+func TestTaskHostReadsTheTaskFileWhenSchtasksFails(t *testing.T) {
+	ctx := context.Background()
+	t.Run("another install's", func(t *testing.T) {
+		for name, op := range nativeOps() {
+			t.Run(name, func(t *testing.T) {
+				h, f := taskFixture(t)
+				shim := otherShim(t)
+				f.registered, f.queryFails = true, 1000
+				writeTaskFile(t, h, taskXMLFor(t, shim))
+				foreign(t, op(ctx, h.n), filepath.Dir(filepath.Dir(shim)))
+				if ch := changedTask(f); len(ch) > 0 {
+					t.Errorf("acted on the task or the supervisor: %q", ch)
+				}
+			})
+		}
+	})
+	t.Run("no task file", func(t *testing.T) {
+		h, _ := taskFixture(t)
+		if err := h.n.CheckOwner(ctx); err != nil {
+			t.Errorf("an install without a task refused: %v", err)
+		}
+	})
+	t.Run("an unreadable task file", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("needs POSIX permissions and a non-root user")
+		}
+		h, f := taskFixture(t)
+		f.queryFails = 1000
+		p := writeTaskFile(t, h, taskXMLFor(t, otherShim(t)))
+		if err := os.Chmod(p, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+		if err := h.n.CheckOwner(ctx); err != nil {
+			t.Errorf("an unreadable task file refused: %v", err)
+		}
+	})
+}
+
+// The SessionStart hook's start (server.start_on_session) reads the
+// task's file, within its budget: another install's task keeps its
+// merely stopped supervisor's mutex and pipe; this install's, or none,
+// starts the supervisor.
+func TestStartIfDownLeavesAnotherInstallsTask(t *testing.T) {
+	ctx := context.Background()
+	h, f := taskFixture(t)
+	n := h.n
+	n.Cfg.Server.StartOnSession = true
+	n.Sys = nil // the hook's Native: no schtasks
+	writeTaskFile(t, h, taskXMLFor(t, otherShim(t)))
+	started, err := n.StartIfDown(ctx)
+	var fe *ForeignNativeError
+	if started || !errors.As(err, &fe) || len(f.detached) != 0 {
+		t.Errorf("another install's task: started %v, %v, detached %q; want nothing started", started, err, f.detached)
+	}
+	touch(t, n.shim(), 0o755)
+	writeTaskFile(t, h, taskXMLFor(t, n.shim()))
+	if started, err := n.StartIfDown(ctx); !started || err != nil || len(f.detached) != 1 {
+		t.Errorf("its own task: started %v, %v, detached %q; want the supervisor started", started, err, f.detached)
+	}
+}
+
+// Reading the task and the supervisor (doctor's facts) is never refused
+// on another install's task.
+func TestTaskHostReadsAreNotGuarded(t *testing.T) {
+	h, f := taskFixture(t)
+	f.registered, f.xml = true, taskXMLFor(t, otherShim(t))
+	f.start()
+	if st, err := h.n.TaskState(context.Background()); err != nil || st != TaskEnabled {
+		t.Errorf("task state: %q, %v", st, err)
+	}
+	if st, err := h.n.SupervisorStatus(context.Background()); err != nil || st == nil {
+		t.Errorf("supervisor status: %v, %v", st, err)
+	}
+	if ch := changedTask(f); len(ch) > 0 {
+		t.Errorf("a read acted: %q", ch)
 	}
 }

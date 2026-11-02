@@ -363,9 +363,13 @@ func taskFixture(t *testing.T) (taskHost, *fakeTask) {
 	if err := os.WriteFile(filepath.Join(n.Root(), "task.xml"), []byte("<Task/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	oldPg0 := pg0Home
+	oldPg0, oldTaskFile := pg0Home, taskFileOf
 	pg0Home = func() (string, error) { return filepath.Join(base, "profile", ".pg0"), nil } // never the user's own
-	t.Cleanup(func() { pg0Home = oldPg0 })
+	// Task Scheduler's files: none, unless a test writes one.
+	taskFileOf = func(name string) string {
+		return filepath.Join(base, "Tasks", strings.ReplaceAll(strings.TrimPrefix(name, `\`), `\`, "_"))
+	}
+	t.Cleanup(func() { pg0Home, taskFileOf = oldPg0, oldTaskFile })
 	old := []any{superviseAsk, startSupervisor, taskRunWait, superviseStopWait, supervisePoll}
 	superviseAsk = f.ask
 	startSupervisor = func(args ...string) error {

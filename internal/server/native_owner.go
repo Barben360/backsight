@@ -144,7 +144,7 @@ func unitRoot(unit []byte) string {
 		if v, ok := strings.CutPrefix(l, "WorkingDirectory="); ok && v != "" {
 			return strings.ReplaceAll(v, "%%", "%")
 		}
-		if v, ok := strings.CutPrefix(l, "Environment="); ok {
+		if v, ok := strings.CutPrefix(l, "Environment="); ok { // systemdUnquote undoes the quoting and the doubled %
 			if home, ok := strings.CutPrefix(systemdUnquote(strings.TrimSpace(v)), "HOME="); ok && filepath.Base(home) == "home" {
 				return filepath.Dir(home)
 			}
@@ -158,31 +158,78 @@ var _ ownerChecker = taskHost{}
 // checkOwner reads the program the registered task \<project>\server runs
 // (another install's shim is that install's task: the shim lives in its
 // data directory) and the native directory the supervisor answering the
-// project's pipe runs from. A task that cannot be queried is taken as
-// not registered, as everywhere else (schtasks' text is localized); a
-// supervisor that does not answer, or too old to name its directory,
-// cannot be told and is left to the operation, which asks it the same.
+// project's pipe runs from. A supervisor too old to name its directory
+// cannot be told and is driven, as before.
 func (h taskHost) checkOwner(ctx context.Context) error {
-	n := h.n
-	var out []byte
-	err := errors.New("no schtasks") // a Native built without Sys (the SessionStart hook's) asks the pipe only
-	if n.Sys != nil {
-		out, err = n.Sys.Run(ctx, "schtasks", "/Query", "/TN", n.TaskName(), "/XML")
+	task, err := h.registeredTask(ctx)
+	if err != nil {
+		return err
 	}
-	if err == nil {
-		if prog := taskProgram(out); prog != "" && !sameDir(prog, n.shim()) && !goneFile(prog) {
-			data := filepath.Dir(filepath.Dir(prog)) // <data>\bin\<shim>
-			return &ForeignNativeError{Project: n.project(), What: "the scheduled task " + n.TaskName() + ", which runs " + prog,
-				Dir: n.Root(), Other: data, Free: "delete its task (schtasks /Delete /TN " + n.TaskName() + " /F)"}
-		}
-	} else if cerr := ctx.Err(); cerr != nil {
-		return fmt.Errorf("cannot check which install owns the scheduled task %s: %w", n.TaskName(), cerr)
+	if err := h.foreignTask(task); err != nil {
+		return err
 	}
 	st, err := h.ask(ctx, "status")
 	if err != nil {
+		// None answers, or its channel fails: there is no supervisor to
+		// tell apart, and the operation asks the same pipe and reports it.
 		return nil
 	}
-	return n.foreignRoot(st.Root, fmt.Sprintf("its supervisor, pid %d", st.PID))
+	return h.n.foreignRoot(st.Root, fmt.Sprintf("its supervisor, pid %d", st.PID))
+}
+
+// taskFileOf is the file Task Scheduler keeps the task name in,
+// %SystemRoot%\System32\Tasks\<folder>\<name>; tests replace it.
+var taskFileOf = func(name string) string {
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	return filepath.Join(root, "System32", "Tasks", strings.TrimPrefix(name, `\`))
+}
+
+// registeredTask is the server task's XML as schtasks /Query /XML prints
+// it; nil when no task is known. schtasks' failure cannot tell a missing
+// task from a passing trouble (its text is localized): then the file Task
+// Scheduler keeps the task in decides (taskFile). A Native built without
+// Sys (the SessionStart hook's) reads that file only.
+func (h taskHost) registeredTask(ctx context.Context) ([]byte, error) {
+	n := h.n
+	if n.Sys != nil {
+		out, err := n.Sys.Run(ctx, "schtasks", "/Query", "/TN", n.TaskName(), "/XML")
+		if err == nil {
+			return out, nil
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, fmt.Errorf("cannot check which install owns the scheduled task %s: %w", n.TaskName(), cerr)
+		}
+	}
+	return h.taskFile(), nil
+}
+
+// taskFile is the task's file, nil when it does not exist or cannot be
+// read: Task Scheduler's folder may refuse a user who is not an
+// administrator, and refusing then would refuse every install that has
+// no task yet. Such a task is driven as before.
+func (h taskHost) taskFile() []byte {
+	raw, err := os.ReadFile(taskFileOf(h.n.TaskName()))
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// foreignTask is the refusal of a task whose program is another install's
+// shim, still there; nil for this install's, a moved home's (its program
+// gone) or a task XML naming no program.
+func (h taskHost) foreignTask(task []byte) error {
+	n := h.n
+	prog := taskProgram(task)
+	if prog == "" || sameDir(prog, n.shim()) || goneFile(prog) {
+		return nil
+	}
+	data := filepath.Dir(filepath.Dir(prog)) // <data>\bin\<shim>
+	return &ForeignNativeError{Project: n.project(), What: "the scheduled task " + n.TaskName() + ", which runs " + prog,
+		Dir: n.Root(), Other: data, Free: "delete its task (schtasks /Delete /TN " + n.TaskName() + " /F)"}
 }
 
 // taskProgram is the program a server task's XML runs: conhost's
@@ -207,7 +254,7 @@ func taskProgram(raw []byte) string {
 // (CommandLineToArgvW's rules for the arguments): blanks separate words
 // outside quotes; 2n backslashes before a quote are n and the quote
 // toggles quoting, 2n+1 are n and a literal quote; "" inside quotes is a
-// literal quote; other backslashes are themselves.
+// literal quote that ends the quoting; other backslashes are themselves.
 func splitWindowsArgs(s string) []string {
 	var out []string
 	var w strings.Builder
@@ -236,8 +283,10 @@ func splitWindowsArgs(s string) []string {
 			inWord = true
 		case c == '"':
 			if quoted && i+1 < len(s) && s[i+1] == '"' {
+				// CommandLineToArgvW: "" inside quotes is a quote, and ends them.
 				w.WriteByte('"')
 				i++
+				quoted = false
 			} else {
 				quoted = !quoted
 			}

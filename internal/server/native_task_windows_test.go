@@ -74,7 +74,9 @@ func TestSplitWindowsArgsIsCommandLineToArgv(t *testing.T) {
 		t.Errorf("task.xml's program %q, want the shim %q", got, n.shim())
 	}
 	for _, line := range []string{`--headless "C:\a b\c.exe" server supervise --backsight-home "C:\x y\"`,
-		`a\\\"b "c\\" d\e ""`, `"trailing\\" x`} {
+		`a\\\"b "c\\" d\e ""`, `"trailing\\" x`,
+		// "" inside quotes: a quote, then the quoting ends (a b c splits).
+		`"f""g"`, `"a""b c"`, `"""x y"`, `x""" y`} {
 		want := commandLineToArgv(t, "prog.exe "+line)[1:]
 		if got := splitWindowsArgs(line); !slices.Equal(got, want) {
 			t.Errorf("splitWindowsArgs(%q) = %q, want %q", line, got, want)

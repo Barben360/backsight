@@ -407,6 +407,12 @@ func (n Native) StartIfDown(ctx context.Context) (started bool, err error) {
 	if _, err := h.ask(ctx, "status"); !errors.Is(err, supervise.ErrNotRunning) {
 		return false, err
 	}
+	// Another install's task (its file read, no schtasks within the
+	// hook's budget): its supervisor, merely down, keeps the project's
+	// mutex and pipe to itself.
+	if err := h.foreignTask(h.taskFile()); err != nil {
+		return false, err
+	}
 	if err := h.launch(false); err != nil {
 		return false, err
 	}
