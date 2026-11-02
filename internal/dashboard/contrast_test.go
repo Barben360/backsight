@@ -113,6 +113,10 @@ func TestContrastOfTokens(t *testing.T) {
 			"--p-ok", "--p-queued", "--p-aside", "--p-failed"} {
 			check(c, "--surface", 3)
 		}
+		// The calendar's steps, and its dashed and solid edges (--c-shown, above).
+		for _, c := range []string{"--hm-1", "--hm-2", "--hm-3", "--hm-4"} {
+			check(c, "--surface", 3)
+		}
 	}
 	for _, a := range []struct {
 		theme  map[string]string
@@ -124,6 +128,10 @@ func TestContrastOfTokens(t *testing.T) {
 		{light, "light", "--accent", "--surface-2", "4.64"},
 		{dark, "dark", "--fg", "--surface", "14.64"},
 		{dark, "dark", "--p-failed", "--surface", "7.62"},
+		{light, "light", "--hm-1", "--surface", "3.06"},
+		{light, "light", "--hm-4", "--surface", "12.16"},
+		{dark, "dark", "--hm-1", "--surface", "3.14"},
+		{dark, "dark", "--hm-4", "--surface", "11.89"},
 	} {
 		if got := fmt.Sprintf("%.2f", ratio(a.theme[a.fg], a.theme[a.bg])); got != a.want {
 			t.Errorf("%s %s on %s is %s, the design says %s", a.name, a.fg, a.bg, got, a.want)
@@ -153,6 +161,11 @@ func TestDarkPaletteStatedTwiceTheSame(t *testing.T) {
 	for k, v := range attr {
 		if media[k] != v {
 			t.Errorf("%s: %q under prefers-color-scheme, %q under data-theme=dark", k, media[k], v)
+		}
+	}
+	for _, k := range []string{"--hm-1", "--hm-2", "--hm-3", "--hm-4"} {
+		if attr[k] == "" || media[k] != attr[k] {
+			t.Errorf("%s: %q under prefers-color-scheme, %q under data-theme=dark", k, media[k], attr[k])
 		}
 	}
 	for k := range media {

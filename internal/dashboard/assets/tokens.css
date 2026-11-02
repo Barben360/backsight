@@ -67,6 +67,11 @@
   --seq-1: #1C5CAB;
   --seq-2: #3987E5;
   --seq-3: #9EC5F4;
+  /* calendar heatmap: one hue, four steps, light to dark */
+  --hm-1: #5C95E3;
+  --hm-2: #2F72CC;
+  --hm-3: #1F55A0;
+  --hm-4: #123566;
 
   /* chart chrome */
   --grid: #E6E9ED;
@@ -117,6 +122,11 @@
     --seq-1: #9EC5F4;
     --seq-2: #3987E5;
     --seq-3: #184F95;
+    /* calendar heatmap: one hue, four steps, light to dark */
+    --hm-1: #3A6AA8;
+    --hm-2: #4C88D8;
+    --hm-3: #7DB1F1;
+    --hm-4: #BBD9FB;
     --grid: #252B33;
     --axis: #4C555F;
     --nbar: rgba(230, 237, 243, 0.08);
@@ -162,6 +172,11 @@
   --seq-1: #9EC5F4;
   --seq-2: #3987E5;
   --seq-3: #184F95;
+  /* calendar heatmap: one hue, four steps, light to dark */
+  --hm-1: #3A6AA8;
+  --hm-2: #4C88D8;
+  --hm-3: #7DB1F1;
+  --hm-4: #BBD9FB;
   --grid: #252B33;
   --axis: #4C555F;
   --nbar: rgba(230, 237, 243, 0.08);
