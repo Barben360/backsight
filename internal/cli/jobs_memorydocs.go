@@ -108,16 +108,22 @@ func maintainMemoryDocs(ctx context.Context, d paths.Dirs, home string, clock fu
 // for one list, read by the hour. A day is written only when all its
 // pages were read in this run; at a bound or the deadline what is whole is
 // written and the rest waits for the next run. The result is a line for
-// the job's report, never an error.
+// the job's report, never an error. An index that cannot catch up in its
+// budget (or fails to) would have the run list again the days it already
+// holds: the days wait for the next run; the operations run, the index's
+// reads standing on their own (a line it lags behind is written again,
+// which the later line wins).
 func collectMemoryDocs(ctx context.Context, w *metricsfile.Writer, ix memoryDocsIndex, r memoryDocsReader, now time.Time) string {
 	if r == nil {
 		return "memory docs: no server set up"
 	}
 	ctx, cancel := context.WithTimeout(ctx, memoryDocsStepTimeout)
 	defer cancel()
-	// Best effort: lines the index has not read yet are read again, which
-	// the later line wins.
-	_, _ = ix.CatchUp(ctx, index.TickBudget)
+	if fr, err := ix.CatchUp(ctx, index.TickBudget); err != nil || fr.Partial {
+		m := &mdRun{w: w, r: r, now: now}
+		m.docs.Store(memoryDocsDocReads)
+		return "memory docs: days not read (index behind), " + m.operations(ctx, ix)
+	}
 	listed, complete, err := ix.ListedDays(ctx)
 	if err != nil {
 		return "memory docs: not run, index " + indexStepError(err)
@@ -588,13 +594,24 @@ func (m *mdRun) operations(ctx context.Context, ix memoryDocsIndex) string {
 		}
 		return s
 	}
+	// notRead: the index could not say which sends or operations it holds
+	// (the step's deadline passed, or the index failed).
+	notRead := func() string {
+		if ctx.Err() != nil {
+			return "operations not read (timeout)"
+		}
+		return "operations not read (index)"
+	}
 	sent, err := ix.SentDocuments(ctx, m.now.Add(-memoryDocsSentReach))
-	if err != nil || len(sent) == 0 {
+	if err != nil {
+		return notRead()
+	}
+	if len(sent) == 0 {
 		return part()
 	}
 	recorded, err := ix.RecordedOperations(ctx)
 	if err != nil {
-		return part()
+		return notRead()
 	}
 	sessionOf := make(map[string]string, len(sent))
 	for _, s := range sent {

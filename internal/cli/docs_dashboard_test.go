@@ -45,6 +45,13 @@ func TestPrivacyDashboardSection(t *testing.T) {
 		"reads the memory server you configured")
 }
 
+// The local record's memory-docs row says a conversation's document id is
+// kept, and that it names the project.
+func TestPrivacyLocalRecordSection(t *testing.T) {
+	requireInSection(t, "../../docs/privacy.md", "The local record",
+		"`memory-docs-`", "`conversation:<session>@<project>#<n>`, which names the session and its project", "never a file's name or path")
+}
+
 func TestDashboardGuideSections(t *testing.T) {
 	requireInSection(t, "../../docs/dashboard.md", "Opening the dashboard",
 		"within 2 minutes", "`backsight dashboard link`", "**`--open`** starts your default browser",

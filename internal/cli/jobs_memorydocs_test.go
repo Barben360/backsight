@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -938,7 +939,7 @@ func TestMemoryDocsSurvivesOddServers(t *testing.T) {
 		if el := time.Since(start); el > 2*time.Second {
 			t.Errorf("step took %v, want about its 300 ms bound", el)
 		}
-		if want := "memory docs: days not listed (timeout), 0 operation(s), 0 unit count(s)"; got != want {
+		if want := "memory docs: days not listed (timeout), operations not read (timeout)"; got != want {
 			t.Errorf("result %q, want %q", got, want)
 		}
 	})
@@ -957,7 +958,7 @@ func TestMemoryDocsSurvivesOddServers(t *testing.T) {
 		}
 		_ = ix.Close()
 		code, out, _ := run(t, "jobs", "maintain", "--json")
-		if code != output.OK || !strings.Contains(out, `"status": "done"`) || !strings.Contains(out, `"memory_docs": "memory docs: days not listed (timeout), 0 operation(s), 0 unit count(s)"`) {
+		if code != output.OK || !strings.Contains(out, `"status": "done"`) || !strings.Contains(out, `"memory_docs": "memory docs: days not listed (timeout), operations not read (timeout)"`) {
 			t.Errorf("exit %d\n%s", code, out)
 		}
 	})
@@ -1056,6 +1057,111 @@ func TestMemoryDocsDoesNotStarveDays(t *testing.T) {
 	}
 }
 
+// mdIndex is the metrics index with its catch-up, or its reads of the
+// sends and operations, answering what the test sets.
+type mdIndex struct {
+	*index.Index
+	fresh            *index.Freshness // the catch-up's answer, when set
+	catchErr         error
+	sentErr, recsErr error
+}
+
+func (x mdIndex) CatchUp(ctx context.Context, b time.Duration) (index.Freshness, error) {
+	if x.fresh != nil || x.catchErr != nil {
+		var f index.Freshness
+		if x.fresh != nil {
+			f = *x.fresh
+		}
+		return f, x.catchErr
+	}
+	return x.Index.CatchUp(ctx, b)
+}
+
+func (x mdIndex) SentDocuments(ctx context.Context, since time.Time) ([]index.SentDocument, error) {
+	if x.sentErr != nil {
+		return nil, x.sentErr
+	}
+	return x.Index.SentDocuments(ctx, since)
+}
+
+func (x mdIndex) RecordedOperations(ctx context.Context) (map[string]index.RecordedOp, error) {
+	if x.recsErr != nil {
+		return nil, x.recsErr
+	}
+	return x.Index.RecordedOperations(ctx)
+}
+
+// An index behind its files would have the run list again the days it
+// holds: no day is read, the operations still run. An index that cannot
+// say which sends or operations it holds says so, never "0 operation(s)".
+func TestMemoryDocsWaitsForTheIndex(t *testing.T) {
+	setup := func(t *testing.T) *mdEnv {
+		e := newMDEnv(t)
+		e.listedRange("2026-10-28", true)
+		setBank(bankDay("2026-10-29", 3))
+		e.sent("conversation:s1", mdAt.Add(-24*time.Hour))
+		fakeOperations = []string{fakeOp("op-1", "completed", "conversation:s1", 0)}
+		documentUnits["conversation:s1"] = 3
+		if _, err := e.ix.CatchUp(context.Background(), 10*time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	runWith := func(e *mdEnv, x mdIndex) string {
+		fakeListLog = nil
+		w := metricsfile.New(e.d.MetricsDir(), "test")
+		w.Now = func() time.Time { return mdAt }
+		return collectMemoryDocs(context.Background(), w, x, e.ro, mdAt)
+	}
+	for _, c := range []struct {
+		name string
+		x    mdIndex
+	}{
+		{"catch-up partial", mdIndex{fresh: &index.Freshness{Partial: true}}},
+		{"catch-up failed", mdIndex{catchErr: errors.New("index failure")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			c.x.Index = e.ix
+			before := len(mdKind(e.lines(), "listed"))
+			if got, want := runWith(e, c.x), "memory docs: days not read (index behind), 1 operation(s), 1 unit count(s)"; got != want {
+				t.Errorf("result %q, want %q", got, want)
+			}
+			if q := mdQueries(); len(q) != 0 {
+				t.Errorf("list calls %v, want none", q)
+			}
+			lines := e.lines()
+			if l := mdKind(lines, "memory"); len(l) != 0 {
+				t.Errorf("%d memory line(s) written behind the index", len(l))
+			}
+			if l := mdKind(lines, "listed"); len(l) != before {
+				t.Errorf("%d listed line(s), want the earlier run's %d", len(l), before)
+			}
+			if ops := mdKind(lines, "op"); len(ops) != 1 {
+				t.Errorf("%d op lines, want 1", len(ops))
+			}
+		})
+	}
+	for _, c := range []struct {
+		name string
+		x    mdIndex
+	}{
+		{"sends not read", mdIndex{sentErr: errors.New("index failure")}},
+		{"operations not read", mdIndex{recsErr: errors.New("index failure")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			c.x.Index = e.ix
+			if got, want := runWith(e, c.x), "memory docs: 1 day(s) listed (3 memories), every day listed, operations not read (index)"; got != want {
+				t.Errorf("result %q, want %q", got, want)
+			}
+			if ops := mdKind(e.lines(), "op"); len(ops) != 0 {
+				t.Errorf("%d op lines, want none", len(ops))
+			}
+		})
+	}
+}
+
 // The step's deadline in the middle of a run: the days read whole are
 // written, the day cut writes nothing and is left for the next run.
 func TestMemoryDocsDeadlineKeepsWholeDays(t *testing.T) {
@@ -1067,15 +1173,16 @@ func TestMemoryDocsDeadlineKeepsWholeDays(t *testing.T) {
 	setBank(bankDay("2026-10-27", 3), bankDay("2026-10-28", 4), bankDay("2026-10-29", 600))
 	fakeHook = func(r *http.Request) {
 		if q := r.URL.Query(); q.Get("start_date") == "2026-10-29T00:00:00Z" && q.Get("offset") == "500" {
-			time.Sleep(2500 * time.Millisecond) // past the step's deadline, within the call's 3 s
+			<-r.Context().Done() // held until the client gives up: the step's deadline, before the call's 3 s
 		}
 	}
 	start := time.Now()
 	got := e.run(mdAt)
-	if el := time.Since(start); el > 2300*time.Millisecond {
+	// Three times the deadline, still below the call's own 3 s bound.
+	if el := time.Since(start); el >= 3*time.Second {
 		t.Errorf("step took %v, want about its 1 s deadline", el)
 	}
-	if want := "memory docs: 2 day(s) listed (7 memories), 1 day(s) left for the next run, 0 operation(s), 0 unit count(s)"; got != want {
+	if want := "memory docs: 2 day(s) listed (7 memories), 1 day(s) left for the next run, operations not read (timeout)"; got != want {
 		t.Errorf("result %q, want %q", got, want)
 	}
 	lines := e.lines()

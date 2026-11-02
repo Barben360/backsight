@@ -147,6 +147,38 @@ func TestAppendIsOneWritePerLine(t *testing.T) {
 	}
 }
 
+// An Append opens each month file once, whatever its number of lines, and
+// keeps the lines in their order.
+func TestAppendOpensEachFileOnce(t *testing.T) {
+	w, dir := writerAt(t, time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC))
+	opened := map[string]int{}
+	old := openAppend
+	openAppend = func(path string) (*os.File, error) {
+		opened[filepath.Base(path)]++
+		return old(path)
+	}
+	t.Cleanup(func() { openAppend = old })
+	recs := []Record{DoctorRun{Checks: map[string]string{"a": "ok"}}}
+	for i := range 50 {
+		recs = append(recs, Listed{Day: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format(time.DateOnly), N: int64(i)})
+	}
+	if err := w.Append(recs...); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]int{"doctor-history-2026-10.jsonl": 1, "memory-docs-2026-10.jsonl": 1}; !reflect.DeepEqual(opened, want) {
+		t.Errorf("opens %v, want %v", opened, want)
+	}
+	got := lines(t, filepath.Join(dir, "memory-docs-2026-10.jsonl"))
+	if len(got) != 50 {
+		t.Fatalf("%d lines, want 50", len(got))
+	}
+	for i, l := range got {
+		if l["n"] != float64(i) {
+			t.Fatalf("line %d: n %v, want the records' order", i, l["n"])
+		}
+	}
+}
+
 func TestNilAndAbsentAreOmitted(t *testing.T) {
 	w, dir := writerAt(t, time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC))
 	zero := int64(0)

@@ -78,27 +78,44 @@ func (w *Writer) Append(recs ...Record) error {
 	if err := fsutil.MkdirPrivate(w.Dir); err != nil {
 		return err
 	}
+	// One open per file, the lines in their order, each its own write.
+	var paths []string
+	byPath := map[string][][]byte{}
 	for _, l := range lines {
-		if err := appendLine(l.path, l.line); err != nil {
+		if _, seen := byPath[l.path]; !seen {
+			paths = append(paths, l.path)
+		}
+		byPath[l.path] = append(byPath[l.path], l.line)
+	}
+	for _, p := range paths {
+		if err := appendLines(p, byPath[p]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// appendLine is one O_APPEND write of the whole line.
-func appendLine(path string, line []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+// openAppend opens a month file for appending (a var for the tests).
+var openAppend = func(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+}
+
+// appendLines opens path once and writes each line with one O_APPEND
+// write of the whole line.
+func appendLines(path string, lines [][]byte) error {
+	f, err := openAppend(path)
 	if err != nil {
 		return err
 	}
-	n, werr := f.Write(line)
-	cerr := f.Close()
-	if werr != nil {
-		return werr
+	for _, line := range lines {
+		n, werr := f.Write(line)
+		if werr == nil && n != len(line) {
+			werr = fmt.Errorf("metricsfile: short write")
+		}
+		if werr != nil {
+			_ = f.Close()
+			return werr
+		}
 	}
-	if n != len(line) {
-		return fmt.Errorf("metricsfile: short write")
-	}
-	return cerr
+	return f.Close()
 }
