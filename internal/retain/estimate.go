@@ -77,13 +77,17 @@ type Estimate struct {
 	Duration     time.Duration `json:"duration_ns"`
 }
 
+// EstimatedFacts is the number of facts extraction is expected to keep
+// from chars characters of content: one per 600 (decision 0051).
+func EstimatedFacts(chars int64) int64 { return chars / 600 }
+
 // EstimateSession estimates one session of chars characters.
 func EstimateSession(chars int64, p Prices) Estimate {
 	chunks := int64(math.Ceil(float64(chars) / 30000))
 	if chunks == 0 {
 		chunks = 1
 	}
-	facts := chars / 600
+	facts := EstimatedFacts(chars)
 	in := chunks*3300 + int64(float64(chars)/3.5) + facts*1600
 	out := in * 15 / 100
 	e := Estimate{Chars: chars, InputTokens: in, OutputTokens: out}
