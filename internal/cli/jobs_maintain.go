@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +53,9 @@ type maintainResult struct {
 	// DoctorHistory: "<n> check(s)" kept in the day's history line, or
 	// "not written (<class>)".
 	DoctorHistory string `json:"doctor_history,omitempty"`
-	MS            int    `json:"ms"`
+	// ServerDaily: the server-daily step's line (collectServerDaily).
+	ServerDaily string `json:"server_daily,omitempty"`
+	MS          int    `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -143,6 +144,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				_ = fsutil.WriteAtomic(filepath.Join(d.State, "doctor-snapshot.json"), raw, 0o600)
 			}
 			res.DoctorHistory = maintainDoctorHistory(d, rep, now)
+			res.ServerDaily = maintainServerDaily(cmd.Context(), d, now)
 			maintainConfig(tw, now)
 			return finish()
 		},
@@ -160,14 +162,7 @@ func maintainDoctorHistory(d paths.Dirs, rep doctor.Report, clock func() time.Ti
 	w := metricsfile.New(d.MetricsDir(), buildinfo.Version)
 	w.Now = clock
 	if err := w.Append(metricsfile.DoctorRun{Checks: checks}); err != nil {
-		class := "io"
-		switch {
-		case errors.Is(err, fs.ErrPermission):
-			class = "permission"
-		case !errors.As(err, new(*fs.PathError)) && !errors.As(err, new(*os.SyscallError)):
-			class = "refused"
-		}
-		return "not written (" + class + ")"
+		return "not written (" + writeClass(err) + ")"
 	}
 	return fmt.Sprintf("%d check(s)", len(checks))
 }
@@ -316,6 +311,9 @@ func maintainText(r maintainResult) string {
 		history = ", doctor history: " + r.DoctorHistory
 	case r.DoctorHistory != "":
 		history = ", doctor history " + r.DoctorHistory
+	}
+	if r.ServerDaily != "" {
+		history += ", " + r.ServerDaily
 	}
 	return fmt.Sprintf("%s: %d telemetry file(s) rotated%s, backup %s, re-attribution %s%s, update %s, doctor %s%s (%d ms)\n", r.Status, len(r.Rotated), metrics,
 		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, history, r.MS)

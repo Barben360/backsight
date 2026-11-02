@@ -718,7 +718,11 @@ func fakeHindsight(t *testing.T) (port int) {
 				old := time.Now().UTC().AddDate(0, 0, -10).Format("2006-01-02")
 				buckets += `,{"time":"` + old + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmOldInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}`
 			}
-			_, _ = w.Write([]byte(`{"buckets":[` + buckets + `]}`))
+			trunc := "" // a 1d answer is hourly on the server: left unnamed as before
+			if llmPeriod != "1d" {
+				trunc = `"trunc":"day",`
+			}
+			_, _ = w.Write([]byte(`{` + trunc + `"buckets":[` + buckets + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats/memories-timeseries"):
 			if fakeSeriesDown {
 				w.WriteHeader(http.StatusInternalServerError)

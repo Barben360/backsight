@@ -371,6 +371,14 @@ func runDoctor(ctx context.Context, doctor func(context.Context) ([]DoctorCheck,
 	}
 }
 
+// ServerErrorClass is the closed enum of a failed server read, as the
+// views' server section names it: not_configured, timeout, unreachable,
+// unauthorized, not_found, bad_response or server_error ("" for nil).
+func ServerErrorClass(err error) string {
+	enum, _ := serverError(err)
+	return enum
+}
+
 // serverError classifies a failed server read: the enum of the view's
 // server section and the no_data reason of its metrics. nil is "".
 func serverError(err error) (enum string, reason string) {
