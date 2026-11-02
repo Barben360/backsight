@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +101,7 @@ func TestReadOnlyExposesOnlyReads(t *testing.T) {
 		got = append(got, typ.Method(i).Name)
 	}
 	sort.Strings(got)
-	want := []string{"BankStats", "LLMStats", "MemoriesTimeseries", "Memory", "OperationsPage", "ProjectTags", "Version"}
+	want := []string{"BankStats", "DocumentUnits", "LLMStats", "MemoriesTimeseries", "Memory", "MemoryOrigin", "OperationsPage", "ProjectTags", "RetainOperations", "Version"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("methods = %v, want %v", got, want)
 	}
@@ -303,5 +306,270 @@ func TestReadOnlyCallsTimeOut(t *testing.T) {
 	}
 	if v, err := ro.Version(context.Background()); err != nil || v.APIVersion != "1.1.0" {
 		t.Fatalf("fast call: %+v, %v", v, err)
+	}
+}
+
+// bodyServer answers each path with its body (404 when absent) and records
+// every request as "METHOD path?query".
+func bodyServer(t *testing.T, bodies map[string]string) (*ReadOnly, func() []string) {
+	t.Helper()
+	var (
+		mu  sync.Mutex
+		got []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.Query().Encode())
+		mu.Unlock()
+		body, ok := bodies[r.URL.EscapedPath()]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	ro, err := NewReadOnly(srv.URL, "k", "b", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ro, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(got)
+	}
+}
+
+func TestMemoryOriginDecodesNoText(t *testing.T) {
+	const bp = "/v1/default/banks/b/memories/"
+	ro, _ := bodyServer(t, map[string]string{
+		bp + "m1": `{"id":"m1","text":"CANARY-TXT one","type":"world","document_id":"conversation:s1@p#2",
+			"created_at":"2026-10-30T09:12:00.123456+00:00","mentioned_at":"2026-01-02T03:04:05Z",
+			"source_memories":[{"id":"m0","text":"CANARY-TXT source","type":"experience"}],
+			"history":[{"changed_at":"2026-10-30T10:00:00Z","old_text":"CANARY-TXT old"}],
+			"tags":["project:CANARY-TAG"]}`,
+		bp + "m2": `{"id":"m2","text":"CANARY-TXT two","type":"observation","document_id":"note:x","mentioned_at":"2026-01-02T03:04:05Z"}`,
+		bp + "m3": `{"id":"m3","type":"experience","created_at":"2026-10-30T09:12:00"}`,
+	})
+	ctx := context.Background()
+	got, err := ro.MemoryOrigin(ctx, "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MemoryOrigin{ID: "m1", DocumentID: "conversation:s1@p#2", FactType: "world", CreatedAt: time.Date(2026, 10, 30, 9, 12, 0, 123456000, time.UTC)}
+	if got != want {
+		t.Fatalf("origin = %+v, want %+v", got, want)
+	}
+	if s := fmt.Sprintf("%+v", got); strings.Contains(s, "CANARY") {
+		t.Fatalf("decoded origin holds server text: %s", s)
+	}
+	// no created_at: zero, never mentioned_at
+	got, err = ro.MemoryOrigin(ctx, "m2")
+	if err != nil || got.ID != "m2" || got.FactType != "observation" || got.DocumentID != "note:x" || !got.CreatedAt.IsZero() {
+		t.Fatalf("origin without created_at = %+v, %v; want a zero CreatedAt", got, err)
+	}
+	if s := fmt.Sprintf("%+v", got); strings.Contains(s, "CANARY") {
+		t.Fatalf("decoded origin holds server text: %s", s)
+	}
+	// zone-less is UTC
+	got, err = ro.MemoryOrigin(ctx, "m3")
+	if err != nil || !got.CreatedAt.Equal(time.Date(2026, 10, 30, 9, 12, 0, 0, time.UTC)) || got.DocumentID != "" {
+		t.Fatalf("zone-less origin = %+v, %v", got, err)
+	}
+	_, err = ro.MemoryOrigin(ctx, "gone")
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Kind != NotFound {
+		t.Fatalf("missing memory: err = %v, want *APIError NotFound", err)
+	}
+}
+
+func TestDocumentUnitsNeverDecodesOriginalText(t *testing.T) {
+	const bp = "/v1/default/banks/b/documents/"
+	ro, seen := bodyServer(t, map[string]string{
+		bp + "conversation%3As1":       `{"id":"conversation:s1","original_text":"CANARY","memory_unit_count":4,"tags":["project:p"]}`,
+		bp + "conversation%3As2@p%232": `{"id":"conversation:s2@p#2","original_text":"CANARY","memory_unit_count":0}`,
+		bp + "conversation%3As3":       `{"id":"conversation:s3","original_text":"CANARY"}`,
+		bp + "conversation%3As4":       `{"id":"conversation:s4","memory_unit_count":null}`,
+	})
+	ctx := context.Background()
+	if n, ok, err := ro.DocumentUnits(ctx, "conversation:s1"); err != nil || n != 4 || !ok {
+		t.Fatalf("units = %d, %v, %v; want 4, true", n, ok, err)
+	}
+	if n, ok, err := ro.DocumentUnits(ctx, "conversation:s2@p#2"); err != nil || n != 0 || !ok {
+		t.Fatalf("zero units = %d, %v, %v; want 0, true (a count of 0 is known)", n, ok, err)
+	}
+	for _, id := range []string{"conversation:s3", "conversation:s4"} {
+		if n, ok, err := ro.DocumentUnits(ctx, id); err != nil || n != 0 || ok {
+			t.Fatalf("%s: units = %d, %v, %v; want 0, false", id, n, ok, err)
+		}
+	}
+	_, ok, err := ro.DocumentUnits(ctx, "conversation:gone")
+	var ae *APIError
+	if ok || !errors.As(err, &ae) || ae.Kind != NotFound {
+		t.Fatalf("missing document: ok %v, err = %v; want *APIError NotFound", ok, err)
+	}
+	if got := seen(); !slices.Contains(got, "GET "+bp+"conversation%3As2@p%232?") {
+		t.Fatalf("requests = %q, want the id escaped (the colon and #: a raw # would end the path)", got)
+	}
+}
+
+// opsBody is one operations page of n operations from first, every third
+// a consolidation.
+func opsBody(first, n, total int) string {
+	var ops []string
+	for i := first; i < first+n; i++ {
+		typ := "retain"
+		if i%3 == 2 {
+			typ = "consolidation"
+		}
+		ops = append(ops, fmt.Sprintf(`{"id":"op%d","operation_type":%q,"status":"completed","document_id":"conversation:s%d","error_message":"CANARY"}`, i, typ, i))
+	}
+	return fmt.Sprintf(`{"total":%d,"operations":[%s]}`, total, strings.Join(ops, ","))
+}
+
+func TestRetainOperationsPagesAndFilters(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		got []string
+	)
+	const total = 250 // three pages: 100, 100, 50
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.Path+"?"+r.URL.Query().Encode())
+		mu.Unlock()
+		off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		_, _ = w.Write([]byte(opsBody(off, max(0, min(100, total-off)), total)))
+	}))
+	defer srv.Close()
+	ro, err := NewReadOnly(srv.URL, "k", "b", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs := func() []string { mu.Lock(); defer mu.Unlock(); r := slices.Clone(got); got = nil; return r }
+	const q = "GET /v1/default/banks/b/operations?limit=100&offset=%d&status=completed&type=retain"
+
+	ops, err := ro.RetainOperations(context.Background(), "completed", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{fmt.Sprintf(q, 0), fmt.Sprintf(q, 100), fmt.Sprintf(q, 200)}
+	if r := reqs(); !reflect.DeepEqual(r, want) {
+		t.Fatalf("requests = %q, want %q (stops at the short page)", r, want)
+	}
+	retains := 0
+	for i := range total {
+		if i%3 != 2 {
+			retains++
+		}
+	}
+	if len(ops) != retains {
+		t.Fatalf("got %d operations, want the %d retains", len(ops), retains)
+	}
+	for _, o := range ops {
+		if o.Type != "retain" {
+			t.Fatalf("non-retain operation kept: %+v", o)
+		}
+	}
+	if ops[0].ID != "op0" || ops[1].ID != "op1" || ops[2].ID != "op3" || ops[len(ops)-1].ID != "op249" {
+		t.Errorf("order or ids: first %s %s %s, last %s", ops[0].ID, ops[1].ID, ops[2].ID, ops[len(ops)-1].ID)
+	}
+
+	ops, err = ro.RetainOperations(context.Background(), "completed", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := reqs(); !reflect.DeepEqual(r, want[:2]) {
+		t.Fatalf("pages 2: requests = %q, want %q", r, want[:2])
+	}
+	if len(ops) != 134 || ops[len(ops)-1].ID != "op199" {
+		t.Fatalf("pages 2: %d operations, last %s; want 134, op199", len(ops), ops[len(ops)-1].ID)
+	}
+
+	if ops, err := ro.RetainOperations(context.Background(), "completed", 0); err != nil || len(ops) != 0 || len(reqs()) != 0 {
+		t.Fatalf("pages 0: %d ops, %v; want no request", len(ops), err)
+	}
+}
+
+func TestRetainOperationsStopsAtTotalAndOnErrors(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		n     int
+		total = 100 // a full page that is the whole list
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		k, tot := n, total
+		mu.Unlock()
+		if k > 1 && tot > 100 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(opsBody(0, 100, tot)))
+	}))
+	defer srv.Close()
+	ro, _ := NewReadOnly(srv.URL, "k", "b", 5*time.Second)
+	requests := func() int { mu.Lock(); defer mu.Unlock(); return n }
+	ops, err := ro.RetainOperations(context.Background(), "completed", 5)
+	if err != nil || len(ops) != 67 || requests() != 1 {
+		t.Fatalf("total reached: %d ops, %d requests, %v; want 67 ops after 1 request", len(ops), requests(), err)
+	}
+	mu.Lock()
+	n, total = 0, 1000
+	mu.Unlock()
+	_, err = ro.RetainOperations(context.Background(), "completed", 5)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Kind != ServerError || requests() != 2 {
+		t.Fatalf("second page fails: err = %v after %d requests; want a ServerError after 2", err, requests())
+	}
+}
+
+// recordingRT answers every request with a body by path and records the
+// methods it was given.
+type recordingRT struct {
+	mu      sync.Mutex
+	methods []string
+	bodies  map[string]string
+}
+
+func (r *recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	r.methods = append(r.methods, req.Method)
+	r.mu.Unlock()
+	body := r.bodies[req.URL.EscapedPath()]
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+}
+
+func TestNewReadsAreGETOnly(t *testing.T) {
+	ro, err := NewReadOnly("http://server.invalid", "k", "b", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, ok := ro.c.http.Transport.(getOnly)
+	if !ok {
+		t.Fatalf("transport = %T, want getOnly", ro.c.http.Transport)
+	}
+	const bp = "/v1/default/banks/b"
+	rec := &recordingRT{bodies: map[string]string{
+		bp + "/memories/m1":                 `{"id":"m1","type":"world"}`,
+		bp + "/documents/conversation%3As1": `{"memory_unit_count":2}`,
+		bp + "/operations":                  opsBody(0, 3, 3),
+	}}
+	g.next = rec
+	ro.c.http.Transport = g
+	ctx := context.Background()
+	if o, err := ro.MemoryOrigin(ctx, "m1"); err != nil || o.ID != "m1" {
+		t.Fatalf("MemoryOrigin: %+v, %v", o, err)
+	}
+	if n, ok, err := ro.DocumentUnits(ctx, "conversation:s1"); err != nil || !ok || n != 2 {
+		t.Fatalf("DocumentUnits: %d, %v, %v", n, ok, err)
+	}
+	if ops, err := ro.RetainOperations(ctx, "completed", 3); err != nil || len(ops) != 2 {
+		t.Fatalf("RetainOperations: %d, %v", len(ops), err)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if !reflect.DeepEqual(rec.methods, []string{"GET", "GET", "GET"}) {
+		t.Fatalf("methods = %v, want three GETs", rec.methods)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -163,4 +164,71 @@ func (r *ReadOnly) OperationsPage(ctx context.Context, status, typ string, limit
 		return OperationPage{}, err
 	}
 	return OperationPage{Total: raw.Total, Operations: raw.Operations}, nil
+}
+
+// MemoryOrigin is where a memory came from: ids, its fact type and when the
+// server created it. It holds no text: the memory's, its sources' and its
+// history's are never decoded.
+type MemoryOrigin struct {
+	ID, DocumentID, FactType string
+	// CreatedAt is the server's created_at only, zero when absent: never
+	// mentioned_at, an event time.
+	CreatedAt time.Time
+}
+
+// MemoryOrigin reads one memory's origin; an *APIError of kind NotFound
+// when the memory is gone.
+func (r *ReadOnly) MemoryOrigin(ctx context.Context, id string) (MemoryOrigin, error) {
+	var raw struct {
+		ID         string `json:"id"`
+		DocumentID string `json:"document_id"`
+		Type       string `json:"type"`
+		CreatedAt  string `json:"created_at"`
+	}
+	if err := r.c.get(ctx, bankPath(r.bank, "/memories/"+url.PathEscape(id)), nil, &raw); err != nil {
+		return MemoryOrigin{}, err
+	}
+	return MemoryOrigin{ID: raw.ID, DocumentID: raw.DocumentID, FactType: raw.Type, CreatedAt: serverTime(raw.CreatedAt)}, nil
+}
+
+// DocumentUnits reads how many memories a document made; ok is false when
+// the server gives no memory_unit_count. Only that count is decoded, never
+// the document's text. An *APIError of kind NotFound when absent.
+func (r *ReadOnly) DocumentUnits(ctx context.Context, id string) (units int, ok bool, err error) {
+	var raw struct {
+		Units *int `json:"memory_unit_count"`
+	}
+	path := bankPath(r.bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A"))
+	if err := r.c.get(ctx, path, nil, &raw); err != nil {
+		return 0, false, err
+	}
+	if raw.Units == nil {
+		return 0, false, nil
+	}
+	return *raw.Units, true, nil
+}
+
+// opsPage is the page size of RetainOperations.
+const opsPage = 100
+
+// RetainOperations lists the retain operations with status ("" = any), most
+// recent first, reading at most pages pages of opsPage. Operations of any
+// other type are dropped even when the server's type filter lets them by.
+func (r *ReadOnly) RetainOperations(ctx context.Context, status string, pages int) ([]Operation, error) {
+	var out []Operation
+	for p := range pages {
+		page, err := r.OperationsPage(ctx, status, "retain", opsPage, p*opsPage)
+		if err != nil {
+			return out, err
+		}
+		for _, o := range page.Operations {
+			if o.Type == "retain" {
+				out = append(out, o)
+			}
+		}
+		if len(page.Operations) < opsPage || (p+1)*opsPage >= page.Total {
+			break
+		}
+	}
+	return out, nil
 }
