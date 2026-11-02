@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 // canaries are texts every source carries where the index must never copy
@@ -36,7 +37,23 @@ var canaries = []string{
 	"CANARY-LISTED-TEXT", "CANARY-LISTED-CONTEXT", "CANARY-LISTED-TAG", "CANARY-LISTED-ENTITY",
 	"CANARY-LISTED-META", "CANARY-LISTED-CHUNK", "CANARY-DOC-TEXT", "CANARY-DIR", "CANARY-FILE",
 	"CANARY-OPERROR", "CANARY-SCAN-TEXT", "CANARY-DOCTOR", "CANARY-CFG-",
+	// briefing pages: their text and their ids; a note document's id
+	"CANARY-BRIEF-TEXT", "CANARY-BRIEF-CLEAN", briefFlagged, briefClean, noteDocument, noteDocumentID,
 }
+
+// The briefing pages the server holds (one the scan flags, one it does not)
+// and the note document of the day lists: ids that must reach no file
+// backsight keeps, however they are written.
+var (
+	briefFlagged   = retain.BriefingModelID("brief-ctl-3d")
+	briefClean     = retain.BriefingModelID("brief-ctl-5a")
+	noteDocumentID = "4f2a9c61d0b7e358"
+	noteDocument   = "note:" + noteDocumentID
+)
+
+// configCanary is the prefix of the config's canary strings: in
+// config.toml alone.
+const configCanary = "CANARY-CFG-"
 
 // serverCanaries are the canaries only the server holds (and the config's
 // strings, which are in config.toml alone): nothing backsight writes
@@ -44,7 +61,7 @@ var canaries = []string{
 var serverCanaries = []string{
 	"CANARY-LISTED-TEXT", "CANARY-LISTED-CONTEXT", "CANARY-LISTED-TAG", "CANARY-LISTED-ENTITY",
 	"CANARY-LISTED-META", "CANARY-LISTED-CHUNK", "CANARY-DOC-TEXT", "CANARY-DIR", "CANARY-FILE",
-	"CANARY-OPERROR", "CANARY-SCAN-TEXT",
+	"CANARY-OPERROR", "CANARY-SCAN-TEXT", "CANARY-BRIEF-TEXT", "CANARY-BRIEF-CLEAN", briefFlagged, briefClean, noteDocument, noteDocumentID,
 }
 
 func canaryFiles(t *testing.T, home string) []string {
@@ -256,7 +273,8 @@ const (
 )
 
 // fixtureIDs are every memory id of the fixture.
-var fixtureIDs = []string{ctlMemory, "mem-allowed-2", "mem-allowed-3", ctlScanned}
+// (and the ids of the listed memories and of the briefing pages, by prefix).
+var fixtureIDs = []string{ctlMemory, "mem-allowed-2", "mem-allowed-3", ctlScanned, ctlListed, "mem-import-ctl", "mem-note-ctl", "mem-obs-ctl", briefFlagged, briefClean}
 
 // canaryConfig writes config.toml: the fake server's address, backups and
 // the update source local, and a canary in every string setting that takes
@@ -284,6 +302,8 @@ func canaryConfig(t *testing.T, home string, port int) int {
 				continue // the server this test talks to
 			case "LLM.Currency":
 				continue // the cost views show it by design: the unit of the amounts
+			case "Update.Source":
+				continue // a failed update check names its source in state.json and the usage log, as it always has
 			}
 			var old reflect.Value
 			switch f.Kind() {
@@ -298,6 +318,10 @@ func canaryConfig(t *testing.T, home string, port int) int {
 				f.Set(reflect.Append(f, reflect.ValueOf(name)))
 			default:
 				continue
+			}
+			if err := cfg.Validate(); err != nil && f.Kind() == reflect.String {
+				// a path setting wants an absolute path: the canary under the home
+				f.SetString(filepath.Join(home, name))
 			}
 			if err := cfg.Validate(); err != nil {
 				f.Set(old)
@@ -342,7 +366,7 @@ func canaryServer(t *testing.T, home string) {
 		fakeCreated = append(fakeCreated,
 			fakeMem{ID: ctlListed + suffix, FactType: "world", Document: "conversation:" + ctlSessionA, Created: at},
 			fakeMem{ID: "mem-import-ctl" + suffix, FactType: "world", Document: "import:CANARY-DIR/CANARY-FILE.md", Created: at.Add(time.Minute)},
-			fakeMem{ID: "mem-note-ctl" + suffix, FactType: "experience", Document: "note:4f2a9c", Created: at.Add(2 * time.Minute)},
+			fakeMem{ID: "mem-note-ctl" + suffix, FactType: "experience", Document: noteDocument, Created: at.Add(2 * time.Minute)},
 			fakeMem{ID: "mem-obs-ctl" + suffix, FactType: "observation", Created: at.Add(3 * time.Minute)})
 	}
 	projectEntities[ctlProject] = "[]"
@@ -357,6 +381,11 @@ func canaryServer(t *testing.T, home string) {
 	// a memory whose text is a secret's shape: assembled, not a literal
 	// secret for gitleaks
 	listAnswer["world"] = `[{"id":"` + ctlScanned + `","text":"CANARY-SCAN-TEXT PGPASSWORD=Zz9y` + `X8wV7u","fact_type":"world","tags":["project:` + ctlProject + `"]}]`
+
+	// briefing pages: one quotes a secret's shape (the scan flags it), one
+	// does not; both carry canary text
+	mentalModels[briefFlagged] = `{"id":"` + briefFlagged + `","content":"CANARY-BRIEF-TEXT PGPASSWORD=Zz9y` + `X8wV7u","tags":["project:brief-ctl-3d"]}`
+	mentalModels[briefClean] = `{"id":"` + briefClean + `","content":"CANARY-BRIEF-CLEAN","tags":["project:brief-ctl-5a"]}`
 
 	// this PC sent the three sessions' documents an hour ago
 	d := pathsOf(home)
@@ -404,7 +433,7 @@ func canaryCollect(t *testing.T, home string) {
 		!strings.Contains(env.Data.MemoryDocs, "day(s) listed") || !strings.Contains(env.Data.MemoryDocs, "3 operation(s)") {
 		t.Fatalf("the collection did not run: %+v", env.Data)
 	}
-	if code, out, errOut := run(t, "memory", "scan"); code != output.OK || !strings.Contains(out, ctlScanned) {
+	if code, out, errOut := run(t, "memory", "scan"); code != output.OK || !strings.Contains(out, ctlScanned) || !strings.Contains(out, briefFlagged+" (briefing page") || strings.Contains(out, briefClean) {
 		t.Fatalf("memory scan: exit %d\n%s%s", code, out, errOut)
 	}
 	if got := tickIndex(context.Background(), d, home); !strings.HasPrefix(got, "caught up") {
@@ -471,7 +500,8 @@ func noCanaryInMetrics(t *testing.T, home string) {
 
 // noServerTextOnDisk fails when a canary only the server holds (or the
 // import document's path) is in any file under the install's home: what
-// backsight keeps never copies it. config.toml holds the config canaries.
+// backsight keeps never copies it. The config's canaries are in config.toml
+// alone: any other file holding one copied a setting's text.
 func noServerTextOnDisk(t *testing.T, step, home string) {
 	t.Helper()
 	files := 0
@@ -483,8 +513,11 @@ func noServerTextOnDisk(t *testing.T, step, home string) {
 		if err != nil {
 			return err
 		}
+		if p == pathsOf(home).ConfigFile() {
+			return nil
+		}
 		files++
-		for _, c := range serverCanaries {
+		for _, c := range append([]string{configCanary}, serverCanaries...) {
 			if strings.Contains(string(b), c) {
 				t.Errorf("%s: %q in %s", step, c, strings.TrimPrefix(p, home))
 			}

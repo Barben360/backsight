@@ -197,8 +197,12 @@ func TestCollectOnACopyHarness(t *testing.T) {
 	copyTree(t, live.State, filepath.Join(root, "state"))
 	copyTree(t, live.Config, filepath.Join(root, "config"))
 	before := treeOf(t, filepath.Dir(live.State))
+	copiedConfig := readFile(t, filepath.Join(root, "config", "config.toml"))
 
 	lines, rows := collectOnACopy(t, root)
+	if got := readFile(t, filepath.Join(root, "config", "config.toml")); got != copiedConfig {
+		t.Error("the copy's config.toml changed")
+	}
 	t.Log(strings.Join(lines, "\n"))
 	for _, table := range []string{"server_snapshots", "doctor_runs", "memory_docs", "memory_days", "doc_ops", "memory_doc", "memory_day"} {
 		if rows[table] == 0 {
