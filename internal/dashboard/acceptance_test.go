@@ -265,7 +265,7 @@ var mustShow = map[string][]string{
 		"w-context-per_session", "w-recall-latency", "w-pipeline-flow"},
 	"quality":  {"w-used-turn_rate", "w-outcomes", "w-reported", "w-recall-hit_rate", "w-recall-empty_reasons", "w-search-rate"},
 	"cost":     {"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens"},
-	"bank":     {"w-bank-size", "w-bank-growth", "w-bank-by_project", "w-bank-consolidation", "w-notes-stored", "w-bank-churn", "w-review"},
+	"bank":     {"w-bank-size", "w-bank-growth", "w-bank-by_project", "w-bank-consolidation", "w-notes-stored", "w-bank-churn", "w-imports-sent", "w-review"},
 	"pipeline": {"w-pipeline-flow", "w-local-backlog", "w-server-queue", "w-server-extraction_delay", "w-hooks-failures", "w-jobs-last_run"},
 	"system":   {"w-server-reach", "w-this-pc", "w-attention", "w-doctor-check"},
 	"releases": {"w-releases"}, "defs": {"w-defs"},
