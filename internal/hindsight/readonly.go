@@ -166,29 +166,35 @@ func (r *ReadOnly) OperationsPage(ctx context.Context, status, typ string, limit
 	return OperationPage{Total: raw.Total, Operations: raw.Operations}, nil
 }
 
-// MemoryOrigin is where a memory came from: ids, its fact type and when the
-// server created it. It holds no text: the memory's, its sources' and its
-// history's are never decoded.
-type MemoryOrigin struct {
-	ID, DocumentID, FactType string
-	// CreatedAt is the server's created_at only, zero when absent: never
-	// mentioned_at, an event time.
-	CreatedAt time.Time
+// ListedMemory is one item of a memory listing: its id, fact type and
+// document ("" when it has none, as observations). Nothing else of the
+// item is decoded: no text, context, entities, metadata or tags.
+type ListedMemory struct {
+	ID         string `json:"id"`
+	FactType   string `json:"fact_type"`
+	DocumentID string `json:"document_id"`
 }
 
-// MemoryOrigin reads one memory's origin; an *APIError of kind NotFound
-// when the memory is gone.
-func (r *ReadOnly) MemoryOrigin(ctx context.Context, id string) (MemoryOrigin, error) {
+// ListCreatedMemories reads one page of the memories the server created in
+// [start, end), limit items from offset, and how many the window holds. A
+// zero start or end leaves that bound out. One request per call: the
+// caller pages.
+func (r *ReadOnly) ListCreatedMemories(ctx context.Context, start, end time.Time, offset, limit int) (items []ListedMemory, total int, err error) {
+	q := url.Values{"time_field": {"created_at"}, "limit": {strconv.Itoa(limit)}, "offset": {strconv.Itoa(offset)}}
+	if !start.IsZero() {
+		q.Set("start_date", start.UTC().Format(time.RFC3339))
+	}
+	if !end.IsZero() {
+		q.Set("end_date", end.UTC().Format(time.RFC3339))
+	}
 	var raw struct {
-		ID         string `json:"id"`
-		DocumentID string `json:"document_id"`
-		Type       string `json:"type"`
-		CreatedAt  string `json:"created_at"`
+		Total int            `json:"total"`
+		Items []ListedMemory `json:"items"`
 	}
-	if err := r.c.get(ctx, bankPath(r.bank, "/memories/"+url.PathEscape(id)), nil, &raw); err != nil {
-		return MemoryOrigin{}, err
+	if err := r.c.get(ctx, bankPath(r.bank, "/memories/list"), q, &raw); err != nil {
+		return nil, 0, err
 	}
-	return MemoryOrigin{ID: raw.ID, DocumentID: raw.DocumentID, FactType: raw.Type, CreatedAt: serverTime(raw.CreatedAt)}, nil
+	return raw.Items, raw.Total, nil
 }
 
 // DocumentUnits reads how many memories a document made; ok is false when

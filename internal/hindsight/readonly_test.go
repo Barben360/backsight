@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -101,7 +102,7 @@ func TestReadOnlyExposesOnlyReads(t *testing.T) {
 		got = append(got, typ.Method(i).Name)
 	}
 	sort.Strings(got)
-	want := []string{"BankStats", "DocumentUnits", "LLMStats", "MemoriesTimeseries", "Memory", "MemoryOrigin", "OperationsPage", "ProjectTags", "RetainOperations", "Version"}
+	want := []string{"BankStats", "DocumentUnits", "LLMStats", "ListCreatedMemories", "MemoriesTimeseries", "Memory", "OperationsPage", "ProjectTags", "RetainOperations", "Version"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("methods = %v, want %v", got, want)
 	}
@@ -340,46 +341,92 @@ func bodyServer(t *testing.T, bodies map[string]string) (*ReadOnly, func() []str
 	}
 }
 
-func TestMemoryOriginDecodesNoText(t *testing.T) {
-	const bp = "/v1/default/banks/b/memories/"
+func TestListCreatedMemoriesDecodesNoText(t *testing.T) {
 	ro, _ := bodyServer(t, map[string]string{
-		bp + "m1": `{"id":"m1","text":"CANARY-TXT one","type":"world","document_id":"conversation:s1@p#2",
-			"created_at":"2026-10-30T09:12:00.123456+00:00","mentioned_at":"2026-01-02T03:04:05Z",
-			"source_memories":[{"id":"m0","text":"CANARY-TXT source","type":"experience"}],
-			"history":[{"changed_at":"2026-10-30T10:00:00Z","old_text":"CANARY-TXT old"}],
-			"tags":["project:CANARY-TAG"]}`,
-		bp + "m2": `{"id":"m2","text":"CANARY-TXT two","type":"observation","document_id":"note:x","mentioned_at":"2026-01-02T03:04:05Z"}`,
-		bp + "m3": `{"id":"m3","type":"experience","created_at":"2026-10-30T09:12:00"}`,
+		"/v1/default/banks/b/memories/list": `{"total":2717,"limit":2,"offset":0,"items":[
+			{"id":"m1","fact_type":"world","document_id":"conversation:s1@p#2","text":"CANARY text","context":"CANARY context",
+			 "entities":["CANARY entity"],"metadata":{"kind":"CANARY","machine_id":"CANARY","session":"CANARY","source":"CANARY"},
+			 "tags":["project:CANARY"],"chunk_id":"CANARY-chunk","mentioned_at":"2026-01-02T03:04:05Z","state":"active"},
+			{"id":"m2","fact_type":"observation","text":"CANARY obs","context":"CANARY","entities":[],"tags":["CANARY"],
+			 "source_memory_ids":["m1"],"occurred_start":"2026-01-02T03:04:05Z"}]}`,
 	})
-	ctx := context.Background()
-	got, err := ro.MemoryOrigin(ctx, "m1")
+	items, total, err := ro.ListCreatedMemories(context.Background(), time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC), 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := MemoryOrigin{ID: "m1", DocumentID: "conversation:s1@p#2", FactType: "world", CreatedAt: time.Date(2026, 10, 30, 9, 12, 0, 123456000, time.UTC)}
-	if got != want {
-		t.Fatalf("origin = %+v, want %+v", got, want)
+	want := []ListedMemory{{ID: "m1", FactType: "world", DocumentID: "conversation:s1@p#2"}, {ID: "m2", FactType: "observation"}}
+	if total != 2717 || !reflect.DeepEqual(items, want) {
+		t.Fatalf("items = %+v, total %d; want %+v, 2717", items, total, want)
 	}
-	if s := fmt.Sprintf("%+v", got); strings.Contains(s, "CANARY") {
-		t.Fatalf("decoded origin holds server text: %s", s)
+	if s := fmt.Sprintf("%+v", items); strings.Contains(s, "CANARY") {
+		t.Fatalf("decoded items hold server text: %s", s)
 	}
-	// no created_at: zero, never mentioned_at
-	got, err = ro.MemoryOrigin(ctx, "m2")
-	if err != nil || got.ID != "m2" || got.FactType != "observation" || got.DocumentID != "note:x" || !got.CreatedAt.IsZero() {
-		t.Fatalf("origin without created_at = %+v, %v; want a zero CreatedAt", got, err)
+}
+
+func TestListCreatedMemoriesPagesAndQuery(t *testing.T) {
+	const all = 700
+	var (
+		mu  sync.Mutex
+		got []url.Values
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		mu.Lock()
+		got = append(got, q)
+		mu.Unlock()
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/default/banks/b/memories/list" {
+			http.NotFound(w, r)
+			return
+		}
+		off, _ := strconv.Atoi(q.Get("offset"))
+		lim, _ := strconv.Atoi(q.Get("limit"))
+		var items []string
+		for i := off; i < min(all, off+lim); i++ {
+			items = append(items, fmt.Sprintf(`{"id":"m%d","fact_type":"world","document_id":"note:%d","text":"CANARY"}`, i, i))
+		}
+		_, _ = fmt.Fprintf(w, `{"total":%d,"limit":%d,"offset":%d,"items":[%s]}`, all, lim, off, strings.Join(items, ","))
+	}))
+	defer srv.Close()
+	ro, err := NewReadOnly(srv.URL, "k", "b", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if s := fmt.Sprintf("%+v", got); strings.Contains(s, "CANARY") {
-		t.Fatalf("decoded origin holds server text: %s", s)
+	reqs := func() []url.Values { mu.Lock(); defer mu.Unlock(); r := got; got = nil; return r }
+	ctx := context.Background()
+	// a start in another zone is sent in UTC
+	start := time.Date(2026, 10, 30, 2, 0, 0, 0, time.FixedZone("CEST", 2*3600))
+	end := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+
+	first, total, err := ro.ListCreatedMemories(ctx, start, end, 0, 500)
+	if err != nil || len(first) != 500 || total != all || first[0].ID != "m0" || first[499].ID != "m499" {
+		t.Fatalf("offset 0: %d items, total %d, %v", len(first), total, err)
 	}
-	// zone-less is UTC
-	got, err = ro.MemoryOrigin(ctx, "m3")
-	if err != nil || !got.CreatedAt.Equal(time.Date(2026, 10, 30, 9, 12, 0, 0, time.UTC)) || got.DocumentID != "" {
-		t.Fatalf("zone-less origin = %+v, %v", got, err)
+	r := reqs()
+	want := url.Values{"time_field": {"created_at"}, "start_date": {"2026-10-30T00:00:00Z"}, "end_date": {"2026-10-31T00:00:00Z"}, "limit": {"500"}, "offset": {"0"}}
+	if len(r) != 1 || !reflect.DeepEqual(r[0], want) {
+		t.Fatalf("offset 0: requests %v, want one %v", r, want)
 	}
-	_, err = ro.MemoryOrigin(ctx, "gone")
-	var ae *APIError
-	if !errors.As(err, &ae) || ae.Kind != NotFound {
-		t.Fatalf("missing memory: err = %v, want *APIError NotFound", err)
+	rest, total, err := ro.ListCreatedMemories(ctx, start, end, 500, 500)
+	if err != nil || len(rest) != 200 || total != all || rest[0].ID != "m500" || rest[199].ID != "m699" {
+		t.Fatalf("offset 500: %d items, total %d, %v", len(rest), total, err)
+	}
+	want.Set("offset", "500")
+	if r := reqs(); len(r) != 1 || !reflect.DeepEqual(r[0], want) {
+		t.Fatalf("offset 500: requests %v, want one %v", r, want)
+	}
+
+	// zero bounds are left out
+	if _, _, err := ro.ListCreatedMemories(ctx, time.Time{}, end, 0, 2); err != nil {
+		t.Fatal(err)
+	}
+	if r := reqs(); len(r) != 1 || r[0].Has("start_date") || r[0].Get("end_date") != "2026-10-31T00:00:00Z" || r[0].Get("time_field") != "created_at" {
+		t.Fatalf("zero start: requests %v, want no start_date", r)
+	}
+	if _, _, err := ro.ListCreatedMemories(ctx, start, time.Time{}, 0, 2); err != nil {
+		t.Fatal(err)
+	}
+	if r := reqs(); len(r) != 1 || r[0].Has("end_date") || r[0].Get("start_date") != "2026-10-30T00:00:00Z" {
+		t.Fatalf("zero end: requests %v, want no end_date", r)
 	}
 }
 
@@ -551,15 +598,15 @@ func TestNewReadsAreGETOnly(t *testing.T) {
 	}
 	const bp = "/v1/default/banks/b"
 	rec := &recordingRT{bodies: map[string]string{
-		bp + "/memories/m1":                 `{"id":"m1","type":"world"}`,
+		bp + "/memories/list":               `{"total":1,"items":[{"id":"m1","fact_type":"world"}]}`,
 		bp + "/documents/conversation%3As1": `{"memory_unit_count":2}`,
 		bp + "/operations":                  opsBody(0, 3, 3),
 	}}
 	g.next = rec
 	ro.c.http.Transport = g
 	ctx := context.Background()
-	if o, err := ro.MemoryOrigin(ctx, "m1"); err != nil || o.ID != "m1" {
-		t.Fatalf("MemoryOrigin: %+v, %v", o, err)
+	if items, total, err := ro.ListCreatedMemories(ctx, time.Now().Add(-24*time.Hour), time.Now(), 0, 10); err != nil || total != 1 || len(items) != 1 || items[0].ID != "m1" {
+		t.Fatalf("ListCreatedMemories: %+v, %d, %v", items, total, err)
 	}
 	if n, ok, err := ro.DocumentUnits(ctx, "conversation:s1"); err != nil || !ok || n != 2 {
 		t.Fatalf("DocumentUnits: %d, %v, %v", n, ok, err)
