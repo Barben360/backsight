@@ -940,3 +940,130 @@ func TestMaintainEmitsConfig(t *testing.T) {
 		t.Errorf("%d config events the next day, want 3", n)
 	}
 }
+
+// metricsLines reads the lines of one metrics family's month files.
+func metricsLines(t *testing.T, home, family string) []string {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).MetricsDir(), family+"-*.jsonl"))
+	var lines []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if l != "" {
+				lines = append(lines, l)
+			}
+		}
+	}
+	return lines
+}
+
+// maintainWithoutBackup is a dev install whose daily job takes no backup.
+func maintainWithoutBackup(t *testing.T) string {
+	t.Helper()
+	home := devInstall(t, true)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	if err := os.WriteFile(cfgPath, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// fixedMaintainDoctor replaces the health checks jobs maintain runs.
+func fixedMaintainDoctor(t *testing.T, checks ...doctor.Check) {
+	t.Helper()
+	old := doctorRun
+	doctorRun = func(context.Context, doctor.Env) doctor.Report { return doctor.Report{Checks: checks} }
+	t.Cleanup(func() { doctorRun = old })
+}
+
+// jobs maintain keeps one doctor-history line per run: the id and status of
+// every check, nothing else.
+func TestMaintainAppendsDoctorHistory(t *testing.T) {
+	home := maintainWithoutBackup(t)
+	fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK, Summary: "fine", Fix: "x"}, doctor.Check{ID: "b", Status: doctor.Warn, Detail: "d"})
+	withClock(t, time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	lines := metricsLines(t, home, "doctor-history")
+	if len(lines) != 1 {
+		t.Fatalf("%d doctor-history lines, want 1: %v", len(lines), lines)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rec["checks"], map[string]any{"a": "ok", "b": "warn"}) || rec["kind"] != "run" {
+		t.Errorf("line %s", lines[0])
+	}
+	if strings.Contains(lines[0], "fine") || strings.Contains(lines[0], "backsight") && strings.Contains(lines[0], " x") {
+		t.Errorf("a summary or fix leaked: %s", lines[0])
+	}
+	if !strings.Contains(out, `"doctor_history": "2 check(s)"`) {
+		t.Errorf("result:\n%s", out)
+	}
+	if _, text, _ := run(t, "jobs", "maintain"); !strings.Contains(text, ", doctor history 2 check(s)") {
+		t.Errorf("text:\n%s", text)
+	}
+}
+
+// A doctor-history file that cannot be written is a line of the result, not
+// a failed job.
+func TestMaintainSaysWhenTheDoctorHistoryIsNotWritten(t *testing.T) {
+	home := maintainWithoutBackup(t)
+	fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK})
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.State, 0o700)
+	if err := os.WriteFile(d.MetricsDir(), []byte("a file where the directory goes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK || !strings.Contains(out, `"doctor_history": "not written (`) {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if _, text, _ := run(t, "jobs", "maintain"); !strings.Contains(text, "doctor history: not written (") {
+		t.Errorf("text:\n%s", text)
+	}
+}
+
+// The upkeep removes metrics month files past the 13 months kept, and only
+// those.
+func TestMaintainRotatesMetricsFiles(t *testing.T) {
+	home := maintainWithoutBackup(t)
+	fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK})
+	mdir := pathsOf(home).MetricsDir()
+	_ = os.MkdirAll(mdir, 0o700)
+	for _, n := range []string{"doctor-history-2025-09.jsonl", "scan-history-2025-09.jsonl", "doctor-history-2025-10.jsonl", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(mdir, n), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withClock(t, time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	var env struct {
+		Data struct {
+			Rotated []string `json:"metrics_rotated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatal(err)
+	}
+	res := env.Data
+	slices.Sort(res.Rotated)
+	if want := []string{"doctor-history-2025-09.jsonl", "scan-history-2025-09.jsonl"}; !reflect.DeepEqual(res.Rotated, want) {
+		t.Errorf("metrics_rotated %v, want %v", res.Rotated, want)
+	}
+	for n, want := range map[string]bool{"doctor-history-2025-09.jsonl": false, "scan-history-2025-09.jsonl": false, "doctor-history-2025-10.jsonl": true, "notes.txt": true} {
+		if _, err := os.Stat(filepath.Join(mdir, n)); (err == nil) != want {
+			t.Errorf("%s present=%v, want %v", n, err == nil, want)
+		}
+	}
+}
