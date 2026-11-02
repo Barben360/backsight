@@ -202,6 +202,18 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 		if bad := checkOverrides(For(goos), declared); len(bad) > 0 {
 			t.Errorf("the %s lock strays from overrides.txt (run scripts/native-lock.sh):\n  %s", goos, strings.Join(bad, "\n  "))
 		}
+		// filelock stays the image's: its fix (4.2.1) is above litellm
+		// 1.104.0's filelock<4.0. A resolver that moves it, or an override
+		// of it, is a change to review, not drift.
+		if v := For(goos).Versions()["filelock"]; v != "3.20.3" {
+			t.Errorf("the %s lock holds filelock %q, want the image's 3.20.3", goos, v)
+		}
+		if v, ok := For(goos).Overrides()["filelock"]; ok {
+			t.Errorf("the %s lock overrides filelock (%s)", goos, v)
+		}
+	}
+	if _, ok := declared["filelock"]; ok {
+		t.Error("overrides.txt names filelock: litellm 1.104.0 caps it below 4.0, and 4.2.1 is its first fixed version")
 	}
 
 	// The checker and the parser bite.
@@ -227,7 +239,7 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 			t.Errorf("%s: %d findings, want %d: %v", name, len(bad), tc.bad, bad)
 		}
 	}
-	for _, bad := range []string{"authlib==1.9.1\n", "authlib==1.9.1:\n", "authlib 1.9.1: why\n", "authlib==1.9.1: a\nAuthLib==1.9.1: b\n"} {
+	for _, bad := range []string{"authlib==1.9.1\n", "authlib==1.9.1:\n", "authlib 1.9.1: why\n", "authlib==1.9.1: a\nAuthLib==1.9.1: b\n", "authlib==1.9.0: a\nAuthLib==1.9.1: b\n", "authlib==1.9.1: \n", "==1.9.1: why\n"} {
 		if _, err := parseOverrides(bad); err == nil {
 			t.Errorf("parseOverrides(%q) accepted it", bad)
 		}

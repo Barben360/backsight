@@ -24,7 +24,7 @@
 # declared requirements still hold), must be in the resolved lock at
 # exactly that version, and is recorded in the header as "# override:
 # name==version (image: version|none)". An override the image ships at
-# the same or a newer version is refused (sort -V order): drop it.
+# the same or a newer version is refused (PEP 440 order, pep440_cmp): drop it.
 #
 # --check regenerates into a temporary file and fails when any
 # name==version line or the header differs from the committed lock; the
@@ -106,6 +106,10 @@ trap 'rm -rf "$work"' EXIT
 norm() { awk -F'==' 'NF == 2 { n = tolower($1); gsub(/[-_.]+/, "-", n); print n "==" $2 }'; }
 # reqs: a lock's name==version lines (hashes and markers dropped).
 reqs() { grep -E '^[A-Za-z0-9]' "$1" | sed -E 's/[ ;\\].*//' | norm | sort; }
+
+# pep440_cmp a b: PEP 440 order (-1, 0, 1).
+# shellcheck source=scripts/pep440.sh
+. "$root/scripts/pep440.sh"
 
 # shared_check: the Windows lock $1 against the Linux lock $2.
 shared_check() {
@@ -194,8 +198,9 @@ twice=$(sed 's/==.*//' "$work/overrides.txt" | uniq -d | tr '\n' ' ')
 : > "$work/override-header.txt"
 while IFS='=' read -r name _ ver; do
   iv=$(sed -n "s/^$name==//p" "$work/constraints.txt")
-  if [ -n "$iv" ] && [ "$(printf '%s\n%s\n' "$ver" "$iv" | sort -V | tail -n 1)" = "$iv" ]; then
-    die "the image ships $name $iv, not older than its override $ver: drop it from $overrides_file"
+  if [ -n "$iv" ]; then
+    c=$(pep440_cmp "$ver" "$iv") || die "cannot compare $name's override $ver with the image's $iv (not a normalised PEP 440 version): check it by hand"
+    [ "$c" = 1 ] || die "the image ships $name $iv, not older than its override $ver: drop it from $overrides_file"
   fi
   echo "# override: $name==$ver (image: ${iv:-none})" >> "$work/override-header.txt"
 done < "$work/overrides.txt"
