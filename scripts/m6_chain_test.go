@@ -14,10 +14,11 @@ import (
 )
 
 // The CI chain re-runs the VM bench's dedup and key-rotation proofs on
-// every pull request, on containers (scripts/m6-chain.sh). Scoped to the
-// m6-chain job: the workflow runs on every pull_request (no paths or
-// branches filter), the job has its own runs-on and no if: (nor
-// continue-on-error), and one step with no if: runs scripts/m6-chain.sh in
+// every pull request but a docs-only one, on containers
+// (scripts/m6-chain.sh). Scoped to the m6-chain job: the workflow runs on
+// every pull_request (no paths or branches filter), the job has its own
+// runs-on and no if: but the docs-only gate (withoutDocsOnlyGate), nor
+// continue-on-error, and one step with no if: runs scripts/m6-chain.sh in
 // its run: script, not in a comment.
 func TestM6ChainRunsOnEveryPullRequest(t *testing.T) {
 	raw, err := os.ReadFile("../.github/workflows/ci.yml")
@@ -55,7 +56,7 @@ func TestM6ChainRunsOnEveryPullRequest(t *testing.T) {
 		t.Errorf("the m6-chain job has no runs-on of its own:\n%s", header)
 	}
 	for _, key := range []string{"if", "continue-on-error"} {
-		if regexp.MustCompile(`(?m)^    ` + key + `:`).MatchString(header) {
+		if regexp.MustCompile(`(?m)^    ` + key + `:`).MatchString(withoutDocsOnlyGate(header)) {
 			t.Errorf("the m6-chain job has an %s: (it may not run, or not fail):\n%s", key, header)
 		}
 	}

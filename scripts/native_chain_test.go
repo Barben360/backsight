@@ -14,8 +14,9 @@ import (
 )
 
 // The CI proof of the native runtime and the switch (decision 0078,
-// scripts/native-chain.sh), on every pull request: a job of its own with
-// no if: (nor continue-on-error), one step with no if: running the script
+// scripts/native-chain.sh), on every pull request but a docs-only one: a
+// job of its own with no if: but the docs-only gate (withoutDocsOnlyGate),
+// nor continue-on-error, one step with no if: running the script
 // in its run: script, and the runner user's linger enabled by an earlier
 // step (the units must outlive the job's session, and the chain's
 // pre-flight refuses without it).
@@ -39,7 +40,7 @@ func TestNativeChainRunsOnEveryPullRequest(t *testing.T) {
 		t.Errorf("the native-chain job does not run on ubuntu-latest:\n%s", header)
 	}
 	for _, key := range []string{"if", "continue-on-error"} {
-		if regexp.MustCompile(`(?m)^    ` + key + `:`).MatchString(header) {
+		if regexp.MustCompile(`(?m)^    ` + key + `:`).MatchString(withoutDocsOnlyGate(header)) {
 			t.Errorf("the native-chain job has an %s: (it may not run, or not fail):\n%s", key, header)
 		}
 	}

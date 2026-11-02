@@ -22,7 +22,7 @@ OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
-.PHONY: build check test test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
+.PHONY: build check test test-shard test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
@@ -52,23 +52,44 @@ check:
 # bench-index.
 test:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m ./...
+	@$(MAKE) --no-print-directory test-sweep
+
+# One slice of make test's -race line, SHARD of SHARDS (from 0): CI runs
+# the SHARDS slices in parallel jobs (ci.yml test-race), each test in
+# exactly one of them (scripts/testshard). The listing builds what the
+# run then reuses (-race).
+test-shard:
+	@pattern=$$(CGO_ENABLED=1 go run ./scripts/testshard -index "$(SHARD)" -total "$(SHARDS)" -- -race ./...) && \
+		echo "go test -race -timeout 20m -run '$$pattern' ./..." && \
+		GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m -run "$$pattern" ./...
+
+# make test's second line: the dashboard's page sweep, without -race.
+test-sweep:
 	go test -short -count=1 ./internal/dashboard/
 
 # The packages with test-only code behind the testhooks tag (the failing
 # migration and server smoke of CI's update proof, the hook chaos switch),
 # built and tested with it. A release never has the tag (verify-keys).
+# internal/cli's hooks (the failing smoke and switch) have no Go test:
+# CI's update and native chains prove them on a testhooks binary, so the
+# package is vetted with the tag, for Windows too, not run a second time
+# under -race (6 minutes on the CI runner).
+TESTHOOKS_PKGS := ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/server/nativelock/ ./internal/cli/
 test-hooks:
-	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/server/nativelock/ ./internal/cli/
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks $(filter-out ./internal/cli/,$(TESTHOOKS_PKGS))
+	go vet -tags testhooks $(TESTHOOKS_PKGS)
+	GOOS=windows go vet -tags testhooks $(TESTHOOKS_PKGS)
 
 # The metrics index's time budgets on a year of generated history (first
 # build, 15-minute catch-up), the page views' render budget and the
-# dashboard's page budgets on the same history, then the index's two as
-# benchmarks. Without -race, which skips the budget tests.
+# dashboard's page budgets on the same history. Without -race, which skips
+# the budget tests. TestIndexBudgets logs the two index times it bounds;
+# BenchmarkFirstBuild and BenchmarkCatchUp15Minutes measure the same two
+# by hand (go test -run '^$$' -bench . ./internal/index/).
 bench-index:
 	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
 	go test -count=1 -run 'TestViewBudgets' -v ./internal/metrics/
 	go test -count=1 -run 'TestPageBudgets|TestRenderBudgets' -v ./internal/dashboard/
-	go test -run '^$$' -bench 'FirstBuild|CatchUp15' -benchtime 1x ./internal/index/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
 # instead of failing on its lock.
