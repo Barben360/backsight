@@ -54,4 +54,22 @@ done
 curl -fsS "http://127.0.0.1:$port/health" >/dev/null
 hfc_save "$project"
 "$bin" bank apply
+
+# Issue #144: a second home on the same Compose project (the sandbox's,
+# never backsight) is refused before it changes anything (exit 20), and
+# the sandbox keeps answering.
+other=$work/other
+mkdir -p "$other/config"
+sed -e "s#^compose_dir = .*#compose_dir = \"$other/data/server\"#" -e "s#^\[server\]\$#[server]\nproject = \"$project\"#" \
+  "$BACKSIGHT_HOME/config/config.toml" > "$other/config/config.toml"
+cp "$BACKSIGHT_HOME/config/secrets.toml" "$other/config/secrets.toml"
+BACKSIGHT_HOME=$other "$bin" server render >/dev/null
+for cmd in stop start; do
+  code=0
+  BACKSIGHT_HOME=$other "$bin" server "$cmd" >/dev/null 2>"$work/refusal" || code=$?
+  [ "$code" = 20 ] && grep -q "$BACKSIGHT_HOME/data/server" "$work/refusal" || {
+    echo "a second home's server $cmd drove the sandbox's project (exit $code, want 20):" >&2; cat "$work/refusal" >&2; exit 1
+  }
+done
+curl -fsS "http://127.0.0.1:$port/health" >/dev/null
 (cd "$root" && SANDBOX_HOME="$BACKSIGHT_HOME" go test -tags sandbox -count=1 -v ./internal/sandbox/)
