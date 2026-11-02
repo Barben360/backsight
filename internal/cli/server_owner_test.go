@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,9 +64,15 @@ func TestServerCommandsRefuseAProjectAnotherInstallOwns(t *testing.T) {
 		{"server", "start"},
 		{"server", "stop"},
 		{"server", "install"},
-		{"server", "expose", "--private", "172.17.0.1", "--answer", "cleartext_lan=yes"},
+		{"server", "expose", "--private", "100.101.1.2"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			// expose's address must be this machine's, whatever the runner's.
+			old := interfaceAddrs
+			interfaceAddrs = func() ([]net.Addr, error) {
+				return []net.Addr{&net.IPNet{IP: net.ParseIP("100.101.1.2"), Mask: net.CIDRMask(32, 32)}}, nil
+			}
+			t.Cleanup(func() { interfaceAddrs = old })
 			home := devInstall(t, true)
 			f := withCompose(t)
 			other := otherInstall(t)
