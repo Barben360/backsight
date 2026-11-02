@@ -18,7 +18,9 @@ import (
 )
 
 // Requirements is the lock scripts/native-lock.sh wrote from the pinned
-// Hindsight image: its header, then every package with its hashes, for
+// Hindsight image, with the versions overrides.txt sets in place of the
+// image's (each recorded in the header): its header, then every package
+// with its hashes, for
 // `uv pip install --require-hashes --no-deps`. A testhooks build may load
 // another file in its place (TestLock).
 //
@@ -91,6 +93,28 @@ func (p Platform) header(key string) string {
 		}
 	}
 	return ""
+}
+
+// overrideRE is a "# override: name==version (image: version)" header
+// line's name and version.
+var overrideRE = regexp.MustCompile(`^# override: ([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+) \(image: [^)]+\)$`)
+
+// Overrides maps each package the lock pins away from its image's version
+// (overrides.txt, recorded in the header by scripts/native-lock.sh) to the
+// version the lock holds. Normalised names.
+func (p Platform) Overrides() map[string]string {
+	out := map[string]string{}
+	sc := bufio.NewScanner(bytes.NewReader(p.Requirements))
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+		if m := overrideRE.FindStringSubmatch(line); m != nil {
+			out[Normalize(m[1])] = m[2]
+		}
+	}
+	return out
 }
 
 // Image is the Hindsight image the lock was made from.

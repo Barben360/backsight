@@ -15,6 +15,7 @@ The units are named after `server.project` (`<project>-db.service`, `<project>-s
 - **This PC only.** The server listens on `127.0.0.1`: `backsight server expose --private` is refused, and so is `setup --role server` (a server-only host exists to serve other PCs). Use the docker runtime for a [shared memory](several-pcs.md).
 - **Linux x86_64 and Windows x86_64 only.** Other platforms are refused at every way in. Not tested on WSL. On Windows a scheduled task and backsight's own supervisor run the server instead of systemd units: [backsight on Windows](windows.md).
 - **A slightly older PostgreSQL.** pg0 ships PostgreSQL 18.1 with pgvector 0.8.5, where the Docker image runs 18.6 with 0.8.7: the dump format is the same, and backups restore across both ([backups and restore](backups-and-restore.md)).
+- **A few newer Python packages than the Docker image.** Native installs the Python packages of the pinned Hindsight image, at the image's versions, except where a newer version fixes a published security advisory the image's version has: authlib 1.9.1, dnspython 2.9.0, fastmcp 3.4.11, pyasn1 0.6.5 and OpenTelemetry 1.45.1, with the few packages these require. The Docker runtime keeps the image's own versions until a later Hindsight release ships the fixes. filelock stays at the image's 3.20.3: its fix needs filelock 4, which the image's litellm does not accept. The full list, with a reason for each, is `internal/server/nativelock/overrides.txt` in the source.
 
 ## What it needs
 

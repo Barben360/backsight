@@ -9,10 +9,11 @@
 # release that fixes a reachable vulnerability.
 #
 # The native runtime's lock (internal/server/nativelock) is generated from
-# the pinned Hindsight image's site-packages and must match it (0078): a
-# bumped package there breaks that parity, so Dependabot ignores every
-# package in it, security updates included. It moves only with the image
-# pin, through scripts/native-lock.sh.
+# the pinned Hindsight image's site-packages and must match it (0078),
+# except the versions overrides.txt names: a package bumped there by hand
+# breaks that parity, so Dependabot ignores every package in it, security
+# updates included. It moves only with the image pin or an override in
+# overrides.txt, through scripts/native-lock.sh (the alerts still show).
 version: 2
 updates:
   - package-ecosystem: "gomod"

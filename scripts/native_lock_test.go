@@ -67,16 +67,24 @@ func runNativeLock(t *testing.T, listing, body, lock string, args ...string) (ca
 // compile was given.
 func runNativeLockIn(t *testing.T, listing, body, lock string, args ...string) (calls, out, constraints string, err error) {
 	t.Helper()
+	return runNativeLockOv(t, "", listing, body, lock, args...)
+}
+
+// runNativeLockOv is runNativeLockIn with overrides as the overrides file
+// (NATIVE_LOCK_OVERRIDES; the others run with an empty one, not the
+// committed overrides.txt).
+func runNativeLockOv(t *testing.T, overrides, listing, body, lock string, args ...string) (calls, out, constraints string, err error) {
+	t.Helper()
 	root, _ := filepath.Abs("..")
 	fake := t.TempDir()
 	lastFake = fake
-	for name, content := range map[string]string{"docker": fakeLockDocker, "uv": fakeLockUV, "listing.txt": listing, "body.txt": body} {
+	for name, content := range map[string]string{"docker": fakeLockDocker, "uv": fakeLockUV, "listing.txt": listing, "body.txt": body, "overrides.txt": overrides} {
 		if werr := os.WriteFile(filepath.Join(fake, name), []byte(content), 0o755); werr != nil {
 			t.Fatal(werr)
 		}
 	}
 	cmd := exec.Command(filepath.Join(root, "scripts", "native-lock.sh"), args...)
-	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK="+lock)
+	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK="+lock, "NATIVE_LOCK_OVERRIDES="+filepath.Join(fake, "overrides.txt"))
 	var b bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &b, &b
 	err = cmd.Run()
@@ -172,6 +180,107 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 			t.Errorf("constraints:\n%s\nwant:\n%s", cons, want)
 		}
 	})
+
+	// overrides.txt: a version in place of the image's, or a package the
+	// image lacks, each with its reason, recorded in the header.
+	const overrides = "# why\n\nZope.Interface==7.1: a security fix\nnew-dep==2.0: required by zope-interface 7.1\n"
+	overBody := strings.Replace(lockBody, "zope-interface==7.0", "zope-interface==7.1", 1) +
+		"new-dep==2.0 \\\n    --hash=sha256:5555555555555555555555555555555555555555555555555555555555555555\n"
+	overHeader := lockHeader + "# override: new-dep==2.0 (image: none)\n# override: zope-interface==7.1 (image: 7.0)\n"
+
+	t.Run("an override replaces the image's version and is recorded", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_, out, cons, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock)
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		if want := "hindsight-api-slim==" + tag + "\nnew-dep==2.0\npg0-embedded==0.15.2\nzope-interface==7.1\n"; cons != want {
+			t.Errorf("constraints:\n%s\nwant:\n%s", cons, want)
+		}
+		if got, _ := os.ReadFile(lock); string(got) != overHeader+overBody {
+			t.Errorf("lock:\n%s\nwant:\n%s", got, overHeader+overBody)
+		}
+	})
+
+	// --check compares the header across machines: its order is bytes',
+	// not the locale's (en_US puts zope-interface before zope-interface-x,
+	// C after).
+	t.Run("the override lines are in byte order whatever the locale", func(t *testing.T) {
+		requireCollatingLocale(t, "en_US.UTF-8")
+		t.Setenv("LC_ALL", "en_US.UTF-8")
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		body := overBody + "zope-interface-x==1.0 \\\n    --hash=sha256:6666666666666666666666666666666666666666666666666666666666666666\n"
+		_, out, _, err := runNativeLockOv(t, overrides+"zope-interface-x==1.0: required by zope-interface 7.1\n", imageListing(tag), body, lock)
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		want := lockHeader + "# override: new-dep==2.0 (image: none)\n# override: zope-interface-x==1.0 (image: none)\n# override: zope-interface==7.1 (image: 7.0)\n"
+		if got, _ := os.ReadFile(lock); string(got) != want+body {
+			t.Errorf("lock:\n%s\nwant:\n%s", got, want+body)
+		}
+	})
+
+	t.Run("--check fails on a lock that does not record an override", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_ = os.WriteFile(lock, []byte(lockHeader+overBody), 0o644)
+		_, out, _, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock, "--check")
+		if err == nil || !strings.Contains(out, "# override: zope-interface==7.1 (image: 7.0)") {
+			t.Errorf("--check = %v:\n%s", err, out)
+		}
+		_ = os.WriteFile(lock, []byte(overHeader+overBody), 0o644)
+		if _, out, _, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock, "--check"); err != nil {
+			t.Errorf("--check on the recorded lock: %v:\n%s", err, out)
+		}
+	})
+
+	t.Run("--check fails on a lock without a declared override", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_ = os.WriteFile(lock, []byte(lockHeader+lockBody), 0o644)
+		_, out, _, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock, "--check")
+		if err == nil || !strings.Contains(out, "zope-interface==7.1") {
+			t.Errorf("--check = %v:\n%s", err, out)
+		}
+	})
+
+	hash := func(c string) string { return " \\\n    --hash=sha256:" + strings.Repeat(c, 64) + "\n" }
+	t.Run("an override of a release the image ships as a pre-release is kept", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		body := lockBody + "rc-pkg==1.0" + hash("7")
+		_, out, _, err := runNativeLockOv(t, "rc-pkg==1.0: the release after the image's 1.0rc1\n", imageListing(tag)+"rc_pkg-1.0rc1.dist-info\n", body, lock)
+		if err != nil {
+			t.Fatalf("1.0 over the image's 1.0rc1 refused (PEP 440: 1.0rc1 < 1.0): %v:\n%s", err, out)
+		}
+		if got, _ := os.ReadFile(lock); !strings.Contains(string(got), "# override: rc-pkg==1.0 (image: 1.0rc1)\n") {
+			t.Errorf("lock:\n%s", got)
+		}
+	})
+
+	for name, tc := range map[string]struct{ overrides, listing, body, want string }{
+		"a pre-release override of the release the image ships": {"pre-pkg==0.66b1: stale\n", "pre_pkg-0.66.dist-info\n", lockBody + "pre-pkg==0.66b1" + hash("8"), "the image ships pre-pkg 0.66, not older than its override 0.66b1"},
+		"a .dev override of the release the image ships":        {"pre-pkg==0.66.dev1: stale\n", "pre_pkg-0.66.dist-info\n", lockBody + "pre-pkg==0.66.dev1" + hash("8"), "the image ships pre-pkg 0.66, not older"},
+		"an override the PEP 440 reader cannot compare":         {"zope-interface==7.1+local: x\n", "", overBody, "cannot compare zope-interface's override 7.1+local with the image's 7.0"},
+		"a name given twice at two versions":                    {"x-pkg==1.0: a\nX_Pkg==1.1: b\n", "", lockBody, "x-pkg twice"},
+		"an empty reason":                                       {"zope-interface==7.1: \n", "", overBody, "name==version: reason"},
+		"a line without a name":                                 {"==7.1: why\n", "", overBody, "name==version: reason"},
+		"a resolution that does not hold a declared override":   {overrides, "", strings.Replace(overBody, "zope-interface==7.1", "zope-interface==7.0", 1), "does not hold the override(s) zope-interface==7.1"},
+		"an override nothing requires":                          {overrides, "", lockBody, "does not hold the override(s) new-dep==2.0 zope-interface==7.1"},
+		"an override at the image's own version":                {"zope-interface==7.0: stale\n", "", lockBody, "the image ships zope-interface 7.0"},
+		"an override older than the image's version":            {"zope-interface==6.9: stale\n", "", lockBody, "the image ships zope-interface 7.0"},
+		"an override without a reason":                          {"zope-interface==7.1\n", "", overBody, "name==version: reason"},
+		"an override given twice":                               {"zope-interface==7.1: a\nzope.interface==7.1: b\n", "", overBody, "zope-interface twice"},
+		"a resolved version that is neither image nor override": {"new-dep==2.0: x\n", "", overBody, "not the image's or an override: zope-interface==7.1"},
+	} {
+		t.Run(name+" is refused and nothing is written", func(t *testing.T) {
+			lock := filepath.Join(t.TempDir(), "lock.txt")
+			_, out, _, err := runNativeLockOv(t, tc.overrides, imageListing(tag)+tc.listing, tc.body, lock)
+			if err == nil || !strings.Contains(out, tc.want) {
+				t.Errorf("= %v, want a refusal naming %q:\n%s", err, tc.want, out)
+			}
+			if _, serr := os.Stat(lock); serr == nil {
+				t.Error("a lock was written")
+			}
+		})
+	}
 }
 
 // runWindowsLock runs native-lock.sh --platform windows with fake uv (and a
@@ -238,6 +347,27 @@ func TestNativeLockScriptWindows(t *testing.T) {
 		}
 	})
 
+	t.Run("the Linux lock's overrides are recorded in the Windows header", func(t *testing.T) {
+		const rec = "# override: zope-interface==7.0 (image: 6.9)\n"
+		linuxOv := filepath.Join(t.TempDir(), "linux.txt")
+		if err := os.WriteFile(linuxOv, []byte(linuxHeader+rec+linuxBody), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ovSum := sha256.Sum256([]byte(linuxHeader + rec + linuxBody))
+		want := strings.Replace(wantHeader, hex.EncodeToString(sum[:])[:12], hex.EncodeToString(ovSum[:])[:12], 1) + rec
+		win := filepath.Join(t.TempDir(), "win.txt")
+		if out, err := runWindowsLock(t, winBody, linuxOv, win); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		if got, _ := os.ReadFile(win); string(got) != want+winBody {
+			t.Errorf("lock:\n%s\nwant:\n%s", got, want+winBody)
+		}
+		_ = os.WriteFile(win, []byte(wantHeader+winBody), 0o644)
+		if out, err := runWindowsLock(t, winBody, linuxOv, win, "--check"); err == nil || !strings.Contains(out, strings.TrimSpace(rec)) {
+			t.Errorf("--check on a Windows lock without the override line = %v:\n%s", err, out)
+		}
+	})
+
 	t.Run("a shared package resolved to another version is refused and nothing is written", func(t *testing.T) {
 		win := filepath.Join(t.TempDir(), "win.txt")
 		out, err := runWindowsLock(t, strings.Replace(winBody, "onnxruntime==1.31.0", "onnxruntime==1.31.1", 1), linux, win)
@@ -284,4 +414,69 @@ func TestNativeLockScriptWindows(t *testing.T) {
 			t.Errorf("= %v:\n%s", err, out)
 		}
 	})
+}
+
+// requireCollatingLocale skips (fails on CI) when locale does not order
+// "a-b==1" before "a==1" the way en_US does: glibc falls back to C for a
+// missing locale, and a locale test would then pass whatever the script does.
+func requireCollatingLocale(t *testing.T, locale string) {
+	t.Helper()
+	cmd := exec.Command("sort")
+	cmd.Env = append(os.Environ(), "LC_ALL="+locale)
+	cmd.Stdin = strings.NewReader("a-b==1\na==1\n")
+	out, err := cmd.Output()
+	if err == nil && string(out) == "a==1\na-b==1\n" {
+		return
+	}
+	msg := "locale " + locale + " is not installed (sort under it orders " + strings.ReplaceAll(strings.TrimSpace(string(out)), "\n", ", ") + "): the test would not bite"
+	if os.Getenv("CI") != "" {
+		t.Fatal(msg)
+	}
+	t.Skip(msg)
+}
+
+// pep440_cmp (scripts/pep440.sh) orders versions as PEP 440 does, under the
+// awk on PATH and, when gawk is there, under gawk --posix (CI's mawk knows
+// no gawk extension either).
+func TestPEP440Cmp(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
+	root, _ := filepath.Abs("..")
+	awks := map[string]string{"awk": ""}
+	if g, err := exec.LookPath("gawk"); err == nil {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "awk"), []byte("#!/bin/sh\nexec "+g+" --posix \"$@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		awks["gawk --posix"] = dir
+	}
+	cases := []struct{ a, b, want string }{
+		{"0.66b1", "0.66", "-1"}, {"0.66", "0.66b1", "1"}, {"1.0rc1", "1.0", "-1"},
+		{"1.0a1", "1.0b1", "-1"}, {"1.0b2", "1.0rc1", "-1"}, {"1.0a10", "1.0a2", "1"},
+		{"1.0.dev1", "1.0a1", "-1"}, {"1.0a1.dev1", "1.0a1", "-1"}, {"1.0", "1.0.post1", "-1"},
+		{"1.0.post1.dev1", "1.0.post1", "-1"}, {"1.0", "1.0.post1.dev1", "-1"},
+		{"1.0", "1.0.0", "0"}, {"1.10", "1.9", "1"}, {"3.4.11", "3.2.0", "1"}, {"2.9.0", "2.9.0", "0"},
+		{"1.45.1", "1.44.0", "1"}, {"0.6.5", "0.6.4", "1"},
+	}
+	for label, dir := range awks {
+		path := os.Getenv("PATH")
+		if dir != "" {
+			path = dir + ":" + path
+		}
+		run := func(a, b string) (string, error) {
+			cmd := exec.Command("bash", "-c", `. "$1"; pep440_cmp "$2" "$3"`, "_", filepath.Join(root, "scripts", "pep440.sh"), a, b)
+			cmd.Env = append(os.Environ(), "PATH="+path)
+			out, err := cmd.Output()
+			return strings.TrimSpace(string(out)), err
+		}
+		for _, c := range cases {
+			if got, err := run(c.a, c.b); err != nil || got != c.want {
+				t.Errorf("%s: pep440_cmp %s %s = %q, %v; want %s", label, c.a, c.b, got, err, c.want)
+			}
+		}
+		for _, bad := range []string{"1!1.0", "1.0+local", "1.0-1", "v1.0", "1.0alpha1", ""} {
+			if got, err := run(bad, "1.0"); err == nil {
+				t.Errorf("%s: pep440_cmp %q 1.0 = %q, want a failure", label, bad, got)
+			}
+		}
+	}
 }
