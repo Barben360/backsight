@@ -132,7 +132,7 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 			// The unit tests and the native chain run on Windows too (M7
 			// block 2); every other job is Linux's.
 			want := "ubuntu-latest"
-			if w.name == "ci.yml" && (j.name == "test-windows" || j.name == "native-chain-windows") {
+			if w.name == "ci.yml" && (j.name == "test-windows" || j.name == "test-windows-budgets" || j.name == "native-chain-windows") {
 				want = "windows-latest"
 			}
 			if len(on) != 1 || on[0] != want {
@@ -565,10 +565,10 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 				t.Errorf("ci.yml job test-windows does not run go test ./... -count=1 on windows-latest:\n%s", j.raw)
 			}
 			// a slice runs its tests only; the pattern comes from the
-			// slicer, set -e stopping the step when it fails (an empty
-			// -run would run everything, unseen)
-			if !strings.Contains(j.raw, `pattern=$(go run ./scripts/testshard `) || !strings.Contains(j.raw, `-run "$pattern"`) || !strings.Contains(j.raw, "shell: bash") {
-				t.Errorf("ci.yml job test-windows does not run the slice testshard prints, in bash:\n%s", j.raw)
+			// slicer, the step stopping when it fails (an empty -run would
+			// run everything, unseen)
+			if !strings.Contains(j.raw, `$pattern = go run ./scripts/testshard `) || !strings.Contains(j.raw, `if ($LASTEXITCODE -ne 0 -or -not $pattern) { exit 1 }`) || !strings.Contains(j.raw, `-run "$pattern"`) {
+				t.Errorf("ci.yml job test-windows does not run the slice testshard prints, stopping when it fails:\n%s", j.raw)
 			}
 			// a slow package: go test's default bound per package would
 			// cut it.
@@ -672,6 +672,74 @@ func TestCITestCheckNeedsEveryLinuxTestJob(t *testing.T) {
 	}
 }
 
+// Windows runs its Go tests in PowerShell: Git Bash's runtime enables the
+// backup privilege, go.exe inherits it, and Go opens files for reading
+// with backup semantics, so a read passes a deny ACE and the tests of an
+// unreadable file fail (TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable).
+// The time budgets run apart, one package at a time: the slices skip
+// exactly the tests test-windows-budgets runs, make bench-index's.
+func TestCIRunsWindowsTestsInPowerShellAndItsBudgetsApart(t *testing.T) {
+	jobs := ciJobs(t)
+	steps := 0
+	for _, name := range []string{"test-windows", "test-windows-budgets"} {
+		j, ok := jobs[name]
+		if !ok {
+			t.Fatalf("ci.yml has no %s job", name)
+		}
+		for _, step := range j.steps {
+			if !regexp.MustCompile(`(?m)^\s+(?:run: )?go test `).MatchString(step) {
+				continue
+			}
+			steps++
+			if !regexp.MustCompile(`(?m)^        shell: pwsh\s*$`).MatchString(step) {
+				t.Errorf("ci.yml job %s runs go test outside PowerShell:\n%s", name, step)
+			}
+		}
+	}
+	if steps != 2 {
+		t.Errorf("%d go test steps found in test-windows and test-windows-budgets, want one each", steps)
+	}
+	if !strings.Contains(jobs["test-windows"].raw, "-skip $env:TIME_BUDGETS") {
+		t.Errorf("ci.yml job test-windows does not skip the time budgets (-skip $env:TIME_BUDGETS)")
+	}
+	b := jobs["test-windows-budgets"].raw
+	if !strings.Contains(b, "go test -count=1 -p 1 ") || !strings.Contains(b, "-run $env:TIME_BUDGETS") || !strings.Contains(b, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
+		t.Errorf("ci.yml job test-windows-budgets does not run the time budgets one package at a time on the local disk:\n%s", b)
+	}
+	// TIME_BUDGETS names make bench-index's tests, each
+	raw, err := os.ReadFile("../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^  TIME_BUDGETS: (\S+)\s*$`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("ci.yml has no workflow-level TIME_BUDGETS")
+	}
+	re := regexp.MustCompile(string(m[1]))
+	mk, err := os.ReadFile("../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bench := regexp.MustCompile(`(?s)\nbench-index:\n(.*?)\n\n`).FindSubmatch(mk)
+	if bench == nil {
+		t.Fatal("Makefile has no bench-index target")
+	}
+	names := regexp.MustCompile(`Test[A-Za-z]+Budgets`).FindAllString(string(bench[1]), -1)
+	if len(names) < 4 {
+		t.Fatalf("make bench-index names %v, want its four budget tests", names)
+	}
+	for _, n := range names {
+		if !re.MatchString(n) {
+			t.Errorf("TIME_BUDGETS %s does not match %s, a time budget of make bench-index", m[1], n)
+		}
+	}
+	for _, n := range []string{"TestBackfillStopsAtTheBudgetAndResumes", "TestCatchUpBudgets", "TestPageBudgetsX"} {
+		if re.MatchString(n) {
+			t.Errorf("TIME_BUDGETS %s matches %s, not a time budget", m[1], n)
+		}
+	}
+}
+
 // docsOnlyGate is the one if: a chain job may have: it skips a pull
 // request that changes documentation alone (ci.yml changes).
 var docsOnlyGate = regexp.MustCompile(`(?m)^    if: needs\.changes\.outputs\.code == 'true'\s*$`)
@@ -686,7 +754,7 @@ func withoutDocsOnlyGate(header string) string {
 // those: the sandbox tests and fresh-install search the embedded docs
 // (guide search), the required checks must run.
 func TestCIDocsOnlySkipsOnlyWhatDocsCannotReach(t *testing.T) {
-	want := map[string]bool{"test-windows": true, "m6-chain": true, "native-chain": true, "native-chain-windows": true}
+	want := map[string]bool{"test-windows": true, "test-windows-budgets": true, "m6-chain": true, "native-chain": true, "native-chain-windows": true}
 	for name, j := range ciJobs(t) {
 		gated := docsOnlyGate.MatchString(j.raw)
 		if gated != want[name] {

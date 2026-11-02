@@ -17,6 +17,9 @@ concurrency:
 # keep jobs apart on one machine, such as a maintainer's).
 env:
   BACKSIGHT_CI_SLOT: "1"
+  # The time budgets (make bench-index's): on Windows the slices skip them
+  # and test-windows-budgets runs them apart.
+  TIME_BUDGETS: ^Test(Index|View|Page|Render)Budgets$
 jobs:
   changes:
     # Whether a pull request changes more than documentation
@@ -287,8 +290,12 @@ jobs:
           key: go-${{ runner.os }}-${{ github.job }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: go-${{ runner.os }}-${{ github.job }}-
       # go test's default 10-minute bound per package would cut a slow one.
+      # PowerShell, not bash: Git Bash's runtime enables the backup
+      # privilege, go.exe inherits it, and Go opens files for reading with
+      # backup semantics, so reads pass a deny ACE and the tests of an
+      # unreadable file (testtool.DenyRead) fail.
       - name: go test ./..., one slice of three
-        shell: bash
+        shell: pwsh
         env:
           SHARD: ${{ matrix.shard }}
           # The runner has a console logon: the server task runs there
@@ -299,10 +306,60 @@ jobs:
           # fewer than D: or the Windows VM (testtool.BenchTempDir).
           BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
         run: |
-          pattern=$(go run ./scripts/testshard -index "$SHARD" -total 3 -- ./...)
-          go test ./... -count=1 -timeout 20m -run "$pattern"
+          $pattern = go run ./scripts/testshard -index $env:SHARD -total 3 -- ./...
+          if ($LASTEXITCODE -ne 0 -or -not $pattern) { exit 1 }
+          go test ./... -count=1 -timeout 20m -run "$pattern" -skip $env:TIME_BUDGETS
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name == 'push' && matrix.shard == 0 && steps.go-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ${{ steps.go-paths.outputs.build }}
+            ${{ steps.go-paths.outputs.mod }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+  test-windows-budgets:
+    # The time budgets on Windows apart from the slices, as bench does on
+    # Linux: one package at a time, nothing else on the runner (beside
+    # other packages in a slice, TestPageBudgets passed its limit). Skipped
+    # for a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The job's own Go caches below, not setup-go's: that one is shared
+      # by every job and saved by whichever ends first.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          cache: false
+      # The job's own build and module caches, keyed on go.mod and go.sum:
+      # restored by every run, saved by main's runs alone, once per key (the
+      # repository's 10 GB must keep the model caches).
+      - name: The Go caches' paths
+        id: go-paths
+        shell: bash
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: go-cache
+        with:
+          path: |
+            ${{ steps.go-paths.outputs.build }}
+            ${{ steps.go-paths.outputs.mod }}
+          key: go-${{ runner.os }}-${{ github.job }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ github.job }}-
+      - name: The time budgets, one package at a time
+        shell: pwsh
+        env:
+          # The runner's local disk (D:), as test-windows.
+          BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
+        run: go test -count=1 -p 1 -timeout 20m -v -run $env:TIME_BUDGETS ./internal/index/ ./internal/metrics/ ./internal/dashboard/
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.event_name == 'push' && steps.go-cache.outputs.cache-hit != 'true'
         with:
           path: |
             ${{ steps.go-paths.outputs.build }}
