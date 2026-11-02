@@ -20,10 +20,10 @@
 <link rel="stylesheet" href="{{asset "dashboard.css"}}">
 <script src="{{asset "copy.js"}}" defer></script>
 </head>
-<body>
+<body{{if .Frame.Prefs.Keys}} data-keys="1"{{end}}>
 {{end}}
 
-{{define "top"}}<div class="page">
+{{define "top"}}<div class="page{{if .Frame.Prefs.Compact}} d-compact{{end}}">
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar">
 <div class="wrap">

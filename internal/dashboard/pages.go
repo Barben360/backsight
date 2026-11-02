@@ -173,6 +173,8 @@ type Choice struct {
 type Prefs struct {
 	Theme        string
 	Dev, Refresh bool
+	Compact      bool // the compact density
+	Keys         bool // keyboard shortcuts on
 }
 
 // navLinks are the navigation, in the order the top partial slices it:
@@ -288,6 +290,9 @@ func prefMenu(path string, p Prefs) []PrefGroup {
 		{Label: "Theme", Choices: theme},
 		{Label: "Developer mode", Choices: flag("dev", "On", p.Dev), Hint: "Adds ranking, learned ranking and release detail."},
 		{Label: "Auto-refresh", Choices: flag("refresh", "Every minute", p.Refresh)},
+		{Label: "Density", Choices: []Choice{link("Comfortable", "density", "comfortable", !p.Compact), link("Compact", "density", "compact", p.Compact)},
+			Hint: "Compact fits more on a screen; touch targets keep their size."},
+		{Label: "Keyboard shortcuts", Choices: flag("keys", "On", p.Keys), Hint: "g then a letter opens a page; press ? to list them all."},
 	}
 }
 
