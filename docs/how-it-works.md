@@ -20,7 +20,7 @@ Hooks never block Claude Code. When the server is down or slow, recall is skippe
 
 ## At session start
 
-- **The memory guide**: a short text (about 1,100 characters) telling Claude when to search and store, to report the memories it used with `memory_credit`, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
+- **The memory guide**: a short text (about 1,200 characters) telling Claude when to search and store, to read an issue or link the prompt points at before searching, to report the memories it used with `memory_credit`, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
 - **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force. After a compaction, the briefing and the last memories shown are given again.
 - **The status line** you see, such as `🧠 backsight · 🗂️ my-project` ([daily-use.md](daily-use.md#the-line-at-session-start)).
 
@@ -31,6 +31,7 @@ When you send a prompt, the prompt hook decides whether to recall:
 - **The first prompt** of a session recalls from 25 characters.
 - **Later prompts** recall when they are at least 60 characters long and either 3 prompts passed since the last recall or the topic changed (few words in common with the last recalled prompt).
 - **Never** past 6,000 characters of memory text in one session, nor for prompts Claude Code writes itself (task notifications, command output).
+- **Not for a prompt that only points at something**: a link or an issue reference (`#12`, `owner/repo#12`) with fewer than 3 other meaningful words, such as "Fix https://github.com/owner/repo/issues/12". Its text says little about the topic, so instead of searching it, the hook asks Claude to read what it points at first and then search memory with that content. Such a prompt does not count as a recall: the next prompt recalls as if it had not been sent.
 
 To recall, it searches the start of your prompt (300 characters, code blocks removed, secrets redacted) in the current project (with a small boost), the transverse pool, the related projects and the whole memory. Each candidate is scored by the **reranker**. It keeps at most 3 memories, 800 characters in all, that:
 
@@ -43,6 +44,7 @@ They are added to the prompt under a header that frames them as notes from past 
 The prompt hook may also add one short line:
 
 - on the first prompt, a reminder to search memory before answering and to report the memories it used;
+- on a prompt that would have recalled but only points at a link or an issue, a line naming it and asking Claude to read it before searching memory, in place of the reminder and the nudge;
 - after 3 prompts without a memory search, when your prompt names things the memory knows about, a nudge that names them;
 - a **save prompt** (below).
 
@@ -112,7 +114,7 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 
 | What | Size |
 |---|---|
-| The memory guide, each session start | about 1,100 characters |
+| The memory guide, each session start | about 1,200 characters |
 | The briefing, each session start | up to about 1,600 characters |
 | The memory tools' descriptions and instructions | about 4,000 characters |
 | Memories on prompts, whole session | up to 6,000 characters (`recall.session_budget_chars`) |
