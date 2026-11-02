@@ -477,7 +477,7 @@ func failedRetains(ctx context.Context, cl *hindsight.Client, bank string, c *Ch
 		return
 	}
 	c.Detail += "; the last extraction failed " + at(failed.FinishedAt()) + ", they succeed since " + at(completed.FinishedAt())
-	c.Fix = "the sessions sent while extraction failed may be missing from memory: backsight guide troubleshooting#extraction-fails-or-costs-too-much"
+	c.Fix = "the sessions sent while extraction failed may be missing from memory: backsight retain resend-failed --plan lists those of this PC to send again whole"
 }
 
 // checkBankConfig compares the bank's settings with backsight's template
@@ -967,7 +967,7 @@ const unconfirmedListed = 5
 // unconfirmed in the last 30 days (replace_unconfirmed telemetry events): a
 // part replacing a document was never confirmed on the server within 24 h
 // of its send, so some of this PC's turns may be missing there. It warns,
-// naming the newest few: nothing re-sends such a part.
+// naming the newest few; retain resend-failed sends their sessions again.
 func checkReplaceUnconfirmed(dir string, now time.Time) Check {
 	c := Check{ID: "replace-unconfirmed", Status: OK, Summary: "no session part given up unconfirmed in the last 30 days"}
 	ev, err := stats.Load(dir, now.Add(-30*24*time.Hour), now)
@@ -1001,7 +1001,7 @@ func checkReplaceUnconfirmed(dir string, now time.Time) Check {
 	c.Summary = fmt.Sprintf("%d session part(s) given up unconfirmed in the last 30 days: some of this PC's turns may be missing on the server", len(parts))
 	c.Detail = fmt.Sprintf("%d session part(s) never confirmed on the server since %s: %s",
 		len(parts), parts[len(parts)-1].TS.UTC().Format("2006-01-02"), strings.Join(names, ", "))
-	c.Fix = "backsight guide troubleshooting#doctor-a-session-part-was-never-confirmed"
+	c.Fix = "backsight retain resend-failed --plan lists the sessions to send again whole (backsight guide troubleshooting#doctor-a-session-part-was-never-confirmed)"
 	return c
 }
 

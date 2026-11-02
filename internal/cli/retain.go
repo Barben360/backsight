@@ -34,7 +34,7 @@ var sendsConfigLoaded = func() {}
 
 func newRetainCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "retain", Short: "Send settled sessions to the memory", Args: cobra.NoArgs}
-	cmd.AddCommand(newRetainFlushCmd(e), newRetainRetryCmd(e), newRetainBackfillCmd(e), newRetainReattributeCmd(e), newRetainPurgeAgainCmd(e))
+	cmd.AddCommand(newRetainFlushCmd(e), newRetainRetryCmd(e), newRetainBackfillCmd(e), newRetainReattributeCmd(e), newRetainResendFailedCmd(e), newRetainPurgeAgainCmd(e))
 	return cmd
 }
 
