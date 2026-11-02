@@ -367,8 +367,8 @@ func TestDependabotTracksModulesAndActionsNotTheNativeLock(t *testing.T) {
 		seen[eco] = true
 		wants := []string{`(?m)^      interval: "?weekly"?\s*$`, `(?m)^    groups:\s*$`, `(?m)^    directory: "?/"?\s*$`}
 		if eco == "pip" {
-			// The native lock must match the pinned image (0078): every
-			// package in it is ignored, security updates included.
+			// The native lock must match the pinned image (0078), overrides.txt
+			// aside: every package in it is ignored, security updates included.
 			wants = []string{`(?m)^    directory: "?/internal/server/nativelock"?\s*$`, `(?m)^      - dependency-name: "\*"\s*$`}
 		}
 		for _, want := range wants {

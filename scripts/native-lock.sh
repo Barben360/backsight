@@ -11,10 +11,22 @@
 # embeds and installs with `uv pip install --require-hashes --no-deps`.
 #
 # It fails when the image ships another hindsight-api-slim than its tag,
-# when its Python is not 3.11, and when a resolved package is not the
-# image's own (none expected; a deliberate exception is named in
+# when its Python is not 3.11, and when a resolved package is neither the
+# image's own nor an override (a deliberate exception is named in
 # NATIVE_LOCK_EXTRA, space-separated package names, and recorded in the
-# header). --check regenerates into a temporary file and fails when any
+# header).
+#
+# internal/server/nativelock/overrides.txt (NATIVE_LOCK_OVERRIDES names
+# another file, tests) lists the deliberate departures from the image,
+# "name==version: reason" per line: a security fix the image lacks, or a
+# package such a fix requires. Each replaces the image's version in the
+# constraints (a plain constraint, not uv's --override: every package's
+# declared requirements still hold), must be in the resolved lock at
+# exactly that version, and is recorded in the header as "# override:
+# name==version (image: version|none)". An override the image ships at
+# the same or a newer version is refused (sort -V order): drop it.
+#
+# --check regenerates into a temporary file and fails when any
 # name==version line or the header differs from the committed lock; the
 # hashes are not compared (PyPI may add wheels to a release).
 #
@@ -22,7 +34,8 @@
 # requirements-windows-amd64.txt: the same roots plus msvc-runtime, resolved
 # for x86_64-pc-windows-msvc with every name==version of the Linux lock as a
 # constraint, so a package both locks hold has one version. It needs the
-# Linux lock, uv and PyPI, not Docker. --check-shared compares the two
+# Linux lock, uv and PyPI, not Docker. Its header repeats the Linux lock's
+# "# override:" lines. --check-shared compares the two
 # committed locks offline: a package in both with two versions must be in
 # WINDOWS_EXCEPTIONS, a package only in the Windows lock must be in
 # WINDOWS_ONLY.
@@ -138,6 +151,7 @@ if [ "$target" = windows ]; then
     echo "# python: $pyline"
     echo "# platform: $platform"
     echo "# linux-lock: $hash12"
+    grep '^# override: ' "$linux_lock" || true
     cat "$work/body.txt"
   } > "$work/lock.txt"
   shared_check "$work/lock.txt" "$linux_lock"
@@ -165,6 +179,30 @@ shipped=$(sed -n 's/^hindsight-api-slim==//p' "$work/constraints.txt")
 [ "$shipped" = "$tag" ] || die "the image $image ships hindsight-api-slim ${shipped:-none}, its tag says $tag"
 
 printf '%s\n' "hindsight-api-slim[local-onnx,embedded-db]==$tag" "pg0-embedded==$pg0" > "$work/in.txt"
+
+# The overrides: name==version (PEP 503 names), checked line by line, then
+# "# override:" header lines; the constraints take their versions.
+overrides_file=${NATIVE_LOCK_OVERRIDES:-$root/internal/server/nativelock/overrides.txt}
+[ -f "$overrides_file" ] || die "no overrides file at $overrides_file"
+bad=$(awk '/^[[:space:]]*(#|$)/ { next }
+  !/^[A-Za-z0-9][A-Za-z0-9._-]*==[^[:space:]:]+: [^[:space:]]/ { print "line " NR ": " $0 }' "$overrides_file")
+[ -z "$bad" ] || die "$overrides_file: want name==version: reason, not
+$(echo "$bad" | sed 's/^/  /')"
+{ grep -Ev '^[[:space:]]*(#|$)' "$overrides_file" || true; } | sed 's/: .*//' | norm | sort > "$work/overrides.txt"
+twice=$(sed 's/==.*//' "$work/overrides.txt" | uniq -d | tr '\n' ' ')
+[ -z "$twice" ] || die "$overrides_file names ${twice% } twice"
+: > "$work/override-header.txt"
+while IFS='=' read -r name _ ver; do
+  iv=$(sed -n "s/^$name==//p" "$work/constraints.txt")
+  if [ -n "$iv" ] && [ "$(printf '%s\n%s\n' "$ver" "$iv" | sort -V | tail -n 1)" = "$iv" ]; then
+    die "the image ships $name $iv, not older than its override $ver: drop it from $overrides_file"
+  fi
+  echo "# override: $name==$ver (image: ${iv:-none})" >> "$work/override-header.txt"
+done < "$work/overrides.txt"
+awk -F'==' -v ov="$work/overrides.txt" 'BEGIN { while ((getline l < ov) > 0) { split(l, a, "=="); o[a[1]] } }
+  !($1 in o)' "$work/constraints.txt" | cat - "$work/overrides.txt" | sort > "$work/pins.txt"
+mv "$work/pins.txt" "$work/constraints.txt"
+
 # The user's own uv and pip settings (an index, a config file) stay out:
 # the lock is PyPI's.
 env -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL -u UV_DEFAULT_INDEX -u UV_INDEX -u UV_FIND_LINKS \
@@ -173,10 +211,12 @@ env -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL -u UV_DEFAULT_INDEX -u UV_INDEX -u UV_
   --python-version 3.11 --python-platform "$platform" \
   -c "$work/constraints.txt" -o "$work/body.txt" "$work/in.txt"
 
+unheld=$(comm -23 "$work/overrides.txt" <(reqs "$work/body.txt") | tr '\n' ' ')
+[ -z "$unheld" ] || die "the resolved lock does not hold the override(s) ${unheld% }: nothing requires them, or another version won; fix $overrides_file"
 extra=${NATIVE_LOCK_EXTRA:-}
 missing=$(comm -23 <(reqs "$work/body.txt") "$work/constraints.txt" |
   awk -v extra=" $extra " -F'==' 'index(extra, " " $1 " ") == 0')
-[ -z "$missing" ] || die "resolved packages that are not the image's (NATIVE_LOCK_EXTRA names a deliberate one): $(echo "$missing" | tr '\n' ' ')"
+[ -z "$missing" ] || die "resolved packages that are not the image's or an override: $(echo "$missing" | tr '\n' ' ')(NATIVE_LOCK_EXTRA names a deliberate one)"
 
 out=$work/lock.txt
 {
@@ -184,6 +224,7 @@ out=$work/lock.txt
   echo "# image: $image"
   echo "# python: $py (image: $py)"
   echo "# platform: $platform"
+  cat "$work/override-header.txt"
   [ -z "$extra" ] || echo "# not in the image: $extra"
   cat "$work/body.txt"
 } > "$out"

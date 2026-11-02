@@ -67,16 +67,24 @@ func runNativeLock(t *testing.T, listing, body, lock string, args ...string) (ca
 // compile was given.
 func runNativeLockIn(t *testing.T, listing, body, lock string, args ...string) (calls, out, constraints string, err error) {
 	t.Helper()
+	return runNativeLockOv(t, "", listing, body, lock, args...)
+}
+
+// runNativeLockOv is runNativeLockIn with overrides as the overrides file
+// (NATIVE_LOCK_OVERRIDES; the others run with an empty one, not the
+// committed overrides.txt).
+func runNativeLockOv(t *testing.T, overrides, listing, body, lock string, args ...string) (calls, out, constraints string, err error) {
+	t.Helper()
 	root, _ := filepath.Abs("..")
 	fake := t.TempDir()
 	lastFake = fake
-	for name, content := range map[string]string{"docker": fakeLockDocker, "uv": fakeLockUV, "listing.txt": listing, "body.txt": body} {
+	for name, content := range map[string]string{"docker": fakeLockDocker, "uv": fakeLockUV, "listing.txt": listing, "body.txt": body, "overrides.txt": overrides} {
 		if werr := os.WriteFile(filepath.Join(fake, name), []byte(content), 0o755); werr != nil {
 			t.Fatal(werr)
 		}
 	}
 	cmd := exec.Command(filepath.Join(root, "scripts", "native-lock.sh"), args...)
-	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK="+lock)
+	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK="+lock, "NATIVE_LOCK_OVERRIDES="+filepath.Join(fake, "overrides.txt"))
 	var b bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &b, &b
 	err = cmd.Run()
@@ -172,6 +180,70 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 			t.Errorf("constraints:\n%s\nwant:\n%s", cons, want)
 		}
 	})
+
+	// overrides.txt: a version in place of the image's, or a package the
+	// image lacks, each with its reason, recorded in the header.
+	const overrides = "# why\n\nZope.Interface==7.1: a security fix\nnew-dep==2.0: required by zope-interface 7.1\n"
+	overBody := strings.Replace(lockBody, "zope-interface==7.0", "zope-interface==7.1", 1) +
+		"new-dep==2.0 \\\n    --hash=sha256:5555555555555555555555555555555555555555555555555555555555555555\n"
+	overHeader := lockHeader + "# override: new-dep==2.0 (image: none)\n# override: zope-interface==7.1 (image: 7.0)\n"
+
+	t.Run("an override replaces the image's version and is recorded", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_, out, cons, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock)
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		if want := "hindsight-api-slim==" + tag + "\nnew-dep==2.0\npg0-embedded==0.15.2\nzope-interface==7.1\n"; cons != want {
+			t.Errorf("constraints:\n%s\nwant:\n%s", cons, want)
+		}
+		if got, _ := os.ReadFile(lock); string(got) != overHeader+overBody {
+			t.Errorf("lock:\n%s\nwant:\n%s", got, overHeader+overBody)
+		}
+	})
+
+	t.Run("--check fails on a lock that does not record an override", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_ = os.WriteFile(lock, []byte(lockHeader+overBody), 0o644)
+		_, out, _, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock, "--check")
+		if err == nil || !strings.Contains(out, "# override: zope-interface==7.1 (image: 7.0)") {
+			t.Errorf("--check = %v:\n%s", err, out)
+		}
+		_ = os.WriteFile(lock, []byte(overHeader+overBody), 0o644)
+		if _, out, _, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock, "--check"); err != nil {
+			t.Errorf("--check on the recorded lock: %v:\n%s", err, out)
+		}
+	})
+
+	t.Run("--check fails on a lock without a declared override", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_ = os.WriteFile(lock, []byte(lockHeader+lockBody), 0o644)
+		_, out, _, err := runNativeLockOv(t, overrides, imageListing(tag), overBody, lock, "--check")
+		if err == nil || !strings.Contains(out, "zope-interface==7.1") {
+			t.Errorf("--check = %v:\n%s", err, out)
+		}
+	})
+
+	for name, tc := range map[string]struct{ overrides, body, want string }{
+		"a resolution that does not hold a declared override":   {overrides, strings.Replace(overBody, "zope-interface==7.1", "zope-interface==7.0", 1), "does not hold the override(s) zope-interface==7.1"},
+		"an override nothing requires":                          {overrides, lockBody, "does not hold the override(s) new-dep==2.0 zope-interface==7.1"},
+		"an override at the image's own version":                {"zope-interface==7.0: stale\n", lockBody, "the image ships zope-interface 7.0"},
+		"an override older than the image's version":            {"zope-interface==6.9: stale\n", lockBody, "the image ships zope-interface 7.0"},
+		"an override without a reason":                          {"zope-interface==7.1\n", overBody, "name==version: reason"},
+		"an override given twice":                               {"zope-interface==7.1: a\nzope.interface==7.1: b\n", overBody, "zope-interface twice"},
+		"a resolved version that is neither image nor override": {"new-dep==2.0: x\n", overBody, "not the image's or an override: zope-interface==7.1"},
+	} {
+		t.Run(name+" is refused and nothing is written", func(t *testing.T) {
+			lock := filepath.Join(t.TempDir(), "lock.txt")
+			_, out, _, err := runNativeLockOv(t, tc.overrides, imageListing(tag), tc.body, lock)
+			if err == nil || !strings.Contains(out, tc.want) {
+				t.Errorf("= %v, want a refusal naming %q:\n%s", err, tc.want, out)
+			}
+			if _, serr := os.Stat(lock); serr == nil {
+				t.Error("a lock was written")
+			}
+		})
+	}
 }
 
 // runWindowsLock runs native-lock.sh --platform windows with fake uv (and a
@@ -235,6 +307,27 @@ func TestNativeLockScriptWindows(t *testing.T) {
 			if !strings.Contains(string(calls), want) {
 				t.Errorf("uv pip compile lacks %q:\n%s", want, calls)
 			}
+		}
+	})
+
+	t.Run("the Linux lock's overrides are recorded in the Windows header", func(t *testing.T) {
+		const rec = "# override: zope-interface==7.0 (image: 6.9)\n"
+		linuxOv := filepath.Join(t.TempDir(), "linux.txt")
+		if err := os.WriteFile(linuxOv, []byte(linuxHeader+rec+linuxBody), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ovSum := sha256.Sum256([]byte(linuxHeader + rec + linuxBody))
+		want := strings.Replace(wantHeader, hex.EncodeToString(sum[:])[:12], hex.EncodeToString(ovSum[:])[:12], 1) + rec
+		win := filepath.Join(t.TempDir(), "win.txt")
+		if out, err := runWindowsLock(t, winBody, linuxOv, win); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		if got, _ := os.ReadFile(win); string(got) != want+winBody {
+			t.Errorf("lock:\n%s\nwant:\n%s", got, want+winBody)
+		}
+		_ = os.WriteFile(win, []byte(wantHeader+winBody), 0o644)
+		if out, err := runWindowsLock(t, winBody, linuxOv, win, "--check"); err == nil || !strings.Contains(out, strings.TrimSpace(rec)) {
+			t.Errorf("--check on a Windows lock without the override line = %v:\n%s", err, out)
 		}
 	})
 

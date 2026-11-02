@@ -16,6 +16,8 @@ What this source tree pins and requires. A release built from it ships exactly t
 
 Both images are pinned by the digest of their multi-arch index, so the tag is only a label: a signed release fixes the digest, and Docker pulls exactly that image (no separate image signature).
 
+The native runtime installs the same Hindsight version from PyPI, with the Python packages hash-locked to the Hindsight image's versions, except a few raised past a published security advisory the image's version has (authlib, dnspython, fastmcp, pyasn1, OpenTelemetry, and what these require). `internal/server/nativelock/overrides.txt` lists each with its reason; the [native runtime](native-runtime.md#what-it-lacks) page says more.
+
 Tested with Docker 29.9 and Compose 5.6 (as of 2026-10-25), and on every change with the Docker of GitHub's `ubuntu-latest` runners. CI installs the Claude Code version pinned in `.github/workflows/ci.yml`.
 
 ## Platforms

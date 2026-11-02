@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -201,7 +202,7 @@ func TestDoctorChecksOfANativeInstallAreUnchanged(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: Linux's native doctor list (Windows': TestDoctorWindowsChecks, TestDoctorOnWindowsReadsTheTaskAndTheSupervisor)")
 	_, n, _, _, _ := nativeHost(t)
 	nativeSys = &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
-	lockedVenv(t, n, n.Version(), "3.2.0")
+	lockedVenv(t, n, n.Version(), nativelock.Versions()["fastmcp"])
 	if err := os.Chmod(n.Home(), 0o700); err != nil {
 		t.Fatal(err)
 	}

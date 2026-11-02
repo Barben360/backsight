@@ -365,7 +365,7 @@ func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
 	_, n, tools, _, _ := nativeHost(t)
 	sys := &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
 	nativeSys = sys
-	lockedVenv(t, n, n.Version(), "3.2.0")
+	lockedVenv(t, n, n.Version(), nativelock.Versions()["fastmcp"])
 	if err := os.Chmod(n.Home(), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
 	for id, want := range map[string]string{
 		"native-unit":     n.ServerUnit() + " is failed",
 		"native-linger":   "linger is off",
-		"native-venv":     "fastmcp==3.2.0",
+		"native-venv":     "fastmcp==" + nativelock.Versions()["fastmcp"],
 		"native-home":     "has mode 0755, not 0700",
 		"native-identity": "identifier 111, recorded 999",
 		"native-stray":    "pid 4242",

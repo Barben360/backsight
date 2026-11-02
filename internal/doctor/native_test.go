@@ -287,8 +287,8 @@ func venvWith(t *testing.T, pkgs map[string]string) string {
 
 func TestNativeVenvDiff(t *testing.T) {
 	lock := nativelock.Versions()
-	if lock["fastmcp"] != "3.2.0" {
-		t.Fatalf("the lock pins fastmcp %q: the test assumes 3.2.0", lock["fastmcp"])
+	if lock["fastmcp"] != "3.4.11" {
+		t.Fatalf("the lock pins fastmcp %q: the test assumes 3.4.11", lock["fastmcp"])
 	}
 	pkgs := map[string]string{}
 	for name, v := range lock {
@@ -297,15 +297,15 @@ func TestNativeVenvDiff(t *testing.T) {
 	pkgs["fastmcp"] = "4.1.4"
 	pkgs["not_in_the_lock"] = "1.0" // an extra package is no difference
 	diff, err := NativeVenvDiff(venvWith(t, pkgs))
-	if err != nil || !slices.Equal(diff, []string{"fastmcp==3.2.0"}) {
-		t.Errorf("one other version: %v %v, want [fastmcp==3.2.0]", diff, err)
+	if err != nil || !slices.Equal(diff, []string{"fastmcp==3.4.11"}) {
+		t.Errorf("one other version: %v %v, want [fastmcp==3.4.11]", diff, err)
 	}
 	delete(pkgs, "fastmcp")
 	diff, err = NativeVenvDiff(venvWith(t, pkgs))
-	if err != nil || !slices.Equal(diff, []string{"fastmcp==3.2.0"}) {
-		t.Errorf("one missing: %v %v, want [fastmcp==3.2.0]", diff, err)
+	if err != nil || !slices.Equal(diff, []string{"fastmcp==3.4.11"}) {
+		t.Errorf("one missing: %v %v, want [fastmcp==3.4.11]", diff, err)
 	}
-	pkgs["fastmcp"] = "3.2.0"
+	pkgs["fastmcp"] = "3.4.11"
 	if diff, err := NativeVenvDiff(venvWith(t, pkgs)); err != nil || len(diff) != 0 {
 		t.Errorf("the lock's set: %v %v, want none", diff, err)
 	}

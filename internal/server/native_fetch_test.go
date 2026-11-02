@@ -143,9 +143,11 @@ func under(root, p string) bool {
 
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
-// The pinned lock is the image's set: the same image and Hindsight version
-// as the Docker runtime (render.go's pinnedHindsight). In package server:
-// nativelock never imports it (ruling R8).
+// The pinned lock is the image's set (with overrides.txt's versions in
+// place of a few, nativelock's TestNativeLocksHoldAndRecordTheirOverrides):
+// the same image and Hindsight version as the Docker runtime (render.go's
+// pinnedHindsight). In package server: nativelock never imports it
+// (ruling R8).
 func TestNativeLockMatchesThePin(t *testing.T) {
 	if nativelock.Image() != pinnedHindsight {
 		t.Errorf("the lock was made from %q, the pinned image is %q: run scripts/native-lock.sh", nativelock.Image(), pinnedHindsight)
