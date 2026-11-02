@@ -93,6 +93,7 @@ func TestStateLayout(t *testing.T) {
 		d.PreImagesDir():    "pre-images",
 		d.TelemetryDir():    "telemetry",
 		d.FeedbackDir():     "feedback",
+		d.ImportDir():       "import",
 	} {
 		if want := filepath.Join("/s", rel); got != want {
 			t.Errorf("got %s, want %s", got, want)

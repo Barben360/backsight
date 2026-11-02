@@ -274,3 +274,34 @@ func TestAppliedTemplateRoundTrips(t *testing.T) {
 		t.Error("a broken record was read")
 	}
 }
+
+const importRuleText = `The source is a file imported from another memory or notes tool. Keep durable statements (decisions, conventions, pitfalls, facts about people, projects and tools) with their reason. A log line, a status, a to-do or a draft without a conclusion holds no fact.`
+
+func TestTemplateHasImportStrategy(t *testing.T) {
+	strategies, _ := Current().Config["retain_strategies"].(map[string]any)
+	imp, ok := strategies["import"].(map[string]any)
+	if !ok {
+		t.Fatalf("retain_strategies = %v, want an import strategy", strategies)
+	}
+	text, _ := imp["retain_custom_instructions"].(string)
+	if !strings.HasPrefix(text, rules) || !strings.HasSuffix(text, "\n"+importRuleText) {
+		t.Errorf("import instructions = %q", text)
+	}
+	if imp["retain_chunk_size"] != 30000 || imp["retain_extraction_mode"] != "custom" {
+		t.Errorf("import strategy = %v", imp)
+	}
+}
+
+func TestApplyNewTemplateSendsTheImportStrategy(t *testing.T) {
+	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
+	if _, err := ApplyBank(context.Background(), client(t, f), "claude-memory", "older-template-hash", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.patches) != 1 {
+		t.Fatalf("patches = %d", len(f.patches))
+	}
+	var strategies map[string]json.RawMessage
+	if err := json.Unmarshal(f.patches[0]["retain_strategies"], &strategies); err != nil || strategies["import"] == nil {
+		t.Errorf("patched strategies = %v %v, want import", strategies, err)
+	}
+}

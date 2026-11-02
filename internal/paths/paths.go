@@ -50,6 +50,9 @@ func (d Dirs) ConnectDir() string { return filepath.Join(d.State, "connect") }
 // FeedbackDir holds the feedback journal and the turn pointers.
 func (d Dirs) FeedbackDir() string { return filepath.Join(d.State, "feedback") }
 
+// ImportDir holds one manifest per imported folder (import/<source>.json).
+func (d Dirs) ImportDir() string { return filepath.Join(d.State, "import") }
+
 // IndexDir holds the local metrics index, derived from telemetry and the
 // feedback journal. MetricsDir and DashboardDir are named here for the
 // uninstall; their owners create them.

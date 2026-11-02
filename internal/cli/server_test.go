@@ -242,6 +242,8 @@ var (
 	projectEntities    map[string]string
 	retainedTags       []string
 	retainedContents   []string     // the content of every accepted item
+	retainedDocIDs     []string     // the document of every accepted item
+	retainedStrategies []string     // the strategy of every accepted item
 	sharedSends        atomic.Int64 // shared ledger documents retained (not in retained)
 	// fakeDocCreated overrides a document's created_at (default: when the
 	// fake accepted it).
@@ -277,6 +279,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	llmPeriod = ""
 	extractFails.Store(false)
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
+	retainedDocIDs, retainedStrategies = nil, nil
 	fakeDocCreated = map[string]time.Time{}
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	memoryStatus, memoryHistory = map[string]int{}, map[string]string{}
@@ -626,6 +629,7 @@ func fakeHindsight(t *testing.T) (port int) {
 					Content    string          `json:"content"`
 					Metadata   json.RawMessage `json:"metadata"`
 					Tags       []string        `json:"tags"`
+					Strategy   string          `json:"strategy"`
 				} `json:"items"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -655,6 +659,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				llmInput.Add(llmPerRetain.Load())
 				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))
 				retainedContents = append(retainedContents, it.Content)
+				retainedDocIDs = append(retainedDocIDs, it.DocumentID)
+				retainedStrategies = append(retainedStrategies, it.Strategy)
 			}
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):

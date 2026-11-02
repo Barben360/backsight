@@ -321,7 +321,6 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 // purgeDocuments are the documents a purge of facts deletes, each read for
 // its memory count, and the facts with no document, which no API deletes.
 func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail) ([]purgeDoc, []string, error) {
-	var out []purgeDoc
 	var undeletable []string
 	docs := map[string]bool{}
 	for _, f := range facts {
@@ -331,10 +330,26 @@ func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, fact
 			docs[f.DocumentID] = true
 		}
 	}
+	ids := make([]string, 0, len(docs))
 	for d := range docs {
+		ids = append(ids, d)
+	}
+	out, err := purgeDocumentsByID(ctx, cl, bank, ids, false)
+	return out, undeletable, err
+}
+
+// purgeDocumentsByID reads each document for its memory count and
+// tombstone, sorted by id; with skipMissing, a document the server does
+// not hold is left out instead of failing.
+func purgeDocumentsByID(ctx context.Context, cl *hindsight.Client, bank string, ids []string, skipMissing bool) ([]purgeDoc, error) {
+	var out []purgeDoc
+	for _, d := range ids {
 		doc, err := cl.GetDocument(ctx, bank, d)
 		if err != nil {
-			return out, undeletable, fmt.Errorf("reading document %s: %w", d, err)
+			if skipMissing && notFound(err) {
+				continue
+			}
+			return out, fmt.Errorf("reading document %s: %w", d, err)
 		}
 		tomb := retain.TombstoneOf(bank, d, doc.Metadata, time.Time{})
 		if strings.HasPrefix(d, "note:") && doc.OriginalText != "" {
@@ -343,7 +358,7 @@ func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, fact
 		out = append(out, purgeDoc{ID: d, Memories: doc.MemoryUnits, tomb: tomb})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, undeletable, nil
+	return out, nil
 }
 
 // projectsOf are the projects ms are tagged with.

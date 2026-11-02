@@ -37,6 +37,9 @@ type tickResult struct {
 	Sessions map[string]int     `json:"sessions,omitempty"`
 	Notes    retain.FlushResult `json:"notes"`
 	Backfill string             `json:"backfill,omitempty"`
+	// Import: queued folder imports sent this tick (sent, left, paused).
+	Import     string `json:"import,omitempty"`
+	importSent int
 	// Extraction: why nothing was sent, while the server's extraction LLM
 	// fails (extractionGate); "" while sends go out.
 	Extraction string   `json:"extraction,omitempty"`
@@ -111,7 +114,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				res.MetricsIndex = tickIndex(cmd.Context(), d, home)
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History,
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History, "import_sent": res.importSent,
 						"shared_up": res.SharedUp, "shared_machines": res.SharedMachines, "shared_skipped": res.SharedSkipped, "shared_error": res.SharedError}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
@@ -232,6 +235,13 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					}
 				}
 			}
+			if f.Hold == "" && otherServer(d, cfg) == nil {
+				ir, ierr := filesImportInTick(cmd.Context(), f, d, cfg, tw)
+				res.Import, res.importSent = ir.String(), ir.Sent
+				if ierr != nil {
+					res.Import = strings.TrimPrefix(res.Import+"; failed: "+redacted(ierr, sec).Error(), "; ")
+				}
+			}
 			if otherServer(d, cfg) != nil {
 				// Not the server this client joined: nothing is written to
 				// it, notes stay queued (decision 0073).
@@ -310,6 +320,9 @@ func tickText(r tickResult) string {
 	}
 	if r.Backfill != "" {
 		msg += ", backfill " + r.Backfill
+	}
+	if r.Import != "" {
+		msg += ", import " + r.Import
 	}
 	if r.Epoch != "" {
 		msg += ", " + r.Epoch
