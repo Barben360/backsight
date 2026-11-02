@@ -18,7 +18,7 @@ import (
 
 // nativeWinIDs are the native checks on Windows, in their order.
 var nativeWinIDs = []string{"native-task", "supervisor", "native-fsync", "native-identity", "native-stray", "native-home", "native-venv",
-	"native-dlls", "native-private", "path-length"}
+	"native-dlls", "native-private", "path-length", "native-owner"}
 
 // restartFix restarts the supervisor: there is no server restart command.
 const restartFix = "backsight server stop, then backsight server start"

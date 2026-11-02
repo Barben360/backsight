@@ -35,7 +35,7 @@ func windowsFacts() NativeFacts {
 
 // wantWinIDs are the checks of a native install on Windows, in order.
 var wantWinIDs = []string{"native-task", "supervisor", "native-fsync", "native-identity", "native-stray", "native-home", "native-venv",
-	"native-dlls", "native-private", "path-length"}
+	"native-dlls", "native-private", "path-length", "native-owner"}
 
 func withVersion(t *testing.T, v string) {
 	t.Helper()
@@ -200,10 +200,10 @@ func TestDoctorWindowsProbeFails(t *testing.T) {
 }
 
 // The Linux native list is the one recorded at 884c942 (the cli golden
-// doctor-checks-native.golden pins it with the rest of doctor's): the
-// Windows checks add nothing to it.
+// doctor-checks-native.golden pins it with the rest of doctor's), plus
+// native-owner (issue #158): the Windows checks add nothing to it.
 func TestLinuxDoctorListUnchanged(t *testing.T) {
-	want := []string{"native-unit", "native-fsync", "native-identity", "native-stray", "native-linger", "native-home", "native-venv", "web-ui"}
+	want := []string{"native-unit", "native-fsync", "native-identity", "native-stray", "native-linger", "native-home", "native-venv", "native-owner", "web-ui"}
 	f := newFixture(t)
 	nativeInstall(f, goodFacts)
 	var got []string

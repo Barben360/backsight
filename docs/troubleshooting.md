@@ -174,6 +174,24 @@ Docker Compose knows a project by its name alone, `server.project` (`backsight` 
 
 A home that was moved or renamed is not refused: its old directory no longer holds a `compose.yaml`, so its next start takes its containers over. The check compares directories after resolving symbolic links (and without case on Windows). When Docker cannot be asked, the command stops before any change, as it would stop at its first Docker call.
 
+## A server command says the native server belongs to another install
+
+The native runtime names what it installs for the whole user account after `server.project` alone: the systemd user units `<project>-db.service` and `<project>-server.service` on Linux; on Windows, the scheduled task `\<project>\server` and the supervisor that answers for the project. A second backsight home of the same user (`BACKSIGHT_HOME` set, a test install) that keeps the default name would rewrite the first install's units to its own directory, then start, stop or disable them; on Windows it would register the task again for itself, or stop the first install's supervisor. So before any command that writes, starts, stops or removes them (`server render`, `start`, `stop`, `install`, `upgrade`, `token --rotate`, setup's server step, `restore`, `uninstall`, a runtime switch or clean), backsight checks that they are this install's:
+
+- each unit names the native directory it runs from (`WorkingDirectory=`, and the database unit's `HOME`);
+- the task runs another install's program when its action names a backsight program other than this install's (`<data>\bin\…`);
+- the supervisor says which native directory it runs from.
+
+When they belong to another install whose directory still holds its `server.env` (or, for the task, whose program is still there), the command exits 20, nothing changed, and names that install's directory. doctor's `native-owner` check reports the same, changing nothing; `server status` and the other read-only commands are not refused.
+
+- This home is a second install: give it a project of its own, `project = "<name>"` under `[server]` in its `config.toml` (lowercase letters, digits, `-` and `_`), then `backsight server install`.
+- You meant to act on the other install: run the command from it (with its `BACKSIGHT_HOME`).
+- The other directory is an old copy of this install that nothing runs any more: do what the message says (on Linux, delete that copy's `server.env`; on Windows, delete the task with the `schtasks /Delete` command it gives) and run the command again; this install takes the units or the task over.
+
+A home that was moved or renamed is not refused: its old directory, or its old program, is gone, so its next `server render` or start takes the units or the task over. A unit file that cannot be read stops the command before any change. A supervisor from a backsight release older than this check does not say its directory: it is not refused, and the task check still applies.
+
+On Windows, when Task Scheduler does not answer for the task (`schtasks` fails, and its message cannot tell a missing task from a passing trouble), backsight reads the file Task Scheduler keeps it in, `%SystemRoot%\System32\Tasks\<project>\server`: another install's task there is refused the same way. When that file cannot be read either (Task Scheduler's folder may refuse an account that is not an administrator), the task is driven as before, so an install without a task still starts. With `server.start_on_session`, a Claude Code session starts this install's supervisor only when no other install's supervisor answers and that file names no other install's program; when the file cannot be read, a session can start this install's supervisor while the other install's is stopped, and the other's then stays down until this one stops. A second install of the same user avoids all of this with a `server.project` of its own.
+
 ## A command says to run it on the server's host
 
 `this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine, and the commands that manage it or write its banks only work there: [the list](commands.md#server). Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.

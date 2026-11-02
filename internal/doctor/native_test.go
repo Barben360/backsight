@@ -348,3 +348,32 @@ func TestDoctorNativeQuotesPathsInCommands(t *testing.T) {
 		t.Errorf("sh read %q (%v), want %q", out, err, root)
 	}
 }
+
+// Issue #158: doctor reports native units, a task or a supervisor that
+// another install runs under this project, which every command that
+// changes the server refuses; it changes nothing itself.
+func TestDoctorNativeOwnerCheck(t *testing.T) {
+	for _, windows := range []bool{false, true} {
+		f := newFixture(t)
+		owner := error(&server.ForeignNativeError{Project: "backsight", What: "the systemd user units backsight-db.service and backsight-server.service",
+			Dir: "/mine/native", Other: "/other/native", Free: "delete /other/native/server.env"})
+		nativeInstall(f, func() NativeFacts {
+			n := goodFacts()
+			if windows {
+				n = windowsFacts()
+			}
+			n.Owner = owner
+			return n
+		})
+		c := check(t, f.run(), "native-owner")
+		expect(t, c, Error, "another backsight install")
+		if !strings.Contains(c.Summary, "/other/native") || !strings.Contains(c.Detail, "/mine/native") ||
+			!strings.Contains(c.Fix, "server.project") || !strings.Contains(c.Fix, "delete /other/native/server.env") {
+			t.Errorf("windows %v, foreign: %+v", windows, c)
+		}
+		owner = nil
+		expect(t, check(t, f.run(), "native-owner"), OK, "this install's")
+		owner = errors.New("permission denied")
+		expect(t, check(t, f.run(), "native-owner"), Error, "cannot tell")
+	}
+}

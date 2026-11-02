@@ -30,6 +30,10 @@ type Status struct {
 	API     string `json:"api"`
 	Refusal string `json:"refusal,omitempty"`
 	Venv    string `json:"venv"`
+	// Root is the native directory it runs from (server.env's): a second
+	// install of the same project tells its own supervisor from another
+	// install's by it. "" from a supervisor older than it.
+	Root string `json:"root,omitempty"`
 }
 
 // ErrNotRunning is Ask's error when no supervisor of the project answers.

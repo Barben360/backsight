@@ -407,6 +407,12 @@ func (n Native) StartIfDown(ctx context.Context) (started bool, err error) {
 	if _, err := h.ask(ctx, "status"); !errors.Is(err, supervise.ErrNotRunning) {
 		return false, err
 	}
+	// Another install's task (its file read, no schtasks within the
+	// hook's budget): its supervisor, merely down, keeps the project's
+	// mutex and pipe to itself.
+	if err := h.foreignTask(h.taskFile()); err != nil {
+		return false, err
+	}
 	if err := h.launch(false); err != nil {
 		return false, err
 	}
@@ -468,6 +474,9 @@ func (h taskHost) Remove(ctx context.Context) error {
 func (n Native) Unregister(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
+	}
+	if err := n.CheckOwner(ctx); err != nil { // never another install's (issue #158)
+		return err
 	}
 	if h, ok := n.host().(taskHost); ok {
 		// Marked stopped first: a SessionStart during the uninstall
@@ -678,11 +687,15 @@ func (n Native) StopOnPurpose(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
 	}
+	// Refused before the marker: a refused stop changes nothing.
+	if err := n.CheckOwner(ctx); err != nil {
+		return err
+	}
 	wrote, err := n.markStopped()
 	if err != nil {
 		return err
 	}
-	if err := n.Stop(ctx); err != nil {
+	if err := n.host().Stop(ctx); err != nil { // Stop, its owner checked above
 		if wrote {
 			n.clearStopped()
 		}
