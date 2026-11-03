@@ -1155,6 +1155,7 @@
         "feedback.boost_weight": 0.1,
         "feedback.confident_rank": 2,
         "feedback.credit_half_life_days": 365,
+        "feedback.cross_project_retire": 1,
         "feedback.enabled": 1,
         "feedback.max_retirements": 3,
         "feedback.miss_half_life_days": 90,

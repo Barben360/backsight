@@ -83,6 +83,16 @@ type Event struct {
 	Params    map[string]float64 `json:"params,omitempty"`
 	Note      string             `json:"note,omitempty"`
 	Source    string             `json:"source,omitempty"`
+	// MemoryProject: on a retire or hide, the project of the memory
+	// retired (Project is the session's); empty on lines written before
+	// the field.
+	MemoryProject string `json:"memory_project,omitempty"`
+}
+
+// CrossProject reports a retire or hide of a memory of another project
+// than the session's.
+func (e Event) CrossProject() bool {
+	return (e.Kind == KindRetire || e.Kind == KindHide) && e.MemoryProject != "" && e.MemoryProject != e.Project
 }
 
 // Kinds of the events that retire a memory shown in a session (a raw fact

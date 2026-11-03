@@ -820,7 +820,8 @@ func TestVerdictNeedsCorrectionAndEvidence(t *testing.T) {
 }
 
 func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
-	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 10\n") // five retirements below
+	// five retirements below; another project's memories are the user's
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 10\ncross_project_retire = false\n")
 	cfg, _, _ := loadServerConfig()
 	alias := cfg.Projects.Transverse[0]
 	_ = os.MkdirAll(filepath.Join(home, "proj"), 0o700)
@@ -851,6 +852,13 @@ func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
 		t.Errorf("linked: %v %s", isErr, out)
 	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:proj,") {
 		t.Errorf("linked: note tags %q", last)
+	}
+	// a linked project's memory alone: its project
+	rawFact(linked)
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "dddddddd")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("linked alone: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:atlas-spec,") {
+		t.Errorf("linked alone: note tags %q", last)
 	}
 	// only transverse memories: the note goes to the pool
 	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "eeeeeeee")); isErr || !retiredRE.MatchString(out) {
