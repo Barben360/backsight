@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -139,7 +140,10 @@ func runResendFailed(ctx context.Context, f resendFailedFlags) (resendFailedResu
 	if !f.plan {
 		reconcile(ctx, fl)
 	}
-	if err := fl.ReattributionGuard(ctx); err != nil {
+	// A plan changes nothing: with retains still queued (and nothing else
+	// in the way) it still lists the sessions, then says why none can go.
+	var queued retain.QueuedError
+	if err := fl.ReattributionGuard(ctx); err != nil && (!f.plan || !errors.As(err, &queued)) {
 		res.Action = "refused"
 		return res, &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
 	}
@@ -173,6 +177,9 @@ func runResendFailed(ctx context.Context, f resendFailedFlags) (resendFailedResu
 	}
 	if f.plan {
 		res.Note = failing
+		if queued.N > 0 {
+			return res, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d operation(s) still queued on the server: nothing can be sent again until they ran, and this list may change by then", queued.N)}
+		}
 		return res, nil
 	}
 	if len(p.Resends) == 0 {
@@ -319,6 +326,9 @@ func resendFailedText(r resendFailedResult) string {
 		}
 		verb := map[bool]string{true: "sent again", false: "send again"}[slices.Contains(r.Queued, s.Session)]
 		fmt.Fprintf(&b, "%s session %s: %d record(s) to %s, %s", verb, s.Session, s.Records, strings.Join(names, ", "), estimateText(s.Estimate))
+		if s.Gone > 0 {
+			fmt.Fprintf(&b, "; %d of them from removed directories, under the project their turns were filed under", s.Gone)
+		}
 		if s.KeptOut > 0 {
 			fmt.Fprintf(&b, "; %d record(s) kept out of memory are not sent", s.KeptOut)
 		}
@@ -328,7 +338,13 @@ func resendFailedText(r resendFailedResult) string {
 		fmt.Fprintf(&b, "in all: %s\n", estimateText(p.Cost))
 	}
 	for _, h := range p.Held {
-		fmt.Fprintf(&b, "left alone: session %s (%s)\n", h.Session, h.Reason)
+		// a reason names directories, from the transcript
+		fmt.Fprintf(&b, "left alone: session %s (%s)\n", h.Session, strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, h.Reason))
 	}
 	if r.Backup != "" {
 		fmt.Fprintf(&b, "verified backup %s\n", r.Backup)

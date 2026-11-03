@@ -76,7 +76,11 @@ type Resend struct {
 	Records    int      `json:"records"`
 	// KeptOut: records the server holds that are now kept out of memory
 	// (an excluded path, a pause): not sent again.
-	KeptOut  int      `json:"kept_out,omitempty"`
+	KeptOut int `json:"kept_out,omitempty"`
+	// Gone: records sent again whose directory no longer exists (a
+	// removed worktree), filed under the project their turn was filed
+	// under when it ran.
+	Gone     int      `json:"gone,omitempty"`
 	Estimate Estimate `json:"estimate"`
 }
 
@@ -426,9 +430,17 @@ func (f *Flusher) ReattributionGuard(ctx context.Context) error {
 		return errors.New(errSummary(err))
 	}
 	if n > 0 {
-		return fmt.Errorf("%d operation(s) still queued on the server: retried once they ran", n)
+		return QueuedError{N: n}
 	}
 	return nil
+}
+
+// QueuedError is a guard's refusal for retains still queued on the server
+// alone: a plan, which changes nothing, can still be read.
+type QueuedError struct{ N int }
+
+func (e QueuedError) Error() string {
+	return fmt.Sprintf("%d operation(s) still queued on the server: retried once they ran", e.N)
 }
 
 func cmpOr(a, b string) string {
