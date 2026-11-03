@@ -118,6 +118,8 @@ type Point struct {
 	Complete      *bool    `json:"complete,omitempty"`
 	Tokens        *int64   `json:"tokens,omitempty"`
 	TokensPerUsed *float64 `json:"tokens_per_used,omitempty"`
+	// CI: the 95 % Wilson interval of a weekly share, set with its value.
+	CI *[2]float64 `json:"ci,omitempty"`
 	// Partial: the window covers only part of this day or hour (its first
 	// or last), so its counts are not a dip.
 	Partial bool `json:"partial,omitempty"`

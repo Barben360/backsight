@@ -24,11 +24,7 @@ const yieldReach = 29
 // shares are withheld.
 const yieldMaxUnresolved = 0.05
 
-const (
-	dateLayout = "2006-01-02"
-	// withheldCatchingUp is extra.withheld while the day lists catch up.
-	withheldCatchingUp = "record_catching_up"
-)
+const dateLayout = "2006-01-02"
 
 // The record's and the server's operations whose tokens a memory costs.
 var yieldOps = []string{"retain", "consolidation"}
@@ -51,8 +47,19 @@ type yieldRun struct {
 	unresolved, gone, pending, resolved int64
 }
 
-// readYield is the run over w, read once per transaction.
+// yieldSpan is how far back the weeks go from the window's end: the
+// server's longest series, whatever the view's window (a short window must
+// not leave every cohort incomplete).
+var yieldSpan = 90 * day
+
+// yieldWindow is the span the weeks cover: yieldSpan ending at w's end.
+func yieldWindow(w Window) Window {
+	return Window{Since: w.Until.Add(-yieldSpan), Until: w.Until, TZ: w.TZ, Loc: w.Loc}
+}
+
+// readYield is the run over w's end, read once per transaction.
 func readYield(e env, w Window) (*yieldRun, error) {
+	w = yieldWindow(w)
 	k := [2]int64{w.Since.UnixNano(), w.Until.UnixNano()}
 	if e.memo != nil {
 		if run, ok := e.memo.yield[k]; ok {
@@ -69,7 +76,7 @@ func readYield(e env, w Window) (*yieldRun, error) {
 	return run, err
 }
 
-// weeksOf are the weeks overlapping w, oldest first.
+// weeksOf are the weeks overlapping w (the yield span), oldest first.
 func weeksOf(w Window) []*yieldWeek {
 	civil := func(t time.Time) time.Time {
 		y, m, d := t.In(w.Loc).Date()
@@ -127,6 +134,9 @@ func (r *yieldRun) bounds() (first, last string, fromMs, toMs int64) {
 func readCreated(e env, r *yieldRun) error {
 	perDay, held := map[string]int64{}, map[string]string{}
 	if serverReason(e, "series") == "" {
+		// The series counts back from now, so its first bucket may cover
+		// only part of its day; a week that starts there may read low. The
+		// weeks that old are rarely complete cohorts anyway.
 		for _, b := range e.srv.Series.Buckets {
 			d := b.Time.UTC().Format(dateLayout)
 			perDay[d] += b.World + b.Experience + b.Observation
@@ -178,8 +188,8 @@ ORDER BY bucket`, from, to)
 	return nil
 }
 
-// readTokens sets each week's extraction tokens (input + output of retain
-// and consolidation, the one reading of tokens): the server's stats for the
+// readTokens sets each week's extraction tokens (input + output + thoughts of
+// retain and consolidation, the one reading of tokens, as extraction.tokens): the server's stats for the
 // days they hold, else the record's day lines. nil when the week has none.
 func readTokens(e env, r *yieldRun) error {
 	type key struct{ op, day string }
@@ -247,14 +257,11 @@ ORDER BY d.bucket, l.operation`, from, to)
 func readCohorts(e env, r *yieldRun) error {
 	first, last, _, _ := r.bounds()
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT created_day, COUNT(*) FROM (
-  SELECT m.memory_id, m.created_day, ROW_NUMBER() OVER (PARTITION BY m.memory_id ORDER BY m.ts DESC, m.source_file DESC, m."offset" DESC) AS rn
-  FROM memory_docs m
-  WHERE m.memory_id IN (SELECT memory_id FROM memory_docs WHERE created_day >= ? AND created_day <= ?)) d
-WHERE rn = 1 AND created_day >= ? AND created_day <= ?
+SELECT d.created_day, COUNT(*) FROM memory_doc d
+WHERE d.created_day >= ? AND d.created_day <= ?
   AND EXISTS (SELECT 1 FROM credits c WHERE c.memory_id = d.memory_id AND c.verdict = 'used'
               AND c.ts < (CAST(strftime('%s', d.created_day) AS INTEGER) + ?) * 1000)
-GROUP BY created_day ORDER BY created_day`, first, last, first, last, int64(yieldReach)*86400)
+GROUP BY d.created_day ORDER BY d.created_day`, first, last, int64(yieldReach)*86400)
 	if err != nil {
 		return err
 	}
@@ -351,7 +358,7 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 	}
 	withheld := run.withheld()
 	if withheld {
-		extra["withheld"] = withheldCatchingUp
+		extra["withheld"] = ReasonRecordCatchingUp
 	}
 	m := Metric{Extra: extra}
 	if run.unresolved > 0 {
@@ -363,6 +370,8 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 			p.Num, p.Den = i64(wk.num), wk.den
 			if *wk.den >= int64(minYieldN()) && !withheld {
 				p.Value = ptr(float64(wk.num) / float64(*wk.den))
+				lo, hi := Wilson(wk.num, *wk.den)
+				p.CI = &[2]float64{lo, hi}
 			}
 			p.Tokens = wk.tokens
 			if wk.tokens != nil && wk.num > 0 {
@@ -371,12 +380,20 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 		}
 		m.Series = append(m.Series, p)
 	}
-	o := Observation{}
+	// The status when no share is shown says why: no complete week, a
+	// record still catching up, a week the server and the record do not
+	// hold; too_few only for a real small number of new memories.
+	o := Observation{Absent: true, Reason: ReasonNoCompleteWeek}
 	if wk := run.latestComplete(); wk != nil {
 		p := m.Series[slices.IndexFunc(m.Series, func(p Point) bool { return p.Week == wk.monday })]
 		m.Value, m.Num, m.Den = p.Value, p.Num, p.Den
 		extra["tokens"], extra["tokens_per_used"] = p.Tokens, p.TokensPerUsed
-		if p.Den != nil && !withheld {
+		switch {
+		case withheld:
+			o.Reason = ReasonRecordCatchingUp
+		case p.Den == nil:
+			o.Reason = ReasonNoRecord
+		default:
 			o = Observation{Num: *p.Num, Den: *p.Den}
 		}
 	}

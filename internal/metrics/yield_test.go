@@ -102,7 +102,7 @@ func weekOf(t *testing.T, m Metric, week string) Point {
 
 func wantFloat(t *testing.T, what string, got *float64, want float64) {
 	t.Helper()
-	if got == nil || *got < want-1e-9 || *got > want+1e-9 {
+	if got == nil || *got < want-1e-6 || *got > want+1e-6 {
 		t.Errorf("%s = %v, want %v", what, got, want)
 	}
 }
@@ -212,7 +212,23 @@ func TestYieldFourteenOfFortyFive(t *testing.T) {
 	x.ydUsedMemories("f", 14)
 	m := yieldOf(x, x.query(90))
 	wantFloat(t, "value", m.Value, 14.0/45)
-	wantFloat(t, "tokens_per_used", weekOf(t, m, ydWeek).TokensPerUsed, 12_400)
+	p := weekOf(t, m, ydWeek)
+	wantFloat(t, "tokens_per_used", p.TokensPerUsed, 12_400)
+	// Wilson 95 % of 14/45: p = 0.31111, z = 1.96, z^2/n = 0.085369,
+	// centre = (0.31111 + 0.042684) / 1.085369 = 0.325968,
+	// half = 1.96 * sqrt(0.0047627 + 0.00047428) / 1.085369 = 0.130683,
+	// so [0.195285, 0.456651].
+	if p.CI == nil {
+		t.Fatal("the week has no interval")
+	}
+	wantFloat(t, "week ci low", &p.CI[0], 0.195285)
+	wantFloat(t, "week ci high", &p.CI[1], 0.456651)
+	if m.CI == nil || *m.CI != *p.CI {
+		t.Errorf("metric ci %v, want the latest week's %v", m.CI, p.CI)
+	}
+	if q := weekOf(t, m, "2026-09-14"); q.CI != nil {
+		t.Errorf("a week with no share carries an interval %v", q.CI)
+	}
 }
 
 func TestYieldWeekWithNoMemories(t *testing.T) {
@@ -303,6 +319,9 @@ func TestYieldNoRecord(t *testing.T) {
 	if p.Source != "none" || p.Value != nil || p.Den != nil {
 		t.Errorf("source %q value %v den %v, want none and no figures", p.Source, p.Value, p.Den)
 	}
+	if m.Status != StatusNoData || m.Reason != ReasonNoRecord || m.Value != nil {
+		t.Errorf("status %q reason %q, want no_data, no_record for a latest complete week nobody recorded", m.Status, m.Reason)
+	}
 	if got := weekOf(t, m, "2026-09-14"); got.Source != "record" {
 		t.Errorf("recorded week source %q, want record", got.Source)
 	}
@@ -375,8 +394,11 @@ func TestYieldWithholdsWhileDaysCatchUp(t *testing.T) {
 		if !slices.Contains(m.Tags, tagPartial) {
 			t.Errorf("tags %v, want partial", m.Tags)
 		}
-		if m.CI != nil {
-			t.Errorf("CI %v on a withheld share", m.CI)
+		if m.CI != nil || p.CI != nil {
+			t.Errorf("CI %v / %v on a withheld share", m.CI, p.CI)
+		}
+		if m.Status != StatusNoData || m.Reason != ReasonRecordCatchingUp {
+			t.Errorf("status %q reason %q, want no_data, record_catching_up (not too_few)", m.Status, m.Reason)
 		}
 	})
 	t.Run("20 resolved and 1 unresolved", func(t *testing.T) {
@@ -496,5 +518,82 @@ func TestYieldInTheCostView(t *testing.T) {
 	}
 	if !slices.Contains(CostServerNeeds(), "series") {
 		t.Error("the cost view does not read the series")
+	}
+}
+
+// The weeks are those of the 90 days ending at the window's end, whatever
+// the window: a 7- or 30-day view reads the same cohort.
+func TestYieldWeeksIgnoreTheViewWindow(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays(ydWeek, 45)
+	x.ydListed()
+	x.ydUsedMemories("f", 14)
+	var want Metric
+	for _, days := range []int{90, 30, 7} {
+		m := yieldOf(x, x.query(days))
+		if days == 90 {
+			want = m
+		}
+		wantFloat(t, fmt.Sprintf("%d days: value", days), m.Value, 14.0/45)
+		wantInt(t, fmt.Sprintf("%d days: num", days), m.Num, 14)
+		wantInt(t, fmt.Sprintf("%d days: den", days), m.Den, 45)
+		if len(m.Series) != len(want.Series) {
+			t.Errorf("%d days: %d weeks, want %d", days, len(m.Series), len(want.Series))
+		}
+	}
+}
+
+// With no span old enough, nothing is complete.
+func TestYieldNoCompleteWeek(t *testing.T) {
+	old := yieldSpan
+	yieldSpan = 3 * 24 * time.Hour
+	t.Cleanup(func() { yieldSpan = old })
+	x := ydFx(t)
+	x.ydDays("2026-10-26", 45)
+	x.ydListed()
+	m := yieldOf(x, x.query(90))
+	if m.Status != StatusNoData || m.Reason != ReasonNoCompleteWeek || m.Value != nil {
+		t.Errorf("status %q reason %q value %v, want no_data, no_complete_week", m.Status, m.Reason, m.Value)
+	}
+}
+
+// A memory listed on two days (the later line wins) is in the week of the
+// later line only; a day recorded twice counts its latest line, with that
+// line's tokens.
+func TestYieldReadsTheLatestLine(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays("2026-09-14", 30)
+	x.ydDays(ydWeek, 45)
+	x.ydListed()
+	x.ydMemory("moved", "2026-09-16") // week of 09-14 ...
+	x.mrec(rcBase.Add(time.Hour), metricsfile.MemoryDoc{Memory: "moved", Outcome: "found", DocKind: "session", Document: "conversation:s-moved",
+		Session: "s-moved", CreatedDay: "2026-09-22", FactType: "world"}) // ... listed again later: week of 09-21
+	x.ydUsed("moved", ydDate("2026-09-17"), "")
+	// 2026-09-22 recorded twice: the earlier line is replaced whole
+	x.mrec(rcBase, metricsfile.ServerDay{Bucket: ydDate("2026-09-22"), New: &metricsfile.KindCounts{World: 100},
+		LLM: map[string]metricsfile.LLMDay{"retain": {Input: 1000, Output: 1000}}})
+	x.mrec(rcBase.Add(time.Hour), metricsfile.ServerDay{Bucket: ydDate("2026-09-22"), New: &metricsfile.KindCounts{World: 20},
+		LLM: map[string]metricsfile.LLMDay{"retain": {Input: 200, Output: 100}}})
+	m := yieldOf(x, x.query(90))
+	a, b := weekOf(t, m, "2026-09-14"), weekOf(t, m, ydWeek)
+	wantInt(t, "earlier week num", a.Num, 0)
+	wantInt(t, "later week num", b.Num, 1)
+	// 45 over the week, the 09-22 share (7) replaced by 20
+	wantInt(t, "den", b.Den, 45-7+20)
+	wantInt(t, "tokens", b.Tokens, 300)
+}
+
+// An unrowed memory first shown after the days listed stays unresolved when
+// the listing has not reached the latest complete week.
+func TestYieldPendingNeedsTheListingToReachTheWeek(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays(ydWeek, 45)
+	x.ydUsedMemories("r", 15)
+	coverage(x, "2026-08-01", "2026-09-20") // covered until before the week's last day (09-27)
+	x.shows(time.Date(2026, 9, 25, 8, 0, 0, 0, time.UTC), "v", "t1", "", "alpha", "prompt", "", "fresh")
+	x.ydUsed("fresh", time.Date(2026, 9, 26, 8, 30, 0, 0, time.UTC), "")
+	m := yieldOf(x, x.query(90))
+	if ydExtra(t, m, "unresolved") != 1 || ydExtra(t, m, "pending") != 0 {
+		t.Errorf("unresolved %v pending %v, want 1 and 0", m.Extra["unresolved"], m.Extra["pending"])
 	}
 }

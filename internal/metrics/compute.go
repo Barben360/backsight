@@ -20,6 +20,9 @@ const (
 	ReasonServerDown        = "server_down"
 	ReasonNotConfigured     = "not_configured" // no memory server set up on this PC
 	ReasonServerUnsupported = "server_unsupported"
+	ReasonRecordCatchingUp  = "record_catching_up" // memory.yield: the day lists do not cover enough memories yet
+	ReasonNoRecord          = "no_record"          // memory.yield: neither the server nor the record holds the week's days
+	ReasonNoCompleteWeek    = "no_complete_week"   // memory.yield: no cohort is old enough to judge
 )
 
 // tagNotFiltered marks a server-scope metric under a project filter: the

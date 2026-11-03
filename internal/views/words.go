@@ -55,6 +55,9 @@ var NoDataWords = map[string]string{
 	metrics.ReasonServerDown:        "memory server not answering",
 	metrics.ReasonNotConfigured:     "no memory server set up",
 	metrics.ReasonServerUnsupported: "this memory server does not provide it",
+	metrics.ReasonRecordCatchingUp:  "still reading which memories are new",
+	metrics.ReasonNoRecord:          "the new memories of that week were not recorded",
+	metrics.ReasonNoCompleteWeek:    "no week is old enough yet",
 	"not_built":                     "not built yet",
 }
 
