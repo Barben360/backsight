@@ -391,6 +391,52 @@ func TestGPUOwnRerankerListFormNoGPU(t *testing.T) {
 	expect(t, c, Info, "your own reranker (provider tei, in compose.override.yaml)")
 }
 
+// A quoted list item (- "KEY=value") counts too.
+func TestGPUOwnRerankerQuotedListForm(t *testing.T) {
+	f := newFixture(t)
+	put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), "services:\n  hindsight:\n    environment:\n      - \"HINDSIGHT_API_RERANKER_PROVIDER=tei\"\n", 0o600)
+	c := check(t, f.run(), "gpu")
+	expect(t, c, Info, "your own reranker (provider tei, in compose.override.yaml)")
+}
+
+// The CPU providers backsight renders itself are not a reranker of the
+// user's own: the GPU stays unused and the guide is still offered.
+func TestGPUOverrideCPUProviderIsNotOwn(t *testing.T) {
+	for _, p := range []string{"local", "ONNX"} {
+		f := newFixture(t)
+		f.env.GPUs = func() []string { return []string{"NVIDIA (/dev/nvidiactl)"} }
+		put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), "services:\n  hindsight:\n    environment:\n      HINDSIGHT_API_RERANKER_PROVIDER: "+p+"\n", 0o600)
+		c := check(t, f.run(), "gpu")
+		if !strings.Contains(c.Summary, "not used: the reranker runs on the CPU") || !strings.Contains(c.Fix, "backsight guide gpu-reranker") {
+			t.Errorf("provider %s: %+v", p, c)
+		}
+	}
+}
+
+// Through Run: on a client or a native server the override is not read, so
+// a reranker there does not hide "not used"; with a config that does not
+// load, the override in the default server directory is still read.
+func TestGPUOverrideGatedByConfig(t *testing.T) {
+	override := "services:\n  hindsight:\n    environment:\n      HINDSIGHT_API_RERANKER_PROVIDER: tei\n"
+	cases := []struct{ name, config, inSummary string }{
+		{"remote", "[server]\nmode = \"remote\"\nurl = \"http://127.0.0.1:1\"\n", "the server runs on another PC"},
+		{"native", "[server]\nruntime = \"native\"\nurl = \"http://127.0.0.1:1\"\n", "not used: the reranker runs on the CPU"},
+		{"broken config", "[server\n", "your own reranker (provider tei"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.env.GPUs = func() []string { return []string{"NVIDIA (/dev/nvidiactl)"} }
+			put(t, f.env.Dirs.ConfigFile(), tc.config, 0o600)
+			put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), override, 0o600)
+			c := check(t, f.run(), "gpu")
+			if !strings.Contains(c.Summary, tc.inSummary) {
+				t.Errorf("summary %q, want %q", c.Summary, tc.inSummary)
+			}
+		})
+	}
+}
+
 // Only commented-out lines, or an override about something else: the CPU
 // reranker, and the guide is offered.
 func TestGPUOverrideWithoutReranker(t *testing.T) {

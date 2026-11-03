@@ -1261,17 +1261,24 @@ func checkGPU(s gpuSetup) Check {
 var rerankerProviderRE = regexp.MustCompile(`(?m)^[ \t]*(?:-[ \t]*)?["']?HINDSIGHT_API_RERANKER_PROVIDER["']?[ \t]*[:=][ \t]*["']?([A-Za-z0-9_-]+)`)
 
 // ownReranker returns the reranker provider the server's
-// compose.override.yaml sets, "" when it sets none or cannot be read. The
+// compose.override.yaml sets, "" when it sets none, sets one of the CPU
+// providers backsight renders itself (local, onnx), or cannot be read. The
 // file is the user's: doctor only reads it (decisions 0035, 0082).
 func ownReranker(composeDir string) string {
 	b, err := os.ReadFile(filepath.Join(composeDir, "compose.override.yaml"))
 	if err != nil {
 		return ""
 	}
-	if m := rerankerProviderRE.FindSubmatch(b); m != nil {
-		return string(m[1])
+	m := rerankerProviderRE.FindSubmatch(b)
+	if m == nil {
+		return ""
 	}
-	return ""
+	switch p := string(m[1]); strings.ToLower(p) {
+	case "local", "onnx":
+		return ""
+	default:
+		return p
+	}
 }
 
 // detectGPUs reports devices only; nothing is configured (decision 0035).
