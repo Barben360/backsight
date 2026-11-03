@@ -305,6 +305,7 @@ You mostly use Claude Code as before. Commands you may need:
 | [native runtime](docs/native-runtime.md) | The server without Docker: what it is, what it lacks, how to switch. |
 | [daily use](docs/daily-use.md) | Sessions, projects, skills, searching, storing, forgetting. |
 | [import](docs/import.md) | Importing a folder of notes or another tool's memory files, with a LifeOS recipe. |
+| [GPU reranker](docs/gpu-reranker.md) | Faster recall with your NVIDIA, AMD or Intel GPU: what to install, the service to add, how to check and undo it. |
 | [how it works](docs/how-it-works.md) | Recall, the question gate, the save detector, latency and context cost, the hooks. |
 | [configuration](docs/configuration.md) | Every `config.toml` key. |
 | [several PCs](docs/several-pcs.md) | One memory shared by your PCs: the host, joining, offline laptops, a lost laptop. |
