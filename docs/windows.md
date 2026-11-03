@@ -69,8 +69,8 @@ Each check, and what to do when it fails: [setup on the native runtime stops at 
 
 The [native runtime](native-runtime.md), as on Linux: Hindsight's API from PyPI in a Python environment, on the PostgreSQL with pgvector that [pg0](https://pypi.org/project/pg0-embedded/) ships, both listening on `127.0.0.1` only. Setup's server step downloads, at the versions this release pins:
 
-- [uv](https://github.com/astral-sh/uv) 0.13.1 (`uv-x86_64-pc-windows-msvc.zip`), checked against its SHA-256, which installs the rest. It is never taken from your `PATH`;
-- CPython 3.11.17, installed by uv;
+- [uv](https://github.com/astral-sh/uv) 0.13.6 (`uv-x86_64-pc-windows-msvc.zip`), checked against its SHA-256, which installs the rest. It is never taken from your `PATH`;
+- CPython 3.11.18, installed by uv;
 - Hindsight (`hindsight-api-slim`) and its packages, from PyPI, each checked against the hash backsight's Windows lock pins, among them `pg0-embedded` and `msvc-runtime` (the Microsoft Visual C++ runtime DLLs);
 - the embedding and reranking models, from Hugging Face, at pinned commits.
 
@@ -82,7 +82,7 @@ Everything is under `server\native` in backsight's data directory (`%LOCALAPPDAT
 
 | Path | What |
 |---|---|
-| `uv\0.13.1\uv.exe` | The pinned uv. |
+| `uv\0.13.6\uv.exe` | The pinned uv. |
 | `python\` | The pinned Python. |
 | `venv\<Hindsight version>-<lock hash>\` | Hindsight's Python environment (`Scripts\`, `Lib\site-packages\`), one per locked set of packages, so an upgrade installs beside the running one. |
 | `pg\18.1.0\` | The PostgreSQL pg0 unpacked, which the server runs. |

@@ -120,7 +120,7 @@ func (p Platform) Overrides() map[string]string {
 // Image is the Hindsight image the lock was made from.
 func (p Platform) Image() string { return p.header("image") }
 
-// Python is the Python the lock installs into ("3.11.17").
+// Python is the Python the lock installs into ("3.11.18").
 func (p Platform) Python() string {
 	v, _, _ := strings.Cut(p.header("python"), " ")
 	return v

@@ -333,7 +333,7 @@ func TestManifestRecordsTheRuntime(t *testing.T) {
 	t.Run("docker", func(t *testing.T) {
 		home, _, _, _ := restoreSetup(t)
 		m, keys := sidecar(t, filepath.Join(pathsOf(home).Data, "backups", "backsight-20261025T040000Z.tar.gz.age"))
-		if m.Runtime != "docker" || m.HindsightVersion != "1.1.0" || keys["runtime"] != "docker" || keys["hindsight_version"] != "1.1.0" {
+		if m.Runtime != "docker" || m.HindsightVersion != "1.2.0" || keys["runtime"] != "docker" || keys["hindsight_version"] != "1.2.0" {
 			t.Errorf("runtime %q, hindsight_version %q (%v)", m.Runtime, m.HindsightVersion, keys)
 		}
 		if m.HindsightImage != server.HindsightImage || m.PostgresImage != server.PostgresImage {
@@ -348,7 +348,7 @@ func TestManifestRecordsTheRuntime(t *testing.T) {
 			t.Fatal(err)
 		}
 		m, keys := sidecar(t, nativeArchive(t, home))
-		if m.Runtime != "native" || m.HindsightVersion != "1.1.0" || keys["runtime"] != "native" || keys["hindsight_version"] != "1.1.0" {
+		if m.Runtime != "native" || m.HindsightVersion != "1.2.0" || keys["runtime"] != "native" || keys["hindsight_version"] != "1.2.0" {
 			t.Errorf("runtime %q, hindsight_version %q (%v)", m.Runtime, m.HindsightVersion, keys)
 		}
 		if m.HindsightImage != "" || m.PostgresImage != "pg0-embedded 0.15.2 (PostgreSQL 18.1, pgvector 0.8.5)" {
@@ -377,24 +377,24 @@ func TestRestoreAcrossRuntimesComparesHindsightVersions(t *testing.T) {
 		rt   server.Runtime
 		want string // "" restores
 	}{
-		{"docker archive into native", backup.Manifest{Runtime: "docker", HindsightVersion: "1.1.0", HindsightImage: server.HindsightImage}, native, ""},
-		{"docker archive of before the field into native", backup.Manifest{HindsightImage: "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:ffff"}, native, ""},
-		{"native archive into native", backup.Manifest{Runtime: "native", HindsightVersion: "1.1.0"}, native, ""},
-		{"native archive into docker", backup.Manifest{Runtime: "native", HindsightVersion: "1.1.0"}, docker, ""},
+		{"docker archive into native", backup.Manifest{Runtime: "docker", HindsightVersion: "1.2.0", HindsightImage: server.HindsightImage}, native, ""},
+		{"docker archive of before the field into native", backup.Manifest{HindsightImage: "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:ffff"}, native, ""},
+		{"native archive into native", backup.Manifest{Runtime: "native", HindsightVersion: "1.2.0"}, native, ""},
+		{"native archive into docker", backup.Manifest{Runtime: "native", HindsightVersion: "1.2.0"}, docker, ""},
 		{"older native archive into docker", backup.Manifest{Runtime: "native", HindsightVersion: "1.0.4"}, docker, ""},
-		{"newer native archive into docker", backup.Manifest{Runtime: "native", HindsightVersion: "1.2.0"}, docker,
-			"the archive was taken with Hindsight 1.2.0 on native, newer than this install's 1.1.0: update backsight first"},
-		{"newer native archive into native", backup.Manifest{Runtime: "native", HindsightVersion: "1.1.1"}, native,
-			"the archive was taken with Hindsight 1.1.1 on native, newer than this install's 1.1.0: update backsight first"},
+		{"newer native archive into docker", backup.Manifest{Runtime: "native", HindsightVersion: "1.3.0"}, docker,
+			"the archive was taken with Hindsight 1.3.0 on native, newer than this install's 1.2.0: update backsight first"},
+		{"newer native archive into native", backup.Manifest{Runtime: "native", HindsightVersion: "1.2.1"}, native,
+			"the archive was taken with Hindsight 1.2.1 on native, newer than this install's 1.2.0: update backsight first"},
 		{"newer docker archive into native", backup.Manifest{HindsightImage: "ghcr.io/vectorize-io/hindsight:9.0.0@sha256:ffff"}, native,
-			"the archive was taken with Hindsight 9.0.0 on docker, newer than this install's 1.1.0: update backsight first"},
+			"the archive was taken with Hindsight 9.0.0 on docker, newer than this install's 1.2.0: update backsight first"},
 		{"neither version nor tag into native", backup.Manifest{HindsightImage: "ghcr.io/vectorize-io/hindsight@sha256:ffff"}, native,
 			"cannot tell the archive's Hindsight version (ghcr.io/vectorize-io/hindsight@sha256:ffff)"},
 		{"native archive with no version into docker", backup.Manifest{Runtime: "native"}, docker,
 			"cannot tell the archive's Hindsight version (none recorded)"},
 		// Same runtime, Docker: placed by its image, today's messages.
-		{"docker rebuild into docker", backup.Manifest{Runtime: "docker", HindsightVersion: "1.1.0", HindsightImage: "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:ffff"}, docker,
-			`cannot tell whether the archive's Hindsight "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:ffff" is older than this install's`},
+		{"docker rebuild into docker", backup.Manifest{Runtime: "docker", HindsightVersion: "1.2.0", HindsightImage: "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:ffff"}, docker,
+			`cannot tell whether the archive's Hindsight "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:ffff" is older than this install's`},
 		{"newer docker archive into docker", backup.Manifest{HindsightImage: "ghcr.io/vectorize-io/hindsight:9.0.0@sha256:ffff"}, docker,
 			"the archive was taken with Hindsight ghcr.io/vectorize-io/hindsight:9.0.0@sha256:ffff, newer than this install's"},
 	} {
@@ -416,10 +416,10 @@ func TestRestoreAcrossRuntimesComparesHindsightVersions(t *testing.T) {
 	// Through the command, nothing changed: a newer native archive into
 	// a Docker install.
 	home, _, dk, port := restoreSetup(t)
-	archive := writeArchive(t, home, backup.Manifest{Runtime: "native", HindsightVersion: "1.2.0", Bank: "claude-memory"})
+	archive := writeArchive(t, home, backup.Manifest{Runtime: "native", HindsightVersion: "1.3.0", Bank: "claude-memory"})
 	dk.calls = nil
 	code, out, errOut := run(t, "restore", archive)
-	if code != output.Blocked || !strings.Contains(errOut, "newer than this install's 1.1.0") {
+	if code != output.Blocked || !strings.Contains(errOut, "newer than this install's 1.2.0") {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 	for _, call := range dk.calls {

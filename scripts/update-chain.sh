@@ -4,7 +4,7 @@
 # throwaway minisign key; a "new" test build (with the testhooks tag, whose
 # migration fails on demand) is published in a local release directory
 # signed with that key. The new build also pins another reference of the
-# same Hindsight 1.1.0 (this platform's manifest digest instead of the
+# same pinned Hindsight (this platform's manifest digest instead of the
 # multi-arch index), so the update upgrades the server for real: pull,
 # backup and verify, start, health, smoke. `update apply --source` must
 # roll back a failing migration and a failing server smoke (the testhooks

@@ -70,7 +70,7 @@
 "ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
-"pull" "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"pull" "ghcr.io/vectorize-io/hindsight:1.3.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 "ps" "--all" "--filter" "label=com.docker.compose.project=backsight" "--format" "{{.Label \"com.docker.compose.project.working_dir\"}}"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "sh" "-c" "rm -f /tmp/backsight-*.dump"
 "compose" "-p" "backsight" "--project-directory" "<home>/backsight/data/server" "-f" "<home>/backsight/data/server/compose.yaml" "exec" "-T" "db" "psql" "-U" "hindsight" "-d" "hindsight" "-At" "-v" "ON_ERROR_STOP=1" "-c" "select version_num from alembic_version"

@@ -303,7 +303,7 @@ To undo the install on the host, run `backsight setup --undo` there; on this PC,
 
 doctor's `latency` check warns when the prompt hook's p95 is over 2.5 s across 7 days. On CPU, the reranker takes nearly all of a recall: it scores each candidate memory against your prompt. Computing the prompt's embedding is a small part.
 
-**A GPU is not used by itself.** The server runs embeddings and the reranker on the CPU: the pinned server image (Hindsight 1.1.0) ships CPU-only builds of PyTorch and ONNX Runtime, so Hindsight's device options (`HINDSIGHT_API_EMBEDDINGS_ONNX_DEVICE=cuda`, for one) fail in it. setup and doctor's `gpu` check name the GPUs they find, and backsight installs no GPU driver or runtime.
+**A GPU is not used by itself.** The server runs embeddings and the reranker on the CPU: the pinned server image (Hindsight 1.2.0) ships CPU-only builds of PyTorch and ONNX Runtime, so Hindsight's device options (`HINDSIGHT_API_EMBEDDINGS_ONNX_DEVICE=cuda`, for one) fail in it. setup and doctor's `gpu` check name the GPUs they find, and backsight installs no GPU driver or runtime.
 
 Two ways to make recall faster, both in the server's `compose.override.yaml`, next to its `compose.yaml` (`~/.local/share/backsight/server` on Linux). backsight never writes that file, and backups include it.
 

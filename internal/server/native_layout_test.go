@@ -76,15 +76,15 @@ func TestToolEnvForByOS(t *testing.T) {
 	win := Native{GOOS: "windows", Cfg: config.Config{Server: config.Server{ComposeDir: `C:\bs`}}}
 	want := []string{`SYSTEMROOT=C:\Windows`, "SystemDrive=C:", `TEMP=C:\bs\native\tmp`, `TMP=C:\bs\native\tmp`,
 		`USERPROFILE=C:\Users\u`, `LOCALAPPDATA=C:\Users\u\AppData\Local`, `APPDATA=C:\Users\u\AppData\Roaming`,
-		`COMSPEC=C:\Windows\system32\cmd.exe`, `PATH=C:\bs\native\uv\0.13.1;C:\Windows\System32`, "HTTPS_PROXY=http://proxy:3128",
+		`COMSPEC=C:\Windows\system32\cmd.exe`, `PATH=C:\bs\native\uv\0.13.6;C:\Windows\System32`, "HTTPS_PROXY=http://proxy:3128",
 		"UV_NO_CONFIG=1", "UV_PYTHON_PREFERENCE=only-managed"}
-	if got := win.toolEnvFor(`C:\bs\native\uv\0.13.1`); !reflect.DeepEqual(got, want) {
+	if got := win.toolEnvFor(`C:\bs\native\uv\0.13.6`); !reflect.DeepEqual(got, want) {
 		t.Errorf("Windows:\n got %q\nwant %q", got, want)
 	}
 	// No SYSTEMROOT: System32 is still absolute, never relative to the
 	// tool's working directory.
 	t.Setenv("SYSTEMROOT", "")
-	if got := win.toolEnvFor(`C:\bs\native\uv\0.13.1`); !slices.Contains(got, `PATH=C:\bs\native\uv\0.13.1;C:\Windows\System32`) {
+	if got := win.toolEnvFor(`C:\bs\native\uv\0.13.6`); !slices.Contains(got, `PATH=C:\bs\native\uv\0.13.6;C:\Windows\System32`) {
 		t.Errorf("Windows without SYSTEMROOT: %q", got)
 	}
 }

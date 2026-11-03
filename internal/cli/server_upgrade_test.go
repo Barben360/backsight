@@ -22,7 +22,7 @@ import (
 )
 
 // The image a newer binary pins in these tests.
-const newImage = "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+const newImage = "ghcr.io/vectorize-io/hindsight:1.3.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func pinImage(t *testing.T, image string) {
 	t.Helper()

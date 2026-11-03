@@ -61,7 +61,7 @@ func uvZip(t *testing.T, uv []byte) []byte {
 // Requirement 4 on Windows: uv comes from the pinned zip, hash-checked
 // before anything is extracted; uv.exe alone is extracted.
 func TestFetchUVFromTheZipChecksTheHash(t *testing.T) {
-	uvExe := []byte("MZ uv 0.13.1")
+	uvExe := []byte("MZ uv 0.13.6")
 	archive := uvZip(t, uvExe)
 
 	t.Run("a sha256 other than the pin installs nothing", func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestFetchUVFromTheZipChecksTheHash(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "the uv download does not match the sha256 this backsight carries: nothing was installed") {
 			t.Fatalf("fetchUV = %v, want the sha256 refusal", err)
 		}
-		if want := "/astral-sh/uv/releases/download/0.13.1/uv-x86_64-pc-windows-msvc.zip"; len(*got) != 1 || (*got)[0] != want {
+		if want := "/astral-sh/uv/releases/download/0.13.6/uv-x86_64-pc-windows-msvc.zip"; len(*got) != 1 || (*got)[0] != want {
 			t.Errorf("requests %v, want one GET of %s", *got, want)
 		}
 		if exists(filepath.Join(n.Root(), "uv")) {
@@ -100,7 +100,7 @@ func TestFetchUVFromTheZipChecksTheHash(t *testing.T) {
 			t.Errorf("%s holds %q (%v), want the archive's uv.exe", n.UV(), b, err)
 		}
 		if entries, _ := os.ReadDir(filepath.Dir(n.UV())); len(entries) != 1 {
-			t.Errorf("uv\\0.13.1 holds %v, want uv.exe alone", entries)
+			t.Errorf("uv\\0.13.6 holds %v, want uv.exe alone", entries)
 		}
 		if !n.uvInstalled() {
 			t.Error("uv.exe extracted but not installed")
@@ -183,10 +183,10 @@ func TestWindowsVenvLayout(t *testing.T) {
 	// The patch version, not python.exe's path: given a path uv bases the
 	// venv on the minor-version junction, which an SSH session cannot
 	// traverse (os error 448).
-	if want := []string{"venv", "--no-project", "--python", "3.11.17", venv}; c[0].Path != n.UV() || !slices.Equal(c[0].Args, want) {
+	if want := []string{"venv", "--no-project", "--python", "3.11.18", venv}; c[0].Path != n.UV() || !slices.Equal(c[0].Args, want) {
 		t.Errorf("call 1: %s %q, want %s %q", c[0].Path, c[0].Args, n.UV(), want)
 	}
-	if !strings.HasSuffix(n.PythonBin(), `\python\cpython-3.11.17-windows-x86_64-none\python.exe`) {
+	if !strings.HasSuffix(n.PythonBin(), `\python\cpython-3.11.18-windows-x86_64-none\python.exe`) {
 		t.Errorf("PythonBin() = %s, want uv's Windows layout", n.PythonBin())
 	}
 	py := filepath.Join(venv, "Scripts", "python.exe")
@@ -396,14 +396,14 @@ func TestUVMinorLinkErrorAccepted(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("fetchPython = %v, want ok %v", err, tc.ok)
 			}
-			if want := []string{"python", "install", "--no-bin", "--no-registry", "3.11.17"}; !slices.Equal(tools.Calls[0].Args, want) {
+			if want := []string{"python", "install", "--no-bin", "--no-registry", "3.11.18"}; !slices.Equal(tools.Calls[0].Args, want) {
 				t.Errorf("uv %q, want %q", tools.Calls[0].Args, want)
 			}
 			ranPython := len(tools.Calls) == 2 && tools.Calls[1].Path == n.PythonBin() && slices.Equal(tools.Calls[1].Args, []string{"-c", "import sys"})
 			if wantPython := tc.name == "the minor link alone" || tc.name == "the minor link, Python broken"; ranPython != wantPython {
 				t.Errorf("python.exe -c \"import sys\" ran %v, want %v (calls %+v)", ranPython, wantPython, tools.Calls)
 			}
-			if !tc.ok && !strings.Contains(err.Error(), "uv python install 3.11.17") {
+			if !tc.ok && !strings.Contains(err.Error(), "uv python install 3.11.18") {
 				t.Errorf("error %q does not name the install", err)
 			}
 		})

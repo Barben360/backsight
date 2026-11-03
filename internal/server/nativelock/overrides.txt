@@ -8,27 +8,9 @@
 # version or a newer one: the script refuses an override the image has
 # caught up with.
 #
-# The pinned image (Hindsight 1.1.0) ships versions with published
-# security advisories, and no later Hindsight release exists yet. The
-# Docker runtime still runs the image's versions. filelock stays the
-# image's 3.20.3: its fix (4.2.1) is above litellm 1.104.0's filelock<4.0.
-authlib==1.9.1: security fixes (one critical) the image's 1.6.12 lacks
-dnspython==2.9.0: a security fix the image's 2.8.0 lacks
-fastmcp==3.4.11: a security fix the image's 3.2.0 lacks (3.4.10 and later)
-fastmcp-slim==3.4.11: required by fastmcp 3.4.11, not in the image
-griffelib==2.4.1: required by fastmcp-slim 3.4.11, not in the image
-joserfc==1.7.7: required by authlib 1.9.1 and fastmcp-slim 3.4.11, not in the image
-opentelemetry-api==1.45.1: a security fix the image's 1.44.0 lacks
-opentelemetry-exporter-http-transport==0.66b1: required by opentelemetry-exporter-otlp-proto-http 1.45.1, not in the image
-opentelemetry-exporter-otlp-common==0.66b1: required by opentelemetry-exporter-otlp-proto-http 1.45.1, not in the image
-opentelemetry-exporter-otlp-proto-common==1.45.1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-exporter-otlp-proto-http==1.45.1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-exporter-prometheus==0.66b1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-instrumentation==0.66b1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-instrumentation-asgi==0.66b1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-instrumentation-fastapi==0.66b1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-proto==1.45.1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-sdk==1.45.1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-semantic-conventions==0.66b1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
-opentelemetry-util-http==0.66b1: the OpenTelemetry release of opentelemetry-api 1.45.1 (its packages require matching versions)
+# The pinned image (Hindsight 1.2.0) ships pyasn1 0.6.4, which has
+# published security advisories. The Docker runtime still runs the image's
+# version. filelock stays the image's 3.20.3: its fix (4.2.1) is above
+# litellm's filelock<4.0 (litellm 1.104.0 in the image, and still in
+# 1.106.6, the latest release on 2026-11-03).
 pyasn1==0.6.5: security fixes the image's 0.6.4 lacks
