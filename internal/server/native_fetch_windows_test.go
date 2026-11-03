@@ -61,7 +61,7 @@ func uvZip(t *testing.T, uv []byte) []byte {
 // Requirement 4 on Windows: uv comes from the pinned zip, hash-checked
 // before anything is extracted; uv.exe alone is extracted.
 func TestFetchUVFromTheZipChecksTheHash(t *testing.T) {
-	uvExe := []byte("MZ uv 0.13.1")
+	uvExe := []byte("MZ uv 0.13.6")
 	archive := uvZip(t, uvExe)
 
 	t.Run("a sha256 other than the pin installs nothing", func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestFetchUVFromTheZipChecksTheHash(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "the uv download does not match the sha256 this backsight carries: nothing was installed") {
 			t.Fatalf("fetchUV = %v, want the sha256 refusal", err)
 		}
-		if want := "/astral-sh/uv/releases/download/0.13.1/uv-x86_64-pc-windows-msvc.zip"; len(*got) != 1 || (*got)[0] != want {
+		if want := "/astral-sh/uv/releases/download/0.13.6/uv-x86_64-pc-windows-msvc.zip"; len(*got) != 1 || (*got)[0] != want {
 			t.Errorf("requests %v, want one GET of %s", *got, want)
 		}
 		if exists(filepath.Join(n.Root(), "uv")) {
@@ -100,7 +100,7 @@ func TestFetchUVFromTheZipChecksTheHash(t *testing.T) {
 			t.Errorf("%s holds %q (%v), want the archive's uv.exe", n.UV(), b, err)
 		}
 		if entries, _ := os.ReadDir(filepath.Dir(n.UV())); len(entries) != 1 {
-			t.Errorf("uv\\0.13.1 holds %v, want uv.exe alone", entries)
+			t.Errorf("uv\\0.13.6 holds %v, want uv.exe alone", entries)
 		}
 		if !n.uvInstalled() {
 			t.Error("uv.exe extracted but not installed")
