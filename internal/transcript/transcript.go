@@ -48,7 +48,10 @@ type ToolUse struct {
 // Known are the record types Claude Code writes besides user and assistant
 // turns, as seen in October 2026 (none carries conversation text; the
 // artifact ones and frame-link hold Artifact state, links and titles;
-// tools-used lists the tool names a session used). Any
+// tools-used lists the tool names a session used; since November 2026,
+// session-owner holds account and organisation ids, history-suppression
+// why a restored history was hidden, fork-context-ref a forked subagent's
+// parent pointer). Any
 // other type is counted as unknown: a rising count is a format change to
 // look at (SPEC §14).
 var Known = map[string]bool{
@@ -57,6 +60,7 @@ var Known = map[string]bool{
 	"queue-operation": true, "pr-link": true, "custom-title": true, "agent-name": true, "system": true,
 	"file-history-snapshot": true, "file-history-delta": true, "cost-state": true, "summary": true, "progress": true,
 	"artifact-autoreact-ledger": true, "artifact-comment-monitor": true, "frame-link": true, "tools-used": true,
+	"session-owner": true, "history-suppression": true, "fork-context-ref": true,
 }
 
 // UnknownLine is a record of a type not in Known, and the offset after it.
