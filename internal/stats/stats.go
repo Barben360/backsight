@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // LongPrompt is the length from which a prompt counts in the search rate
@@ -458,8 +460,12 @@ func Compute(events []Event, from, to time.Time) Report {
 			s.Shows, s.Credits, s.Misses, s.Unknown = s.Shows+e.Shows, s.Credits+e.Credits, s.Misses+e.Misses, s.Unknown+e.Unknown
 			r.Feedback.Late += e.Late
 		case "transcript_unknown":
+			// An older binary's count of a type this one knows is no
+			// format change: it would warn until it aged out.
 			for t, n := range e.Types {
-				r.Unknown[t] += n
+				if !transcript.Known[t] {
+					r.Unknown[t] += n
+				}
 			}
 		}
 	}

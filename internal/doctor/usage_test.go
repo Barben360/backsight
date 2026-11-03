@@ -311,3 +311,22 @@ func TestOwnersCheckListsWhatWasLearnt(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+// A type an older binary counted as unknown, and this one knows, is not
+// a format change: it leaves the week's count at once instead of warning
+// for seven more days.
+func TestUsageTranscriptsIgnoresTypesKnownSince(t *testing.T) {
+	dir := events(t, map[time.Duration][]string{
+		3 * time.Hour: {`"event":"transcript_unknown","types":{"tools-used":40,"session-owner":23}`},
+	})
+	if c := byID(checkUsage(dir, usageNow, false))["transcripts"]; c.Status != OK {
+		t.Errorf("only known types: %+v", c)
+	}
+	dir = events(t, map[time.Duration][]string{
+		3 * time.Hour: {`"event":"transcript_unknown","types":{"tools-used":40,"new-kind":2}`},
+	})
+	c := byID(checkUsage(dir, usageNow, false))["transcripts"]
+	if c.Status != Warn || !strings.Contains(c.Summary, "2 unknown transcript records") || !strings.Contains(c.Summary, "new-kind") || strings.Contains(c.Summary, "tools-used") {
+		t.Errorf("a known type mixed with a new one: %+v", c)
+	}
+}

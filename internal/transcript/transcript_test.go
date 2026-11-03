@@ -298,3 +298,23 @@ func TestToolsUsedRecordsAreKnown(t *testing.T) {
 		t.Errorf("unknown: %v", got)
 	}
 }
+
+// session-owner (account and organisation ids), history-suppression (why
+// a restored history was hidden) and fork-context-ref (a forked
+// subagent's parent pointer), seen November 2026, carry no conversation:
+// known, never a format change.
+func TestMetadataRecordsOfNovember2026AreKnown(t *testing.T) {
+	in := strings.Join([]string{
+		`{"type":"session-owner","accountUuid":"a","organizationUuid":"o","sessionId":"s"}`,
+		`{"type":"history-suppression","sessionId":"s","cause":"migration","ts":"2026-10-30T06:02:06.889Z"}`,
+		`{"type":"fork-context-ref","agentId":"x","parentSessionId":"s","parentLastUuid":"u","contextLength":43}`,
+		`{"type":"owner-next-thing","sessionId":"s"}`,
+	}, "\n") + "\n"
+	recs, st, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(recs) != 0 {
+		t.Fatalf("%+v %v", recs, err)
+	}
+	if got := st.UnknownBefore(st.Consumed); len(got) != 1 || got["owner-next-thing"] != 1 {
+		t.Errorf("unknown: %v", got)
+	}
+}
