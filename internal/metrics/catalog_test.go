@@ -66,13 +66,21 @@ var catalogRows = []catalogRow{
 	{"server.reach", "Memory server answering", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "last_ok,failing_since,breaker_open_until,skipped_prompts"},
 	{"doctor.check", "Health checks", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "ok,info,warn,error"},
 	{"jobs.last_run", "Background jobs", "ms", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "tick,maintain"},
+	{"pipeline.time_to_recall", "From session to recalled memory", "ms", "down", 20, 3600000, none, "p95", false, false, "none", "machine", false, "pipeline", "none", "backsight stats pipeline", ""},
+	{"memory.yield", "Memories that proved useful", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", false, "cost", "weekly", "backsight stats cost", ""},
+	{"secrets.suspects", "Possible secrets in memory", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight memory scan", ""},
+	{"doctor.history", "Health checks over time", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "none", "backsight stats system", ""},
+	{"bank.active_share", "Share of the memory that came up", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats bank --dev", ""},
+	{"shows.concentration", "How concentrated shows are", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "reach", "none", "backsight stats bank --dev", ""},
+	{"injection.contradicted", "Corrections after memory was shown", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
+	{"boost.set_changed", "Recalls the learned ranking changed", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
 }
 
 // A typo in any value of any row goes red: each Def is read back against the
 // row stated above, in order.
 func TestCatalogRows(t *testing.T) {
-	if len(catalogRows) != 39 || len(Catalog) != 39 {
-		t.Fatalf("rows: table %d, catalog %d, want 39 each", len(catalogRows), len(Catalog))
+	if len(catalogRows) != 47 || len(Catalog) != 47 {
+		t.Fatalf("rows: table %d, catalog %d, want 47 each", len(catalogRows), len(Catalog))
 	}
 	num := func(p *float64) float64 {
 		if p == nil {
@@ -127,6 +135,13 @@ func TestCatalogSources(t *testing.T) {
 		want[id] = "server"
 	}
 	want["doctor.check"] = "doctor"
+	for _, id := range []string{"pipeline.time_to_recall", "memory.yield", "secrets.suspects", "doctor.history"} {
+		want[id] = "collection"
+	}
+	want["bank.active_share"] = "journal"
+	want["shows.concentration"] = "journal"
+	want["injection.contradicted"] = "telemetry"
+	want["boost.set_changed"] = "journal"
 	if len(want) != len(Catalog) {
 		t.Fatalf("source table covers %d rows, catalog has %d", len(want), len(Catalog))
 	}
@@ -140,7 +155,7 @@ func TestCatalogSources(t *testing.T) {
 // Every id is unique and every row carries its text and source.
 func TestCatalogRowsAreComplete(t *testing.T) {
 	seen := map[string]bool{}
-	sources := []string{"telemetry", "journal", "ledger", "local", "server", "doctor"}
+	sources := []string{"telemetry", "journal", "ledger", "local", "server", "doctor", "collection"}
 	for _, d := range Catalog {
 		if seen[d.ID] {
 			t.Errorf("duplicate id %s", d.ID)
@@ -154,7 +169,8 @@ func TestCatalogRowsAreComplete(t *testing.T) {
 		if !slices.Contains(sources, d.Source) {
 			t.Errorf("%s: source %q", d.ID, d.Source)
 		}
-		if (d.Scope == "server") != (d.Source == "server") {
+		// The scan reads the server's memories, but its record is local.
+		if d.ID != "secrets.suspects" && (d.Scope == "server") != (d.Source == "server") {
 			t.Errorf("%s: scope %q but source %q", d.ID, d.Scope, d.Source)
 		}
 	}
@@ -257,7 +273,7 @@ func TestOnlyTheListedMetricsAreRelative(t *testing.T) {
 	slices.Sort(rel)
 	slices.Sort(errc)
 	wantRel := []string{"recall.hit_rate", "search.empty_rate", "search.rate", "used.turn_rate"}
-	wantErr := []string{"bank.consolidation", "doctor.check", "hooks.failures", "jobs.last_run", "local.backlog", "pipeline.flow", "server.queue", "server.reach"}
+	wantErr := []string{"bank.consolidation", "doctor.check", "hooks.failures", "jobs.last_run", "local.backlog", "pipeline.flow", "secrets.suspects", "server.queue", "server.reach"}
 	if !slices.Equal(rel, wantRel) {
 		t.Errorf("relative = %v, want %v", rel, wantRel)
 	}

@@ -362,6 +362,63 @@ var Catalog = withDrills([]Def{
 		Definition: "The last tick and maintain runs, with status and duration. Bad when a job is more than twice its cadence late and prompts or tool events happened since it was due (a sleeping laptop is not a fault).",
 		Action:     "Background work is not running. Run backsight jobs tick.",
 	},
+	{
+		ID: "pipeline.time_to_recall", Label: "From session to recalled memory", Unit: "ms", Direction: "down", MinN: 20,
+		Absolute: Threshold{Watch: f(3600000), On: "p95"}, CI: "none", Scope: "machine", Source: "collection", Family: "pipeline", Series: "none",
+		Command:    "backsight stats pipeline",
+		Question:   "How long until a session's memories come back?",
+		Definition: "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way; the slowest 1 in 20 of the sent-to-memories step needs 100 sessions and is watched above 1 hour.",
+		Action:     "Memories take long to come back. Check the server with backsight doctor.",
+	},
+	{
+		ID: "memory.yield", Label: "Memories that proved useful", Unit: "ratio", Direction: "up", MinN: 20,
+		CI: "wilson", Scope: "machine", Source: "collection", Family: "cost", Series: "weekly", Command: "backsight stats cost",
+		Question:   "Do new memories turn out useful?",
+		Definition: "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
+		Action:     "Few new memories prove useful. Compare what is stored with what Claude finds.",
+	},
+	{
+		ID: "secrets.suspects", Label: "Possible secrets in memory", Unit: "count", Direction: "none", MinN: 0,
+		ErrorClass: true, CI: "none", Scope: "server", Source: "collection", Family: "pipeline", Series: "none", Command: "backsight memory scan",
+		Question:   "Could memory hold a secret?",
+		Definition: "The memories the last scan found that look like a key, token or password. Watched as soon as the last scan found one.",
+		Action:     "Run backsight memory scan to see which memories, then forget them.",
+	},
+	{
+		ID: "doctor.history", Label: "Health checks over time", Unit: "count", Direction: "none", MinN: 0,
+		CI: "none", Scope: "machine", Source: "collection", Family: "pipeline", Series: "none", Command: "backsight stats system",
+		Question:   "Have the health checks passed lately?",
+		Definition: "For each check and each day, the result of the day's last daily run: ok, watch or bad. A day without a run is shown as none, which is not a fault.",
+		Action:     "A check that keeps failing needs fixing; backsight doctor says how.",
+	},
+	{
+		ID: "bank.active_share", Label: "Share of the memory that came up", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "wilson", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
+		Question:   "How much of the memory ever comes up?",
+		Definition: "The memories shown in the window that already existed when it began, out of all the memories the server held then. Memories created inside the window are left out.",
+		Action:     "A low share means most stored memories are never recalled.",
+	},
+	{
+		ID: "shows.concentration", Label: "How concentrated shows are", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
+		Question:   "Do a few memories take all the shows?",
+		Definition: "The Gini index of how often each shown memory was shown in the window: 0 when all are shown equally, near 1 when a few take almost every show. The share of the 10 most shown is given beside it.",
+		Action:     "A few memories take most shows; check that the ranking is not stuck on them.",
+	},
+	{
+		ID: "injection.contradicted", Label: "Corrections after memory was shown", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Question:   "Does the user correct Claude after memory is shown?",
+		Definition: "The share of turns with injected memories where the next prompt looked like a correction.",
+		Action:     "Frequent corrections after memory is shown point to memories that mislead.",
+	},
+	{
+		ID: "boost.set_changed", Label: "Recalls the learned ranking changed", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Question:   "How often does the learned ranking change what is shown?",
+		Definition: "The share of recalls, prompts and searches, whose shown memories differ from what the ranking would show without what it learned from past feedback.",
+		Action:     "A share near 0 means the learned ranking has no effect yet.",
+	},
 })
 
 // withDrills fills Drill with Command for the rows that have no drill of

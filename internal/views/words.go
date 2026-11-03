@@ -301,6 +301,26 @@ var PathWords = map[string]string{
 // MemoryStateWords name the state of a memory.
 var MemoryStateWords = map[string]string{"hidden": "hidden", "wrong": "reported wrong", "never_used": "often shown, never used", "": "—"}
 
+// FunnelWords name the steps a session's memories go through.
+var FunnelWords = map[string]string{
+	"ended": "session ended", "sent": "sent", "extracted": "turned into memories", "recalled": "shown again",
+}
+
+// OriginWords name where a memory came from.
+var OriginWords = map[string]string{
+	"this_pc": "a session on this PC", "other_pc": "a session on another PC", "no_session": "a note or an import", "unknown": "not known yet",
+}
+
+// NeverExtractedWords say why a sent session gave no memories.
+var NeverExtractedWords = map[string]string{
+	"failed": "the server failed on it", "no_memory": "nothing worth keeping", "none": "no trace of it on the server",
+}
+
+// ReadingWords name the reading of a comparison between two versions.
+var ReadingWords = map[string]string{
+	"differs": "differs", "no_difference": "no clear difference",
+}
+
 // Word is the word of k in m, k itself when it has none.
 func Word(m map[string]string, k string) string {
 	if w, ok := m[k]; ok {
