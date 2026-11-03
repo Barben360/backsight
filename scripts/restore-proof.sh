@@ -115,10 +115,20 @@ grep -q '^HINDSIGHT_API_LLM_PROVIDER=mock$' "$BACKSIGHT_HOME/data/server/.env" |
 
 # 2. The real archive restored: restore's own checks, then the counts read
 # again from the scratch database, against the manifest written beside it.
-db_counts() { # the memory bank's rows per table (the control bank is restore's own)
-  local t
+# The manifest counts every bank, the control bank included (tombstones,
+# feedback). The restore epoch document is left out: restore writes it into
+# the control bank after its own count (retain.EpochDocument).
+epoch_doc=backsight:epoch
+db_counts() { # every bank's rows but the epoch document's; $1 = epoch: only its rows
+  local t w
   for t in documents memory_units mental_models; do
-    printf '%s %s\n' "$t" "$(compose exec -T db psql -U hindsight -d hindsight -tAc "select count(*) from $t where bank_id <> '$(rc_bank)-control'")"
+    case $t in
+      documents) w="bank_id = '$(rc_bank)-control' and id = '$epoch_doc'" ;;
+      memory_units) w="bank_id = '$(rc_bank)-control' and document_id = '$epoch_doc'" ;;
+      *) w=false ;;
+    esac
+    [ "${1:-}" = epoch ] || w="not ($w)"
+    printf '%s %s\n' "$t" "$(compose exec -T db psql -U hindsight -d hindsight -tAc "select count(*) from $t where $w")"
   done | jq -R -s -c 'split("\n") | map(select(. != "") | split(" ") | {(.[0]): (.[1] | tonumber)}) | add'
 }
 want=$(jq -cS '.counts' <<<"$manifest")
@@ -128,9 +138,16 @@ jq -e '.ok and ([.data.steps[] | select(.status == "done") | .name] as $s | ["ch
   "$work/restore-first.json" >/dev/null || { cat "$work/restore-first.json" >&2; fail "the real archive's restore skipped a check"; }
 [ "$(jq -cS '.data.restored_counts' "$work/restore-first.json")" = "$want" ] || fail "restored counts $(jq -c '.data.restored_counts' "$work/restore-first.json") differ from the manifest's $want"
 [ "$(jq -cS '.data.manifest.counts' "$work/restore-first.json")" = "$want" ] || fail "the archive's own manifest differs from the one beside it"
-got=$(db_counts | jq -cS .)
-[ "$got" = "$want" ] || fail "the scratch database holds $got, the manifest $want"
 first_epoch=$(jq -r '.data.epoch.epoch' "$work/restore-first.json")
+got=$(db_counts | jq -cS .)
+epoch_rows=$(db_counts epoch | jq -cS .)
+[ "$(jq -r '.documents' <<<"$epoch_rows")" = 1 ] || fail "the control bank holds $epoch_rows of the restore epoch document after the restore, not one document"
+# An archive that held an epoch document (this fresh install's first epoch is
+# then above 1, the archive's + 1) had it replaced by restore's: its rows,
+# of the same shape, leave the manifest's counts too.
+want_db=$want
+[ "$first_epoch" -le 1 ] || want_db=$(jq -cS --argjson e "$epoch_rows" 'with_entries(.value -= ($e[.key] // 0))' <<<"$want")
+[ "$got" = "$want_db" ] || fail "the scratch database holds $got besides the restore epoch document ($epoch_rows), the manifest $want"
 "$bin" jobs tick --json > "$work/tick-first.json" || { cat "$work/tick-first.json" >&2; fail "jobs tick after the first restore failed"; }
 jq -e --argjson to "$first_epoch" '.ok and (.data.epoch | startswith("restore epoch 0 -> \($to): 0 session"))' "$work/tick-first.json" >/dev/null ||
   { cat "$work/tick-first.json" >&2; fail "the scratch client did not reconcile to epoch $first_epoch"; }
