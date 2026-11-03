@@ -67,7 +67,7 @@ var catalogRows = []catalogRow{
 	{"doctor.check", "Health checks", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "ok,info,warn,error"},
 	{"jobs.last_run", "Background jobs", "ms", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "tick,maintain"},
 	{"pipeline.time_to_recall", "From session to recalled memory", "ms", "down", 20, 3600000, none, "p95", false, false, "none", "machine", false, "pipeline", "none", "backsight stats pipeline", "funnel,hops"},
-	{"memory.yield", "Memories that proved useful", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", false, "cost", "weekly", "backsight stats cost", ""},
+	{"memory.yield", "Memories that proved useful", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", false, "cost", "weekly", "backsight stats cost", "tokens,tokens_per_used,unresolved,gone,pending,resolved_used,withheld"},
 	{"secrets.suspects", "Possible secrets in memory", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight memory scan", ""},
 	{"doctor.history", "Health checks over time", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "none", "backsight stats system", ""},
 	{"bank.active_share", "Share of the memory that came up", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats bank --dev", ""},

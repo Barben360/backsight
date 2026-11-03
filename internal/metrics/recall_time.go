@@ -342,8 +342,8 @@ SELECT memory_id, ts FROM shows WHERE memory_id IS NOT NULL AND ts >= ? ORDER BY
 // has given a row: gone when the record covers their first show's day (they
 // were forgotten before it was listed), unresolved otherwise.
 func readUnresolved(e env, w Window, run *recallRun) error {
-	var covered sql.NullString
-	if err := e.tx.QueryRowContext(e.ctx, `SELECT covered_until FROM memory_coverage`).Scan(&covered); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	covered, err := coveredUntil(e)
+	if err != nil {
 		return err
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
@@ -359,13 +359,31 @@ WHERE NOT EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id)`,
 		if err := rows.Scan(&first); err != nil {
 			return err
 		}
-		if covered.Valid && time.UnixMilli(first).UTC().Format("2006-01-02") <= covered.String {
+		if goneBy(covered, first) {
 			run.gone++
 		} else {
 			run.unresolved++
 		}
 	}
 	return rows.Err()
+}
+
+// coveredUntil is the last day (UTC date) the day lists cover, NULL when
+// the record does not yet cover the bank (the memory_coverage view).
+func coveredUntil(e env) (sql.NullString, error) {
+	var covered sql.NullString
+	err := e.tx.QueryRowContext(e.ctx, `SELECT covered_until FROM memory_coverage`).Scan(&covered)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return covered, err
+	}
+	return covered, nil
+}
+
+// goneBy reports whether a memory without a row, first shown at firstMs
+// (unix ms), is gone: the record covers the day it was first shown, so it
+// was forgotten before that day was listed.
+func goneBy(covered sql.NullString, firstMs int64) bool {
+	return covered.Valid && time.UnixMilli(firstMs).UTC().Format("2006-01-02") <= covered.String
 }
 
 // neverRowsOf are the sessions that never gave a memory, newest send

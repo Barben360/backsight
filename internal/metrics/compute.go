@@ -62,6 +62,7 @@ type memo struct {
 	ledger    *feedback.Ledger        // the index's ledger
 	projects  map[string]string       // every memory's project (memoryProjects)
 	recall    map[[2]int64]*recallRun // pipeline.time_to_recall's reads, by window
+	yield     map[[2]int64]*yieldRun  // memory.yield's reads, by window
 }
 
 // newMemo is an empty memo.

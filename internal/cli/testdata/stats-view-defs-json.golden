@@ -1266,6 +1266,15 @@
           "dev": false,
           "family": "cost",
           "series": "weekly",
+          "extra": [
+            "tokens",
+            "tokens_per_used",
+            "unresolved",
+            "gone",
+            "pending",
+            "resolved_used",
+            "withheld"
+          ],
           "drill": "backsight stats cost",
           "n": 0,
           "mdc": null

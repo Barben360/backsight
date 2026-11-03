@@ -14,9 +14,20 @@ import (
 // to build memory (the server's LLM stats, for every PC using the server).
 
 var costIDs = []string{"context.per_session", "context.per_prompt", "recall.latency", "search.latency",
-	"extraction.tokens", "extraction.cost", "extraction.per_session"}
+	"extraction.tokens", "extraction.cost", "extraction.per_session", yieldID}
 
-func init() { register("cost", costIDs, cost) }
+// costStepOf names the step that fills each id: memory.yield reads the day
+// record, which the other cost figures (and the verdict) never need.
+var costStepOf = func() map[string]string {
+	m := map[string]string{}
+	for _, id := range costIDs {
+		m[id] = "main"
+	}
+	m[yieldID] = "yield"
+	return m
+}()
+
+func init() { registerSteps("cost", costIDs, costStepOf, cost) }
 
 // extractionOps are the server operations whose LLM use is named in
 // extraction.tokens and extraction.cost; the rest of the total is "other".
@@ -27,10 +38,10 @@ var extractionOps = []string{"retain", "consolidation", "refresh_mental_model"}
 
 // CostServerNeeds are the server reads of a view holding the cost family
 // (loadServer keys): the LLM stats of all operations and of each
-// extraction operation over the view's period, and the 30-day stats of
-// extraction.per_session.
+// extraction operation over the view's period, the 30-day stats of
+// extraction.per_session and the memories series of memory.yield.
 func CostServerNeeds() []string {
-	needs := []string{"llm:", llm30dKey}
+	needs := []string{"llm:", llm30dKey, "series"}
 	for _, op := range extractionOps {
 		needs = append(needs, "llm:"+op)
 	}
@@ -75,6 +86,14 @@ func cost(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 			obs[id] = Observation{Absent: true, Reason: reason}
 			met[id] = Metric{}
 		}
+	}
+	if e.runs("yield") {
+		if err := yield(e, w, obs, met); err != nil {
+			return nil, nil, err
+		}
+	}
+	if !e.runs("main") {
+		return obs, met, nil
 	}
 	// context.*: prompts and briefings; recall.latency: prompts;
 	// search.latency: tool calls.

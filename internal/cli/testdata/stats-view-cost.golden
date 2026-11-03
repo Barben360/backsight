@@ -7,6 +7,7 @@ Time memory adds to a prompt                 —                        (n=5, to
 Time of a memory search                      —                        (no data: nothing recorded yet)
 What the server's model spent (tokens)       —                        (no data: nothing recorded yet)
 What the server's model spent (cost)         —                        (no data: nothing recorded yet)
+Memories that proved useful                  —                        (no data: nothing recorded yet)
 
 What the server's model spent, by day
 none

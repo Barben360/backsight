@@ -374,6 +374,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "memory.yield", Label: "Memories that proved useful", Unit: "ratio", Direction: "up", MinN: 20,
 		CI: "wilson", Scope: "machine", Source: "collection", Family: "cost", Series: "weekly", Command: "backsight stats cost",
+		Extra:      []string{"tokens", "tokens_per_used", "unresolved", "gone", "pending", "resolved_used", "withheld"},
 		Question:   "Do new memories turn out useful?",
 		Definition: "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
 		Action:     "Few new memories prove useful. Compare what is stored with what Claude finds.",
