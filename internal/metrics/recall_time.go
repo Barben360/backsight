@@ -71,6 +71,7 @@ type recallSession struct {
 	failed         bool // an operation of its send failed
 	retries        int
 	noMemory       bool // an operation of its send completed with 0 memories
+	beforeRecord   bool // sent before the operations record began: what became of it is not known
 }
 
 // recallRun is what timeToRecall reads: the sessions that ended in the
@@ -80,10 +81,14 @@ type recallRun struct {
 	unresolved, gone int64
 }
 
-// never reports whether s was sent a day ago or more and gave no memory.
-func (s *recallSession) never(now time.Time) bool {
+// stale reports whether s was sent a day ago or more and gave no memory.
+func (s *recallSession) stale(now time.Time) bool {
 	return s.t1 >= 0 && s.t2 < 0 && now.Sub(time.UnixMilli(s.t1)) >= neverAfter
 }
+
+// never is stale for a send the operations record covers; one from before
+// the record began is unresolved, not never.
+func (s *recallSession) never(now time.Time) bool { return s.stale(now) && !s.beforeRecord }
 
 func (s *recallSession) state() string {
 	switch {
@@ -95,8 +100,26 @@ func (s *recallSession) state() string {
 	return "none"
 }
 
-// readRecall reads the sessions of the window and their way.
+// readRecall is the run over w, read once per transaction.
 func readRecall(e env, w Window) (*recallRun, error) {
+	k := [2]int64{w.Since.UnixNano(), w.Until.UnixNano()}
+	if e.memo != nil {
+		if run, ok := e.memo.recall[k]; ok {
+			return run, nil
+		}
+	}
+	run, err := loadRecall(e, w)
+	if err == nil && e.memo != nil {
+		if e.memo.recall == nil {
+			e.memo.recall = map[[2]int64]*recallRun{}
+		}
+		e.memo.recall[k] = run
+	}
+	return run, err
+}
+
+// loadRecall reads the sessions of the window and their way.
+func loadRecall(e env, w Window) (*recallRun, error) {
 	run := &recallRun{}
 	bySession := map[string]*recallSession{}
 	rows, err := e.tx.QueryContext(e.ctx, `
@@ -130,7 +153,7 @@ GROUP BY session HAVING MAX(ts) < ? AND MAX(ts) <= ?`, // the prompts from the w
 		if err := readSends(e, bySession, minT0); err != nil {
 			return nil, err
 		}
-		if err := readOps(e, bySession); err != nil {
+		if err := readOps(e, bySession, minT1(bySession)); err != nil {
 			return nil, err
 		}
 		if err := readRecalls(e, bySession); err != nil {
@@ -168,41 +191,82 @@ WHERE status = 'ok' AND document IS NOT NULL AND ts >= ? ORDER BY ts, source_fil
 	return rows.Err()
 }
 
-// readOps sets T2 and, for a send with no memory made, why: the
-// operations created from 120 s before the send on.
-func readOps(e env, by map[string]*recallSession) error {
+// minT1 is the earliest send of the sessions, -1 when none was sent.
+func minT1(by map[string]*recallSession) int64 {
+	m := int64(-1)
+	for _, s := range by {
+		if s.t1 >= 0 && (m < 0 || s.t1 < m) {
+			m = s.t1
+		}
+	}
+	return m
+}
+
+// readOps sets T2 and, for a send with no memory made, why: the operations
+// created from 120 s before the send on. An operation's latest line is its
+// state (doc_ops lines share the operation's created_at, so the bound on it
+// keeps every line of the operations it keeps). A send from before the
+// operations record began is marked beforeRecord (no record: all of them).
+func readOps(e env, by map[string]*recallSession, minT1 int64) error {
+	var start sql.NullInt64
+	if err := e.tx.QueryRowContext(e.ctx, `SELECT MIN(ts) FROM doc_ops`).Scan(&start); err != nil {
+		return err
+	}
+	for _, s := range by {
+		s.beforeRecord = s.t1 >= 0 && (!start.Valid || s.t1 < start.Int64)
+	}
+	if minT1 < 0 || !start.Valid {
+		return nil
+	}
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT document, status, created_at, updated_at, COALESCE(retries, 0), units FROM doc_op
-WHERE document IS NOT NULL AND created_at IS NOT NULL ORDER BY created_at, ts`)
+SELECT operation_id, document, status, created_at, updated_at, COALESCE(retries, 0), units FROM doc_ops
+WHERE operation_id IS NOT NULL AND document IS NOT NULL AND created_at >= ?
+ORDER BY ts, source_file, "offset"`, minT1-opSkew.Milliseconds())
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
+	type op struct {
+		doc, status      string
+		created, retries int64
+		updated, units   sql.NullInt64
+	}
+	latest := map[string]op{} // by operation: the last line read wins
 	for rows.Next() {
-		var doc, status string
-		var created, retries int64
-		var updated, units sql.NullInt64
-		if err := rows.Scan(&doc, &status, &created, &updated, &retries, &units); err != nil {
+		var id string
+		var o op
+		if err := rows.Scan(&id, &o.doc, &o.status, &o.created, &o.updated, &o.retries, &o.units); err != nil {
 			return err
 		}
-		sid, ok := session.OfDocument(doc)
+		latest[id] = o
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	ops := make([]op, 0, len(latest))
+	for _, o := range latest {
+		ops = append(ops, o)
+	}
+	slices.SortFunc(ops, func(a, b op) int { return int(a.created - b.created) })
+	for _, o := range ops {
+		sid, ok := session.OfDocument(o.doc)
 		s := by[sid]
-		if !ok || s == nil || s.t1 < 0 || created < s.t1-opSkew.Milliseconds() {
+		if !ok || s == nil || s.t1 < 0 || o.created < s.t1-opSkew.Milliseconds() {
 			continue
 		}
 		switch {
-		case status == "failed":
-			s.failed, s.retries = true, max(s.retries, int(retries))
-		case status == "completed" && units.Valid && units.Int64 == 0:
+		case o.status == "failed":
+			s.failed, s.retries = true, max(s.retries, int(o.retries))
+		case o.status == "completed" && o.units.Valid && o.units.Int64 == 0:
 			s.noMemory = true
-		case status == "completed" && s.t2 < 0: // no count yet counts as extracted
-			s.t2 = created
-			if updated.Valid {
-				s.t2 = updated.Int64
+		case o.status == "completed" && s.t2 < 0: // no count yet counts as extracted
+			s.t2 = o.created
+			if o.updated.Valid {
+				s.t2 = o.updated.Int64
 			}
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // readRecalls sets T3: the first show at or after T2 of a memory whose
@@ -218,25 +282,36 @@ func readRecalls(e env, by map[string]*recallSession) error {
 		return nil
 	}
 	of := map[string]*recallSession{} // memory -> the session its document belongs to
-	rows, err := e.tx.QueryContext(e.ctx, `SELECT memory_id, document FROM memory_doc WHERE document IS NOT NULL`)
-	if err != nil {
-		return err
+	var ids []any
+	for id, s := range by {
+		if s.t2 >= 0 {
+			ids = append(ids, id)
+		}
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var mem, doc string
-		if err := rows.Scan(&mem, &doc); err != nil {
+	for len(ids) > 0 { // the memories of these sessions' documents only, in chunks of bound values
+		n := min(len(ids), 500)
+		rows, err := e.tx.QueryContext(e.ctx, `
+SELECT memory_id, document FROM memory_docs WHERE document IS NOT NULL AND memory_id IS NOT NULL
+  AND session IN (?`+strings.Repeat(",?", n-1)+`)`, ids[:n]...)
+		if err != nil {
 			return err
 		}
-		if sid, ok := session.OfDocument(doc); ok && by[sid] != nil && by[sid].t2 >= 0 {
-			of[mem] = by[sid]
+		for rows.Next() {
+			var mem, doc string
+			if err := rows.Scan(&mem, &doc); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if sid, ok := session.OfDocument(doc); ok && by[sid] != nil && by[sid].t2 >= 0 {
+				of[mem] = by[sid]
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return err
+		}
+		ids = ids[n:]
 	}
 	if len(of) == 0 {
 		return nil
@@ -351,6 +426,7 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 	}
 	var lastSent, sentExt, extRecalled, whole []int64
 	f := map[string]int64{"ended": int64(len(run.sessions)), "unresolved": run.unresolved, "gone": run.gone}
+	sessionsUnresolved := false
 	for _, s := range run.sessions {
 		if s.t1 >= 0 {
 			f["sent"]++
@@ -360,8 +436,11 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 		case s.t2 >= 0:
 			f["extracted"]++
 			sentExt = append(sentExt, max(0, s.t2-s.t1))
-		case s.t1 >= 0 && s.never(e.now):
+		case s.never(e.now):
 			f["never"]++
+		case s.stale(e.now): // sent before the operations record began
+			f["unresolved"]++
+			sessionsUnresolved = true
 		case s.t1 >= 0:
 			f["on_server"]++
 		}
@@ -383,7 +462,7 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 	}
 	m := Metric{Value: hops[3].P50, Num: i64(f["recalled"]), Den: i64(f["sent"]),
 		Extra: map[string]any{"funnel": f, "hops": hops}}
-	if run.unresolved > 0 {
+	if run.unresolved > 0 || sessionsUnresolved {
 		m.Tags = []string{tagPartial}
 	}
 	o := Observation{Den: hops[1].N, P95: hops[1].P95}

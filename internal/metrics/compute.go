@@ -57,10 +57,11 @@ type env struct {
 type memo struct {
 	runs      map[runKey]familyRun
 	backlog   *time.Duration
-	docStatus map[string]string    // document_status
-	stale     *feedback.StaleLists // feedback.Stale of the index's ledger, as of now
-	ledger    *feedback.Ledger     // the index's ledger
-	projects  map[string]string    // every memory's project (memoryProjects)
+	docStatus map[string]string       // document_status
+	stale     *feedback.StaleLists    // feedback.Stale of the index's ledger, as of now
+	ledger    *feedback.Ledger        // the index's ledger
+	projects  map[string]string       // every memory's project (memoryProjects)
+	recall    map[[2]int64]*recallRun // pipeline.time_to_recall's reads, by window
 }
 
 // newMemo is an empty memo.

@@ -174,10 +174,10 @@ func edgeSessions(x *fx) {
 	day := func(d int, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, fxParis) }
 	// never sent
 	x.rcPrompt(day(28, 10, 0), "never-sent")
-	// sent 3 days ago, the operation failed three times
-	x.rcPrompt(day(27, 10, 0), "failed")
-	x.rcSend(day(27, 10, 5), "failed")
-	x.rcOp("failed", "failed", day(27, 10, 5).Add(30*time.Second), day(27, 10, 10), 3, nil)
+	// sent 30 h ago, the operation failed three times
+	x.rcPrompt(day(29, 5, 55), "failed")
+	x.rcSend(day(29, 6, 0), "failed")
+	x.rcOp("failed", "failed", day(29, 6, 0).Add(30*time.Second), day(29, 6, 5), 3, nil)
 	// sent 2 h ago, nothing on the server yet
 	x.rcPrompt(day(30, 8, 30), "recent")
 	x.rcSend(day(30, 10, 0), "recent")
@@ -214,12 +214,12 @@ func TestTimeToRecallEdgeSessions(t *testing.T) {
 		got[i] = fmt.Sprintf("%s/%s/%s/%d", r.Session, r.Project, r.State, r.Retries)
 	}
 	// newest send first
-	wantRows := []string{"empty/alpha/no_memory/0", "failed/alpha/failed/3", "skew/alpha/none/0"}
+	wantRows := []string{"failed/alpha/failed/3", "empty/alpha/no_memory/0", "skew/alpha/none/0"}
 	if fmt.Sprint(got) != fmt.Sprint(wantRows) {
 		t.Errorf("never_extracted %v, want %v", got, wantRows)
 	}
-	if len(rows) > 0 && !rows[0].Sent.Equal(time.Date(2026, 10, 27, 11, 5, 0, 0, fxParis)) {
-		t.Errorf("sent %v, want 2026-10-27 11:05 Paris", rows[0].Sent)
+	if len(rows) > 0 && !rows[0].Sent.Equal(time.Date(2026, 10, 29, 6, 0, 0, 0, fxParis)) {
+		t.Errorf("sent %v, want 2026-10-29 06:00 Paris", rows[0].Sent)
 	}
 	for _, r := range rows {
 		if !slices.Contains(NeverStates, r.State) {
@@ -310,6 +310,7 @@ func TestNeverExtractedFilter(t *testing.T) {
 // filter all of them.
 func TestNeverExtractedFilterIsNotCapped(t *testing.T) {
 	x := newFx(t, fxNow)
+	x.rcOp("anchor", "completed", rcBase.Add(-time.Hour), rcBase.Add(-50*time.Minute), 0, units(1)) // the record began before the sends
 	for i := range 55 {
 		s := fmt.Sprintf("sess-%d", i)
 		x.rcPrompt(rcBase, s)
@@ -460,5 +461,87 @@ func TestTimeToRecallShowBeforeOwnExtraction(t *testing.T) {
 	f = funnelOf(t, ttr(y, y.query(7)))
 	if f["recalled"] != 1 || f["not_recalled"] != 1 {
 		t.Errorf("funnel %v, want one recalled and one not", f)
+	}
+}
+
+// A send from before the operations record began says nothing about what
+// became of it: unresolved, never never.
+func TestTimeToRecallBeforeTheOperationsRecord(t *testing.T) {
+	day := func(d int, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, fxParis) }
+	t.Run("no record at all", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.rcPrompt(day(27, 9, 55), "old")
+		x.rcSend(day(27, 10, 0), "old") // 3 days ago
+		m := ttr(x, x.query(7))
+		f := funnelOf(t, m)
+		if f["never"] != 0 || f["unresolved"] != 1 || f["sent"] != 1 {
+			t.Errorf("funnel %v, want never 0, unresolved 1", f)
+		}
+		if !slices.Contains(m.Tags, "partial") {
+			t.Errorf("tags %v, want partial", m.Tags)
+		}
+		if rows := x.run("pipeline", x.query(7)).Tables.NeverExtracted; len(rows) != 0 {
+			t.Errorf("rows %v, want none", rows)
+		}
+		q := x.query(7)
+		q.Has = "never_extracted"
+		if rows := x.run("sessions", q).Tables.Sessions; len(rows) != 0 {
+			t.Errorf("--has never_extracted lists %v, want none", rows)
+		}
+	})
+	t.Run("a send before the record's first line, and one after", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.rcPrompt(day(26, 9, 55), "before")
+		x.rcSend(day(26, 10, 0), "before")
+		x.rcPrompt(day(28, 9, 55), "after")
+		x.rcSend(day(28, 10, 0), "after")
+		// the record's first line is written on the 27th, for another session
+		x.rcOp("other", "completed", day(27, 8, 0), day(27, 8, 5), 0, units(1))
+		m := ttr(x, x.query(7))
+		f := funnelOf(t, m)
+		if f["never"] != 1 || f["unresolved"] != 1 {
+			t.Errorf("funnel %v, want never 1 (after) and unresolved 1 (before)", f)
+		}
+		rows := x.run("pipeline", x.query(7)).Tables.NeverExtracted
+		if len(rows) != 1 || rows[0].Session != "after" || rows[0].State != "none" {
+			t.Errorf("rows %v, want only the session sent after the record began", rows)
+		}
+	})
+}
+
+// The edges of the two timings: an operation created 120 s before the send
+// belongs to it, 121 s does not; a send exactly 24 h old is never, one
+// 23 h 59 min old is still on the server.
+func TestTimeToRecallBoundaries(t *testing.T) {
+	anchor := func(x *fx) {
+		x.rcOp("anchor", "completed", rcBase.Add(-time.Hour), rcBase.Add(-50*time.Minute), 0, units(1))
+	}
+	for _, c := range []struct {
+		skew      time.Duration
+		extracted int64
+	}{{120 * time.Second, 1}, {121 * time.Second, 0}} {
+		x := newFx(t, fxNow)
+		anchor(x)
+		x.rcPrompt(rcBase, "s1")
+		t1 := rcBase.Add(10 * time.Minute)
+		x.rcSend(t1, "s1")
+		x.rcOp("s1", "completed", t1.Add(-c.skew), t1.Add(time.Minute), 0, units(2))
+		if f := funnelOf(t, ttr(x, x.query(7))); f["extracted"] != c.extracted {
+			t.Errorf("operation %v before the send: extracted %d, want %d", c.skew, f["extracted"], c.extracted)
+		}
+	}
+	for _, c := range []struct {
+		age             time.Duration
+		never, onServer int64
+	}{{24 * time.Hour, 1, 0}, {24*time.Hour - time.Minute, 0, 1}} {
+		x := newFx(t, fxNow)
+		x.rcOp("anchor", "completed", fxNow.Add(-48*time.Hour), fxNow.Add(-47*time.Hour), 0, units(1))
+		t1 := fxNow.Add(-c.age)
+		x.rcPrompt(t1.Add(-5*time.Minute), "s1")
+		x.rcSend(t1, "s1")
+		f := funnelOf(t, ttr(x, x.query(7)))
+		if f["never"] != c.never || f["on_server"] != c.onServer {
+			t.Errorf("sent %v ago: never %d on_server %d, want %d and %d", c.age, f["never"], f["on_server"], c.never, c.onServer)
+		}
 	}
 }
