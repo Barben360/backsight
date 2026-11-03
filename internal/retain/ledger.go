@@ -681,6 +681,32 @@ func (a Attributor) Turns(since time.Time) ([]TurnEntry, error) {
 	return out, nil
 }
 
+// filedTurns is what this PC recorded of session sid's main turns as they
+// were filed: by its prompt record's uuid, the project each turn was filed
+// under (the last record of a turn wins). Only turns retained whole are
+// recorded; none when the ledger is off or unreadable.
+func (a Attributor) filedTurns(sid string) map[string]string {
+	out := map[string]string{}
+	if a.Dir == "" || !session.ValidID(sid) {
+		return out
+	}
+	_, turnsPath := a.mainPaths(sid)
+	fh, err := os.Open(turnsPath)
+	if err != nil {
+		return out
+	}
+	defer func() { _ = fh.Close() }()
+	sc := bufio.NewScanner(fh)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
+		var e TurnEntry
+		if json.Unmarshal(sc.Bytes(), &e) == nil && e.Turn != "" && e.Base != "" && !e.Subagent() {
+			out[e.Turn] = e.Base
+		}
+	}
+	return out
+}
+
 // AttributionKeep is how long a session's recorded turns and decisions
 // are kept after its last change: longer than the families' window, and
 // a report's decision also travels in its document's metadata.
