@@ -93,6 +93,17 @@ To finish the import now, with the user's go-ahead, run `backsight retain backfi
 
 When the user answered `import=yes` with `import_path=<folder>`, setup ran `backsight import <folder>`: the folder is queued, and `jobs tick` sends up to 10 files per run after any past sessions. Before answering, `backsight import /path/to/folder --plan --json` shows what would be sent and its cost (`data.plan.files`, `data.plan.total.cost`, `data.plan.skipped` by reason); propose `--exclude` patterns when the plan shows logs, archives or generated files, then run `backsight import /path/to/folder --exclude … --json` yourself instead of the setup answer. `backsight import list --json` gives each folder's `status` (`sending`, `waiting`, `paused`, `done`), `reason` (`past_sessions`, `budget`, `subscription`), `sent` out of `files`, and `spent_cost`. A `budget` pause needs a higher `--max-cost`, which is the user's call. [import](import.md) has a LifeOS recipe.
 
+### Offering a GPU reranker
+
+When setup's pre-flight `gpu` line (or doctor's `gpu` check) names a GPU and points to `backsight guide gpu-reranker`, offer the user to run the reranker on it: recall gets faster, the memories found stay the same. It is optional and backsight does not manage it: you add a service to the server's `compose.override.yaml` and the user owns it. Follow [GPU reranker](gpu-reranker.md) for their GPU:
+
+1. Install the machine's prerequisites the page names for that GPU (NVIDIA driver and Container Toolkit; or the Mesa Vulkan driver and the `render` and `video` groups), with the distribution's package manager and the user's go-ahead: they need administrator rights, and Docker restarts.
+2. Run the page's container check: the GPU must be visible from a container before you write the override.
+3. Write `compose.override.yaml` from the page's recipe. If the file exists, merge into it and keep what the user put there.
+4. `backsight server start`, then the page's checks. If the server does not come back healthy, remove what you added and run `backsight server start` again: the CPU reranker is back.
+
+Not on the native runtime (no override file there), and not on a PC joined to another PC's server: the GPU that counts is the host's.
+
 `backsight doctor --json` checks the whole install at any time. About an hour after the user's first real session, `backsight verify --live --json` checks the real pipeline, read-only: exit 0 means this machine's latest settled session reached the server and an observation was consolidated from it; exit 40 means not yet, rerun after `data.wait_s` seconds; exit 20 means it failed, with `data.fix`. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
 
 ## Joining a shared memory or installing a remote server
@@ -164,4 +175,4 @@ When the user asks whether memory works or is worth it, run `backsight stats ove
 
 ## More
 
-The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md).
+The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md), [GPU reranker](gpu-reranker.md).

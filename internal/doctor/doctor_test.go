@@ -356,8 +356,117 @@ func TestGPUReported(t *testing.T) {
 	f.env.GPUs = func() []string { return []string{"AMD ROCm (/dev/kfd)"} }
 	c := check(t, f.run(), "gpu")
 	expect(t, c, Info, "AMD ROCm")
-	if !strings.Contains(c.Summary, "not used: backsight runs on the CPU") {
+	if !strings.Contains(c.Summary, "not used: the reranker runs on the CPU") {
 		t.Errorf("must say the GPU is not used: %q", c.Summary)
+	}
+	if c.Fix != "a GPU reranker in the server's compose.override.yaml: backsight guide gpu-reranker" {
+		t.Errorf("must point to the GPU reranker guide: %q", c.Fix)
+	}
+}
+
+// A reranker the user set in the server's compose.override.yaml is reported
+// as theirs, and the guide is no longer offered.
+func TestGPUOwnRerankerFromOverride(t *testing.T) {
+	f := newFixture(t)
+	f.env.GPUs = func() []string { return []string{"render node renderD128 (Vulkan)"} }
+	put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), `services:
+  hindsight:
+    environment:
+      # HINDSIGHT_API_RERANKER_PROVIDER: tei
+      HINDSIGHT_API_RERANKER_PROVIDER: "cohere"
+`, 0o600)
+	c := check(t, f.run(), "gpu")
+	expect(t, c, Info, "your own reranker (provider cohere, in compose.override.yaml)")
+	if !strings.Contains(c.Summary, "renderD128") || c.Fix != "" {
+		t.Errorf("summary must keep the GPUs, without a fix: %+v", c)
+	}
+}
+
+// The override's list form (- KEY=value) counts too, and a reranker is
+// reported even where no GPU is seen (a service on another machine).
+func TestGPUOwnRerankerListFormNoGPU(t *testing.T) {
+	f := newFixture(t)
+	put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), "services:\n  hindsight:\n    environment:\n      - HINDSIGHT_API_RERANKER_PROVIDER=tei\n", 0o600)
+	c := check(t, f.run(), "gpu")
+	expect(t, c, Info, "your own reranker (provider tei, in compose.override.yaml)")
+}
+
+// A quoted list item (- "KEY=value") counts too.
+func TestGPUOwnRerankerQuotedListForm(t *testing.T) {
+	f := newFixture(t)
+	put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), "services:\n  hindsight:\n    environment:\n      - \"HINDSIGHT_API_RERANKER_PROVIDER=tei\"\n", 0o600)
+	c := check(t, f.run(), "gpu")
+	expect(t, c, Info, "your own reranker (provider tei, in compose.override.yaml)")
+}
+
+// The CPU providers backsight renders itself are not a reranker of the
+// user's own: the GPU stays unused and the guide is still offered.
+func TestGPUOverrideCPUProviderIsNotOwn(t *testing.T) {
+	for _, p := range []string{"local", "ONNX"} {
+		f := newFixture(t)
+		f.env.GPUs = func() []string { return []string{"NVIDIA (/dev/nvidiactl)"} }
+		put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), "services:\n  hindsight:\n    environment:\n      HINDSIGHT_API_RERANKER_PROVIDER: "+p+"\n", 0o600)
+		c := check(t, f.run(), "gpu")
+		if !strings.Contains(c.Summary, "not used: the reranker runs on the CPU") || !strings.Contains(c.Fix, "backsight guide gpu-reranker") {
+			t.Errorf("provider %s: %+v", p, c)
+		}
+	}
+}
+
+// Through Run: on a client or a native server the override is not read, so
+// a reranker there does not hide "not used"; with a config that does not
+// load, the override in the default server directory is still read.
+func TestGPUOverrideGatedByConfig(t *testing.T) {
+	override := "services:\n  hindsight:\n    environment:\n      HINDSIGHT_API_RERANKER_PROVIDER: tei\n"
+	cases := []struct{ name, config, inSummary string }{
+		{"remote", "[server]\nmode = \"remote\"\nurl = \"http://127.0.0.1:1\"\n", "the server runs on another PC"},
+		{"native", "[server]\nruntime = \"native\"\nurl = \"http://127.0.0.1:1\"\n", "not used: the reranker runs on the CPU"},
+		{"broken config", "[server\n", "your own reranker (provider tei"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.env.GPUs = func() []string { return []string{"NVIDIA (/dev/nvidiactl)"} }
+			put(t, f.env.Dirs.ConfigFile(), tc.config, 0o600)
+			put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), override, 0o600)
+			c := check(t, f.run(), "gpu")
+			if !strings.Contains(c.Summary, tc.inSummary) {
+				t.Errorf("summary %q, want %q", c.Summary, tc.inSummary)
+			}
+		})
+	}
+}
+
+// Only commented-out lines, or an override about something else: the CPU
+// reranker, and the guide is offered.
+func TestGPUOverrideWithoutReranker(t *testing.T) {
+	f := newFixture(t)
+	f.env.GPUs = func() []string { return []string{"NVIDIA (/dev/nvidiactl)"} }
+	put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), "services:\n  hindsight:\n    environment:\n      #HINDSIGHT_API_RERANKER_PROVIDER: tei\n      HINDSIGHT_API_RERANKER_MAX_CANDIDATES: \"20\"\n", 0o600)
+	c := check(t, f.run(), "gpu")
+	expect(t, c, Info, "not used: the reranker runs on the CPU")
+	if !strings.Contains(c.Fix, "backsight guide gpu-reranker") {
+		t.Errorf("fix: %q", c.Fix)
+	}
+}
+
+func TestGPUNoneNoFix(t *testing.T) {
+	c := check(t, newFixture(t).run(), "gpu")
+	expect(t, c, Info, "no GPU detected; the reranker runs on the CPU")
+	if c.Fix != "" {
+		t.Errorf("no GPU, nothing to offer: %q", c.Fix)
+	}
+}
+
+func TestGPUCheckNativeAndRemote(t *testing.T) {
+	gpus := []string{"NVIDIA (/dev/nvidiactl)"}
+	native := checkGPU(gpuSetup{gpus: gpus, native: true})
+	if !strings.Contains(native.Summary, "not used: the reranker runs on the CPU") || !strings.Contains(native.Fix, "needs the Docker runtime") || !strings.Contains(native.Fix, "backsight guide gpu-reranker") {
+		t.Errorf("native: %+v", native)
+	}
+	remote := checkGPU(gpuSetup{gpus: gpus, remote: true})
+	if !strings.Contains(remote.Summary, "the server runs on another PC") || remote.Fix != "" {
+		t.Errorf("remote: %+v", remote)
 	}
 }
 

@@ -167,9 +167,19 @@ func Preflight(ctx context.Context, p Probes) []Check {
 			add(Check{ID: "transcripts", Status: Info, Summary: p.Transcript})
 		}
 	}
-	gpu := Check{ID: "gpu", Status: Info, Summary: "no GPU found: CPU inference"}
+	// A GPU is pointed to, never configured: the service and its drivers are
+	// the user's (decisions 0035, 0082).
+	gpu := Check{ID: "gpu", Status: Info, Summary: "no GPU found: the reranker runs on the CPU"}
 	if len(p.GPUs) > 0 {
-		gpu.Summary = "GPU found (" + strings.Join(p.GPUs, ", ") + "): reported only, backsight runs on the CPU"
+		found := "GPU found (" + strings.Join(p.GPUs, ", ") + "): "
+		switch {
+		case p.Remote:
+			gpu.Summary = found + "not used: the server runs on another PC"
+		case native:
+			gpu.Summary = found + "the reranker runs on the CPU; a GPU reranker needs the Docker runtime: backsight guide gpu-reranker"
+		default:
+			gpu.Summary = found + "the reranker runs on the CPU; to run it on this GPU after setup: backsight guide gpu-reranker"
+		}
 	}
 	add(gpu)
 	return out
