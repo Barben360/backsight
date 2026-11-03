@@ -150,6 +150,31 @@ func TestRootlessAndGPUAreReported(t *testing.T) {
 	}
 }
 
+// A GPU found on a Docker server points to the GPU reranker guide; native
+// says it needs Docker; a remote server's GPU is its host's business.
+func TestGPUPointsToTheGuide(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		runtime       string
+		remote        bool
+		want, notWant string
+	}{
+		{"docker", "", false, "the reranker runs on the CPU; to run it on this GPU after setup: backsight guide gpu-reranker", ""},
+		{"native", "native", false, "a GPU reranker needs the Docker runtime: backsight guide gpu-reranker", ""},
+		{"remote", "", true, "not used: the server runs on another PC", "backsight guide"},
+	} {
+		p := healthy()
+		p.GPUs, p.Runtime, p.Remote = []string{"NVIDIA (/dev/nvidiactl)"}, tc.runtime, tc.remote
+		g := byID(Preflight(context.Background(), p))["gpu"]
+		if g.Status != Info || !strings.Contains(g.Summary, "NVIDIA") || !strings.Contains(g.Summary, tc.want) || (tc.notWant != "" && strings.Contains(g.Summary, tc.notWant)) {
+			t.Errorf("%s: %+v", tc.name, g)
+		}
+	}
+	if g := byID(Preflight(context.Background(), healthy()))["gpu"]; g.Summary != "no GPU found: the reranker runs on the CPU" {
+		t.Errorf("no GPU: %+v", g)
+	}
+}
+
 func TestNeedsUserWinsWhateverTheOrder(t *testing.T) {
 	p := healthy()
 	p.Docker = func(context.Context) (string, error) { return "", fmt.Errorf("x: %w", exec.ErrNotFound) } // needs_user, first

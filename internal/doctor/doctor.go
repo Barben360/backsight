@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -240,7 +241,16 @@ func Run(ctx context.Context, env Env) Report {
 			add(checkGitBash(*env.GitBash))
 		}
 	}
-	add(checkGPU(env.GPUs()))
+	gs := gpuSetup{gpus: env.GPUs()}
+	composeDir := filepath.Join(env.Dirs.Data, "server")
+	if cfgErr == nil {
+		composeDir = cfg.Server.ComposeDir
+		gs.remote, gs.native = cfg.Server.Mode == "remote", cfg.Server.Runtime == "native"
+	}
+	if !gs.remote && !gs.native {
+		gs.provider = ownReranker(composeDir)
+	}
+	add(checkGPU(gs))
 	writeOff := cfgErr == nil && !cfg.Components.Write
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	add(checkBackup(env, now()))
@@ -1212,14 +1222,56 @@ func checkClient(env Env, loc claudecode.Location) Check {
 	return c
 }
 
-func checkGPU(gpus []string) Check {
+// gpuSetup is what the gpu check reports on: the devices seen, where the
+// server runs, and the reranker provider the user's compose.override.yaml
+// sets ("" for none).
+type gpuSetup struct {
+	gpus           []string
+	remote, native bool
+	provider       string
+}
+
+const gpuGuide = "backsight guide gpu-reranker"
+
+func checkGPU(s gpuSetup) Check {
 	c := Check{ID: "gpu", Status: Info}
-	if len(gpus) == 0 {
-		c.Summary = "no GPU detected; backsight runs on the CPU"
-		return c
+	seen := strings.Join(s.gpus, ", ")
+	switch {
+	case s.provider != "":
+		c.Summary = "your own reranker (provider " + s.provider + ", in compose.override.yaml), not managed by backsight"
+		if seen != "" {
+			c.Summary += "; " + seen
+		}
+	case len(s.gpus) == 0:
+		c.Summary = "no GPU detected; the reranker runs on the CPU"
+	case s.remote:
+		c.Summary = seen + "; not used: the server runs on another PC"
+	case s.native:
+		c.Summary = seen + "; not used: the reranker runs on the CPU"
+		c.Fix = "a GPU reranker needs the Docker runtime: " + gpuGuide
+	default:
+		c.Summary = seen + "; not used: the reranker runs on the CPU"
+		c.Fix = "a GPU reranker in the server's compose.override.yaml: " + gpuGuide
 	}
-	c.Summary = strings.Join(gpus, ", ") + "; not used: backsight runs on the CPU"
 	return c
+}
+
+// rerankerProviderRE matches an uncommented HINDSIGHT_API_RERANKER_PROVIDER
+// setting, in Compose's map (KEY: value) or list (- KEY=value) form.
+var rerankerProviderRE = regexp.MustCompile(`(?m)^[ \t]*(?:-[ \t]*)?["']?HINDSIGHT_API_RERANKER_PROVIDER["']?[ \t]*[:=][ \t]*["']?([A-Za-z0-9_-]+)`)
+
+// ownReranker returns the reranker provider the server's
+// compose.override.yaml sets, "" when it sets none or cannot be read. The
+// file is the user's: doctor only reads it (decisions 0035, 0082).
+func ownReranker(composeDir string) string {
+	b, err := os.ReadFile(filepath.Join(composeDir, "compose.override.yaml"))
+	if err != nil {
+		return ""
+	}
+	if m := rerankerProviderRE.FindSubmatch(b); m != nil {
+		return string(m[1])
+	}
+	return ""
 }
 
 // detectGPUs reports devices only; nothing is configured (decision 0035).
