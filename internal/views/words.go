@@ -303,7 +303,8 @@ var MemoryStateWords = map[string]string{"hidden": "hidden", "wrong": "reported 
 
 // FunnelWords name the steps a session's memories go through.
 var FunnelWords = map[string]string{
-	"ended": "session ended", "sent": "sent", "extracted": "turned into memories", "recalled": "shown again",
+	"ended": "session ended", "sent": "sent", "waiting_or_failed": "not sent", "extracted": "turned into memories",
+	"never": "never turned into memories", "on_server": "still on the server", "recalled": "shown again", "not_recalled": "not shown again",
 }
 
 // OriginWords name where a memory came from.
@@ -318,7 +319,7 @@ var NeverExtractedWords = map[string]string{
 
 // ReadingWords name the reading of a comparison between two versions.
 var ReadingWords = map[string]string{
-	"differs": "differs", "no_difference": "no clear difference",
+	"differs": "differs", "no_clear_difference": "no clear difference", "too_few": "too few to compare",
 }
 
 // Word is the word of k in m, k itself when it has none.
