@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/github/license/Barben360/backsight)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/Barben360/backsight)](go.mod)
 [![Status: preview, Linux and Windows](https://img.shields.io/badge/preview-Linux%20and%20Windows%20%28macOS%20later%29-orange)](docs/compatibility.md)
-[![Hindsight 1.1.0](https://img.shields.io/badge/Hindsight-1.1.0-blue)](docs/compatibility.md)
+[![Hindsight 1.2.0](https://img.shields.io/badge/Hindsight-1.2.0-blue)](docs/compatibility.md)
 
 Long-term memory for [Claude Code](https://code.claude.com/docs/en/overview), on a [Hindsight](https://github.com/vectorize-io/hindsight) server you run yourself.
 

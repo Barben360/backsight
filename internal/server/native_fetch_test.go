@@ -156,8 +156,8 @@ func TestNativeLockMatchesThePin(t *testing.T) {
 		t.Errorf("the lock installs hindsight-api-slim %q, the pin is %q", nativelock.Hindsight(), PinnedVersion())
 	}
 	for _, tc := range []struct{ goos, url, sum string }{
-		{"linux", "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz", nativelock.UVSHA256},
-		{"windows", "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-pc-windows-msvc.zip", nativelock.UVWindowsSHA256},
+		{"linux", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-gnu.tar.gz", nativelock.UVSHA256},
+		{"windows", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-pc-windows-msvc.zip", nativelock.UVWindowsSHA256},
 	} {
 		n := Native{GOOS: tc.goos}
 		if got := n.uvURL(); got != tc.url {
@@ -171,11 +171,11 @@ func TestNativeLockMatchesThePin(t *testing.T) {
 
 func TestNativeVersionAndOrder(t *testing.T) {
 	n := newNative(t, nil)
-	want := "1.1.0-" + nativelock.Hash12()
+	want := "1.2.0-" + nativelock.Hash12()
 	if n.Version() != want {
 		t.Errorf("Version() = %q, want %q", n.Version(), want)
 	}
-	if HindsightVersionOf(n.Version()) != "1.1.0" {
+	if HindsightVersionOf(n.Version()) != "1.2.0" {
 		t.Errorf("HindsightVersionOf(%q) = %q", n.Version(), HindsightVersionOf(n.Version()))
 	}
 	// Ruling R9: WithVersion is honoured as Docker's is.
@@ -219,7 +219,7 @@ func TestNativePathsAreUnderComposeDir(t *testing.T) {
 	}
 	for name, got := range map[string][2]string{
 		"Root":         {n.Root(), root},
-		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv"+exeSuffix())},
+		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.6", "uv"+exeSuffix())},
 		"Python":       {n.Python(), filepath.Join(root, "python")},
 		"PythonBin":    {n.PythonBin(), pythonBin},
 		"VenvDir":      {n.VenvDir("1.1.0-0123456789ab"), filepath.Join(root, "venv", "1.1.0-0123456789ab")},
@@ -274,7 +274,7 @@ func serveUV(t *testing.T, body []byte) *[]string {
 }
 
 func TestNativeFetchVerifiesUV(t *testing.T) {
-	uvBin := []byte("#!/bin/sh\necho uv 0.13.1\n")
+	uvBin := []byte("#!/bin/sh\necho uv 0.13.6\n")
 	tarball := uvTarball(t, uvBin)
 
 	t.Run("a sha256 other than the pin installs nothing", func(t *testing.T) {
@@ -307,7 +307,7 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 		if err := n.Fetch(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if want := "/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"; len(*got) != 1 || (*got)[0] != want {
+		if want := "/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-gnu.tar.gz"; len(*got) != 1 || (*got)[0] != want {
 			t.Errorf("requests %v, want one GET of %s", *got, want)
 		}
 		if _, err := os.Stat(n.UV()); err != nil {
@@ -320,7 +320,7 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 			t.Errorf("uv holds %q, want the archive's uv", b)
 		}
 		if entries, _ := os.ReadDir(filepath.Dir(n.UV())); len(entries) != 1 {
-			t.Errorf("uv/0.13.1 holds %v, want uv alone", entries)
+			t.Errorf("uv/0.13.6 holds %v, want uv alone", entries)
 		}
 		if len(tools.Calls) == 0 || tools.Calls[0].Path != n.UV() {
 			t.Errorf("the next steps did not run the fetched uv: %+v", tools.Calls)
@@ -645,7 +645,7 @@ func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
 	if err != nil || models {
 		t.Fatalf("Downloads = %v, %v, %v", items, models, err)
 	}
-	want := []string{"uv 0.13.1", "Python " + nativelock.Python(),
+	want := []string{"uv 0.13.6", "Python " + nativelock.Python(),
 		fmt.Sprintf("hindsight-api-slim %s (%d packages)", nativelock.Hindsight(), len(nativelock.Versions())),
 		"pg0's PostgreSQL 18.1, pgvector 0.8.5 (unpacked from the venv)",
 		"embedding and reranker models"}

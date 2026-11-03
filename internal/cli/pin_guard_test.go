@@ -14,10 +14,10 @@ import (
 	"github.com/Barben360/backsight/internal/setup"
 )
 
-// Images ordered around the default pin (Hindsight 1.1.0) in these tests.
+// Images ordered around the default pin (Hindsight 1.2.0) in these tests.
 const (
 	olderImage     = "ghcr.io/vectorize-io/hindsight:1.0.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	unorderedImage = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	unorderedImage = "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
 // deployFile writes a compose.yaml whose hindsight service runs image, as

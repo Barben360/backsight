@@ -4,11 +4,11 @@ package nativelock
 // its Linux x86_64 archive and that archive's sha256, checked before
 // anything is extracted.
 const (
-	UVVersion = "0.13.1"
+	UVVersion = "0.13.6"
 	UVAsset   = "uv-x86_64-unknown-linux-gnu.tar.gz"
-	UVSHA256  = "eadd9d27c134ab5ac1ffd4473b97a741407f3ea238288f03121fc4deddf90220"
+	UVSHA256  = "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645"
 
 	// Windows (M7 block 2, E34 W6): the zip and the release's .sha256 asset.
 	UVWindowsAsset  = "uv-x86_64-pc-windows-msvc.zip"
-	UVWindowsSHA256 = "3b2661a463a5baea7f5076ea2b25ab71d77f36a6c0d809e5350651792f80a672"
+	UVWindowsSHA256 = "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f"
 )

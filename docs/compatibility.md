@@ -8,7 +8,7 @@ What this source tree pins and requires. A release built from it ships exactly t
 
 | Component | Pinned or required | Enforced by |
 |---|---|---|
-| Hindsight server | `ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06` | the binary: `server render` writes this image; `server render`, `server start`, `server install` and setup refuse a deployed server on another pin (`server upgrade` and `update apply` move it) |
+| Hindsight server | `ghcr.io/vectorize-io/hindsight:1.2.0@sha256:19d0c08f3df79acac29384826419a1ca158129e81ec527cdcbd8c97ff4ef76da` | the binary: `server render` writes this image; `server render`, `server start`, `server install` and setup refuse a deployed server on another pin (`server upgrade` and `update apply` move it) |
 | PostgreSQL | `pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11` | the binary: `server render` writes this image |
 | Claude Code | `2.1.309` or newer | setup's pre-flight and `client install` refuse an older version |
 | Docker | Docker Engine (Linux) or Docker Desktop, usable by your user without `sudo` (the `docker` group, or rootless Docker) | setup's pre-flight runs `docker info`; it checks no minimum version |
@@ -16,7 +16,7 @@ What this source tree pins and requires. A release built from it ships exactly t
 
 Both images are pinned by the digest of their multi-arch index, so the tag is only a label: a signed release fixes the digest, and Docker pulls exactly that image (no separate image signature).
 
-The native runtime installs the same Hindsight version from PyPI, with the Python packages hash-locked to the Hindsight image's versions, except a few raised past a published security advisory the image's version has (authlib, dnspython, fastmcp, pyasn1, OpenTelemetry, and what these require). `internal/server/nativelock/overrides.txt` lists each with its reason; the [native runtime](native-runtime.md#what-it-lacks) page says more.
+The native runtime installs the same Hindsight version from PyPI, with the Python packages hash-locked to the Hindsight image's versions, except one raised past a published security advisory the image's version has (pyasn1). `internal/server/nativelock/overrides.txt` lists each with its reason; the [native runtime](native-runtime.md#what-it-lacks) page says more.
 
 Tested with Docker 29.9 and Compose 5.6 (as of 2026-10-25), and on every change with the Docker of GitHub's `ubuntu-latest` runners. CI installs the Claude Code version pinned in `.github/workflows/ci.yml`.
 

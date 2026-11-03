@@ -38,7 +38,7 @@ func init() {
 	}
 }
 
-// PinnedVersion is the tag of HindsightImage ("1.1.0"): the Hindsight
+// PinnedVersion is the tag of HindsightImage ("1.2.0"): the Hindsight
 // version this backsight is built for.
 func PinnedVersion() string {
 	ref, _, _ := strings.Cut(HindsightImage, "@")
@@ -48,7 +48,7 @@ func PinnedVersion() string {
 	return ref
 }
 
-const pinnedHindsight = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06"
+const pinnedHindsight = "ghcr.io/vectorize-io/hindsight:1.2.0@sha256:19d0c08f3df79acac29384826419a1ca158129e81ec527cdcbd8c97ff4ef76da"
 
 // Files are the rendered server: Docker's compose project, or the native
 // runtime's environment and units.
