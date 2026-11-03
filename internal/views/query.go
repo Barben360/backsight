@@ -25,7 +25,7 @@ type Params struct {
 
 // Allowed values of the view parameters.
 var (
-	hasValues   = []string{"used", "wrong", "undeclared", "memory"}
+	hasValues   = []string{"used", "wrong", "undeclared", "memory", "never_extracted"}
 	sortValues  = []string{"shown", "used", "rate", "last_shown"}
 	stateValues = []string{"hidden", "wrong", "never_used"}
 )

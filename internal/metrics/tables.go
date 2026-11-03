@@ -6,31 +6,32 @@ import "time"
 // only its own. A table the view does not fill (nil) is left out; one it
 // fills with no rows marshals as [] (omitzero, not omitempty).
 type Tables struct {
-	Page             *Page              `json:"page,omitzero"`
-	Activity         *Activity          `json:"activity,omitzero"`
-	Lately           []SessionRow       `json:"lately,omitzero"`
-	OutcomeMix       []OutcomeDay       `json:"outcome_mix,omitzero"`
-	Reported         []ReportedRow      `json:"reported,omitzero"`
-	Extraction       []ExtractionRow    `json:"extraction,omitzero"`
-	ByProject        []ProjectCount     `json:"by_project,omitzero"`
-	Review           *Review            `json:"review,omitzero"`
-	FailedOperations []OperationRow     `json:"failed_operations,omitzero"`
-	Jobs             []JobRow           `json:"jobs,omitzero"`
-	Doctor           []DoctorRow        `json:"doctor,omitzero"`
-	System           *SystemInfo        `json:"system,omitzero"`
-	Projects         []ProjectRow       `json:"projects,omitzero"`
-	Pooled           *PooledRow         `json:"pooled,omitzero"`
-	Project          *ProjectPage       `json:"project,omitzero"`
-	Sessions         []SessionRow       `json:"sessions,omitzero"`
-	Session          *SessionPage       `json:"session,omitzero"`
-	Memories         []MemoryRow        `json:"memories,omitzero"`
-	Memory           *MemoryPage        `json:"memory,omitzero"`
-	Days             []DayRow           `json:"days,omitzero"`
-	Day              *DayPage           `json:"day,omitzero"`
-	Releases         []ReleaseRow       `json:"releases,omitzero"`
-	Settings         map[string]float64 `json:"settings,omitzero"`
-	Defs             []DefRow           `json:"defs,omitzero"`
-	Note             string             `json:"note,omitzero"`
+	Page             *Page               `json:"page,omitzero"`
+	Activity         *Activity           `json:"activity,omitzero"`
+	Lately           []SessionRow        `json:"lately,omitzero"`
+	OutcomeMix       []OutcomeDay        `json:"outcome_mix,omitzero"`
+	Reported         []ReportedRow       `json:"reported,omitzero"`
+	Extraction       []ExtractionRow     `json:"extraction,omitzero"`
+	ByProject        []ProjectCount      `json:"by_project,omitzero"`
+	Review           *Review             `json:"review,omitzero"`
+	FailedOperations []OperationRow      `json:"failed_operations,omitzero"`
+	Jobs             []JobRow            `json:"jobs,omitzero"`
+	NeverExtracted   []NeverExtractedRow `json:"never_extracted,omitzero"`
+	Doctor           []DoctorRow         `json:"doctor,omitzero"`
+	System           *SystemInfo         `json:"system,omitzero"`
+	Projects         []ProjectRow        `json:"projects,omitzero"`
+	Pooled           *PooledRow          `json:"pooled,omitzero"`
+	Project          *ProjectPage        `json:"project,omitzero"`
+	Sessions         []SessionRow        `json:"sessions,omitzero"`
+	Session          *SessionPage        `json:"session,omitzero"`
+	Memories         []MemoryRow         `json:"memories,omitzero"`
+	Memory           *MemoryPage         `json:"memory,omitzero"`
+	Days             []DayRow            `json:"days,omitzero"`
+	Day              *DayPage            `json:"day,omitzero"`
+	Releases         []ReleaseRow        `json:"releases,omitzero"`
+	Settings         map[string]float64  `json:"settings,omitzero"`
+	Defs             []DefRow            `json:"defs,omitzero"`
+	Note             string              `json:"note,omitzero"`
 }
 
 // Page is a browse view's paging.

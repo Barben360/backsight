@@ -221,6 +221,63 @@
           "waiting": 0
         }
       },
+      "pipeline.time_to_recall": {
+        "value": null,
+        "num": 0,
+        "den": 0,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [
+          "partial"
+        ],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats pipeline",
+        "extra": {
+          "funnel": {
+            "ended": 4,
+            "extracted": 0,
+            "gone": 0,
+            "never": 0,
+            "not_recalled": 0,
+            "on_server": 0,
+            "recalled": 0,
+            "sent": 0,
+            "unresolved": 3,
+            "waiting_or_failed": 4
+          },
+          "hops": [
+            {
+              "name": "last_to_sent",
+              "p50": null,
+              "p95": null,
+              "n": 0
+            },
+            {
+              "name": "sent_to_extracted",
+              "p50": null,
+              "p95": null,
+              "n": 0
+            },
+            {
+              "name": "extracted_to_recalled",
+              "p50": null,
+              "p95": null,
+              "n": 0
+            },
+            {
+              "name": "whole_way",
+              "p50": null,
+              "p95": null,
+              "n": 0
+            }
+          ]
+        }
+      },
       "retain.outcomes": {
         "value": 1,
         "num": null,

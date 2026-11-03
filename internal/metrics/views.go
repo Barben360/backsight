@@ -59,14 +59,15 @@ var staleIDs = []string{"stale.never_used", "stale.hidden", "stale.reported"}
 // latelyRows is how many sessions the overview lists.
 const latelyRows = 5
 
-// overviewIDs are the overview's metrics: every axis's, the bank tiles
-// and the review-queue counts.
+// overviewIDs are the overview's metrics: every axis's, the bank tiles, the
+// review-queue counts and the time to recall (no axis's metric: it carries
+// no verdict and no attention item).
 func overviewIDs() []string {
 	var ids []string
 	for _, axis := range axisOrder {
 		ids = append(ids, axisMetrics[axis]...)
 	}
-	return append(ids, append([]string{"bank.size", "bank.growth"}, staleIDs...)...)
+	return append(ids, append([]string{"bank.size", "bank.growth", timeToRecallID}, staleIDs...)...)
 }
 
 // overviewNeeds are the overview's server reads: what Flowing judges (the
@@ -179,7 +180,8 @@ func Pipeline(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Tables.FailedOperations = failedOperations(e)
 		r.Tables.Jobs = jobRows(m["jobs.last_run"])
 		r.Tables.Doctor = doctorRows(e)
-		return nil
+		r.Tables.NeverExtracted, err = neverExtracted(e, e.q.Window)
+		return err
 	})
 }
 

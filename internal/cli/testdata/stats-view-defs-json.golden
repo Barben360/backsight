@@ -1236,6 +1236,10 @@
           "dev": false,
           "family": "pipeline",
           "series": "none",
+          "extra": [
+            "funnel",
+            "hops"
+          ],
           "drill": "backsight stats pipeline",
           "n": 0,
           "mdc": null

@@ -366,6 +366,7 @@ var Catalog = withDrills([]Def{
 		ID: "pipeline.time_to_recall", Label: "From session to recalled memory", Unit: "ms", Direction: "down", MinN: 20,
 		Absolute: Threshold{Watch: f(3600000), On: "p95"}, CI: "none", Scope: "machine", Source: "collection", Family: "pipeline", Series: "none",
 		Command:    "backsight stats pipeline",
+		Extra:      []string{"funnel", "hops"},
 		Question:   "How long until a session's memories come back?",
 		Definition: "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way; the slowest 1 in 20 of the sent-to-memories step needs 100 sessions and is watched above 1 hour.",
 		Action:     "Memories take long to come back. Check the server with backsight doctor.",

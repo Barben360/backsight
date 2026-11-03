@@ -16,9 +16,12 @@ import (
 // the server's operations; the health checks from the doctor.
 
 var pipelineIDs = []string{"pipeline.flow", "retain.outcomes", "local.backlog", "server.queue", "server.extraction_delay",
-	"hooks.failures", "server.reach", "doctor.check", "jobs.last_run"}
+	"hooks.failures", "server.reach", "doctor.check", "jobs.last_run", timeToRecallID}
 
-func init() { register("pipeline", pipelineIDs, pipeline) }
+// The pipeline family computes every id but the time to recall, a family of
+// its own (recall_time.go): it reads the whole record of memories and shows,
+// which the verdict, asking the pipeline family for many windows, never needs.
+func init() { register("pipeline", pipelineIDs[:len(pipelineIDs)-1], pipeline) }
 
 // The cadences of the background jobs: how often `jobs tick` and `jobs
 // maintain` are due.

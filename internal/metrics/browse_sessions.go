@@ -17,6 +17,8 @@ const (
 	hasWrong      = "wrong"
 	hasUndeclared = "undeclared"
 	hasMemory     = "memory"
+	// hasNeverExtracted: the sessions of the pipeline's never_extracted list.
+	hasNeverExtracted = "never_extracted"
 )
 
 // sessionTables are the index tables that name sessions.
@@ -26,7 +28,8 @@ var sessionTables = []string{"turns", "shows", "credits", "tel_prompt", "tel_bri
 // session's project is the filter), latest activity first, then by id,
 // paged. --has keeps those with a used credit (used), a wrong or outdated
 // credit (wrong), a turn that ended undeclared under the two-hour rule
-// (undeclared) or a non-briefing show (memory). `sent` is the state of the
+// (undeclared), a non-briefing show (memory) or a send that never gave a
+// memory (never_extracted). `sent` is the state of the
 // session's documents (ok only when all are ok). With q.ID (an exact id or
 // a unique prefix of at least 8 characters) it is that session's page, the
 // turn rail of all of it.
@@ -37,8 +40,8 @@ func Sessions(ctx context.Context, s Source, q Query) (Result, error) {
 	if _, err := checkSort(q, "latest", "latest"); err != nil {
 		return Result{}, err
 	}
-	if q.Has != "" && !slices.Contains([]string{hasUsed, hasWrong, hasUndeclared, hasMemory}, q.Has) {
-		return Result{}, fmt.Errorf("--has: one of %s, %s, %s, %s", hasUsed, hasWrong, hasUndeclared, hasMemory)
+	if q.Has != "" && !slices.Contains([]string{hasUsed, hasWrong, hasUndeclared, hasMemory, hasNeverExtracted}, q.Has) {
+		return Result{}, fmt.Errorf("--has: one of %s, %s, %s, %s, %s", hasUsed, hasWrong, hasUndeclared, hasMemory, hasNeverExtracted)
 	}
 	return runView(ctx, s, q, "sessions", nil, func(e env, r *Result) error {
 		rows, err := sessionRows(e, e.q.Window)
@@ -79,6 +82,12 @@ func hasFilter(e env, rows []SessionRow) ([]SessionRow, error) {
 		keep = func(s SessionRow) bool { return set[s.ID] }
 	case hasMemory:
 		set, err := memorySessions(e, e.q.Window)
+		if err != nil {
+			return nil, err
+		}
+		keep = func(s SessionRow) bool { return set[s.ID] }
+	case hasNeverExtracted:
+		set, err := neverSessions(e, e.q.Window)
 		if err != nil {
 			return nil, err
 		}

@@ -54,7 +54,7 @@ var (
 	ServerStateWords = map[string]string{"active": "available", "valid": "available", "invalidated": "forgotten"}
 
 	// HasWords and SortWords label the filters and orders of the lists.
-	HasWords  = map[string]string{"used": "Used", "wrong": "Reported wrong", "undeclared": "Not declared", "memory": "Got memory"}
+	HasWords  = map[string]string{"used": "Used", "wrong": "Reported wrong", "undeclared": "Not declared", "memory": "Got memory", "never_extracted": "Never turned into memories"}
 	SortWords = map[string]string{"shown": "Most shown", "used": "Most used", "rate": "Used rate", "last_shown": "Last shown"}
 
 	// LanguageWords name the language groups of recall.by_lang.
