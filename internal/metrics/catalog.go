@@ -212,9 +212,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "extraction.tokens", Label: "What the server's model spent", Unit: "tokens", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
-		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered", "failed_operations"},
+		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered", "failed_operations", "record_from"},
 		Question:   "How many tokens does the server's model use to build memory?",
-		Definition: "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+		Definition: "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
 		Action:     "Use it to see which operation costs the most before changing the model or the projects sent.",
 	},
 	{
@@ -244,9 +244,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "bank.growth", Label: "New memories per day", Unit: "count", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "bank", Series: "daily", Command: "backsight stats bank",
-		Extra:      []string{"world", "experience", "observation", "days_covered"},
+		Extra:      []string{"world", "experience", "observation", "days_covered", "record_from"},
 		Question:   "Is memory still growing?",
-		Definition: "Memories added per day, by kind, from the server's time series.",
+		Definition: "Memories added per day, by kind, from the server's time series (90 days); older days come from the days this PC recorded, and a day neither holds is left empty.",
 		Action:     "A flat line while you work means memory is not learning; run backsight doctor.",
 	},
 	{

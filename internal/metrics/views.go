@@ -146,8 +146,8 @@ func Cost(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Metrics = m
-		r.Tables.Extraction = extractionRows(e, e.q.Window)
-		return nil
+		r.Tables.Extraction, err = extractionRows(e, e.q.Window)
+		return err
 	})
 }
 

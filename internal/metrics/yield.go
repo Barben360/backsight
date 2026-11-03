@@ -144,25 +144,14 @@ func readCreated(e env, r *yieldRun) error {
 		}
 	}
 	_, _, from, to := r.bounds()
-	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT bucket, COALESCE(world, 0) + COALESCE(experience, 0) + COALESCE(observation, 0) FROM server_day
-WHERE bucket >= ? AND bucket < ? AND NOT (world IS NULL AND experience IS NULL AND observation IS NULL)
-ORDER BY bucket`, from, to)
+	recorded, err := readRecordedNew(e, from, to)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var bucket, n int64
-		if err := rows.Scan(&bucket, &n); err != nil {
-			return err
+	for _, n := range recorded {
+		if d := n.Bucket.Format(dateLayout); held[d] == "" {
+			perDay[d], held[d] = n.total(), sourceRecord
 		}
-		if d := time.UnixMilli(bucket).UTC().Format(dateLayout); held[d] == "" {
-			perDay[d], held[d] = n, "record"
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	for _, wk := range r.weeks {
 		var sum int64
@@ -206,27 +195,13 @@ func readTokens(e env, r *yieldRun) error {
 		}
 	}
 	_, _, from, to := r.bounds()
-	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT d.bucket, l.operation, COALESCE(l.input, 0), COALESCE(l.output, 0), COALESCE(l.thoughts, 0)
-FROM server_day d JOIN server_day_llm l ON l.source_file = d.source_file AND l."offset" = d."offset"
-WHERE d.bucket >= ? AND d.bucket < ? AND l.operation IN ('retain', 'consolidation')
-ORDER BY d.bucket, l.operation`, from, to)
+	rows, err := readRecordedLLM(e, from, to, yieldOps)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
 	recorded := map[key]tokens{}
-	for rows.Next() {
-		var bucket, in, out, thoughts int64
-		var op string
-		if err := rows.Scan(&bucket, &op, &in, &out, &thoughts); err != nil {
-			return err
-		}
-		k := key{op, time.UnixMilli(bucket).UTC().Format(dateLayout)}
-		recorded[k] = tokens{input: in, output: out + thoughts}
-	}
-	if err := rows.Err(); err != nil {
-		return err
+	for _, r := range rows {
+		recorded[key{r.Op, r.Bucket.Format(dateLayout)}] = r.T
 	}
 	for _, wk := range r.weeks {
 		var sum tokens

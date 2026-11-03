@@ -625,7 +625,7 @@
           "id": "extraction.tokens",
           "label": "What the server's model spent",
           "question": "How many tokens does the server's model use to build memory?",
-          "definition": "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+          "definition": "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
           "unit": "tokens",
           "aggregation": "raw",
           "direction": "none",
@@ -649,7 +649,8 @@
             "output",
             "by_operation",
             "days_covered",
-            "failed_operations"
+            "failed_operations",
+            "record_from"
           ],
           "drill": "backsight stats cost",
           "n": 0,
@@ -754,7 +755,7 @@
           "id": "bank.growth",
           "label": "New memories per day",
           "question": "Is memory still growing?",
-          "definition": "Memories added per day, by kind, from the server's time series.",
+          "definition": "Memories added per day, by kind, from the server's time series (90 days); older days come from the days this PC recorded, and a day neither holds is left empty.",
           "unit": "count",
           "aggregation": "raw",
           "direction": "none",
@@ -776,7 +777,8 @@
             "world",
             "experience",
             "observation",
-            "days_covered"
+            "days_covered",
+            "record_from"
           ],
           "drill": "backsight stats bank",
           "n": 0,

@@ -253,27 +253,42 @@ ORDER BY at DESC, source_file DESC, "offset" DESC, pos DESC LIMIT ?`,
 // operation of w: each named operation read, and "other" (the rest of the
 // total) when every one was read; days without tokens are left out. The
 // cost is null without prices. No rows when the total cannot be read.
-func extractionRows(e env, w Window) []ExtractionRow {
+func extractionRows(e env, w Window) ([]ExtractionRow, error) {
 	out := []ExtractionRow{}
 	all, reason := llmRead(e, "llm:")
 	if reason != "" {
-		return out
+		return out, nil
 	}
 	buckets := w.Buckets()
 	_, allDays, _ := inWindow(all, w.Since, w.Until, w.Loc, buckets)
 	cfg := e.src.Config.LLM
 	prices := retain.PricesFor(cfg.Model, cfg.PriceInput, cfg.PriceCached, cfg.PriceOutput, cfg.Currency)
-	other := slices.Clone(allDays)
-	read := 0
 	byOp := map[string][]tokens{}
+	named := map[string]tokens{}
 	for _, op := range extractionOps {
 		bs, reason := llmRead(e, "llm:"+op)
 		if reason != "" {
 			continue
 		}
-		read++
 		_, days, _ := inWindow(bs, w.Since, w.Until, w.Loc, buckets)
-		byOp[op] = days
+		byOp[op], named[op] = days, tokens{}
+	}
+	// Past the server's 30 days, the record gives the days before its first.
+	rec, _, err := recordedExtraction(e, w, buckets, all, named)
+	if err != nil {
+		return nil, err
+	}
+	if rec != nil {
+		for i := range buckets {
+			allDays[i].plus(rec.byOp[""][i])
+			for op, days := range byOp {
+				days[i].plus(rec.byOp[op][i])
+			}
+		}
+	}
+	other := slices.Clone(allDays)
+	read := len(byOp)
+	for _, days := range byOp {
 		for i, t := range days {
 			other[i].input = max(0, other[i].input-t.input)
 			other[i].cached = max(0, other[i].cached-t.cached)
@@ -302,7 +317,7 @@ func extractionRows(e env, w Window) []ExtractionRow {
 			out = append(out, row)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // byProject is the server's memory count per project tag, the largest
