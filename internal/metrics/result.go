@@ -87,7 +87,7 @@ type Metric struct {
 	Status      Status         `json:"status"`
 	Reason      string         `json:"reason,omitempty"`
 	Borderline  bool           `json:"borderline"`
-	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial
+	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial, old_scan
 	CI          *[2]float64    `json:"ci"`
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`
@@ -133,6 +133,18 @@ type Item struct {
 	Text     string   `json:"text"`
 	Why      string   `json:"why"`
 	Command  string   `json:"command"`
+
+	// reason, when set, is the banner's wording of the item (its Text is the
+	// list's).
+	reason string
+}
+
+// bannerText is the item's wording on a verdict axis's banner.
+func (it Item) bannerText() string {
+	if it.reason != "" {
+		return it.reason
+	}
+	return it.Text
 }
 
 // InfoItem is one counted, non-alarming line.

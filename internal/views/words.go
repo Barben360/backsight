@@ -326,6 +326,12 @@ var ReadingWords = map[string]string{
 	"differs": "differs", "no_clear_difference": "no clear difference", "too_few": "too few to compare",
 }
 
+// TagWords say what a metric's tag means, for those a person reads.
+var TagWords = map[string]string{"old_scan": "the last scan is more than 30 days old"}
+
+// DayStatusWords name a doctor check's status on a day of its history.
+var DayStatusWords = map[string]string{"ok": "ok", "watch": "warning", "bad": "problem", "none": "no run"}
+
 // Word is the word of k in m, k itself when it has none.
 func Word(m map[string]string, k string) string {
 	if w, ok := m[k]; ok {

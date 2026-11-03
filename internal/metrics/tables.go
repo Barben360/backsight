@@ -18,6 +18,7 @@ type Tables struct {
 	Jobs             []JobRow            `json:"jobs,omitzero"`
 	NeverExtracted   []NeverExtractedRow `json:"never_extracted,omitzero"`
 	Doctor           []DoctorRow         `json:"doctor,omitzero"`
+	DoctorHistory    []DoctorHistoryRow  `json:"doctor_history,omitzero"`
 	System           *SystemInfo         `json:"system,omitzero"`
 	Projects         []ProjectRow        `json:"projects,omitzero"`
 	Pooled           *PooledRow          `json:"pooled,omitzero"`
@@ -141,6 +142,33 @@ type DoctorRow struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 	Fix    string `json:"fix"`
+}
+
+// DoctorHistoryRow is one doctor check over the window: how many days it
+// read ok, watch and bad, how it reads now (its latest day with a run), its
+// last change and each day (ok, watch, bad, or none for a day without a run).
+type DoctorHistoryRow struct {
+	Check      string        `json:"check"`
+	Now        string        `json:"now"`
+	OK         int64         `json:"ok"`
+	Watch      int64         `json:"watch"`
+	Bad        int64         `json:"bad"`
+	LastChange *DoctorChange `json:"last_change"`
+	Days       []DoctorDay   `json:"days"`
+}
+
+// DoctorDay is one check's status on one local day.
+type DoctorDay struct {
+	Day    string `json:"day"`
+	Status string `json:"status"`
+}
+
+// DoctorChange is the latest day a check's status differed from the one
+// before it (days without a run left out).
+type DoctorChange struct {
+	Day  string `json:"day"`
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // SystemInfo is the system page.

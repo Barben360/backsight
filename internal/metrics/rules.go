@@ -124,6 +124,14 @@ func ruleDoctor(checks []DoctorCheck) Status {
 	return StatusOK
 }
 
+// ruleSecrets: the last scan found a suspect → watch.
+func ruleSecrets(found int64) Status {
+	if found > 0 {
+		return StatusWatch
+	}
+	return StatusOK
+}
+
 // ruleJobs: bad only when the last run is more than twice the cadence ago
 // and prompts or tool events happened since the run was expected (a
 // sleeping laptop is not a fault).

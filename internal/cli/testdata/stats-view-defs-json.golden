@@ -1303,6 +1303,14 @@
           "dev": false,
           "family": "pipeline",
           "series": "none",
+          "extra": [
+            "scanned_at",
+            "age_days",
+            "live",
+            "forgotten",
+            "pages",
+            "ms"
+          ],
           "drill": "backsight memory scan",
           "n": 0,
           "mdc": null
@@ -1329,6 +1337,9 @@
           "dev": false,
           "family": "pipeline",
           "series": "none",
+          "extra": [
+            "days_without"
+          ],
           "drill": "backsight stats system",
           "n": 0,
           "mdc": null

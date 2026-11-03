@@ -382,6 +382,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "secrets.suspects", Label: "Possible secrets in memory", Unit: "count", Direction: "none", MinN: 0,
 		ErrorClass: true, CI: "none", Scope: "server", Source: "collection", Family: "pipeline", Series: "none", Command: "backsight memory scan",
+		Extra:      []string{"scanned_at", "age_days", "live", "forgotten", "pages", "ms"},
 		Question:   "Could memory hold a secret?",
 		Definition: "The memories the last scan found that look like a key, token or password. Watched as soon as the last scan found one.",
 		Action:     "Run backsight memory scan to see which memories, then forget them.",
@@ -389,6 +390,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "doctor.history", Label: "Health checks over time", Unit: "count", Direction: "none", MinN: 0,
 		CI: "none", Scope: "machine", Source: "collection", Family: "pipeline", Series: "none", Command: "backsight stats system",
+		Extra:      []string{"days_without"},
 		Question:   "Have the health checks passed lately?",
 		Definition: "For each check and each day, the result of the day's last daily run: ok, watch or bad. A day without a run is shown as none, which is not a fault.",
 		Action:     "A check that keeps failing needs fixing; backsight doctor says how.",

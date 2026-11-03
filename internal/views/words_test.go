@@ -24,3 +24,19 @@ func TestFunnelAndNeverExtractedWordsCoverEveryKey(t *testing.T) {
 		t.Errorf("FunnelWords has %d words for %d funnel keys", len(FunnelWords), len(metrics.FunnelKeys))
 	}
 }
+
+// Every status a doctor history day can read, and the tag of an old scan,
+// has a plain word of its own.
+func TestDoctorHistoryAndScanWords(t *testing.T) {
+	for _, k := range metrics.DayStatuses {
+		if w := DayStatusWords[k]; w == "" || (w == k && k != "ok") {
+			t.Errorf("day status %q has no plain word (%q)", k, w)
+		}
+	}
+	if len(DayStatusWords) != len(metrics.DayStatuses) {
+		t.Errorf("DayStatusWords has %d words for %d statuses", len(DayStatusWords), len(metrics.DayStatuses))
+	}
+	if w := TagWords["old_scan"]; w == "" || w == "old_scan" {
+		t.Errorf("old_scan has no plain word (%q)", w)
+	}
+}

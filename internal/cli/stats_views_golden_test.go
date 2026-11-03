@@ -478,7 +478,7 @@ func TestStatsViewsWithoutAServer(t *testing.T) {
 		ms, _ := at(v.env.Data, "metrics").(map[string]any)
 		for id, m := range ms {
 			def, _ := metrics.DefOf(id)
-			if def.Scope != "server" && id != "server.reach" {
+			if (def.Scope != "server" || def.Source != "server") && id != "server.reach" { // the scan record is local
 				continue
 			}
 			if at(m, "status") != "no_data" || at(m, "reason") != "not_configured" {

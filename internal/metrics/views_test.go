@@ -107,7 +107,7 @@ func TestScopeServerOKWithoutReads(t *testing.T) {
 
 // TestServerSectionsWhenNotConfigured: no memory server set up (a reach
 // record left from an earlier one): each view that reads the server says
-// {ok: false, error: not_configured}, every server-scope metric and the
+// {ok: false, error: not_configured}, every server-scope metric that reads the server and the
 // server's reach read no_data/not_configured (never server_down, never a
 // status of their own), and what this PC recorded is computed.
 func TestServerSectionsWhenNotConfigured(t *testing.T) {
@@ -122,7 +122,7 @@ func TestServerSectionsWhenNotConfigured(t *testing.T) {
 			t.Errorf("%s: server = %s, want ok false, not_configured", v, mustJSON(t, r.Server))
 		}
 		for id, m := range r.Metrics {
-			if d, _ := DefOf(id); (d.Scope == "server" || id == "server.reach") && (m.Status != StatusNoData || m.Reason != ReasonNotConfigured) {
+			if d, _ := DefOf(id); ((d.Scope == "server" && d.Source == "server") || id == "server.reach") && (m.Status != StatusNoData || m.Reason != ReasonNotConfigured) {
 				t.Errorf("%s: %s = %s/%s, want no_data/not_configured", v, id, m.Status, m.Reason)
 			}
 		}
@@ -135,7 +135,7 @@ func TestServerSectionsWhenNotConfigured(t *testing.T) {
 // TestServerSectionsWhenDown: every server read unreachable, the last
 // answer recorded at T: each view that reads the server says {ok: false,
 // error: unreachable, last_ok: T} and server_ok false, its server-scope
-// metrics read no_data/server_down, and what this PC recorded is computed.
+// metrics that read the server (the scan's record is local) read no_data/server_down, and what this PC recorded is computed.
 func TestServerSectionsWhenDown(t *testing.T) {
 	lastOK := fxNow.Add(-26 * time.Hour)
 	x := newFx(t, fxNow)
@@ -161,7 +161,7 @@ func TestServerSectionsWhenDown(t *testing.T) {
 			t.Errorf("%s: scope.server_ok true", v)
 		}
 		for id, m := range r.Metrics {
-			if d, _ := DefOf(id); d.Scope == "server" && (m.Status != StatusNoData || m.Reason != ReasonServerDown) {
+			if d, _ := DefOf(id); d.Scope == "server" && d.Source == "server" && (m.Status != StatusNoData || m.Reason != ReasonServerDown) {
 				t.Errorf("%s: %s = %s/%s, want no_data/server_down", v, id, m.Status, m.Reason)
 			}
 		}
@@ -838,7 +838,7 @@ func TestSystemTable(t *testing.T) {
 				return
 			}
 		}
-	}), []string{"doctor.check", "jobs.last_run", "local.backlog", "server.reach"}) {
+	}), []string{"doctor.check", "doctor.history", "jobs.last_run", "local.backlog", "secrets.suspects", "server.reach"}) {
 		t.Errorf("system metrics = %v", r.Metrics)
 	}
 }

@@ -186,7 +186,7 @@ func Pipeline(ctx context.Context, s Source, q Query) (Result, error) {
 }
 
 // systemIDs are the system page's metrics.
-var systemIDs = []string{"doctor.check", "server.reach", "jobs.last_run", "local.backlog"}
+var systemIDs = []string{"doctor.check", "server.reach", "jobs.last_run", "local.backlog", secretsID, doctorHistoryID}
 
 // System is the doctor's checks and the state of the services.
 func System(ctx context.Context, s Source, q Query) (Result, error) {
@@ -198,6 +198,11 @@ func System(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Metrics = m
 		r.Tables.Doctor = doctorRows(e)
 		r.Tables.Jobs = jobRows(m["jobs.last_run"])
+		dh, err := readDoctorHistory(e, e.q.Window)
+		if err != nil {
+			return err
+		}
+		r.Tables.DoctorHistory = dh.rows
 		info, err := systemInfo(e)
 		if err != nil {
 			return err

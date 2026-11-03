@@ -755,6 +755,22 @@
           "p95": null
         }
       },
+      "secrets.suspects": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory scan"
+      },
       "server.queue": {
         "value": 0,
         "num": null,
