@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -277,6 +278,33 @@ func checkNote(d paths.Dirs, home string, cfg config.Config, sid, cwd, kind, pro
 		return &output.Error{Code: output.Blocked, Message: "this directory is excluded from memory (" + why + "): nothing stored"}
 	}
 	return nil
+}
+
+// projectKeptOut reports whether project proj is kept out of memory on
+// this machine, and why: an entry of privacy.exclude_paths that is one of
+// its directories (what pause --project writes), or its root, as the
+// families file knows it, opted out. checkNote looks at the session's
+// directory only: a note for another project is refused then, as one
+// from there would be.
+func projectKeptOut(d paths.Dirs, cfg config.Config, res *project.Resolver, proj string) (bool, string) {
+	for _, e := range cfg.Privacy.ExcludePaths {
+		dir := e
+		switch {
+		case e == "~":
+			dir = res.Home()
+		case strings.HasPrefix(e, "~/"):
+			dir = filepath.Join(res.Home(), e[2:])
+		}
+		if res.Project(dir) == proj {
+			return true, "privacy.exclude_paths contains " + e
+		}
+	}
+	if f, ok := familiesFile(d); ok {
+		if root := f.Roots[proj]; root != "" {
+			return res.OptedOut(root, cfg.Privacy.ExcludePaths)
+		}
+	}
+	return false, ""
 }
 
 // validProject: a project name given by a caller ("" = the default).

@@ -49,7 +49,7 @@ Every line about the memory has the same shape: 🧠 alone when a memory was rea
 | 🧠❌ **Wrong, retired (my-project · 7e1f9d03)** — … · undo: `backsight forget --restore <id>` | Claude reported a memory false; it is retired on the server ([below](#memories-claude-reports-wrong)). |
 | 🧠⌛ **Outdated, retired (my-project · c93a0e17)** — … · undo: `backsight forget --restore <id>` | The same for a memory that was true and no longer is. |
 | 🧠🙈 **Hidden on this PC (my-project · c93a0e17)** — … · undo: `backsight forget --restore <id>` | A reported memory that could only be hidden on this machine; when the server could not be read, the line also gives `backsight forget <id>` to retire it there. |
-| 🧠⚠️ **Not retired (my-project · 7e1f9d03)** — … · retire it: `backsight forget <id>` | A reported memory was not retired, with the reason: the retirement limit, the server's refusal, another project's memory. |
+| 🧠⚠️ **Not retired (my-project · 7e1f9d03)** — … · retire it: `backsight forget <id>` | A reported memory was not retired, with the reason: the retirement limit, the server's refusal, another project's memory while `feedback.cross_project_retire` is off. |
 | 🧠🔍 **Nothing in memory** — … | Claude searched and found nothing. |
 | 🧠📚 **Retro (my-project)** — 6 saved, 1 corrected, 2 to promote | The summary that ends `/backsight:memory-retro`. |
 
@@ -158,7 +158,7 @@ The plan lists the project's documents and memory counts, changing nothing. The 
 
 ## Memories Claude reports wrong
 
-When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note and retires the wrong memory, at most 3 per session (`feedback.max_retirements`). Nothing is deleted:
+When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note in the wrong memory's project and retires the wrong memory, at most 3 per session (`feedback.max_retirements`), whichever projects they belong to. A memory of another project than the session's can be retired too: turn it off with `feedback.cross_project_retire = false` in `config.toml`. Nothing is deleted:
 
 - a [raw fact](glossary.md#fact) is invalidated on the server: recall stops returning it;
 - for an [observation](glossary.md#observation), Claude is first shown the facts it is drawn from, then names the wrong ones, which are invalidated;
@@ -185,6 +185,8 @@ It lists the memories worth a look, from this machine's record of what was shown
 | Shown often, never used | Memories shown at least 10 times (`feedback.stale_shows`) that Claude never reported using. Only the shows recorded live count, not those imported from earlier history. | `backsight forget <id>` retires one. |
 | Hidden, not rewritten for 7 days | Observations hidden after a report, because the server could not list the facts they are drawn from, and not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget --restore <id>` clears the mark. Until the server rewrites them they stay hidden on this machine, and recall here skips them (your other machines on the same server follow a hiding from their next fetch of the shared counts; a restore applies on the machine where it is run); `backsight forget <id>` retires one for good once the server lists its source facts. |
 | Reported wrong or outdated | Raw facts Claude reported, already invalidated. | `backsight forget <id> --purge` alone only lists what deleting one for good would remove; adding `--yes` deletes it. |
+
+A hidden or reported memory that a session of another project retired shows both projects, `<session's project> → <memory's project>`; `backsight stats` lists them too, on its `Across projects` line.
 
 `backsight forget --restore <id>` undoes a retirement. The command reads local files only and changes nothing in the memory; `--json` gives the same lists.
 

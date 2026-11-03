@@ -279,8 +279,9 @@ func sharedMachines(d paths.Dirs) int {
 
 // journalCounts sets r's counts that the feedback journal holds, over r's
 // window: the prompt recalls and searches whose shown set the boost
-// changed (their set_changed flag), and the shows imported from earlier
-// history. A journal that cannot be read counts what it could.
+// changed (their set_changed flag), the shows imported from earlier
+// history, and the memories a session of another project retired. A
+// journal that cannot be read counts what it could.
 func journalCounts(d paths.Dirs, r *stats.Report) {
 	events, _, _ := feedback.Read(d.FeedbackDir(), r.From)
 	f := &r.Feedback
@@ -299,6 +300,11 @@ func journalCounts(d paths.Dirs, r *stats.Report) {
 			f.Boost.Searches++
 			if changed {
 				f.Boost.SearchesSetChanged++
+			}
+		case e.CrossProject():
+			for _, id := range e.IDs {
+				f.CrossProject = append(f.CrossProject, stats.CrossRetirement{At: e.TS, ID: id, Kind: e.Kind, Verdict: e.Verdict,
+					SessionProject: e.Project, MemoryProject: e.MemoryProject})
 			}
 		case e.Kind == feedback.KindImport:
 			for _, s := range e.Settled {
@@ -439,6 +445,21 @@ func statsText(r statsResult) string {
 		f.Verdicts["used"], f.Verdicts["none"], f.Verdicts["wrong"], f.Verdicts["outdated"], f.Refused)
 	fmt.Fprintf(&b, "Retirements  %d raw fact(s) invalidated on the server (%d verdict(s) the server refused halfway), %d observation(s) hidden on this machine\n",
 		f.Retired, f.Partly, f.Hidden)
+	if n := len(f.CrossProject); n > 0 {
+		what := "memories"
+		if n == 1 {
+			what = "memory"
+		}
+		parts := make([]string, 0, n)
+		for _, c := range f.CrossProject {
+			how := c.Verdict
+			if c.Kind == feedback.KindHide {
+				how += ", hidden"
+			}
+			parts = append(parts, safeProject(c.SessionProject)+" → "+safeProject(c.MemoryProject)+" "+shortID(c.ID)+" ("+how+")")
+		}
+		fmt.Fprintf(&b, "Across projects  %d %s retired by a session of another project: %s; backsight forget --restore <id> undoes one\n", n, what, strings.Join(parts, ", "))
+	}
 	st := f.Settled
 	fmt.Fprintf(&b, "Ledger       settled %d live shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; imported %d shows of earlier history (%d credits); honesty flags: %s",
 		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, f.Imported.Shows, f.Imported.Credits, counts(f.Flags))

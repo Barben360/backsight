@@ -24,7 +24,11 @@ type staleMemory struct {
 	LastShown   time.Time `json:"last_shown,omitzero"`
 	HiddenSince time.Time `json:"hidden_since,omitzero"`
 	Wrong       int       `json:"wrong,omitempty"`
-	Command     string    `json:"command"`
+	// SessionProject and MemoryProject: a memory a session of another
+	// project retired or hid, the two projects; empty otherwise.
+	SessionProject string `json:"session_project,omitempty"`
+	MemoryProject  string `json:"memory_project,omitempty"`
+	Command        string `json:"command"`
 }
 
 type staleResult struct {
@@ -69,6 +73,8 @@ func newMemoryStaleCmd(e *env) *cobra.Command {
 			}
 			at := now()
 			res := staleOf(l, cfg.Feedback.StaleShows, at)
+			events, _, _ := feedback.Read(d.FeedbackDir(), time.Time{}) // what it could read
+			markCrossProject(&res, events)
 			if ids := res.ids(); len(ids) > 0 && cfg.Feedback.Enabled {
 				_ = feedback.NewJournal(d.FeedbackDir(), feedback.Common{Binary: buildinfo.Version}).Append(feedback.Event{Kind: feedback.KindStale, IDs: ids})
 			}
@@ -108,11 +114,32 @@ func staleOf(l feedback.Ledger, shows int, at time.Time) staleResult {
 	return res
 }
 
+// markCrossProject names the two projects of each hidden or reported
+// memory that a session of another project retired or hid last.
+func markCrossProject(r *staleResult, events []feedback.Event) {
+	last := map[string]feedback.Event{}
+	for _, e := range events {
+		if e.Kind == feedback.KindRetire || e.Kind == feedback.KindHide {
+			for _, id := range e.IDs {
+				last[id] = e
+			}
+		}
+	}
+	for _, ms := range [][]staleMemory{r.Hidden, r.Reported} {
+		for i := range ms {
+			if e, ok := last[ms[i].ID]; ok && e.CrossProject() {
+				ms[i].SessionProject, ms[i].MemoryProject = e.Project, e.MemoryProject
+			}
+		}
+	}
+}
+
 func staleText(r staleResult, at time.Time) string {
 	if len(r.ids()) == 0 {
 		return "Nothing needs review: no memory shown often and never used, hidden for 7 days, or reported wrong or outdated.\n"
 	}
 	var b strings.Builder
+	cross := false
 	for _, sec := range []struct {
 		title, footer string
 		ms            []staleMemory
@@ -133,11 +160,18 @@ func staleText(r staleResult, at time.Time) string {
 			if !m.LastShown.IsZero() {
 				age = recall.Age(at.Sub(m.LastShown)) + " ago"
 			}
-			fmt.Fprintf(&b, "%s  shown %d  %s  %s\n", shortID(m.ID), m.Shown, age, m.Command)
+			projects := ""
+			if m.MemoryProject != "" {
+				projects, cross = safeProject(m.SessionProject)+" → "+safeProject(m.MemoryProject)+"  ", true
+			}
+			fmt.Fprintf(&b, "%s  shown %d  %s  %s%s\n", shortID(m.ID), m.Shown, age, projects, m.Command)
 		}
 		if sec.footer != "" {
 			b.WriteString(sec.footer + "\n")
 		}
+	}
+	if cross {
+		b.WriteString("\n<session's project> → <memory's project>: a session of one project retired a memory of the other.")
 	}
 	b.WriteString("\nbacksight forget --restore <id> undoes a retirement")
 	if len(r.Reported) > 0 {

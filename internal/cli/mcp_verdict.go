@@ -163,7 +163,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 		switch {
 		case slices.Contains(plan.hide, id):
 			hidden = append(hidden, id)
-			d.journal(live, feedback.Event{Kind: feedback.KindHide, IDs: []string{id}, Verdict: verdict, Note: note})
+			d.journal(live, feedback.Event{Kind: feedback.KindHide, IDs: []string{id}, Verdict: verdict, Note: note, MemoryProject: canonicalProject(d.cfg, owner(id))})
 		case slices.Contains(plan.retire, id):
 			// Each retirement checks the sends generation: a connect
 			// meanwhile moved this PC to another server.
@@ -176,7 +176,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 			}
 			if failure == nil {
 				retired = append(retired, id)
-				d.journal(live, feedback.Event{Kind: feedback.KindRetire, IDs: []string{id}, Verdict: verdict, Outcome: "invalidated", Note: note})
+				d.journal(live, feedback.Event{Kind: feedback.KindRetire, IDs: []string{id}, Verdict: verdict, Outcome: "invalidated", Note: note, MemoryProject: canonicalProject(d.cfg, owner(id))})
 				continue
 			}
 			for _, rest := range ids[i:] {

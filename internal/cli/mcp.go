@@ -93,13 +93,15 @@ func (d mcpDeps) live() (session.Live, string) {
 func paired(found string) bool { return found == "record" || found == "session" }
 
 // freshPrivacy is the server's config with the privacy and components
-// sections read again: a pause --project or an opt-out taken during the
-// session applies to the next store, not to the next session. An
-// unreadable config keeps the one the server started with.
+// sections and feedback.cross_project_retire read again: a pause
+// --project, an opt-out or a narrower retirement scope taken during the
+// session applies to the next store or verdict, not to the next session.
+// An unreadable config keeps the one the server started with.
 func (d mcpDeps) freshPrivacy() config.Config {
 	cfg := d.cfg
 	if fresh, _, err := loadServerConfig(); err == nil {
 		cfg.Privacy, cfg.Components = fresh.Privacy, fresh.Components
+		cfg.Feedback.CrossProjectRetire = fresh.Feedback.CrossProjectRetire
 	}
 	return cfg
 }
@@ -471,8 +473,9 @@ func shownProjects(shown []feedback.Show, current string) func(id string) string
 }
 
 // correct answers a wrong or outdated verdict on ids, each shown in this
-// session: every guard first (each memory's project allowed, the
-// correction and the evidence through the note checks, the session's
+// session: every guard first (each memory's project allowed, one project
+// for the note, the correction and the evidence through the note checks
+// and the note's project not excluded, the session's
 // retirements under feedback.max_retirements, counting what will be
 // retired or hidden), then the correction stored as a note naming the
 // memories it replaces, then the retirement. An observation none of whose
@@ -481,31 +484,52 @@ func shownProjects(shown []feedback.Show, current string) func(id string) string
 // note and the invalidation reason only, never the journal or telemetry.
 func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, verdict string, a creditArgs, ids []string, owner func(string) string) (string, error) {
 	cfg := d.freshPrivacy()
-	// Allowed: the session's project, the transverse pool and the projects
-	// it links (as memory_search scopes them); another project's memory is
-	// the user's to retire.
-	linked := linkedProjects(d.dirs, cfg, project.New(d.home, cfg.Projects.Transverse), live.Cwd, live.Project)
-	var problems []string
-	pool := true
+	resolver := project.New(d.home, cfg.Projects.Transverse)
+	// Near: the session's project, the transverse pool and the projects it
+	// links (as memory_search scopes them). Another project's memory is
+	// retired too with feedback.cross_project_retire (config.toml only),
+	// else it is the user's to retire.
+	linked := linkedProjects(d.dirs, cfg, resolver, live.Cwd, live.Project)
+	near := func(p string) bool { return p == live.Project || isPool(cfg, p) || slices.Contains(linked, p) }
+	var projects, problems []string // projects: the memories', the pool as one
 	for _, id := range ids {
 		p := owner(id)
-		pool = pool && isPool(cfg, p)
-		if p != live.Project && !isPool(cfg, p) && !slices.Contains(linked, p) {
+		if key := canonicalProject(cfg, p); !slices.Contains(projects, key) {
+			projects = append(projects, key)
+		}
+		if !near(p) {
 			problems = append(problems, instructions.NotRetiredLine(safeProject(p), id, "a memory of project "+safeProject(p)+", outside this session's project and the projects it links", true))
 		}
 	}
-	if len(problems) > 0 {
+	if len(problems) > 0 && !cfg.Feedback.CrossProjectRetire {
 		return "", errors.New("nothing stored: the user can retire these memories from a terminal; " + printLines(problems) + "\n" + strings.Join(problems, "\n"))
 	}
-	// The note goes to the session's project, or to the pool when every
-	// memory it replaces is transverse.
+	// The note goes to the memories' project when they share one (the
+	// pool when every one is transverse), so that the right fact reaches
+	// the sessions that had the wrong one; memories of several near
+	// projects: the session's. One note per project: several projects,
+	// one of them not near, is one call per project.
+	if len(problems) > 0 && len(projects) > 1 {
+		names := make([]string, 0, len(projects))
+		for _, p := range projects {
+			names = append(names, safeProject(p))
+		}
+		slices.Sort(names)
+		return "", errors.New("nothing stored: these memories belong to projects " + strings.Join(names, ", ") +
+			": a correction is stored in the project of the memories it replaces, so call memory_credit once per project, each call with that project's ids")
+	}
 	proj := live.Project
-	if pool {
+	if len(projects) == 1 {
 		proj = owner(ids[0])
 	}
 	correction, evidence := strings.TrimSpace(a.Correction), singleLine(a.Evidence)
 	if err := checkNote(d.dirs, d.home, cfg, live.SessionID, live.Cwd, "correction", proj, correction); err != nil {
 		return "", err
+	}
+	if proj != live.Project && !isPool(cfg, proj) {
+		if out, why := projectKeptOut(d.dirs, cfg, resolver, proj); out {
+			return "", &output.Error{Code: output.Blocked, Message: "project " + safeProject(proj) + " is excluded from memory (" + why + "): nothing stored"}
+		}
 	}
 	if _, kinds := redact.Text(evidence); len(kinds) > 0 {
 		return "", errors.New("the evidence holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory")

@@ -75,3 +75,4 @@ boost_weight = 0.1
 prior_credits = 3.0
 prior_misses = 9.0
 share_ledger = true
+cross_project_retire = true

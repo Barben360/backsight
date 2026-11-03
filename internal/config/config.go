@@ -235,6 +235,12 @@ type Feedback struct {
 	// ShareLedger: this machine's counts go to the user's server for the
 	// other machines, and theirs come back; false: neither.
 	ShareLedger bool `toml:"share_ledger" json:"share_ledger"`
+	// CrossProjectRetire: Claude may retire a wrong or outdated memory of
+	// any project shown in the session, its correction stored in that
+	// memory's project; false: only the session's project, the transverse
+	// pool and the projects it links. Read from config.toml only: a
+	// repository's .backsight.toml never sets it.
+	CrossProjectRetire bool `toml:"cross_project_retire" json:"cross_project_retire"`
 }
 
 // DefaultBank is the memory bank setup and server install write into a new
@@ -266,7 +272,7 @@ func Default(d paths.Dirs, home string) Config {
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
 		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
-			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true},
+			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true},
 	}
 }
 

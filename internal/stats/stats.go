@@ -265,7 +265,22 @@ type Report struct {
 			Shows   int `json:"shows"`
 			Credits int `json:"credits"`
 		} `json:"imported"`
+		// CrossProject: the memories a session of another project
+		// retired or hid in the window, from the feedback journal (the
+		// caller sets it), for the user to review and undo.
+		CrossProject []CrossRetirement `json:"cross_project,omitempty"`
 	} `json:"feedback"`
+}
+
+// CrossRetirement is one memory of a project that a session of another
+// project retired (kind retire) or hid (kind hide).
+type CrossRetirement struct {
+	At             time.Time `json:"at"`
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	Verdict        string    `json:"verdict"`
+	SessionProject string    `json:"session_project"`
+	MemoryProject  string    `json:"memory_project"`
 }
 
 type turn struct {
