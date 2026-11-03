@@ -305,7 +305,7 @@ var MemoryStateWords = map[string]string{"hidden": "hidden", "wrong": "reported 
 var FunnelWords = map[string]string{
 	"ended": "session ended", "sent": "sent", "waiting_or_failed": "not sent", "extracted": "turned into memories",
 	"never": "never turned into memories", "on_server": "still on the server", "recalled": "shown again", "not_recalled": "not shown again",
-	"unresolved": "shown, origin not known yet", "gone": "shown, since forgotten",
+	"unresolved": "shown, origin not known yet", "before_record": "sent before this was recorded", "gone": "shown, since forgotten",
 }
 
 // OriginWords name where a memory came from.

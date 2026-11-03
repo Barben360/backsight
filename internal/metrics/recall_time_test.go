@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -145,7 +147,7 @@ func TestTimeToRecallHops(t *testing.T) {
 		t.Errorf("series %v, want none", m.Series)
 	}
 	wantF := map[string]int64{"ended": 20, "sent": 20, "waiting_or_failed": 0, "extracted": 20, "never": 0, "on_server": 0,
-		"recalled": 20, "not_recalled": 0, "unresolved": 0, "gone": 0}
+		"recalled": 20, "not_recalled": 0, "unresolved": 0, "before_record": 0, "gone": 0}
 	if f := funnelOf(t, m); fmt.Sprint(f) != fmt.Sprint(wantF) {
 		t.Errorf("funnel %v, want %v", f, wantF)
 	}
@@ -204,7 +206,7 @@ func TestTimeToRecallEdgeSessions(t *testing.T) {
 	edgeSessions(x)
 	m := ttr(x, x.query(7))
 	want := map[string]int64{"ended": 6, "sent": 5, "waiting_or_failed": 1, "extracted": 1, "never": 3, "on_server": 1,
-		"recalled": 0, "not_recalled": 1, "unresolved": 0, "gone": 0}
+		"recalled": 0, "not_recalled": 1, "unresolved": 0, "before_record": 0, "gone": 0}
 	if f := funnelOf(t, m); fmt.Sprint(f) != fmt.Sprint(want) {
 		t.Errorf("funnel %v, want %v", f, want)
 	}
@@ -474,8 +476,8 @@ func TestTimeToRecallBeforeTheOperationsRecord(t *testing.T) {
 		x.rcSend(day(27, 10, 0), "old") // 3 days ago
 		m := ttr(x, x.query(7))
 		f := funnelOf(t, m)
-		if f["never"] != 0 || f["unresolved"] != 1 || f["sent"] != 1 {
-			t.Errorf("funnel %v, want never 0, unresolved 1", f)
+		if f["never"] != 0 || f["before_record"] != 1 || f["unresolved"] != 0 || f["sent"] != 1 {
+			t.Errorf("funnel %v, want never 0, before_record 1, unresolved 0", f)
 		}
 		if !slices.Contains(m.Tags, "partial") {
 			t.Errorf("tags %v, want partial", m.Tags)
@@ -499,8 +501,8 @@ func TestTimeToRecallBeforeTheOperationsRecord(t *testing.T) {
 		x.rcOp("other", "completed", day(27, 8, 0), day(27, 8, 5), 0, units(1))
 		m := ttr(x, x.query(7))
 		f := funnelOf(t, m)
-		if f["never"] != 1 || f["unresolved"] != 1 {
-			t.Errorf("funnel %v, want never 1 (after) and unresolved 1 (before)", f)
+		if f["never"] != 1 || f["before_record"] != 1 {
+			t.Errorf("funnel %v, want never 1 (after) and before_record 1 (before)", f)
 		}
 		rows := x.run("pipeline", x.query(7)).Tables.NeverExtracted
 		if len(rows) != 1 || rows[0].Session != "after" || rows[0].State != "none" {
@@ -543,5 +545,94 @@ func TestTimeToRecallBoundaries(t *testing.T) {
 		if f["never"] != c.never || f["on_server"] != c.onServer {
 			t.Errorf("sent %v ago: never %d on_server %d, want %d and %d", c.age, f["never"], f["on_server"], c.never, c.onServer)
 		}
+	}
+}
+
+// rcOpID is rcOp with the operation's id given.
+func (x *fx) rcOpID(id, session, status string, created, updated time.Time, ts time.Time, units *int64) {
+	x.t.Helper()
+	x.mrec(ts, metricsfile.DocOp{Operation: id, Document: "conversation:" + session, Session: session, Status: status,
+		CreatedAt: created, UpdatedAt: updated, Units: units})
+}
+
+// Two operations created at the same instant: the one written first, then
+// the one with the lower id, is the first (not whichever a map yields).
+func TestTimeToRecallOperationTies(t *testing.T) {
+	x := newFx(t, fxNow)
+	for i := 1; i <= 20; i++ {
+		s := fmt.Sprintf("sess-%d", i)
+		x.rcPrompt(rcBase, s)
+		t1 := rcBase.Add(time.Minute)
+		x.rcSend(t1, s)
+		at := t1.Add(5 * time.Second)
+		// written at the same time; op-b sorts after op-a and updates later
+		x.rcOpID("op-b-"+s, s, "completed", at, t1.Add(9*time.Minute), t1.Add(10*time.Minute), units(2))
+		x.rcOpID("op-a-"+s, s, "completed", at, t1.Add(time.Minute), t1.Add(10*time.Minute), units(2))
+	}
+	for range 10 {
+		hops := hopsOf(t, ttr(x, x.query(7)))
+		if h := hops["sent_to_extracted"]; h.P50 == nil || *h.P50 != 60_000 {
+			t.Fatalf("sent_to_extracted p50 %v, want 60 000 (op-a's update)", h.P50)
+		}
+	}
+}
+
+// appendRaw appends a hand-written line to the memory-docs month file.
+func (x *fx) appendRaw(month, line string) {
+	x.t.Helper()
+	if err := os.MkdirAll(x.dirs.MetricsDir(), 0o700); err != nil {
+		x.t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(x.dirs.MetricsDir(), "memory-docs-"+month+".jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		x.t.Fatal(err)
+	}
+}
+
+// An operation is what its latest line says: when that line has no
+// creation time, an older line's does not stand in.
+func TestTimeToRecallLatestOperationLineDecides(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.rcOp("anchor", "completed", rcBase.Add(-time.Hour), rcBase.Add(-50*time.Minute), 0, units(1))
+	x.rcPrompt(rcBase, "s1")
+	t1 := rcBase.Add(time.Minute)
+	x.rcSend(t1, "s1")
+	x.rcOpID("o1", "s1", "completed", t1.Add(5*time.Second), t1.Add(time.Minute), t1.Add(time.Minute), units(3))
+	// a later line of the same operation that does not give its times
+	later := t1.Add(2 * time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")
+	x.appendRaw("2026-10", `{"schema":1,"ts":"`+later+`","kind":"op","v":"v1","binary_version":"1","operation":"o1","document":"conversation:s1","session":"s1","status":"completed","retries":0}`)
+	f := funnelOf(t, ttr(x, x.query(7)))
+	if f["extracted"] != 0 || f["never"] != 1 {
+		t.Errorf("funnel %v, want extracted 0 and never 1: the latest line has no creation time", f)
+	}
+}
+
+// A memory listed twice belongs to the document of its latest line.
+func TestTimeToRecallLatestMemoryLineDecides(t *testing.T) {
+	x := newFx(t, fxNow)
+	for _, s := range []string{"s1", "s2"} {
+		x.rcPrompt(rcBase, s)
+		t1 := rcBase.Add(time.Minute)
+		x.rcSend(t1, s)
+		done := t1.Add(2 * time.Minute) // s2 is extracted before the show, s1 after it
+		if s == "s1" {
+			done = t1.Add(3 * time.Hour)
+		}
+		x.rcOp(s, "completed", t1.Add(5*time.Second), done, 0, units(2))
+	}
+	doc := func(s string) metricsfile.MemoryDoc {
+		return metricsfile.MemoryDoc{Memory: "m1", Outcome: "found", DocKind: "session", Document: "conversation:" + s, Session: s,
+			CreatedDay: "2026-10-26", FactType: "world"}
+	}
+	x.mrec(rcBase, doc("s2"))                   // first listed as s2's
+	x.mrec(rcBase.Add(24*time.Hour), doc("s1")) // later listed as s1's: the one that stands
+	x.rcShow(rcBase.Add(time.Hour), "m1")
+	f := funnelOf(t, ttr(x, x.query(7)))
+	if f["extracted"] != 2 || f["recalled"] != 0 {
+		t.Errorf("funnel %v, want nobody recalled: m1 is s1's, shown before s1's extraction", f)
 	}
 }

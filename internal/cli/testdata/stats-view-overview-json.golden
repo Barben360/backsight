@@ -555,6 +555,7 @@
         "drill": "backsight stats pipeline",
         "extra": {
           "funnel": {
+            "before_record": 0,
             "ended": 4,
             "extracted": 0,
             "gone": 0,

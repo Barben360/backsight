@@ -35,7 +35,7 @@ const (
 // The hops, in order, and the funnel's keys: the names the views read.
 var (
 	HopNames   = []string{"last_to_sent", "sent_to_extracted", "extracted_to_recalled", "whole_way"}
-	FunnelKeys = []string{"ended", "sent", "waiting_or_failed", "extracted", "never", "on_server", "recalled", "not_recalled", "unresolved", "gone"}
+	FunnelKeys = []string{"ended", "sent", "waiting_or_failed", "extracted", "never", "on_server", "recalled", "not_recalled", "unresolved", "before_record", "gone"}
 	// NeverStates are the states of a never_extracted row.
 	NeverStates = []string{"failed", "no_memory", "none"}
 )
@@ -87,7 +87,7 @@ func (s *recallSession) stale(now time.Time) bool {
 }
 
 // never is stale for a send the operations record covers; one from before
-// the record began is unresolved, not never.
+// the record began is before_record, not never.
 func (s *recallSession) never(now time.Time) bool { return s.stale(now) && !s.beforeRecord }
 
 func (s *recallSession) state() string {
@@ -203,9 +203,8 @@ func minT1(by map[string]*recallSession) int64 {
 }
 
 // readOps sets T2 and, for a send with no memory made, why: the operations
-// created from 120 s before the send on. An operation's latest line is its
-// state (doc_ops lines share the operation's created_at, so the bound on it
-// keeps every line of the operations it keeps). A send from before the
+// created from 120 s before the send on, each as its latest line says (the
+// doc_op view's reading), in the order of creation, then write, then id. A send from before the
 // operations record began is marked beforeRecord (no record: all of them).
 func readOps(e env, by map[string]*recallSession, minT1 int64) error {
 	var start sql.NullInt64
@@ -218,10 +217,17 @@ func readOps(e env, by map[string]*recallSession, minT1 int64) error {
 	if minT1 < 0 || !start.Valid {
 		return nil
 	}
+	// The operations whose latest line (as the doc_op view reads it) is a
+	// document's and was created in time, oldest first. The inner select
+	// only narrows the lines read to the operations that have a line
+	// created in time; the latest line of each decides.
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT operation_id, document, status, created_at, updated_at, COALESCE(retries, 0), units FROM doc_ops
-WHERE operation_id IS NOT NULL AND document IS NOT NULL AND created_at >= ?
-ORDER BY ts, source_file, "offset"`, minT1-opSkew.Milliseconds())
+SELECT document, status, created_at, updated_at, COALESCE(retries, 0), units FROM (
+  SELECT d.*, ROW_NUMBER() OVER (PARTITION BY d.operation_id ORDER BY d.ts DESC, d.source_file DESC, d."offset" DESC) AS rn
+  FROM doc_ops d
+  WHERE d.operation_id IN (SELECT operation_id FROM doc_ops WHERE created_at >= ? AND operation_id IS NOT NULL))
+WHERE rn = 1 AND document IS NOT NULL AND created_at >= ?
+ORDER BY created_at, ts, operation_id`, minT1-opSkew.Milliseconds(), minT1-opSkew.Milliseconds())
 	if err != nil {
 		return err
 	}
@@ -231,23 +237,17 @@ ORDER BY ts, source_file, "offset"`, minT1-opSkew.Milliseconds())
 		created, retries int64
 		updated, units   sql.NullInt64
 	}
-	latest := map[string]op{} // by operation: the last line read wins
+	var ops []op
 	for rows.Next() {
-		var id string
 		var o op
-		if err := rows.Scan(&id, &o.doc, &o.status, &o.created, &o.updated, &o.retries, &o.units); err != nil {
+		if err := rows.Scan(&o.doc, &o.status, &o.created, &o.updated, &o.retries, &o.units); err != nil {
 			return err
 		}
-		latest[id] = o
+		ops = append(ops, o)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	ops := make([]op, 0, len(latest))
-	for _, o := range latest {
-		ops = append(ops, o)
-	}
-	slices.SortFunc(ops, func(a, b op) int { return int(a.created - b.created) })
 	for _, o := range ops {
 		sid, ok := session.OfDocument(o.doc)
 		s := by[sid]
@@ -291,8 +291,11 @@ func readRecalls(e env, by map[string]*recallSession) error {
 	for len(ids) > 0 { // the memories of these sessions' documents only, in chunks of bound values
 		n := min(len(ids), 500)
 		rows, err := e.tx.QueryContext(e.ctx, `
-SELECT memory_id, document FROM memory_docs WHERE document IS NOT NULL AND memory_id IS NOT NULL
-  AND session IN (?`+strings.Repeat(",?", n-1)+`)`, ids[:n]...)
+SELECT memory_id, document FROM (
+  SELECT d.memory_id, d.document, ROW_NUMBER() OVER (PARTITION BY d.memory_id ORDER BY d.ts DESC, d.source_file DESC, d."offset" DESC) AS rn
+  FROM memory_docs d
+  WHERE d.memory_id IN (SELECT memory_id FROM memory_docs WHERE memory_id IS NOT NULL AND session IN (?`+strings.Repeat(",?", n-1)+`)))
+WHERE rn = 1 AND document IS NOT NULL`, ids[:n]...)
 		if err != nil {
 			return err
 		}
@@ -426,7 +429,6 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 	}
 	var lastSent, sentExt, extRecalled, whole []int64
 	f := map[string]int64{"ended": int64(len(run.sessions)), "unresolved": run.unresolved, "gone": run.gone}
-	sessionsUnresolved := false
 	for _, s := range run.sessions {
 		if s.t1 >= 0 {
 			f["sent"]++
@@ -439,8 +441,7 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 		case s.never(e.now):
 			f["never"]++
 		case s.stale(e.now): // sent before the operations record began
-			f["unresolved"]++
-			sessionsUnresolved = true
+			f["before_record"]++
 		case s.t1 >= 0:
 			f["on_server"]++
 		}
@@ -462,7 +463,7 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 	}
 	m := Metric{Value: hops[3].P50, Num: i64(f["recalled"]), Den: i64(f["sent"]),
 		Extra: map[string]any{"funnel": f, "hops": hops}}
-	if run.unresolved > 0 || sessionsUnresolved {
+	if run.unresolved > 0 || f["before_record"] > 0 {
 		m.Tags = []string{tagPartial}
 	}
 	o := Observation{Den: hops[1].N, P95: hops[1].P95}
