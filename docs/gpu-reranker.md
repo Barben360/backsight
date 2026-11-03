@@ -11,6 +11,8 @@ On the CPU, the reranker takes nearly all of a recall: it scores each candidate 
 
 These are whole `backsight search` calls, measured on real memories (30 candidates per search). The gain grows with the CPU's slowness and with the length of your prompts. doctor's `latency` check warns when the prompt hook's 95th percentile passes 2.5 s over 7 days: that is the clearest sign a GPU reranker is worth it.
 
+**An integrated GPU counts.** The Radeon 890M above is built into the processor, like the GPU of most laptops and many desktops: recent AMD Ryzen and Intel Core processors (Intel Iris Xe or Arc graphics) have one. It takes the [AMD or Intel](#amd-or-intel-llamacpp-on-vulkan) recipe, and its memory comes from the system's RAM. On a laptop that also has an NVIDIA GPU, use the [NVIDIA](#nvidia-text-embeddings-inference) recipe: the separate GPU is the faster one. An older Intel GPU (UHD Graphics) may be no faster than a fast CPU: time a few `backsight search` calls before and after, and [go back to the CPU](#going-back-to-the-cpu) if they are not faster.
+
 Same results: the GPU service runs the very model the server runs on the CPU (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`), so memories rank the same in every language. The embeddings stay on the CPU, as backsight sets them: the stored memories were embedded with `multilingual-e5-small`, and another model's vectors do not match them.
 
 ## Before you start
@@ -184,9 +186,9 @@ volumes:
 - **Keep `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`.** `llama-server` refuses a prompt and memory longer than the model's 512 tokens, and the whole search then fails. Prompt recall sends only 300 characters, but `backsight search` and Claude's `memory_search` send what they are given. Capping the query at 250 tokens keeps every pair under the limit (memories are already capped at 128).
 - Hindsight's `cohere` provider insists on a key; `llama-server` ignores it.
 - The service listens only on the Compose network: no port is published.
-- `--parallel 32` scores up to 32 memories at once; it uses about 330 MB of GPU memory on a Radeon 890M.
+- `--parallel 32` scores up to 32 memories at once; it uses about 330 MB of GPU memory on a Radeon 890M, which an integrated GPU takes from the system's RAM.
 
-Intel GPUs take the same recipe with the ANV driver; it was tested on AMD only.
+Intel GPUs, integrated or separate, take the same recipe with the ANV driver; it was tested on AMD only.
 
 Then: `backsight server start`, and [check it works](#check-it-works).
 
