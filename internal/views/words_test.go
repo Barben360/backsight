@@ -40,3 +40,15 @@ func TestDoctorHistoryAndScanWords(t *testing.T) {
 		t.Errorf("old_scan has no plain word (%q)", w)
 	}
 }
+
+// Every state of a memory's origin has a plain word of its own.
+func TestOriginWordsCoverEveryState(t *testing.T) {
+	for _, k := range metrics.OriginStates {
+		if w := OriginWords[k]; w == "" || w == k {
+			t.Errorf("origin state %q has no plain word (%q)", k, w)
+		}
+	}
+	if len(OriginWords) != len(metrics.OriginStates) {
+		t.Errorf("OriginWords has %d words for %d states", len(OriginWords), len(metrics.OriginStates))
+	}
+}

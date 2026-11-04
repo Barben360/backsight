@@ -115,7 +115,10 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Tables.Activity = &act
-		r.Tables.Lately, err = lately(e, e.q.Window)
+		if r.Tables.Lately, err = lately(e, e.q.Window); err != nil {
+			return err
+		}
+		r.Tables.Helped, err = helped(e, e.q.Window)
 		return err
 	})
 }

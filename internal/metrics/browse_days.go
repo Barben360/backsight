@@ -64,7 +64,8 @@ func Days(ctx context.Context, s Source, q Query) (Result, error) {
 		}
 		lo, hi, page := pageBounds(e.q, len(rows))
 		r.Tables.Days, r.Tables.Page = rows[lo:hi], &page
-		return nil
+		r.Tables.Calendar, err = calendar(e)
+		return err
 	})
 }
 

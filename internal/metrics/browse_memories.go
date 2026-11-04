@@ -306,6 +306,9 @@ func memoryPage(ctx context.Context, s Source, q Query, id string) (Result, erro
 		if page.Retirements, err = memoryRetirements(e, full); err != nil {
 			return err
 		}
+		if page.Origin, err = memoryOrigin(e, full); err != nil {
+			return err
+		}
 		pg := Page{Limit: e.q.EffectiveLimit(), Offset: max(e.q.Offset, 0), Total: total}
 		r.Tables.Memory, r.Tables.Page = &page, &pg
 		return nil

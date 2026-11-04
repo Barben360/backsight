@@ -1018,7 +1018,8 @@
           "context_chars": 0,
           "sent": ""
         }
-      ]
+      ],
+      "helped": []
     },
     "attention": [
       {

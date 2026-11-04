@@ -29,6 +29,8 @@ type Tables struct {
 	Memories         []MemoryRow         `json:"memories,omitzero"`
 	Memory           *MemoryPage         `json:"memory,omitzero"`
 	Days             []DayRow            `json:"days,omitzero"`
+	Calendar         []CalendarDay       `json:"calendar,omitzero"`
+	Helped           []HelpedRow         `json:"helped,omitzero"`
 	Day              *DayPage            `json:"day,omitzero"`
 	Releases         []ReleaseRow        `json:"releases,omitzero"`
 	Markers          []Marker            `json:"markers,omitzero"`
@@ -309,7 +311,60 @@ type MemoryPage struct {
 	Shows         []ShowMark       `json:"shows"`
 	Retirements   []RetireMark     `json:"retirements"`
 	RankHistogram map[string]int64 `json:"rank_histogram"`
+	Origin        *Origin          `json:"origin"`
 	Commands      []string         `json:"commands"`
+}
+
+// Origin says where a memory came from, from the record of the day lists
+// (never a document id): the kind of its document and, for a session's, the
+// session. The times are those of the session on this PC (null when not
+// reached); Created is the day another PC's memory was made.
+type Origin struct {
+	State      string     `json:"state"` // this_pc | other_pc | no_session | unknown
+	DocKind    string     `json:"doc_kind"`
+	Session    string     `json:"session"`
+	Project    string     `json:"project"`
+	Ended      *time.Time `json:"ended"`
+	Sent       *time.Time `json:"sent"`
+	Extracted  *time.Time `json:"extracted"`
+	FirstShown *time.Time `json:"first_shown"` // null when never shown
+	Created    *string    `json:"created"`     // another PC's: the UTC date of the day list; else null
+}
+
+// The states of an Origin.
+const (
+	OriginThisPC    = "this_pc"
+	OriginOtherPC   = "other_pc"
+	OriginNoSession = "no_session"
+	OriginUnknown   = "unknown"
+)
+
+// OriginStates are the states of an Origin, the words the views name.
+var OriginStates = []string{OriginThisPC, OriginOtherPC, OriginNoSession, OriginUnknown}
+
+// HelpedRow is one of the memories that helped most in the window: its
+// project (that of its latest show), its kind (from the day lists, empty
+// when not known), the credits of verdict used it got and how often it was
+// shown, both in the window.
+type HelpedRow struct {
+	Memory   string `json:"memory"`
+	Project  string `json:"project"`
+	FactType string `json:"fact_type"`
+	Used     int64  `json:"used"`
+	Shown    int64  `json:"shown"`
+}
+
+// CalendarDay is one local day of the days view's calendar, whatever the
+// window: the typed prompts, those that got memory, the turns where Claude
+// used memory, the sessions that prompted, and whether anything was
+// recorded that day.
+type CalendarDay struct {
+	Day               string `json:"day"`
+	Prompts           int64  `json:"prompts"`
+	PromptsWithMemory int64  `json:"prompts_with_memory"`
+	UsedTurns         int64  `json:"used_turns"`
+	Sessions          int64  `json:"sessions"`
+	Recorded          bool   `json:"recorded"`
 }
 
 // ShowMark is one showing of a memory.
