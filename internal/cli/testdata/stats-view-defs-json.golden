@@ -562,7 +562,7 @@
           "id": "recall.latency",
           "label": "Time memory adds to a prompt",
           "question": "How long does memory make a prompt wait?",
-          "definition": "Wall time of the prompt recall, typical (median) and slowest 1 in 20. Watched above 2,000 ms, bad above 2,500 ms.",
+          "definition": "Wall time of the prompt recall, typical (median) and slowest 1 in 20. Watched above 2,000 ms, bad above 2,500 ms; when the latest day (20 recalls or more) is back at or under 2,000 ms, bad reads watch, marked improving.",
           "unit": "ms",
           "aggregation": "raw",
           "direction": "down",
