@@ -49,6 +49,13 @@ func Releases(ctx context.Context, s Source, q Query) (Result, error) {
 		if r.Tables.Markers, err = Markers(e, e.q.Window); err != nil {
 			return err
 		}
+		if e.q.Compare[0] != "" {
+			c, err := Compare(e, e.q.Compare, e.q.Measure)
+			if err != nil {
+				return err
+			}
+			r.Tables.Compare = &c
+		}
 		r.Metrics, err = computeMetrics(e, e.q.Window, []string{"used.turn_rate"})
 		return err
 	})

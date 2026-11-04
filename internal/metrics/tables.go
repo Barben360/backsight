@@ -33,6 +33,7 @@ type Tables struct {
 	Releases         []ReleaseRow        `json:"releases,omitzero"`
 	Markers          []Marker            `json:"markers,omitzero"`
 	Settings         map[string]float64  `json:"settings,omitzero"`
+	Compare          *Comparison         `json:"compare,omitzero"`
 	Defs             []DefRow            `json:"defs,omitzero"`
 	Note             string              `json:"note,omitzero"`
 }
@@ -389,4 +390,81 @@ type SettingChange struct {
 	Key  string   `json:"key"`
 	From *float64 `json:"from"`
 	To   *float64 `json:"to"`
+}
+
+// Rate is a count over a count.
+type Rate struct {
+	Num int64 `json:"num"`
+	Den int64 `json:"den"`
+}
+
+// Comparison is the releases view's answer to --compare A,B: one measure
+// of two versions, compared stratum by stratum (project and recall path)
+// and pooled over the strata that have enough days and units on both
+// sides, with an interval that treats the units of a session as one
+// observation. Reading is differs, no_clear_difference or too_few; never
+// better or worse. Diff (B minus A), CI, PooledA and PooledB are null when
+// the reading is too_few.
+type Comparison struct {
+	A               string        `json:"a"`
+	B               string        `json:"b"`
+	Measure         string        `json:"measure"`
+	Reading         string        `json:"reading"`
+	Diff            *float64      `json:"diff"`
+	CI              *[2]float64   `json:"ci"`
+	PooledA         *float64      `json:"pooled_a"`
+	PooledB         *float64      `json:"pooled_b"`
+	RawA            Rate          `json:"raw_a"`
+	RawB            Rate          `json:"raw_b"`
+	RawDisagrees    bool          `json:"raw_disagrees"`
+	Strata          []StratumRow  `json:"strata"`
+	SessionsA       int           `json:"sessions_a"`
+	SessionsB       int           `json:"sessions_b"`
+	TooFew          *TooFew       `json:"too_few"`
+	SettingsDiffer  []SettingDiff `json:"settings_differ"`
+	SettingsUnknown bool          `json:"settings_unknown"`
+}
+
+// StratumRow is one (project, path) stratum of a comparison. Weight, Diff,
+// CI and Reading's figures are null for a stratum that is not eligible;
+// Why then names the first gate it missed (days, units or sessions).
+type StratumRow struct {
+	Project  string      `json:"project"`
+	Path     string      `json:"path"`
+	A        StratumSide `json:"a"`
+	B        StratumSide `json:"b"`
+	Weight   *float64    `json:"weight"`
+	Diff     *float64    `json:"diff"`
+	CI       *[2]float64 `json:"ci"`
+	Reading  string      `json:"reading"`
+	Eligible bool        `json:"eligible"`
+	Why      string      `json:"why,omitzero"`
+}
+
+// StratumSide is one version's units in a stratum: the successes, the
+// units and the distinct active days.
+type StratumSide struct {
+	Num  int64 `json:"num"`
+	Den  int64 `json:"den"`
+	Days int   `json:"days"`
+}
+
+// TooFew says what a comparison lacks: the version that misses the first
+// gate (days, units, then sessions), what it has in the best stratum, and
+// when the days gate could be met at the earliest.
+type TooFew struct {
+	Version    string     `json:"version"`
+	Days       int        `json:"days"`
+	Units      int        `json:"units"`
+	Why        string     `json:"why"`
+	RetryAfter *time.Time `json:"retry_after,omitzero"`
+}
+
+// SettingDiff is a numeric setting whose value in effect differs between
+// the two versions; ChangedAt is the record that changed it.
+type SettingDiff struct {
+	Key       string     `json:"key"`
+	A         *float64   `json:"a"`
+	B         *float64   `json:"b"`
+	ChangedAt *time.Time `json:"changed_at"`
 }
