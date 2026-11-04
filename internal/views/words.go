@@ -115,6 +115,9 @@ func StatusText(d metrics.Def, m metrics.Metric) string {
 	if m.Borderline {
 		s += " — close to the line"
 	}
+	if slices.Contains(m.Tags, metrics.TagImproving) {
+		s += " — improving: the latest day is back under the line"
+	}
 	return s
 }
 

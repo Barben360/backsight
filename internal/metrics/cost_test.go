@@ -209,6 +209,33 @@ func TestRecallLatency(t *testing.T) {
 	}
 }
 
+// The latest day of the window judges beside the week (#184): 100 recalls
+// at 3,000 ms on 10-29, then n at 300 ms on 10-30 (the window's last day,
+// before the 12:00 clock). 25 of them: the week is bad (p95 = 3,000) but the
+// last day is under the line: watch, tagged improving. 5 of them: too few,
+// the week keeps its verdict.
+func TestRecallLatencyLastDay(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want Status
+		tag  bool
+	}{{25, StatusWatch, true}, {5, StatusBad, false}} {
+		x := costFx(t)
+		d1 := time.Date(2026, 10, 29, 8, 0, 0, 0, fxParis)
+		d2 := time.Date(2026, 10, 30, 8, 0, 0, 0, fxParis)
+		for i := 1; i <= 100; i++ {
+			x.tel(d1.Add(time.Duration(i)*time.Minute), telemetry.Prompt{N: i, Decision: "recall", MS: 3000}, "s", "alpha")
+		}
+		for i := 1; i <= c.n; i++ {
+			x.tel(d2.Add(time.Duration(i)*time.Minute), telemetry.Prompt{N: 100 + i, Decision: "recall", MS: 300}, "s", "alpha")
+		}
+		m := costOf(x, x.query(7))["recall.latency"]
+		if m.Status != c.want || slices.Contains(m.Tags, TagImproving) != c.tag {
+			t.Errorf("%d recalls on the last day: status %s tags %v, want %s, improving %v", c.n, m.Status, m.Tags, c.want, c.tag)
+		}
+	}
+}
+
 // TestSearchLatencyOkOnly: 100 ok searches at 1,000 ms, 5 failed at
 // 10,000 ms and a memory_read at 50,000 ms: p95 = 1,000, ok (watch above
 // 3,000).

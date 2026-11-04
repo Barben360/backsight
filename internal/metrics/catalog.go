@@ -197,7 +197,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight doctor", Drill: "backsight stats days",
 		Extra:      pctExtra,
 		Question:   "How long does memory make a prompt wait?",
-		Definition: "Wall time of the prompt recall, typical (median) and slowest 1 in 20. Watched above 2,000 ms, bad above 2,500 ms.",
+		Definition: "Wall time of the prompt recall, typical (median) and slowest 1 in 20. Watched above 2,000 ms, bad above 2,500 ms; when the latest day (20 recalls or more) is back at or under 2,000 ms, bad reads watch, marked improving.",
 		Action:     "The server or the embeddings are slow. Run backsight doctor.",
 	},
 	{

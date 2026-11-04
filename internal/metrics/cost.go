@@ -282,7 +282,11 @@ func latency(e env, w Window, id, query string, obs map[string]Observation, met 
 		}
 		m.Series = append(m.Series, p)
 	}
-	obs[id], met[id] = Observation{Den: n, P95: p95}, m
+	o := Observation{Den: n, P95: p95}
+	if k := len(m.Series); k > 0 && m.Series[k-1].P95 != nil { // the window's latest day
+		o.Recent, o.RecentN = m.Series[k-1].P95, *m.Series[k-1].N
+	}
+	obs[id], met[id] = o, m
 	return nil
 }
 
