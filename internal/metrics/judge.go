@@ -18,7 +18,19 @@ type Observation struct {
 	Watch    *float64        // a run-time watch threshold (context.per_session); nil: Def's
 	Filtered bool            // a server metric whose figure does answer the project filter: no not_filtered tag
 	Test     Status          // a test the family ran itself (Absolute.On "test"): its result, "" when none
+	// Recent is the p95 of the window's final 24 h (rolling) over RecentN samples (a
+	// latency's fix shows there a week before it leaves the window); nil
+	// when the final 24 h have none.
+	Recent  *float64
+	RecentN int64
 }
+
+// RecentMinN is the samples the final 24 h need to speak for a recovery.
+const RecentMinN = 20
+
+// TagImproving marks a metric whose window is bad but whose final 24 h are
+// back under the watch line.
+const TagImproving = "improving"
 
 // BaselineValue is one previous 7-day window of a relative metric: its
 // point value and its denominator.
@@ -34,6 +46,7 @@ type Judgement struct {
 	Status     Status
 	Reason     string
 	Borderline bool
+	Improving  bool // bad on the window, lowered to watch by recovered final 24 h
 	CI         *[2]float64
 }
 
@@ -66,9 +79,25 @@ func Judge(d Def, o Observation) Judgement {
 		return j
 	}
 	abs, borderline := absolute(d.Absolute, o, lo, hi)
+	if abs == StatusBad && recovered(d.Absolute, o) {
+		abs, j.Improving = StatusWatch, true
+	}
 	j.Borderline = borderline
 	j.Status = worst(worst(worst(StatusOK, abs), o.Err), relative(d, o, lo, hi))
 	return j
+}
+
+// recovered: a percentile metric judged bad on its window whose final 24 h
+// have at least RecentMinN samples and a p95 at or under the watch line. The
+// window's figure is kept; the verdict drops to watch (#184) so a fixed
+// cause does not read bad for a week. A recent period too small, or still over the
+// line, changes nothing.
+func recovered(t Threshold, o Observation) bool {
+	watch := t.Watch
+	if o.Watch != nil {
+		watch = o.Watch
+	}
+	return t.On == "p95" && watch != nil && o.Recent != nil && o.RecentN >= RecentMinN && *o.Recent <= *watch
 }
 
 // absolute is step 3. Rates (On hi or lo) need trials; a percentile or a

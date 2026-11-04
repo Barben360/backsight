@@ -209,6 +209,47 @@ func TestRecallLatency(t *testing.T) {
 	}
 }
 
+// The rolling last 24 h of the window judge beside the week (#184): 100
+// recalls at 3,000 ms two days before the end, then fast ones (300 ms) at
+// given ages. 3 of them in the last calendar day and 22 the evening before
+// make 25 in 24 h: the week is bad (p95 = 3,000) but the last 24 h are under
+// the line, so watch, tagged improving, with no flapping at midnight. Only 5
+// in 24 h, or 25 older than 24 h: too few or too old, the week keeps its
+// verdict.
+func TestRecallLatencyLast24h(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		agesH        []int // hours before the end of the window, one fast recall each
+		want         Status
+		wantImproved bool
+	}{
+		{"25 in 24 h across midnight", append(rep(3, 1), rep(22, 20)...), StatusWatch, true},
+		{"5 in 24 h", rep(5, 1), StatusBad, false},
+		{"25 older than 24 h", rep(25, 30), StatusBad, false},
+	} {
+		x := costFx(t)
+		for i := 1; i <= 100; i++ {
+			x.tel(ago(48*time.Hour+time.Duration(i)*time.Minute), telemetry.Prompt{N: i, Decision: "recall", MS: 3000}, "s", "alpha")
+		}
+		for i, h := range c.agesH {
+			x.tel(ago(time.Duration(h)*time.Hour+time.Duration(i)*time.Second), telemetry.Prompt{N: 100 + i, Decision: "recall", MS: 300}, "s", "alpha")
+		}
+		m := costOf(x, x.query(7))["recall.latency"]
+		if m.Status != c.want || slices.Contains(m.Tags, TagImproving) != c.wantImproved {
+			t.Errorf("%s: status %s tags %v, want %s, improving %v", c.name, m.Status, m.Tags, c.want, c.wantImproved)
+		}
+	}
+}
+
+// rep is n copies of v.
+func rep(n, v int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = v
+	}
+	return out
+}
+
 // TestSearchLatencyOkOnly: 100 ok searches at 1,000 ms, 5 failed at
 // 10,000 ms and a memory_read at 50,000 ms: p95 = 1,000, ok (watch above
 // 3,000).

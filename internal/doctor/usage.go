@@ -42,9 +42,16 @@ func checkUsage(dir string, now time.Time, writeOff bool) []Check {
 	}
 	r := stats.Compute(this, now.Add(-week), now)
 	p := stats.Compute(last, now.Add(-2*week), now.Add(-week))
+	var today []stats.Event
+	for _, e := range this {
+		if !e.TS.Before(now.Add(-24 * time.Hour)) {
+			today = append(today, e)
+		}
+	}
+	d := stats.Compute(today, now.Add(-24*time.Hour), now)
 	return []Check{
 		checkRecallFailures(r),
-		checkLatency(r),
+		checkLatency(r, d),
 		checkLearning(ev, now, writeOff),
 		checkSearchRate(r, p),
 		checkUnknownRecords(r, p),
@@ -90,11 +97,17 @@ func checkRecallFailures(r stats.Report) Check {
 	return c
 }
 
-func checkLatency(r stats.Report) Check {
+// checkLatency judges the week's p95. day is the last 24 h: when it has
+// enough recalls and its own p95 is back under the limit, the cause is
+// fixed and the week's figure only lags (#184): no warning, the summary
+// says so and still gives the week's figure.
+func checkLatency(r, day stats.Report) Check {
 	c := Check{ID: "latency", Status: OK}
 	switch {
 	case r.Prompts.Recalls < promptP95MinN:
 		c.Status, c.Summary = Info, fmt.Sprintf("%d prompt recalls in 7 days: too few for a p95", r.Prompts.Recalls)
+	case r.Prompts.P95MS > promptP95MaxMS && day.Prompts.Recalls >= promptP95MinN && day.Prompts.P95MS <= promptP95MaxMS:
+		c.Status, c.Summary = Info, fmt.Sprintf("prompt hook p95 %d ms over 7 days (limit %d ms), %d ms over the last 24 h: improving", r.Prompts.P95MS, promptP95MaxMS, day.Prompts.P95MS)
 	case r.Prompts.P95MS > promptP95MaxMS:
 		c.Status, c.Summary = Warn, fmt.Sprintf("prompt hook p95 %d ms over 7 days (limit %d ms)", r.Prompts.P95MS, promptP95MaxMS)
 		c.Fix = "fewer rerank candidates, or your own GPU reranker, in the server's compose.override.yaml: backsight guide troubleshooting#slow-recall-and-gpu-acceleration"

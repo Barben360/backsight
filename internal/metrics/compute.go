@@ -380,6 +380,9 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 	m.Series = slices.Clone(m.Series) // the family run's own stays as computed (memo)
 	tags := make([]string, 0, len(m.Tags)+1)
 	tags = append(tags, m.Tags...)
+	if j.Improving && !slices.Contains(tags, TagImproving) {
+		tags = append(tags, TagImproving)
+	}
 	if d.Scope == "server" && q.Project != "" && !o.Filtered && !slices.Contains(tags, tagNotFiltered) {
 		tags = append(tags, tagNotFiltered)
 	}
