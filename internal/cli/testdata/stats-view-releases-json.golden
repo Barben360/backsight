@@ -30,7 +30,84 @@
       "ok": true,
       "last_ok": null
     },
-    "metrics": {},
+    "metrics": {
+      "used.turn_rate": {
+        "value": 1,
+        "num": 1,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0.20654329147389294,
+          1
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has used",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "num": 0,
+            "den": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-08",
+            "value": 1,
+            "num": 1,
+            "den": 1,
+            "partial": true
+          }
+        ],
+        "extra": {
+          "check_skipped": 0,
+          "pending": 0,
+          "subagent_turns": 0,
+          "worst_case": 1
+        }
+      }
+    },
     "tables": {
       "page": {
         "limit": 50,
@@ -1149,6 +1226,14 @@
           },
           "prompts_per_day": 1,
           "bank_size": 0
+        }
+      ],
+      "markers": [
+        {
+          "at": "2026-10-08T04:00:00+02:00",
+          "kind": "release",
+          "version": "v0.1.18",
+          "previous": "v0.1.17"
         }
       ],
       "settings": {

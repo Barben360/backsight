@@ -31,6 +31,7 @@ type Tables struct {
 	Days             []DayRow            `json:"days,omitzero"`
 	Day              *DayPage            `json:"day,omitzero"`
 	Releases         []ReleaseRow        `json:"releases,omitzero"`
+	Markers          []Marker            `json:"markers,omitzero"`
 	Settings         map[string]float64  `json:"settings,omitzero"`
 	Defs             []DefRow            `json:"defs,omitzero"`
 	Note             string              `json:"note,omitzero"`
@@ -347,6 +348,7 @@ type DayRow struct {
 type DayPage struct {
 	Day      string       `json:"day"`
 	Sessions []SessionRow `json:"sessions"`
+	Markers  []Marker     `json:"markers"`
 }
 
 // ReleaseRow is one binary version of the releases view.
@@ -367,4 +369,24 @@ type DefRow struct {
 	Def
 	N   int64    `json:"n"`
 	MDC *float64 `json:"mdc"`
+}
+
+// Marker is a point on a time chart where something changed: a version seen
+// for the first time after another one (Kind "release", with Version and
+// Previous), or a recorded change of the settings (Kind "config", with
+// Changes). At is when it was recorded.
+type Marker struct {
+	At       time.Time       `json:"at"`
+	Kind     string          `json:"kind"`
+	Version  string          `json:"version,omitzero"`
+	Previous string          `json:"previous,omitzero"`
+	Changes  []SettingChange `json:"changes,omitzero"`
+}
+
+// SettingChange is one setting that differs from the previous record: From
+// is null for a setting that is new, To for one that is gone.
+type SettingChange struct {
+	Key  string   `json:"key"`
+	From *float64 `json:"from"`
+	To   *float64 `json:"to"`
 }

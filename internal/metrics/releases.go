@@ -46,7 +46,11 @@ func Releases(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Tables.Releases, r.Tables.Page = rows[lo:hi], &page
 		r.Tables.Settings = settingsOf(e.src.Config)
 		r.Tables.Note = releaseNote
-		return nil
+		if r.Tables.Markers, err = Markers(e, e.q.Window); err != nil {
+			return err
+		}
+		r.Metrics, err = computeMetrics(e, e.q.Window, []string{"used.turn_rate"})
+		return err
 	})
 }
 

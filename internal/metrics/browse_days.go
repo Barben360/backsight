@@ -45,7 +45,11 @@ func Days(ctx context.Context, s Source, q Query) (Result, error) {
 			}
 			sortSessions(sessions)
 			lo, hi, page := pageBounds(e.q, len(sessions))
-			day := DayPage{Day: id, Sessions: orEmpty(sessions[lo:hi])}
+			markers, err := Markers(e, e.q.Window)
+			if err != nil {
+				return err
+			}
+			day := DayPage{Day: id, Sessions: orEmpty(sessions[lo:hi]), Markers: markers}
 			if err := withSent(e, day.Sessions); err != nil {
 				return err
 			}

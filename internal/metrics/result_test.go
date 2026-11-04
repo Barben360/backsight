@@ -178,6 +178,6 @@ func TestTablesRowNames(t *testing.T) {
 	wantKeys(t, "show mark", mem["shows"].([]any)[0].(map[string]any), "at outcome path prompt rank rank_without_boost score_without_boost session turn")
 	wantKeys(t, "retire mark", mem["retirements"].([]any)[0].(map[string]any), "at kind")
 	wantKeys(t, "day row", first("days"), "context_chars day prompts prompts_with_memory recalls sent_failed sent_ok sessions used_turns wrong")
-	wantKeys(t, "day page", sub(t, m, "day"), "day sessions")
+	wantKeys(t, "day page", sub(t, m, "day"), "day markers sessions")
 	wantKeys(t, "release row", first("releases"), "bank_size first flagship last n project_shares prompts_per_day version")
 }
