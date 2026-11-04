@@ -132,7 +132,7 @@ func (f *Flusher) Waiting(files []string) []Waiter {
 			continue // last written before retain_since: backfill's
 		}
 		c, recs := f.Survey(file)
-		if c.Status != "send" || !(ok || f.RetainSince.IsZero() || !recs[0].Timestamp.Before(f.RetainSince)) {
+		if c.Status != "send" || (!ok && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)) {
 			continue
 		}
 		w := Waiter{Session: sid, Transcript: file, Project: c.Project, Reason: WaitDue}
