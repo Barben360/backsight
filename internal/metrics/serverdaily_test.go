@@ -205,7 +205,7 @@ func TestTokensReadTheRecordPastThirtyDays(t *testing.T) {
 func TestInsideTheReachNothingChanges(t *testing.T) {
 	build := func(withRecord bool) *fx {
 		x := costFx(t)
-		x.need = append(x.need, "tags")
+		x.need = append(x.need, "tags", "series") // bank.growth is read through the cost fixture
 		pricesSet(x)
 		extractionServer(x)
 		x.server.set(func(f *fakeData) {

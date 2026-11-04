@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 )
@@ -87,11 +88,17 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		ids := append(overviewIDs(), "extraction.cost") // the cost is the summary's only
-		m, reused := a.metricsFor(e.q, ids)
-		if !reused {
-			if m, err = computeMetrics(e, e.q.Window, ids); err != nil {
+		// The verdict leaves out the time to recall (no rule reads it): the
+		// overview makes it, for the same window, beside the verdict's figures.
+		m, reused := a.metricsFor(e.q, slices.DeleteFunc(slices.Clone(ids), verdictSkips))
+		if reused {
+			ttr, err := computeMetrics(e, e.q.Window, []string{timeToRecallID})
+			if err != nil {
 				return err
 			}
+			maps.Copy(m, ttr)
+		} else if m, err = computeMetrics(e, e.q.Window, ids); err != nil {
+			return err
 		}
 		sum := summary(m)
 		delete(m, "extraction.cost")

@@ -28,7 +28,9 @@ func ydFx(t *testing.T) *fx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newFx(t, now)
+	x := newFx(t, now)
+	x.need = slices.Concat(x.need, YieldServerNeeds())
+	return x
 }
 
 func ydDate(s string) time.Time { return mustDay(s) }
@@ -516,7 +518,7 @@ func TestYieldInTheCostView(t *testing.T) {
 	if m, ok := r.Metrics[ydToken]; !ok || m.Value == nil {
 		t.Fatalf("cost view: %+v", m)
 	}
-	if !slices.Contains(CostServerNeeds(), "series") {
+	if !slices.Contains(CostServerNeeds(), yieldSeriesKey) {
 		t.Error("the cost view does not read the series")
 	}
 }
@@ -596,4 +598,51 @@ func TestYieldPendingNeedsTheListingToReachTheWeek(t *testing.T) {
 	if ydExtra(t, m, "unresolved") != 1 || ydExtra(t, m, "pending") != 0 {
 		t.Errorf("unresolved %v pending %v, want 1 and 0", m.Extra["unresolved"], m.Extra["pending"])
 	}
+}
+
+// The server is read over the yield's own 90 days, not the view's: a day
+// the record lacks and the server still holds gives the same week at 7, 30
+// and 90 days.
+func TestYieldServerReadSpansTheNinetyDays(t *testing.T) {
+	x := ydFx(t)
+	for i := range 7 {
+		if i != 3 { // the record has a hole on 09-24
+			x.mrec(rcBase, metricsfile.ServerDay{Bucket: ydDate(ydWeek).AddDate(0, 0, i), New: &metricsfile.KindCounts{World: 5}})
+		}
+	}
+	x.ydListed()
+	x.ydUsedMemories("s", 14)
+	var bs []hindsight.SeriesBucket
+	for i := range 7 {
+		bs = append(bs, hindsight.SeriesBucket{Time: ydDate(ydWeek).AddDate(0, 0, i), World: 6, Experience: 4})
+	}
+	x.server.set(func(d *fakeData) { d.Series = hindsight.Timeseries{Period: "90d", Trunc: "day", Buckets: bs} })
+	for _, days := range []int{90, 30, 7} {
+		m := yieldOf(x, x.query(days))
+		p := weekOf(t, m, ydWeek)
+		wantInt(t, fmt.Sprintf("%d days: den", days), p.Den, 70)
+		wantFloat(t, fmt.Sprintf("%d days: value", days), m.Value, 14.0/70)
+		if p.Source != "server" {
+			t.Errorf("%d days: source %q, want server", days, p.Source)
+		}
+	}
+}
+
+// The weeks count the whole bank, whatever project the view is filtered to:
+// the figure says so; without a project it does not.
+func TestYieldIsNotFilteredByProject(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays(ydWeek, 45)
+	x.ydListed()
+	x.ydUsedMemories("p", 14)
+	q := x.query(90)
+	if m := yieldOf(x, q); slices.Contains(m.Tags, tagNotFiltered) {
+		t.Errorf("no project: tags %v", m.Tags)
+	}
+	q.Project = "alpha"
+	m := yieldOf(x, q)
+	if !slices.Contains(m.Tags, tagNotFiltered) {
+		t.Errorf("project alpha: tags %v, want %s", m.Tags, tagNotFiltered)
+	}
+	wantInt(t, "den", m.Den, 45) // the figure itself is unchanged
 }

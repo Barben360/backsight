@@ -452,8 +452,8 @@ func TestViewServerReads(t *testing.T) {
 		{"system", "", []string{"Version"}},
 		{"bank", "", []string{"BankStats", "MemoriesTimeseries", "ProjectTags"}},
 		{"pipeline", "", []string{"OperationsPage(completed)", "OperationsPage(failed)", "OperationsPage(pending)", "OperationsPage(processing)"}},
-		{"cost", "", []string{"LLMStats(operation=consolidation&period=7d)", "LLMStats(operation=refresh_mental_model&period=7d)",
-			"LLMStats(operation=retain&period=7d)", "LLMStats(period=30d)", "LLMStats(period=7d)", "MemoriesTimeseries"}},
+		{"cost", "", []string{"LLMStats(operation=consolidation&period=30d)", "LLMStats(operation=consolidation&period=7d)",
+			"LLMStats(operation=refresh_mental_model&period=7d)", "LLMStats(operation=retain&period=30d)", "LLMStats(operation=retain&period=7d)", "LLMStats(period=30d)", "LLMStats(period=7d)", "MemoriesTimeseries"}},
 	} {
 		x := newFx(t, fxNow)
 		q := x.query(7)

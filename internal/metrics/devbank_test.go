@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"testing"
@@ -276,4 +277,84 @@ func TestTopShown(t *testing.T) {
 	if len(rows) != 3 || rows[0].Memory != "m01" || rows[1].Memory != "m02" || rows[2].Memory != "m03" {
 		t.Errorf("rows %+v, want the 3 memories, the most shown first and ties by id", rows)
 	}
+}
+
+// TestActiveShareBeforeTheSeries: the series starts on 2026-10-26, three
+// days after the window's first date (10-23): the record's days from 10-23
+// up to the series' first day count in the memories created since, the days
+// before the window and those the series holds do not. 1 000 now, less the
+// series' 5 days of 6 (30), less the record's 10-23 to 10-25 (10 + 20 + 30):
+// 910.
+func TestActiveShareBeforeTheSeries(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.need = BankServerNeeds()
+	x.server.set(func(d *fakeData) {
+		d.Stats = hindsight.BankStats{NodesByFactType: map[string]int{"world": 1000}}
+		d.Series = hindsight.Timeseries{Trunc: "day"}
+		for _, day := range []int{26, 27, 28, 29, 30} {
+			d.Series.Buckets = append(d.Series.Buckets, hindsight.SeriesBucket{Time: utcDay(day), World: 6})
+		}
+	})
+	for _, r := range []struct {
+		day   int
+		world int64
+	}{{22, 100}, {23, 10}, {24, 20}, {25, 30}, {26, 500}} { // 22: before the window; 26: the series holds it
+		x.mrec(rcBase, metricsfile.ServerDay{Bucket: utcDay(r.day), New: &metricsfile.KindCounts{World: r.world}})
+	}
+	x.mrec(rcBase, metricsfile.Listed{Day: "2026-09-01", N: 3})
+	x.dbShow(fxNow.Add(-time.Hour), "t1", x.dbOld("o", 5)...)
+
+	m := x.metrics([]string{dbShown}, x.query(7))[dbShown]
+	wantInt(t, "den", m.Den, 910)
+	wantInt(t, "num", m.Num, 5)
+	if slices.Contains(m.Tags, tagNotFiltered) {
+		t.Errorf("no project: tags %v", m.Tags)
+	}
+	q := x.query(7)
+	q.Project = "alpha" // the bank's size is the whole bank's
+	if m := x.metrics([]string{dbShown}, q)[dbShown]; !slices.Contains(m.Tags, tagNotFiltered) {
+		t.Errorf("project alpha: tags %v, want %s", m.Tags, tagNotFiltered)
+	}
+}
+
+// TestActiveShareHasNoEarlierWindow: the server's figures are as of now, so
+// the window before has no active share (no_events), whatever was shown in it.
+func TestActiveShareHasNoEarlierWindow(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.need = BankServerNeeds()
+	x.dbServer(1000, nil)
+	x.mrec(rcBase, metricsfile.Listed{Day: "2026-09-01", N: 3})
+	old := x.dbOld("o", 5)
+	x.dbShow(fxNow.Add(-8*24*time.Hour), "t0", old...) // in the window before
+	x.dbShow(fxNow.Add(-time.Hour), "t1", old...)
+	w := x.window(7)
+	var cur, prev map[string]Metric
+	err := withTx(context.Background(), x.source(), x.query(7), x.need, func(e env) error {
+		var err error
+		if cur, err = computeMetrics(e, w, []string{dbShown}); err != nil {
+			return err
+		}
+		prev, err = computeMetrics(e, w.Previous(), []string{dbShown})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur[dbShown].Status == StatusNoData {
+		t.Fatalf("the window itself has no data: %+v", cur[dbShown])
+	}
+	wantNoData(t, dbShown, prev[dbShown], ReasonNoEvents)
+}
+
+// The share is at most 1: shown memories without a day-list row count as
+// older, so they can outnumber the bank measured.
+func TestActiveShareAtMostOne(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.need = BankServerNeeds()
+	x.dbServer(10, nil)
+	x.dbShow(fxNow.Add(-time.Hour), "t1", "u-1", "u-2", "u-3", "u-4", "u-5", "u-6", "u-7", "u-8", "u-9", "u-10", "u-11", "u-12", "u-13", "u-14", "u-15", "u-16", "u-17", "u-18", "u-19", "u-20")
+	m := x.metrics([]string{dbShown}, x.query(7))[dbShown]
+	wantInt(t, "num", m.Num, 20)
+	wantInt(t, "den", m.Den, 10)
+	wantFloat(t, "value", m.Value, 1)
 }

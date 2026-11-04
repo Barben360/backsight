@@ -9,7 +9,8 @@ import (
 // The developer metrics on the bank: how much of it ever comes up
 // (bank.active_share) and how unevenly the shows fall on the memories
 // (shows.concentration, with the table of the most shown). Both read the
-// journal's shows (any path, imports never count).
+// journal's shows (the shows table holds every path, the answers from
+// sources included, and no import).
 
 const (
 	activeShareID   = "bank.active_share"
@@ -91,6 +92,16 @@ func bankConcentration(e env, w Window, obs map[string]Observation, met map[stri
 	return nil
 }
 
+// ratioAtMostOne is num/den, at most 1: the count of unresolved memories
+// is counted as older, so it can exceed the bank measured.
+func ratioAtMostOne(num, den int64) *float64 {
+	v := ratio(num, den)
+	if v != nil {
+		*v = min(*v, 1)
+	}
+	return v
+}
+
 // bankActiveShare fills bank.active_share: of the bank as it was when the
 // window began, the share that came up in it. The numerator is the distinct
 // memories shown, less those created from the window's first UTC date on
@@ -163,7 +174,7 @@ ORDER BY c.memory_id`, w.Since.UnixMilli(), w.Until.UnixMilli())
 	if !shown {
 		return absent(ReasonNoEvents)
 	}
-	m := Metric{Num: i64(num), Den: i64(den), Value: ratio(num, den),
+	m := Metric{Num: i64(num), Den: i64(den), Value: ratioAtMostOne(num, den),
 		Extra: map[string]any{"unresolved": unresolved, "gone": gone}}
 	if unresolved > 0 {
 		m.Tags = []string{tagPartial}

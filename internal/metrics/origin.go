@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/session"
 )
 
@@ -57,7 +58,7 @@ func memoryOrigin(e env, id string) (*Origin, error) {
 	}
 	o.Ended, o.Sent, o.Extracted = at(s.t0), at(s.t1), at(s.t2)
 	var first sql.NullInt64
-	if err := e.tx.QueryRowContext(e.ctx, `SELECT MIN(ts) FROM shows WHERE memory_id = ?`, id).Scan(&first); err != nil {
+	if err := e.tx.QueryRowContext(e.ctx, `SELECT MIN(ts) FROM shows WHERE memory_id = ? AND COALESCE(path, '') <> ?`, id, feedback.PathSources).Scan(&first); err != nil {
 		return nil, err
 	}
 	if first.Valid {

@@ -119,6 +119,14 @@ type judgingRun struct {
 	rightCur, rightPrv map[string]Metric
 }
 
+// verdictSkips are the figures no verdict rule reads, each costly to make
+// (the yield and the time to recall read the day record and the telemetry's
+// operations, the doctor's history its runs): the views showing them ask
+// for them themselves.
+func verdictSkips(id string) bool {
+	return id == yieldID || id == timeToRecallID || id == doctorHistoryID
+}
+
 func assess(e env) (assessment, error) {
 	loc := e.q.Window.Loc
 	if loc == nil {
@@ -135,11 +143,11 @@ func assess(e env) (assessment, error) {
 	e.q.Window = w // the figures as of now are this window's
 	var ids, twoWindow []string
 	for _, d := range Catalog {
-		if d.Dev || d.ID == yieldID { // the yield judges nothing and reads the day record: the cost view asks for it itself
+		if d.Dev || verdictSkips(d.ID) {
 			continue
 		}
 		ids = append(ids, d.ID)
-		if !d.ErrorClass && d.ID != timeToRecallID && (d.Absolute.On != "" || d.Relative) { // the time to recall has no verdict effect: no earlier window to judge
+		if !d.ErrorClass && (d.Absolute.On != "" || d.Relative) {
 			twoWindow = append(twoWindow, d.ID)
 		}
 	}
@@ -506,7 +514,7 @@ func (r *judgingRun) items(root bool) (out, warns []Item, err error) {
 			if m.Value != nil {
 				found = int64(*m.Value)
 			}
-			it.Why, it.reason = secretsWhy(found, n), secretsBanner(found, at, w.Loc)
+			it.Why, it.reason = secretsWhy(found, n), secretsBanner(found, at, viewLocOf(w))
 		}
 		out = append(out, it)
 	}

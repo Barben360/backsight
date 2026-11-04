@@ -3,6 +3,8 @@ package metrics
 import (
 	"database/sql"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -39,11 +41,22 @@ var extractionOps = []string{"retain", "consolidation", "refresh_mental_model"}
 // CostServerNeeds are the server reads of a view holding the cost family
 // (loadServer keys): the LLM stats of all operations and of each
 // extraction operation over the view's period, the 30-day stats of
-// extraction.per_session and the memories series of memory.yield.
+// extraction.per_session and the reads of memory.yield.
 func CostServerNeeds() []string {
-	needs := []string{"llm:", llm30dKey, "series"}
+	needs := []string{"llm:", llm30dKey}
 	for _, op := range extractionOps {
 		needs = append(needs, "llm:"+op)
+	}
+	return slices.Concat(needs, YieldServerNeeds())
+}
+
+// YieldServerNeeds are the server reads of memory.yield: the memories
+// series and the LLM stats of its operations, each over the yield's own
+// 90-day span ending at the window's end, not the view's.
+func YieldServerNeeds() []string {
+	needs := []string{yieldSeriesKey}
+	for _, op := range yieldOps {
+		needs = append(needs, yieldLLMPrefix+op)
 	}
 	return needs
 }
@@ -395,6 +408,9 @@ func llmRead(e env, key string) ([]hindsight.LLMBucket, string) {
 	}
 	if key == llm30dKey {
 		return e.srv.LLM30, ""
+	}
+	if op, ok := strings.CutPrefix(key, yieldLLMPrefix); ok {
+		return e.srv.YieldLLM[op], ""
 	}
 	return e.srv.LLM[key[len("llm:"):]], ""
 }

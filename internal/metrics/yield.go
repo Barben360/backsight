@@ -133,11 +133,11 @@ func (r *yieldRun) bounds() (first, last string, fromMs, toMs int64) {
 // of the bucket); a week with a day neither holds has none.
 func readCreated(e env, r *yieldRun) error {
 	perDay, held := map[string]int64{}, map[string]string{}
-	if serverReason(e, "series") == "" {
+	if serverReason(e, yieldSeriesKey) == "" {
 		// The series counts back from now, so its first bucket may cover
 		// only part of its day; a week that starts there may read low. The
 		// weeks that old are rarely complete cohorts anyway.
-		for _, b := range e.srv.Series.Buckets {
+		for _, b := range e.srv.YieldSeries.Buckets {
 			d := b.Time.UTC().Format(dateLayout)
 			perDay[d] += b.World + b.Experience + b.Observation
 			held[d] = "server"
@@ -184,10 +184,10 @@ func readTokens(e env, r *yieldRun) error {
 	type key struct{ op, day string }
 	sums, held := map[key]tokens{}, map[key]bool{}
 	for _, op := range yieldOps {
-		if _, reason := llmRead(e, "llm:"+op); reason != "" {
+		if _, reason := llmRead(e, yieldLLMPrefix+op); reason != "" {
 			continue
 		}
-		for _, b := range e.srv.LLM[op] {
+		for _, b := range e.srv.YieldLLM[op] {
 			k := key{op, b.Time.UTC().Format(dateLayout)}
 			t := sums[k]
 			t.add(b)
@@ -338,6 +338,9 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 	m := Metric{Extra: extra}
 	if run.unresolved > 0 {
 		m.Tags = []string{tagPartial}
+	}
+	if e.q.Project != "" { // the weeks count the whole bank's new memories
+		m.Tags = append(m.Tags, tagNotFiltered)
 	}
 	for _, wk := range run.weeks {
 		p := Point{Week: wk.monday, Source: wk.source, Complete: ptr(wk.complete)}

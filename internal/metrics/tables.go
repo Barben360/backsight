@@ -111,8 +111,9 @@ type ProjectCount struct {
 }
 
 // TopShownRow is one of the memories shown most in the window: its project
-// (that of its latest show), how often it was shown, its share of all the
-// shows, and the credits of verdict used it got in the window.
+// (that of its latest show), how often it was shown (every kind of show,
+// answers from sources included, as the concentration counts them), its
+// share of all the shows, and the credits of verdict used it got in the window.
 type TopShownRow struct {
 	Memory  string  `json:"memory"`
 	Project string  `json:"project"`

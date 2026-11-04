@@ -72,7 +72,7 @@ var Catalog = withDrills([]Def{
 		Extra:      []string{"by_lang", "test"},
 		Question:   "Does memory show up as often in every language?",
 		Definition: "The share of prompt recalls that injected a memory, split by the language of the prompt. Each language needs its own 20 prompts before it is judged.",
-		Action:     "A language far below the others means memory misses across languages.",
+		Action:     "A language far from the most used one, higher or lower, means memory does not serve every language alike.",
 	},
 	{
 		ID: "search.rate", Label: "Prompts where Claude searched memory", Unit: "ratio", Direction: "up", MinN: 20,
@@ -224,7 +224,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
 		Extra:      []string{"price_set", "currency", "by_operation", "failed_operations"},
 		Question:   "How much does the server's model cost?",
-		Definition: "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server.",
+		Definition: "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
 		Action:     "Set the model prices to see the cost; a high cost calls for a cheaper model or fewer projects sent.",
 	},
 	{
@@ -410,7 +410,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
 		Extra:      []string{"gini", "top10_share", "shows"},
 		Question:   "Do a few memories take all the shows?",
-		Definition: "The Gini index of how often each shown memory was shown in the window: 0 when all are shown equally, near 1 when a few take almost every show. The share of the 10 most shown is given beside it.",
+		Definition: "The Gini index of how often each shown memory was shown in the window: 0 when all are shown equally, near 1 when a few take almost every show. The share of the 10 most shown is given beside it. Every kind of show counts, answers from sources included.",
 		Action:     "A few memories take most shows; check that the ranking is not stuck on them.",
 	},
 	{

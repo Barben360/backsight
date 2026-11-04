@@ -257,6 +257,9 @@ func TestOriginStates(t *testing.T) {
 	x.mrec(rcBase, metricsfile.MemoryDoc{Memory: "m-other", Outcome: "found", DocKind: "session", Document: "conversation:sElsewhere@proj", Session: "sElsewhere", CreatedDay: "2026-10-20", FactType: "world"})
 	x.mrec(rcBase, metricsfile.MemoryDoc{Memory: "m-note", Outcome: "found", DocKind: "note", CreatedDay: "2026-10-21", FactType: "world"})
 	x.mrec(rcBase, metricsfile.MemoryDoc{Memory: "m-obs", Outcome: "found", DocKind: "none", CreatedDay: "2026-10-22", FactType: "observation"})
+	// An answer from sources is not a show: earlier than m-sA's first real
+	// show it does not set first_shown, and m-sB has only such answers.
+	x.shows(rcBase.Add(10*time.Minute), "src-s", "t1", "", "alpha", feedback.PathSources, "alpha", "m-sA", "m-sB")
 
 	origin := func(id string) Origin {
 		t.Helper()

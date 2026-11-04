@@ -71,7 +71,7 @@ func statusRule(d Def) string {
 			parts = append(parts, "watch when even the upper end of the interval is under "+amount(*t.Watch, d.Unit))
 		}
 	case "test":
-		parts = append(parts, "watch when a language is more than 15 points behind the most used one, by more than chance explains")
+		parts = append(parts, fmt.Sprintf("watch when a language is more than %.0f points away from the most used one, by more than chance explains", langGapLimit*100))
 	case "lo", "p95", "value":
 		what := "the lower end of the interval"
 		switch t.On {

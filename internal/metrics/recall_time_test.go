@@ -637,25 +637,31 @@ func TestTimeToRecallLatestMemoryLineDecides(t *testing.T) {
 	}
 }
 
-// The verdict reads neither the yield (it judges nothing and reads the day
-// record: the cost view asks for it) nor an earlier window of the time to
-// recall (it has no verdict effect): the assessment holds the other
-// metrics of the window, and of the window before for those a rule judges
-// over two weeks, but not these.
+// The verdict computes none of the yield, the time to recall and the
+// doctor's history, which no rule reads (each reads the day record, the
+// telemetry or the doctor's runs): the overview makes the time to recall
+// itself, the cost view the yield. The other metrics are there, and the
+// earlier window of those a rule judges over two weeks.
 func TestVerdictLeavesOutYieldAndEarlierTimeToRecall(t *testing.T) {
 	x := newFx(t, fxNow)
 	x.rcPrompt(rcBase, "s1")
 	a := x.assess(x.query(7))
-	if _, ok := a.Now[yieldID]; ok {
-		t.Errorf("the verdict computed %s", yieldID)
+	for _, id := range []string{yieldID, timeToRecallID, doctorHistoryID} { // no rule reads them
+		if _, ok := a.Now[id]; ok {
+			t.Errorf("the verdict computed %s", id)
+		}
+		if _, ok := a.Prev[id]; ok {
+			t.Errorf("the verdict computed the earlier window of %s", id)
+		}
 	}
-	if _, ok := a.Now[timeToRecallID]; !ok {
-		t.Errorf("the verdict does not hold %s for its window", timeToRecallID)
-	}
-	if _, ok := a.Prev[timeToRecallID]; ok {
-		t.Errorf("the verdict computed the earlier window of %s", timeToRecallID)
+	if _, ok := a.Now["recall.hit_rate"]; !ok { // the control: a judged metric is there
+		t.Errorf("the verdict lacks recall.hit_rate")
 	}
 	if _, ok := a.Prev["recall.hit_rate"]; !ok { // the control: a metric judged over two weeks is there
 		t.Errorf("the verdict lacks the earlier window of recall.hit_rate")
+	}
+	// The overview still shows the time to recall, made beside the verdict.
+	if _, ok := x.run("overview", x.query(7)).Metrics[timeToRecallID]; !ok {
+		t.Errorf("the overview lacks %s", timeToRecallID)
 	}
 }

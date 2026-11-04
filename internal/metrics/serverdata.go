@@ -20,6 +20,8 @@ import (
 type serverData struct {
 	Stats               hindsight.BankStats
 	Series              hindsight.Timeseries
+	YieldSeries         hindsight.Timeseries             // the series over the yield's span (yieldSeriesKey)
+	YieldLLM            map[string][]hindsight.LLMBucket // by operation, over the yield's span (yieldLLMPrefix)
 	Tags                []hindsight.TagCount
 	Version             hindsight.Version
 	Pending, Processing int
@@ -37,6 +39,20 @@ type serverData struct {
 
 // memoryKeyPrefix starts the server read of one memory: memory:<id>.
 const memoryKeyPrefix = "memory:"
+
+// The server reads of memory.yield, sized to its own span (yieldSpan ending
+// at the window's end), not the view's: the memories series and the LLM
+// stats of an extraction operation, whatever the view's window.
+const (
+	yieldSeriesKey = "yield:series"
+	yieldLLMPrefix = "yield:llm:"
+)
+
+// yieldReadSpan is the span the server's periods must cover for the yield's
+// weeks of w, read at now.
+func yieldReadSpan(now time.Time, w Window) time.Duration {
+	return viewSpan(now, yieldWindow(w))
+}
 
 // llm30dKey is the server read of the LLM stats over 30 days, all
 // operations, whatever the view's window (extraction.per_session needs 28
@@ -147,7 +163,7 @@ func llmPeriod(span time.Duration) string {
 // order; a partial failure shows only in its metrics' reasons. A read is
 // kept only when it ends in time: a late one is dropped.
 func loadServer(ctx context.Context, src Source, w Window, need []string) (*serverData, *ServerState) {
-	d := &serverData{LLM: map[string][]hindsight.LLMBucket{}, Err: map[string]error{}, Have: map[string]bool{}}
+	d := &serverData{LLM: map[string][]hindsight.LLMBucket{}, YieldLLM: map[string][]hindsight.LLMBucket{}, Err: map[string]error{}, Have: map[string]bool{}}
 	keys := slices.Clone(need)
 	slices.Sort(keys)
 	keys = slices.Compact(keys)
@@ -170,6 +186,8 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	}
 
 	span := viewSpan(src.now(), w)
+	ySpan := yieldReadSpan(src.now(), w)
+	yieldLLM := map[string]*[]hindsight.LLMBucket{}
 	var (
 		kmu    sync.Mutex
 		closed bool
@@ -208,6 +226,11 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 			calls[key] = func(ctx context.Context) error {
 				v, err := s.MemoriesTimeseries(ctx, seriesPeriod(span))
 				return keep(err, func() { d.Series = v })
+			}
+		case yieldSeriesKey:
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.MemoriesTimeseries(ctx, seriesPeriod(ySpan))
+				return keep(err, func() { d.YieldSeries = v })
 			}
 		case "tags":
 			calls[key] = func(ctx context.Context) error {
@@ -255,6 +278,15 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 				}
 				continue
 			}
+			if op, ok := strings.CutPrefix(key, yieldLLMPrefix); ok {
+				slot := new([]hindsight.LLMBucket)
+				yieldLLM[op] = slot
+				calls[key] = func(ctx context.Context) error {
+					v, err := s.LLMStats(ctx, llmPeriod(ySpan), op)
+					return keep(err, func() { *slot = v })
+				}
+				continue
+			}
 			op, ok := strings.CutPrefix(key, "llm:")
 			if !ok {
 				d.Err[key] = fmt.Errorf("%w %q", errUnknownRead, key)
@@ -286,6 +318,11 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	for op, slot := range llm {
 		if d.Err["llm:"+op] == nil {
 			d.LLM[op] = *slot
+		}
+	}
+	for op, slot := range yieldLLM {
+		if d.Err[yieldLLMPrefix+op] == nil {
+			d.YieldLLM[op] = *slot
 		}
 	}
 	if sameLLM && s != nil {
