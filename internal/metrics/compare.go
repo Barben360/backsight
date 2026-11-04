@@ -79,6 +79,8 @@ func compareUnits(e env, versions [2]string, measure string) ([]cmpUnit, error) 
 	var err error
 	switch measure {
 	case "recall.hit_rate":
+		// A prompt with no session id reads as session '': all of them
+		// share one cluster (the cautious reading: a larger variance).
 		rows, err = e.tx.QueryContext(e.ctx, `
 SELECT COALESCE(session, ''), COALESCE(project, ''), binary_version, ts, 'prompt', COALESCE(injected, 0) > 0
 FROM tel_prompt
@@ -296,8 +298,9 @@ func (s *stratum) gate() string {
 }
 
 // pooled is the weighted difference of the strata (weights s.w, all
-// eligible) and the cluster-robust variance of that difference. D = sum c_i y_i with c_i = w_s / (W n_Bs) for a B unit and
-// -w_s / (W n_As) for an A unit; Var = G/(G-1) sum_g (sum_{i in g} c_i
+// eligible) and the cluster-robust variance of that difference. D = sum
+// c_i y_i with c_i = w_s / (W n_Bs) for a B unit and -w_s / (W n_As) for an
+// A unit; Var = G/(G-1) sum_g (sum_{i in g} c_i
 // (y_i - p_sv))^2 over the sessions g of the strata.
 func pooled(ss []*stratum) (d, variance float64) {
 	var wsum float64
@@ -399,12 +402,16 @@ func tooFew(strata, eligible []*stratum, c Comparison, a, b string, loc *time.Lo
 	return t
 }
 
-// compareSettings is the numeric settings that differ between the config
-// records in effect under the two versions, and whether a version has no
-// record to read. A version's record is the latest one at or before the
-// start of its units' span, else the first one up to the span's end;
-// ChangedAt is the record between the two in effect that made the setting
-// take the later one's value.
+// compareSettings is the numeric settings whose value is not one single
+// value over the two versions' spans. A version's spans' records are the
+// one in effect at the start of its units' span (the latest at or before
+// it, else the first one up to the span's end) and every record inside the
+// span; unknown when a version has no unit or no such record. A setting is
+// flagged when those records, A's and B's together, do not all give it the
+// same value (absent counts as a value). A and B are the values at the
+// end of each span; ChangedAt is the first record of the chain from the
+// earliest to the latest of those records that gives the setting a value
+// other than the previous record's.
 func compareSettings(e env, units []cmpUnit, versions [2]string) ([]SettingDiff, bool, error) {
 	out := []SettingDiff{}
 	var first, last [2]int64
@@ -421,8 +428,9 @@ func compareSettings(e env, units []cmpUnit, versions [2]string) ([]SettingDiff,
 			last[vi] = ms
 		}
 	}
-	var recs [2]cfgRec
-	for i := range recs {
+	var spans [2][]cfgAt
+	lo, maxTs := cfgRec{}, int64(0)
+	for i := range spans {
 		if first[i] == 0 {
 			return out, true, nil
 		}
@@ -430,70 +438,90 @@ func compareSettings(e env, units []cmpUnit, versions [2]string) ([]SettingDiff,
 		if err != nil || !ok {
 			return out, true, err
 		}
-		recs[i] = r
+		recs := []cfgRec{r}
+		after, err := configAfter(e, r, last[i])
+		if err != nil {
+			return nil, false, err
+		}
+		recs = append(recs, after...)
+		for _, x := range recs {
+			v, err := configValuesOf(e, x)
+			if err != nil {
+				return nil, false, err
+			}
+			spans[i] = append(spans[i], cfgAt{rec: x, values: v})
+		}
+		if lo == (cfgRec{}) || r.before(lo) {
+			lo = r
+		}
+		maxTs = max(maxTs, recs[len(recs)-1].ts)
 	}
-	if recs[0].same(recs[1]) {
+	// the values each key takes over the records of the two spans
+	type val struct {
+		has bool
+		v   float64
+	}
+	seen := map[string]map[val]bool{}
+	for _, sp := range spans {
+		for _, r := range sp {
+			for k := range r.values {
+				if seen[k] == nil {
+					seen[k] = map[val]bool{}
+				}
+			}
+		}
+	}
+	for k := range seen {
+		for _, sp := range spans {
+			for _, r := range sp {
+				v, has := r.values[k]
+				seen[k][val{has, v}] = true
+			}
+		}
+	}
+	keys := make([]string, 0, len(seen))
+	for k, vals := range seen {
+		if len(vals) > 1 {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
 		return out, false, nil
 	}
-	va, err := configValuesOf(e, recs[0])
+	slices.Sort(keys)
+	// the chain of records from the earliest to the latest, for ChangedAt
+	lv, err := configValuesOf(e, lo)
 	if err != nil {
 		return nil, false, err
 	}
-	vb, err := configValuesOf(e, recs[1])
+	chain := []cfgAt{{rec: lo, values: lv}}
+	rest, err := configAfter(e, lo, maxTs)
 	if err != nil {
 		return nil, false, err
 	}
-	// the records after the earlier one, up to the later one, in time order
-	lo, hi, to := recs[0], recs[1], vb
-	if recs[1].before(recs[0]) {
-		lo, hi, to = recs[1], recs[0], va
-	}
-	between, err := configBetween(e, lo, hi)
-	if err != nil {
-		return nil, false, err
-	}
-	var from map[string]float64
-	if lo == recs[0] {
-		from = va
-	} else {
-		from = vb
-	}
-	keys := map[string]bool{}
-	for k := range va {
-		keys[k] = true
-	}
-	for k := range vb {
-		keys[k] = true
-	}
-	sorted := make([]string, 0, len(keys))
-	for k := range keys {
-		sorted = append(sorted, k)
-	}
-	slices.Sort(sorted)
-	for _, k := range sorted {
-		x, hasA := va[k]
-		y, hasB := vb[k]
-		if hasA && hasB && x == y {
-			continue
+	for _, r := range rest {
+		v, err := configValuesOf(e, r)
+		if err != nil {
+			return nil, false, err
 		}
+		chain = append(chain, cfgAt{rec: r, values: v})
+	}
+	endOf := func(i int) map[string]float64 { return spans[i][len(spans[i])-1].values }
+	for _, k := range keys {
 		d := SettingDiff{Key: k}
-		if hasA {
-			d.A = ptr(x)
+		if v, ok := endOf(0)[k]; ok {
+			d.A = ptr(v)
 		}
-		if hasB {
-			d.B = ptr(y)
+		if v, ok := endOf(1)[k]; ok {
+			d.B = ptr(v)
 		}
-		// the first record, after the earlier one, from which the key keeps
-		// the later one's value
-		target, hasTarget := to[k]
-		prev, hadPrev := from[k]
-		for _, r := range between {
-			v, has := r.values[k]
-			if has == hasTarget && (!has || v == target) && (has != hadPrev || v != prev) {
-				d.ChangedAt = ptr(time.UnixMilli(r.ts).In(viewLocOf(e.q.Window)))
+		for i := 1; i < len(chain); i++ {
+			pv, phas := chain[i-1].values[k]
+			v, has := chain[i].values[k]
+			if has != phas || v != pv {
+				d.ChangedAt = ptr(time.UnixMilli(chain[i].rec.ts).In(viewLocOf(e.q.Window)))
 				break
 			}
-			prev, hadPrev = v, has
 		}
 		out = append(out, d)
 	}
@@ -507,7 +535,6 @@ type cfgRec struct {
 	off  int64
 }
 
-func (r cfgRec) same(o cfgRec) bool { return r == o }
 func (r cfgRec) before(o cfgRec) bool {
 	if r.ts != o.ts {
 		return r.ts < o.ts
@@ -557,41 +584,27 @@ func configValuesOf(e env, r cfgRec) (map[string]float64, error) {
 }
 
 type cfgAt struct {
-	ts     int64
+	rec    cfgRec
 	values map[string]float64
 }
 
-// configBetween are the config records after lo up to hi, with their
-// values, in time order.
-func configBetween(e env, lo, hi cfgRec) ([]cfgAt, error) {
+// configAfter are the config records after lo up to time hiTs, in time
+// order.
+func configAfter(e env, lo cfgRec, hiTs int64) ([]cfgRec, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `SELECT ts, source_file, "offset" FROM tel_config
-WHERE (ts, source_file, "offset") > (?, ?, ?) AND (ts, source_file, "offset") <= (?, ?, ?)
-ORDER BY ts, source_file, "offset"`, lo.ts, lo.file, lo.off, hi.ts, hi.file, hi.off)
+WHERE (ts, source_file, "offset") > (?, ?, ?) AND ts <= ?
+ORDER BY ts, source_file, "offset"`, lo.ts, lo.file, lo.off, hiTs)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	var recs []cfgRec
 	for rows.Next() {
 		var r cfgRec
 		if err := rows.Scan(&r.ts, &r.file, &r.off); err != nil {
-			_ = rows.Close()
 			return nil, err
 		}
 		recs = append(recs, r)
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	out := make([]cfgAt, 0, len(recs))
-	for _, r := range recs {
-		v, err := configValuesOf(e, r)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, cfgAt{r.ts, v})
-	}
-	return out, nil
+	return recs, rows.Err()
 }

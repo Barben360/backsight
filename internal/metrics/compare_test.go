@@ -543,3 +543,140 @@ func TestCompareDegenerate(t *testing.T) {
 		}
 	})
 }
+
+// A session that holds units in two strata is one cluster: its terms add up
+// before they are squared. 40 sessions per version, each with one unit in
+// "prompt" and one in "search" and the same outcome in both; A hits 20 of
+// them, B 30. w = 20 per stratum, W = 40, c = +-1/80, so a session's term
+// is +-(y - p)/40 (the two strata alike): sum of squares = 40 (.5/40)^2 +
+// 30 (.25/40)^2 + 10 (.75/40)^2 = .0109375, G = 80, Var = 80/79 * that.
+// Clustering each stratum on its own would halve the sum and shrink SE by
+// sqrt(2).
+func TestCompareSessionAcrossStrata(t *testing.T) {
+	var units []cmpUnit
+	for _, v := range []struct {
+		name string
+		hits int
+	}{{"v1", 20}, {"v2", 30}} {
+		for i := range 40 {
+			for _, path := range []string{"prompt", "search"} {
+				units = append(units, cmpUnit{version: v.name, project: "p", path: path,
+					session: fmt.Sprintf("%s-%d", v.name, i), at: cmpDay(i % 8), hit: i < v.hits})
+			}
+		}
+	}
+	c := compareOf(units, "v1", "v2", "used.turn_rate", fxParis)
+	noNaN(t, c)
+	se := math.Sqrt(80.0 / 79 * 0.0109375)
+	nearP(t, "diff", c.Diff, 0.25, 1e-12)
+	ci(t, "ci", c.CI, 0.25-1.96*se, 0.25+1.96*se, 1e-12)
+	if c.SessionsA != 40 || c.SessionsB != 40 {
+		t.Errorf("sessions %d/%d, want 40/40 (a session is counted once across strata)", c.SessionsA, c.SessionsB)
+	}
+}
+
+// The stratum of a unit is its turn's earliest non-briefing main-agent show:
+// a later show does not move it, a briefing show or a subagent's is skipped,
+// shows at the same instant go in the order prompt, gate, search, read,
+// failure, sources; a verdict whose turn has no main-agent show is in
+// "unknown". The project filter keeps the units of that project.
+func TestCompareStratumPath(t *testing.T) {
+	const v = "0.1.16"
+	x := newFx(t, fxNow)
+	x.binary = v
+	t0 := mk(15, 10, 0)
+	turn := func(session, project string, build func(at time.Time)) {
+		x.turnEvent(t0.Add(-time.Second), session, project)
+		build(t0)
+		x.credit(t0.Add(30*time.Second), session, "", project, "used", "m1")
+		x.stop(t0.Add(5*time.Minute), session, "", "declared")
+	}
+	turn("later-prompt", "alpha", func(at time.Time) { // search first, prompt later: search
+		x.shows(at, "later-prompt", fxTurn, "", "alpha", "search", "", "m1")
+		x.shows(at.Add(time.Minute), "later-prompt", fxTurn, "", "alpha", "prompt", "", "m1")
+	})
+	turn("tie", "alpha", func(at time.Time) { // same instant: gate before search
+		x.shows(at, "tie", fxTurn, "", "alpha", "search", "", "m1")
+		x.shows(at, "tie", fxTurn, "", "alpha", "gate", "", "m1")
+	})
+	turn("briefing-first", "alpha", func(at time.Time) { // briefing is skipped: read
+		x.shows(at.Add(-time.Minute), "briefing-first", fxTurn, "", "alpha", "briefing", "", "m1")
+		x.shows(at, "briefing-first", fxTurn, "", "alpha", "read", "", "m1")
+	})
+	turn("subagent-first", "alpha", func(at time.Time) { // a subagent's show is skipped: failure
+		x.shows(at.Add(-time.Minute), "subagent-first", fxTurn, "sub", "alpha", "prompt", "", "m1")
+		x.shows(at, "subagent-first", fxTurn, "", "alpha", "failure", "", "m1")
+	})
+	turn("other-project", "beta", func(at time.Time) {
+		x.shows(at, "other-project", fxTurn, "", "beta", "prompt", "", "m1")
+	})
+	// a verdict on a turn with only a subagent show
+	x.turnEvent(t0.Add(-time.Second), "sub-only", "alpha")
+	x.shows(t0, "sub-only", fxTurn, "sub", "alpha", "prompt", "", "m1")
+	x.credit(t0.Add(30*time.Second), "sub-only", "", "alpha", "wrong", "m1")
+
+	read := func(measure, project string) map[string]string {
+		t.Helper()
+		q := x.query(30)
+		q.Project = project
+		var units []cmpUnit
+		err := withTx(t.Context(), x.source(), q, nil, func(e env) error {
+			var err error
+			units, err = compareUnits(e, [2]string{v, "other"}, measure)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, u := range units {
+			got[u.session] = u.project + "/" + u.path
+		}
+		return got
+	}
+	eq := func(name string, got, want map[string]string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Errorf("%s: %v, want %v", name, got, want)
+			return
+		}
+		for k, w := range want {
+			if got[k] != w {
+				t.Errorf("%s: %v, want %v", name, got, want)
+				return
+			}
+		}
+	}
+	eq("turn rate", read("used.turn_rate", ""), map[string]string{
+		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read",
+		"subagent-first": "alpha/failure", "other-project": "beta/prompt"})
+	eq("turn rate, project alpha", read("used.turn_rate", "alpha"), map[string]string{
+		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read", "subagent-first": "alpha/failure"})
+	eq("verdicts", read("verdict.wrong_rate", "alpha"), map[string]string{
+		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read",
+		"subagent-first": "alpha/failure", "sub-only": "alpha/unknown"})
+	eq("verdicts, project beta", read("verdict.wrong_rate", "beta"), map[string]string{"other-project": "beta/prompt"})
+}
+
+// A setting that changes inside a version's span is flagged even when both
+// spans start under the same record.
+func TestCompareSettingsMidSpan(t *testing.T) {
+	const a, b = "0.1.16", "0.1.17"
+	x := newFx(t, fxNow)
+	x.configAt(mk(10, 8, 0), "a", map[string]float64{"recall.min_score": 0.5, "recall.k": 8})
+	x.configAt(mk(22, 9, 30), "b", map[string]float64{"recall.min_score": 0.55, "recall.k": 8}) // inside B's span
+	x.promptAt(mk(12, 9, 0), a)
+	x.promptAt(mk(14, 9, 0), a)
+	x.promptAt(mk(21, 9, 0), b) // B starts under the record A ran under
+	x.promptAt(mk(23, 9, 0), b)
+	q := x.query(30)
+	q.Compare, q.Measure = [2]string{a, b}, "recall.hit_rate"
+	c := x.run("releases", q).Tables.Compare
+	if c.SettingsUnknown || len(c.SettingsDiffer) != 1 {
+		t.Fatalf("unknown %v, differ %+v, want recall.min_score only", c.SettingsUnknown, c.SettingsDiffer)
+	}
+	d := c.SettingsDiffer[0]
+	if d.Key != "recall.min_score" || d.A == nil || *d.A != 0.5 || d.B == nil || *d.B != 0.55 || d.ChangedAt == nil || !d.ChangedAt.Equal(mk(22, 9, 30)) {
+		t.Errorf("difference = %+v, want recall.min_score 0.5 -> 0.55 changed 2026-10-22 09:30", d)
+	}
+}

@@ -304,6 +304,10 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 		{"too-short id", "sessions", "sess", nil, http.StatusNotFound},
 		{"unknown memory", "memories", "mem-nothing-here", nil, http.StatusNotFound},
 		{"day not a date", "days", "2026-13-01", nil, http.StatusNotFound},
+		{"compare with one version", "releases", "", []pair{{"compare", "v1"}}, http.StatusBadRequest},
+		{"compare with the same version twice", "releases", "", []pair{{"compare", "v1,v1"}}, http.StatusBadRequest},
+		{"compare with an unknown measure", "releases", "", []pair{{"compare", "v1,v2"}, {"measure", "bogus"}}, http.StatusBadRequest},
+		{"measure without compare", "releases", "", []pair{{"measure", "recall.hit_rate"}}, http.StatusBadRequest},
 	} {
 		t.Run("error: "+e.name, func(t *testing.T) {
 			status, raw := dashGet(t, base, c, apiPath(e.view, e.id, e.q))
