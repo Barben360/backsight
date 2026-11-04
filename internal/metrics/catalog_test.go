@@ -29,7 +29,7 @@ const none = -1.0 // no threshold value
 var catalogRows = []catalogRow{
 	{"recall.hit_rate", "Prompts that got memory", "ratio", "up", 20, 0.10, none, "hi", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats sessions --has memory", ""},
 	{"recall.empty_reasons", "Why prompts got nothing", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "reach", "daily", "backsight stats quality", "empty,skips"},
-	{"recall.by_lang", "Prompts that got memory, by language", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats quality --dev", "by_lang"},
+	{"recall.by_lang", "Prompts that got memory, by language", "ratio", "up", 20, none, none, "test", false, false, "wilson", "machine", true, "reach", "none", "backsight stats quality --dev", "by_lang,test"},
 	{"search.rate", "Prompts where Claude searched memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", ""},
 	{"search.empty_rate", "Searches that found nothing", "ratio", "down", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", "failed"},
 	{"used.turn_rate", "Turns where Claude used memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "quality", "daily", "backsight stats sessions --has used", "worst_case,pending,check_skipped,subagent_turns"},
@@ -73,7 +73,7 @@ var catalogRows = []catalogRow{
 	{"bank.active_share", "Share of the memory that came up", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats bank --dev", ""},
 	{"shows.concentration", "How concentrated shows are", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "reach", "none", "backsight stats bank --dev", ""},
 	{"injection.contradicted", "Corrections after memory was shown", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
-	{"boost.set_changed", "Recalls the learned ranking changed", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
+	{"boost.set_changed", "Recalls the learned ranking changed", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "prompts,prompts_set_changed,searches,searches_set_changed"},
 }
 
 // A typo in any value of any row goes red: each Def is read back against the

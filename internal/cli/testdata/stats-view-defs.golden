@@ -47,7 +47,7 @@ secrets.suspects         Possible secrets in memory                  count   0  
 doctor.history           Health checks over time                     count   0        0      —
 bank.active_share        Share of the memory that came up            rate    20       0      —
 shows.concentration      How concentrated shows are                  rate    20       0      —
-injection.contradicted   Corrections after memory was shown          rate    20       0      —
-boost.set_changed        Recalls the learned ranking changed         rate    20       0      —
+injection.contradicted   Corrections after memory was shown          rate    20       1      —
+boost.set_changed        Recalls the learned ranking changed         rate    20       3      —
 
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

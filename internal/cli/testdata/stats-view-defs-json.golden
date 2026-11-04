@@ -101,7 +101,7 @@
           "direction": "up",
           "min_n": 20,
           "absolute": {
-            "on": ""
+            "on": "test"
           },
           "relative": false,
           "error_class": false,
@@ -114,7 +114,8 @@
           "family": "reach",
           "series": "none",
           "extra": [
-            "by_lang"
+            "by_lang",
+            "test"
           ],
           "drill": "backsight stats quality --dev",
           "n": 5,
@@ -1419,7 +1420,7 @@
           "family": "quality",
           "series": "none",
           "drill": "backsight stats quality --dev",
-          "n": 0,
+          "n": 1,
           "mdc": null
         },
         {
@@ -1444,8 +1445,14 @@
           "dev": true,
           "family": "quality",
           "series": "none",
+          "extra": [
+            "prompts",
+            "prompts_set_changed",
+            "searches",
+            "searches_set_changed"
+          ],
           "drill": "backsight stats quality --dev",
-          "n": 0,
+          "n": 3,
           "mdc": null
         }
       ]

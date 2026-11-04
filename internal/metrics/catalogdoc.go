@@ -70,6 +70,8 @@ func statusRule(d Def) string {
 		if t.Watch != nil {
 			parts = append(parts, "watch when even the upper end of the interval is under "+amount(*t.Watch, d.Unit))
 		}
+	case "test":
+		parts = append(parts, "watch when a language is more than 15 points behind the most used one, by more than chance explains")
 	case "lo", "p95", "value":
 		what := "the lower end of the interval"
 		switch t.On {

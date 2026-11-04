@@ -553,3 +553,82 @@ func TestParamsCoverEveryViewFlag(t *testing.T) {
 		}
 	}
 }
+
+// The developer metrics on reach and quality read the same lines as
+// `stats`: the corrections after memory against its injections line, the
+// recalls the ranking changed against its Boost line, and --has contradicted
+// lists the sessions behind the first.
+func TestAgreementWithStats(t *testing.T) {
+	viewsFixture(t)
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i, e := range []telemetry.Event{
+		telemetry.Outcome{N: 1, IDs: []string{"m1"}, Contradicted: true},
+		telemetry.Outcome{N: 2, IDs: []string{"m1"}, Contradicted: true},
+		telemetry.Outcome{N: 3, IDs: []string{"m1"}},
+		telemetry.Outcome{N: 4, IDs: nil, Contradicted: true}, // nothing injected: out of both
+	} {
+		b.WriteString(telLineFor(t, goldenNow.Add(-time.Duration(5+i)*time.Hour), e, "s2", "p1"))
+	}
+	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-2026-10.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	home, _ := os.UserHomeDir()
+	hr := func(h int) time.Time { return goldenNow.Add(-time.Duration(h) * time.Hour) }
+	items := []feedback.Item{{ID: "m1", Rank: 1}}
+	set := []string{feedback.FlagSetChanged}
+	journalIn(t, home,
+		feedback.Event{Kind: "shows", Path: "prompt", TS: hr(8), Items: items, Flags: set},
+		feedback.Event{Kind: "shows", Path: "prompt", TS: hr(7), Items: items},
+		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: hr(6), Items: items, Flags: set},
+		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: hr(5), Items: items},
+		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: hr(4), Items: items},
+	)
+
+	win := []string{"--since", "2026-10-01T12:00:00Z", "--until", "2026-10-08T12:00:00Z"}
+	view := runView(t, append([]string{"stats", "quality", "--dev"}, win...)...)
+	legacy := runView(t, append([]string{"stats"}, win...)...)
+	if view.code != output.OK || legacy.code != output.OK {
+		t.Fatalf("exit %d / %d", view.code, legacy.code)
+	}
+	boost := at(legacy.env.Data, "feedback", "boost")
+	c := at(view.env.Data, "metrics", "injection.contradicted")
+	n, contra := at(legacy.env.Data, "injections", "n"), at(legacy.env.Data, "injections", "contradicted")
+	if contra != float64(2) || n != float64(4) {
+		t.Fatalf("stats injections %v contradicted of %v, want 2 of 4", contra, n)
+	}
+	if at(c, "num") != contra || at(c, "den") != n {
+		t.Errorf("injection.contradicted %v/%v, stats %v/%v", at(c, "num"), at(c, "den"), contra, n)
+	}
+	s := at(view.env.Data, "metrics", "boost.set_changed")
+	prompts, searches := at(boost, "prompts").(float64), at(boost, "searches").(float64)
+	changed := at(boost, "prompts_set_changed").(float64) + at(boost, "searches_set_changed").(float64)
+	if prompts != 4 || searches != 4 || changed != 3 {
+		t.Fatalf("stats boost %v", boost)
+	}
+	if at(s, "num") != changed || at(s, "den") != prompts+searches {
+		t.Errorf("boost.set_changed %v/%v, stats %v/%v", at(s, "num"), at(s, "den"), changed, prompts+searches)
+	}
+	for k, want := range map[string]string{"prompts": "prompts", "prompts_set_changed": "prompts_set_changed", "searches": "searches", "searches_set_changed": "searches_set_changed"} {
+		if at(at(s, "extra"), k) != at(boost, want) {
+			t.Errorf("boost.set_changed extra %s = %v, stats %v", k, at(at(s, "extra"), k), at(boost, want))
+		}
+	}
+
+	list := runView(t, append([]string{"stats", "sessions", "--has", "contradicted"}, win...)...)
+	if list.code != output.OK {
+		t.Fatalf("--has contradicted: exit %d: %s %s", list.code, list.raw, list.stderr)
+	}
+	rows, _ := at(list.env.Data, "tables", "sessions").([]any)
+	if len(rows) != 1 || at(rows[0], "id") != "s2" {
+		t.Errorf("--has contradicted lists %v, want s2 alone", rows)
+	}
+}

@@ -19,6 +19,8 @@ const (
 	hasMemory     = "memory"
 	// hasNeverExtracted: the sessions of the pipeline's never_extracted list.
 	hasNeverExtracted = "never_extracted"
+	// hasContradicted: the sessions with a correction after memory was shown.
+	hasContradicted = "contradicted"
 )
 
 // sessionTables are the index tables that name sessions.
@@ -29,7 +31,8 @@ var sessionTables = []string{"turns", "shows", "credits", "tel_prompt", "tel_bri
 // paged. --has keeps those with a used credit (used), a wrong or outdated
 // credit (wrong), a turn that ended undeclared under the two-hour rule
 // (undeclared), a non-briefing show (memory) or a send that never gave a
-// memory (never_extracted). `sent` is the state of the
+// memory (never_extracted) or a correction after memory was shown
+// (contradicted). `sent` is the state of the
 // session's documents (ok only when all are ok). With q.ID (an exact id or
 // a unique prefix of at least 8 characters) it is that session's page, the
 // turn rail of all of it.
@@ -40,8 +43,8 @@ func Sessions(ctx context.Context, s Source, q Query) (Result, error) {
 	if _, err := checkSort(q, "latest", "latest"); err != nil {
 		return Result{}, err
 	}
-	if q.Has != "" && !slices.Contains([]string{hasUsed, hasWrong, hasUndeclared, hasMemory, hasNeverExtracted}, q.Has) {
-		return Result{}, fmt.Errorf("--has: one of %s, %s, %s, %s, %s", hasUsed, hasWrong, hasUndeclared, hasMemory, hasNeverExtracted)
+	if q.Has != "" && !slices.Contains([]string{hasUsed, hasWrong, hasUndeclared, hasMemory, hasNeverExtracted, hasContradicted}, q.Has) {
+		return Result{}, fmt.Errorf("--has: one of %s, %s, %s, %s, %s, %s", hasUsed, hasWrong, hasUndeclared, hasMemory, hasNeverExtracted, hasContradicted)
 	}
 	return runView(ctx, s, q, "sessions", nil, func(e env, r *Result) error {
 		rows, err := sessionRows(e, e.q.Window)
@@ -86,6 +89,12 @@ func hasFilter(e env, rows []SessionRow) ([]SessionRow, error) {
 			return nil, err
 		}
 		keep = func(s SessionRow) bool { return set[s.ID] }
+	case hasContradicted:
+		set, err := contradictedSessions(e, e.q.Window)
+		if err != nil {
+			return nil, err
+		}
+		keep = func(s SessionRow) bool { return set[s.ID] }
 	case hasNeverExtracted:
 		set, err := neverSessions(e, e.q.Window)
 		if err != nil {
@@ -109,6 +118,30 @@ func memorySessions(e env, w Window) (map[string]bool, error) {
 SELECT DISTINCT s.session FROM shows s
 WHERE s.ts >= ? AND s.ts < ? AND COALESCE(s.session, '') <> '' AND COALESCE(s.path, '') NOT IN ('briefing', ?) AND `+sessionProject("s"),
 		w.Since.UnixMilli(), w.Until.UnixMilli(), feedback.PathSources, e.q.Project, e.q.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// contradictedSessions are the sessions with an outcome in w that followed
+// injected memory and read as a correction: the rows injection.contradicted
+// counts.
+func contradictedSessions(e env, w Window) (map[string]bool, error) {
+	rows, err := e.tx.QueryContext(e.ctx, `
+SELECT DISTINCT session FROM tel_outcome
+WHERE ts >= ? AND ts < ? AND ids_n > 0 AND contradicted = 1 AND COALESCE(session, '') <> '' AND `+projectClause+` AND `+versionClause+`
+ORDER BY session`,
+		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version)
 	if err != nil {
 		return nil, err
 	}

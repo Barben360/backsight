@@ -4,11 +4,12 @@ package metrics
 // own value, without a baseline. On names what is compared: hi is the upper
 // bound of a rate's interval (the rule fires when it is below Watch), lo its
 // lower bound (fires when above Watch or Bad), p95 and value the figure
-// itself (fires when above).
+// itself (fires when above); test is a rule the metric's family runs on its
+// own detail (the language test of recall.by_lang) and hands over as a result.
 type Threshold struct {
 	Watch *float64 `json:"watch,omitempty"`
 	Bad   *float64 `json:"bad,omitempty"`
-	On    string   `json:"on"` // hi | lo | p95 | value, empty when there is no absolute rule
+	On    string   `json:"on"` // hi | lo | p95 | value | test, empty when there is no absolute rule
 }
 
 // Def describes one metric: what it is called, what it answers, how it is
@@ -66,8 +67,9 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "recall.by_lang", Label: "Prompts that got memory, by language", Unit: "ratio", Direction: "up", MinN: 20,
-		CI: "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "reach", Series: "none", Command: "backsight stats quality --dev",
-		Extra:      []string{"by_lang"},
+		Absolute: Threshold{On: "test"},
+		CI:       "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "reach", Series: "none", Command: "backsight stats quality --dev",
+		Extra:      []string{"by_lang", "test"},
 		Question:   "Does memory show up as often in every language?",
 		Definition: "The share of prompt recalls that injected a memory, split by the language of the prompt. Each language needs its own 20 prompts before it is judged.",
 		Action:     "A language far below the others means memory misses across languages.",
@@ -419,6 +421,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "boost.set_changed", Label: "Recalls the learned ranking changed", Unit: "ratio", Direction: "none", MinN: 20,
 		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Extra:      []string{"prompts", "prompts_set_changed", "searches", "searches_set_changed"},
 		Question:   "How often does the learned ranking change what is shown?",
 		Definition: "The share of recalls, prompts and searches, whose shown memories differ from what the ranking would show without what it learned from past feedback.",
 		Action:     "A share near 0 means the learned ranking has no effect yet.",
