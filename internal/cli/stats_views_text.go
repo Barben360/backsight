@@ -210,7 +210,10 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 	case m.Status != metrics.StatusNoData && d.Unit == "ratio" && m.Num != nil && m.Den != nil && *m.Den < handful:
 		value = fmt.Sprintf("%s of %s", grouped(*m.Num), grouped(*m.Den)) // a percentage over so few would be a guess
 	case m.Status != metrics.StatusNoData && d.ID == "server.reach" && m.Value != nil:
-		value = map[bool]string{true: "yes", false: "no"}[serverUp] // what the view's header says, not the skipped-prompt count
+		value = "no" // what the view's header says, not the skipped-prompt count
+		if serverUp {
+			value = "yes"
+		}
 	case m.Status != metrics.StatusNoData && d.ID == "recall.empty_reasons" && m.Value != nil:
 		value = countOf(int64(*m.Value), "prompt", "prompts")
 	case m.Status != metrics.StatusNoData && d.ID == "doctor.check" && m.Value != nil:
@@ -749,7 +752,11 @@ func blockDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string 
 		if at, ok := extraAs[time.Time](m, "scanned_at"); ok {
 			line := "last scan " + whenText(at, loc)
 			if age, ok := extraAs[int64](m, "age_days"); ok {
-				line += ", " + map[bool]string{true: "today", false: countOf(age, "day", "days") + " ago"}[age == 0]
+				if age == 0 {
+					line += ", today"
+				} else {
+					line += ", " + countOf(age, "day", "days") + " ago"
+				}
 			}
 			if pages, ok := extraAs[int64](m, "pages"); ok && pages > 0 {
 				line += " (" + countOf(pages, "page", "pages") + " read)"
@@ -918,9 +925,10 @@ func originLine(o metrics.Origin, loc *time.Location) []string {
 				steps = append(steps, s.name+" "+whenText(*s.at, loc))
 			}
 		}
-		steps = append(steps, map[bool]string{true: "never shown", false: ""}[o.FirstShown == nil])
 		if o.FirstShown != nil {
-			steps[len(steps)-1] = "first shown " + whenText(*o.FirstShown, loc)
+			steps = append(steps, "first shown "+whenText(*o.FirstShown, loc))
+		} else {
+			steps = append(steps, "never shown")
 		}
 		return append(lines, "Session "+strings.Join(steps, ", "))
 	case metrics.OriginOtherPC:

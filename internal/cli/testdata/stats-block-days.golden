@@ -6,7 +6,7 @@ Days
 Day         Prompts  Recalls  With memory  Used turns  Wrong  Context chars  Sessions  Sent  Send failed
 2026-10-08  4        4        4            1           0      0              5         2     0
 2026-10-07  3        2        1            0           0      0              1         1     0
-2026-10-06  1        1        1            0           0      0              1         0     0
+2026-10-06  3        3        3            0           0      0              3         2     0
 2026-10-05  0        0        0            0           0      0              0         0     0
 2026-10-04  0        0        0            0           0      0              0         0     0
 2026-10-03  0        0        0            0           0      0              0         0     0

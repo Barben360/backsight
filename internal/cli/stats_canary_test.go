@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
@@ -65,6 +68,33 @@ func TestStatsViewsHoldNoCanary(t *testing.T) {
 					scan(view+" "+id, append(append([]string{"stats", view, id}, dev...), js...)...)
 				}
 			}
+		}
+	}
+	// the block's filters and the comparison, text and JSON; the comparison
+	// runs on versions the fixture has seen
+	for _, js := range [][]string{nil, {"--json"}} {
+		scan("never extracted", append([]string{"stats", "sessions", "--has", "never_extracted"}, js...)...)
+		scan("contradicted", append([]string{"stats", "sessions", "--has", "contradicted"}, js...)...)
+		scan("compare", append([]string{"stats", "releases", "--compare", "v0.0.1," + buildinfo.Version}, js...)...)
+		scan("compare measure", append([]string{"stats", "releases", "--compare", "v0.0.1," + buildinfo.Version, "--measure", "recall.hit_rate"}, js...)...)
+	}
+	// a settings marker names the numeric settings only: the key that is no
+	// setting does not come through
+	rel := runView(t, "stats", "releases", "--days", "30")
+	var changes []string
+	ms, _ := at(rel.env.Data, "tables", "markers").([]any)
+	for _, m := range ms {
+		cs, _ := at(m, "changes").([]any)
+		for _, c := range cs {
+			changes = append(changes, at(c, "key").(string))
+		}
+	}
+	if !slices.Contains(changes, "recall.min_score") || strings.Contains(rel.raw, "CANARY") {
+		t.Errorf("the settings marker names %v, want recall.min_score and no canary: %s", changes, rel.raw)
+	}
+	for _, k := range changes {
+		if !regexp.MustCompile(`^[a-z][a-z0-9_.]*$`).MatchString(k) {
+			t.Errorf("a marker names the setting %q, which is no setting's shape", k)
 		}
 	}
 	scan("memories sorted", "stats", "memories", "--sort", "rate", "--state", "hidden", "--json")

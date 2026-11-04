@@ -513,6 +513,12 @@ func blockFixture(t *testing.T, home string) {
 	}{{"sess-long-1", hr(10.5)}, {"sess-long-2", hr(11.5)}} {
 		b.WriteString(telLineFor(t, s.at, telemetry.Retain{Document: "conversation:" + s.id, Items: 2, Status: "ok", MS: 300}, s.id, "p1"))
 	}
+	// two sessions sent two days ago: one the server never made memories of
+	// (no operation), one whose operation failed twice
+	for _, id := range []string{"sess-never-1", "sess-never-2"} {
+		b.WriteString(telLineFor(t, hr(52), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80, MS: 500, Injected: 1}, id, "p1"))
+		b.WriteString(telLineFor(t, hr(51.5), telemetry.Retain{Document: "conversation:" + id, Items: 2, Status: "ok", MS: 300}, id, "p1"))
+	}
 	for _, c := range []struct {
 		at    time.Time
 		sha   string
@@ -545,6 +551,28 @@ func blockFixture(t *testing.T, home string) {
 			CreatedAt: hr(10.49), UpdatedAt: hr(10.5 - 10.0/60), Units: &units},
 		metricsfile.DocOp{Operation: "op-2", Document: "conversation:sess-long-2", Session: "sess-long-2", Status: "failed",
 			CreatedAt: hr(11.49), UpdatedAt: hr(11.4), Retries: 3})
+	// the operations record starts before those sends (a session of an
+	// earlier day), so a send without a memory is never_extracted, not "before the record"
+	rec(hr(60), metricsfile.DocOp{Operation: "op-0", Document: "conversation:sess-old", Session: "sess-old", Status: "completed",
+		CreatedAt: hr(60.1), UpdatedAt: hr(60.05), Units: &units})
+	rec(hr(51), metricsfile.DocOp{Operation: "op-n2", Document: "conversation:sess-never-2", Session: "sess-never-2", Status: "failed",
+		CreatedAt: hr(51.49), UpdatedAt: hr(51.4), Retries: 2})
+	// the yield of one complete week (31 August to 6 September): 21 new
+	// memories a day record gives, three of the four listed on 1 September
+	// used within 28 days, and the tokens the server spent those days
+	for day := 0; day < 7; day++ {
+		b := time.Date(2026, 8, 31+day, 0, 0, 0, 0, time.UTC)
+		rec(b.Add(25*time.Hour), metricsfile.ServerDay{Bucket: b, New: &metricsfile.KindCounts{World: 3},
+			LLM: map[string]metricsfile.LLMDay{"all": {Input: 1000, Output: 500, Requests: 2}, "retain": {Input: 1000, Output: 500, Requests: 2}}})
+	}
+	rec(time.Date(2026, 9, 2, 1, 0, 0, 0, time.UTC),
+		metricsfile.MemoryDoc{Memory: "mem-y1", Outcome: "found", DocKind: "note", CreatedDay: "2026-09-01", FactType: "world"},
+		metricsfile.MemoryDoc{Memory: "mem-y2", Outcome: "found", DocKind: "note", CreatedDay: "2026-09-01", FactType: "world"},
+		metricsfile.MemoryDoc{Memory: "mem-y3", Outcome: "found", DocKind: "note", CreatedDay: "2026-09-01", FactType: "world"},
+		metricsfile.MemoryDoc{Memory: "mem-y4", Outcome: "found", DocKind: "note", CreatedDay: "2026-09-01", FactType: "world"},
+		metricsfile.Listed{Day: "2026-09-01", N: 4})
+	journalIn(t, home, feedback.Event{Kind: "credit", TS: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC), Session: "sess-y", Turn: "ty", Project: "p1",
+		Verdict: "used", IDs: []string{"mem-y1", "mem-y2", "mem-y3"}})
 	rec(hr(48), metricsfile.Scan{Count: 1, Live: 1, Forgotten: 0, Pages: 3, MS: 1200})
 	rec(hr(50), metricsfile.DoctorRun{Checks: map[string]string{"config": "ok", "backup": "ok", "memory": "ok"}})
 	rec(hr(26), metricsfile.DoctorRun{Checks: map[string]string{"config": "ok", "backup": "warn", "memory": "ok"}})
@@ -564,6 +592,10 @@ var blockViews = []struct {
 	{"days", []string{"stats", "days"}},
 	{"day-page", []string{"stats", "days", "2026-10-08"}},
 	{"memory-page", []string{"stats", "memories", "mem-long-1"}},
+	{"cost", []string{"stats", "cost"}},
+	{"cost-yield", []string{"stats", "cost", "--days", "60"}},
+	{"sessions", []string{"stats", "sessions"}},
+	{"sessions-never", []string{"stats", "sessions", "--has", "never_extracted"}},
 	{"releases", []string{"stats", "releases"}},
 	{"releases-compare", []string{"stats", "releases", "--compare", "v0.1.17,v0.1.18"}},
 }
@@ -629,12 +661,30 @@ func TestStatsBlockText(t *testing.T) {
 	}
 
 	wantLines(t, "pipeline", text("pipeline"),
-		"session ended 6 → sent 2 → turned into memories 1 → shown again 1",
-		"not sent 4, still on the server 1, shown, origin not known yet 1",
-		"last turn to sent: 2 sessions, too few for a typical time",
+		"session ended 8 → sent 4 → turned into memories 1 → shown again 1",
+		"not sent 4, never turned into memories 2, still on the server 1, shown, origin not known yet 1",
+		"last turn to sent: 4 sessions, too few for a typical time",
+		// the two sessions sent two days ago: none made memories (one no operation, one a failed one)
+		"Sessions sent that gave no memories",
+		"Session Project Sent What happened Retries",
+		"sess-nev p1 2026-10-06 10:30 no trace of it on the server 0",
+		"sess-nev p1 2026-10-06 10:30 the server failed on it 2",
 		"sent to turned into memories: 1 session, too few for a typical time",
 		"turned into memories to shown again: 1 session, too few for a typical time",
 		"the whole way: 1 session, too few for a typical time",
+	)
+
+	// the same two sessions, filtered
+	if sn := text("sessions", "--has", "never_extracted"); strings.Count(sn, "sess-nev") != 2 || strings.Contains(sn, "s1 ") {
+		t.Errorf("sessions --has never_extracted:\n%s", sn)
+	}
+	// yield of the one complete week (3 of the 21 new memories used, 10,500
+	// tokens spent, 3,500 a useful memory), and where the record starts
+	wantLines(t, "cost", text("cost", "--days", "60"),
+		"week of 2026-08-31: 3 of 21 (14 %, 5 to 35 %), 10,500 tokens, 3,500 tokens per useful memory",
+		"older days come from the days this PC recorded, from 2026-08-31",
+		"week of 2026-09-07: not complete yet",
+		"week of 2026-08-24: the new memories of that week were not recorded",
 	)
 
 	wantLines(t, "system", text("system"),
