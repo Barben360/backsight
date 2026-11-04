@@ -631,6 +631,37 @@ func (c *Client) LatestOperation(ctx context.Context, bank, status, typ string) 
 	return op, ok, nil
 }
 
+// FirstOperationAfter is the earliest finish, among the operations of the
+// bank with status and type, later than after: when they began to succeed
+// again once the failure at after. The server lists by creation, newest
+// first, so it reads 100 at a time (up to 5 pages) until one finished at or
+// before after; a longer history than that answers the earliest it read.
+func (c *Client) FirstOperationAfter(ctx context.Context, bank, status, typ string, after time.Time) (op Operation, ok bool, err error) {
+	for page := 0; page < 5; page++ {
+		var out struct {
+			Operations []Operation `json:"operations"`
+		}
+		q := url.Values{"status": {status}, "type": {typ}, "limit": {"100"}, "offset": {strconv.Itoa(page * 100)}}
+		if err := c.get(ctx, bankPath(bank, "/operations"), q, &out); err != nil {
+			return op, false, err
+		}
+		reached := false
+		for _, o := range out.Operations {
+			if !o.FinishedAt().After(after) {
+				reached = true
+				continue
+			}
+			if !ok || o.FinishedAt().Before(op.FinishedAt()) {
+				op, ok = o, true
+			}
+		}
+		if reached || len(out.Operations) < 100 {
+			break
+		}
+	}
+	return op, ok, nil
+}
+
 func (c *Client) QueuedOperations(ctx context.Context, bank string) (int, error) {
 	n := 0
 	for _, status := range []string{"pending", "processing"} {
