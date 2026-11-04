@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -41,14 +43,25 @@ func Markers(e env, w Window) ([]Marker, error) {
 }
 
 func releaseMarkers(e env, w Window) ([]Marker, error) {
+	// The version of the last prompt before the window: the previous one of
+	// the window's first prompt. Reading the rows from the window's start
+	// alone (not every prompt there is) keeps a year of history out of the
+	// read.
+	var before sql.NullString
+	err := e.tx.QueryRowContext(e.ctx, `
+SELECT binary_version FROM tel_prompt WHERE ts < ? AND COALESCE(binary_version, '') <> ''
+ORDER BY ts DESC, source_file DESC, "offset" DESC LIMIT 1`, w.Since.UnixMilli()).Scan(&before)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	rows, err := e.tx.QueryContext(e.ctx, `
 WITH p AS (
   SELECT ts, source_file, "offset", binary_version AS v,
          LAG(binary_version) OVER (ORDER BY ts, source_file, "offset") AS prev
-  FROM tel_prompt WHERE ts < ? AND COALESCE(binary_version, '') <> '')
+  FROM tel_prompt WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '')
 SELECT ts, v, prev FROM p
-WHERE ts >= ? AND prev IS NOT NULL AND prev <> v
-ORDER BY ts, source_file, "offset"`, w.Until.UnixMilli(), w.Since.UnixMilli())
+WHERE prev IS NULL OR prev <> v
+ORDER BY ts, source_file, "offset"`, w.Since.UnixMilli(), w.Until.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -56,11 +69,17 @@ ORDER BY ts, source_file, "offset"`, w.Until.UnixMilli(), w.Since.UnixMilli())
 	var out []Marker
 	for rows.Next() {
 		var ts int64
-		var v, prev string
+		var v string
+		var prev sql.NullString
 		if err := rows.Scan(&ts, &v, &prev); err != nil {
 			return nil, err
 		}
-		out = append(out, Marker{At: time.UnixMilli(ts).In(viewLocOf(w)), Kind: "release", Version: v, Previous: prev})
+		if !prev.Valid { // the window's first prompt: its previous is the last one before the window
+			if prev = before; !prev.Valid || prev.String == v {
+				continue
+			}
+		}
+		out = append(out, Marker{At: time.UnixMilli(ts).In(viewLocOf(w)), Kind: "release", Version: v, Previous: prev.String})
 	}
 	return out, rows.Err()
 }

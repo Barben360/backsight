@@ -130,14 +130,16 @@ The pages' titles above are the short form of these questions.
 | `backsight stats bank` | How big is the memory, and what should I review or forget? |
 | `backsight stats pipeline` | Is what I write reaching the memory? |
 | `backsight stats system` | Are the checks, the server and the background jobs healthy? |
-| `backsight stats releases` | Did a new backsight version change anything? |
+| `backsight stats releases [--compare A,B]` | Did a new backsight version change anything? |
 | `backsight stats projects [<name>]` | Which projects use memory, and how well? |
-| `backsight stats sessions [<id>]` | Which sessions got memory, and what happened in one? |
+| `backsight stats sessions [<id>] [--has never_extracted\|contradicted]` | Which sessions got memory, which were sent and gave none, and what happened in one? |
 | `backsight stats memories [<id>]` | Which memories are shown, used, reported or never used? |
 | `backsight stats days [<date>]` | What happened each day? |
 | `backsight stats defs [<id>]` | What does a number mean, and when is it judged? |
 
 Flags go after the view word: `backsight stats overview --days 30`, `--project <name>`, `--since` and `--until`, `--tz`. [commands.md](commands.md) lists them all.
+
+`backsight stats releases --compare A,B` (with `--measure used.turn_rate`, `recall.hit_rate` or `verdict.wrong_rate`) compares two versions. It matches turns by project and by where memory was first shown; a turn with no main-agent show falls in the `unknown` stratum. Only groups where both versions have 7 active days and 30 turns count, and the figure it gives is the matched difference with its 95 % interval, read as `differs`, `no clear difference` or `too few to compare`. The comparison is observational: the weeks, the projects and the settings differ between two versions, so it never says one is better. When the unmatched difference points the other way it says so and tells you to read the matched figure.
 
 ## Reading the numbers
 

@@ -92,6 +92,15 @@ func TestViewBudgets(t *testing.T) {
 	}
 	for _, view := range Views[:6] {
 		r := timed(view, view, q)
+		if view == "overview" { // the block's reads: time to recall (the sessions' way) and Helped most
+			f, _ := r.Metrics["pipeline.time_to_recall"].Extra["funnel"].(map[string]int64)
+			if f["ended"] < 100 {
+				t.Errorf("overview: pipeline.time_to_recall funnel %v, want the week's ended sessions (>= 100)", f)
+			}
+			if len(r.Tables.Helped) != 3 {
+				t.Errorf("overview: %d memories that helped most, want 3", len(r.Tables.Helped))
+			}
+		}
 		// the measure is of real work: each view read the generated week
 		if c := realWork[view]; !c.ok(r) {
 			t.Errorf("%s: %s = %+v, want %s", view, c.id, r.Metrics[c.id], c.what)
@@ -111,6 +120,28 @@ func TestViewBudgets(t *testing.T) {
 			len(projects.Projects), projects.Pooled.Totals.Prompts, len(sessions.Sessions), sessions.Page.Total, len(memories.Memories), memories.Page.Total,
 			len(days.Days), len(releases.Releases), len(defs.Defs))
 		return
+	}
+	// the days view reads the calendar of 13 months, and the releases view
+	// compares two versions on the week's turns
+	if len(days.Calendar) < 390 {
+		t.Errorf("days: %d days in the calendar, want 13 months", len(days.Calendar))
+	}
+	recorded := 0
+	for _, c := range days.Calendar {
+		if c.Recorded {
+			recorded++
+		}
+	}
+	if recorded < 300 {
+		t.Errorf("days: %d days recorded in the calendar, want the generated history", recorded)
+	}
+	cq := q
+	cq.Compare = [2]string{"v0.1.16", "v0.1.17"}
+	if len(releases.Releases) > 1 {
+		cq.Compare = [2]string{releases.Releases[1].Version, releases.Releases[0].Version}
+	}
+	if c := timed("releases --compare", "releases", cq).Tables.Compare; c == nil {
+		t.Errorf("releases --compare: no comparison")
 	}
 	for _, p := range []struct {
 		name, view, id string

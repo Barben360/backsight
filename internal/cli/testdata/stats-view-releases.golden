@@ -9,6 +9,10 @@ Version  First             Last              Events  Prompts per day  Memories
 v0.1.18  2026-10-08 04:00  2026-10-08 04:00  1       1.0              0
 v0.1.17  2026-10-06 12:00  2026-10-06 12:00  1       1.0              0
 
+What changed
+When              What
+2026-10-08 04:00  new version v0.1.18 (after v0.1.17)
+
 Settings in force
 feedback.boost_weight              0.1
 feedback.confident_rank            2

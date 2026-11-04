@@ -24,4 +24,8 @@ rel-v0.1  p1       2026-10-08 04:00  1        1            0      0     0      0
 s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
 sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              —
 
+What changed on 2026-10-08
+When              What
+2026-10-08 04:00  new version v0.1.18 (after v0.1.17)
+
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

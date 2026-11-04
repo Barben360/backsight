@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"slices"
 	"time"
 )
 
@@ -28,10 +29,17 @@ func calendar(e env) ([]CalendarDay, error) {
 
 	var out []CalendarDay
 	index := map[string]int{}
+	var starts []int64 // each day's first instant (unix ms), to place a timestamp without formatting it
 	for day := start; day.Before(end); day = time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, loc) {
 		key := day.Format(dateLayout)
 		index[key] = len(out)
+		starts = append(starts, day.UnixMilli())
 		out = append(out, CalendarDay{Day: key})
+	}
+	// dayOf is the row of the day holding ts (unix ms), false outside the span.
+	dayOf := func(ts int64) (int, bool) {
+		i, _ := slices.BinarySearch(starts, ts+1) // the first start after ts
+		return i - 1, i > 0
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT ts, COALESCE(session, ''),
@@ -54,7 +62,7 @@ FROM tel_prompt WHERE ts >= ? AND ts < ? AND `+projectClause,
 		if err := rows.Scan(&ts, &session, &typed, &withMemory); err != nil {
 			return nil, err
 		}
-		i, ok := index[time.UnixMilli(ts).In(loc).Format(dateLayout)]
+		i, ok := dayOf(ts)
 		if !ok {
 			continue
 		}

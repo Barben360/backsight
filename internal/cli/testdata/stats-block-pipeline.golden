@@ -1,0 +1,38 @@
+Is it flowing? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Flowing
+Sessions sent                                3 of 3                   (n=3, ok)
+  sent 3, failed 0, set aside after an error 0, waiting 0
+Sends by result                              3                        (ok, +3 vs previous)
+Waiting on this PC                           0                        (ok)
+Waiting on the server                        0                        (ok)
+  waiting 0, running 0, failed in the last 7 days 0, failed in all 0
+Time to turn a session into memories         —                        (too few)
+Steps that crashed                           0                        (ok, no change vs previous)
+Memory server answering                      yes                      (ok, no change vs previous)
+Health checks                                1 failed                 (watch)
+  1 failed, 1 with a warning
+Background jobs                              —                        (no data: nothing recorded yet)
+From session to recalled memory              —                        (n=2, too few, 18 more needed)
+  partial: some of it could not be read
+  session ended 6 → sent 2 → turned into memories 1 → shown again 1
+  not sent 4, still on the server 1, shown, origin not known yet 1
+  last turn to sent: 2 sessions, too few for a typical time
+  sent to turned into memories: 1 session, too few for a typical time
+  turned into memories to shown again: 1 session, too few for a typical time
+  the whole way: 1 session, too few for a typical time
+
+Server tasks that failed
+none
+
+Background jobs
+none
+
+Health checks
+Check          Status  Fix
+settings       ok
+memory server  ok
+backup         warn    backsight backup create
+memory         error   backsight doctor
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

@@ -19,6 +19,9 @@ memory server  ok
 backup         warn    backsight backup create
 memory         error   backsight doctor
 
+Health checks over time
+none
+
 System
 Memory server   version 1.1.0, running in docker, mode local
 Reach           no answer recorded yet

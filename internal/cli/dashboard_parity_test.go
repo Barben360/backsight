@@ -232,6 +232,15 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 		success{"memories", "mem-long-1", nil},
 		success{"days", "2026-10-08", nil},
 		success{"defs", "recall.hit_rate", nil},
+		// the block's parameters: a comparison of two versions, a measure,
+		// the sessions the pipeline lost or a correction followed, and the
+		// developer metrics of the pipeline and the bank
+		success{"releases", "", []pair{{"compare", "v1,v2"}}},
+		success{"releases", "", []pair{{"compare", "v1,v2"}, {"measure", "recall.hit_rate"}}},
+		success{"sessions", "", []pair{{"has", "never_extracted"}}},
+		success{"sessions", "", []pair{{"has", "contradicted"}}},
+		success{"pipeline", "", []pair{{"dev", "1"}}},
+		success{"bank", "", []pair{{"dev", "1"}, {"days", "30"}}},
 	)
 	for _, s := range ok {
 		query := url.Values{}
@@ -282,6 +291,8 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 	differ("overview/?tz=America%2FLos_Angeles", "overview/?")
 	differ("days/?days=30&tz=Pacific%2FAuckland", "days/?days=30")
 	differ("overview/?since=2026-10-01&until=2026-10-08", "overview/?")
+	differ("releases/?compare=v1%2Cv2", "releases/?")
+	differ("releases/?compare=v1%2Cv2", "releases/?compare=v1%2Cv2&measure=recall.hit_rate")
 
 	// the errors: the same code and the same sentence, the HTTP status of
 	// their class

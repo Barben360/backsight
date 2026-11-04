@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -488,5 +491,314 @@ func TestStatsViewsWithoutAServer(t *testing.T) {
 		if at(v.env.Data, "server", "error") != "not_configured" {
 			t.Errorf("%s: server = %v", view, at(v.env.Data, "server"))
 		}
+	}
+}
+
+// blockFixture adds to viewsFixture the records of the daily collection
+// and the telemetry that go with them: sess-long-1 and sess-long-2 were sent
+// (30 minutes after their last prompt), the first was turned into two
+// memories 10 minutes later (mem-long-1, from it, shown again an hour and
+// twenty minutes after; mem-long-2 is a note), the second's operation
+// failed; a scan found one possible secret, the checks ran on three days
+// (the backup check warns from the second, the memory check fails on the
+// third) and the settings changed once.
+func blockFixture(t *testing.T, home string) {
+	t.Helper()
+	d := pathsOf(home)
+	hr := func(h float64) time.Time { return goldenNow.Add(-time.Duration(h * float64(time.Hour))) }
+	var b strings.Builder
+	for _, s := range []struct {
+		id string
+		at time.Time
+	}{{"sess-long-1", hr(10.5)}, {"sess-long-2", hr(11.5)}} {
+		b.WriteString(telLineFor(t, s.at, telemetry.Retain{Document: "conversation:" + s.id, Items: 2, Status: "ok", MS: 300}, s.id, "p1"))
+	}
+	for _, c := range []struct {
+		at    time.Time
+		sha   string
+		score float64
+	}{{hr(60), strings.Repeat("a", 64), 0.5}, {hr(20), strings.Repeat("b", 64), 0.6}} {
+		b.WriteString(telLineFor(t, c.at, telemetry.Config{SHA256: c.sha, Values: map[string]float64{"recall.min_score": c.score}}, "", ""))
+	}
+	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-2026-10.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	rec := func(ts time.Time, recs ...metricsfile.Record) {
+		w := metricsfile.New(d.MetricsDir(), "v0.1.17")
+		w.Now = func() time.Time { return ts }
+		if err := w.Append(recs...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	units := int64(2)
+	rec(hr(8),
+		metricsfile.MemoryDoc{Memory: "mem-long-1", Outcome: "found", DocKind: "session", Document: "conversation:sess-long-1", Session: "sess-long-1", CreatedDay: "2026-10-08", FactType: "world"},
+		metricsfile.MemoryDoc{Memory: "mem-long-2", Outcome: "found", DocKind: "note", CreatedDay: "2026-10-08", FactType: "world"},
+		metricsfile.Listed{Day: "2026-10-08", N: 2},
+		metricsfile.DocOp{Operation: "op-1", Document: "conversation:sess-long-1", Session: "sess-long-1", Status: "completed",
+			CreatedAt: hr(10.49), UpdatedAt: hr(10.5 - 10.0/60), Units: &units},
+		metricsfile.DocOp{Operation: "op-2", Document: "conversation:sess-long-2", Session: "sess-long-2", Status: "failed",
+			CreatedAt: hr(11.49), UpdatedAt: hr(11.4), Retries: 3})
+	rec(hr(48), metricsfile.Scan{Count: 1, Live: 1, Forgotten: 0, Pages: 3, MS: 1200})
+	rec(hr(50), metricsfile.DoctorRun{Checks: map[string]string{"config": "ok", "backup": "ok", "memory": "ok"}})
+	rec(hr(26), metricsfile.DoctorRun{Checks: map[string]string{"config": "ok", "backup": "warn", "memory": "ok"}})
+	rec(hr(2), metricsfile.DoctorRun{Checks: map[string]string{"config": "ok", "backup": "warn", "memory": "error"}})
+}
+
+// blockViews is every view whose text the block's fixture pins.
+var blockViews = []struct {
+	name string
+	args []string
+}{
+	{"overview", []string{"stats", "overview"}},
+	{"quality-dev", []string{"stats", "quality", "--dev"}},
+	{"bank-dev", []string{"stats", "bank", "--dev"}},
+	{"pipeline", []string{"stats", "pipeline"}},
+	{"system", []string{"stats", "system"}},
+	{"days", []string{"stats", "days"}},
+	{"day-page", []string{"stats", "days", "2026-10-08"}},
+	{"memory-page", []string{"stats", "memories", "mem-long-1"}},
+	{"releases", []string{"stats", "releases"}},
+	{"releases-compare", []string{"stats", "releases", "--compare", "v0.1.17,v0.1.18"}},
+}
+
+// blockSetup is the extended fixture: the views' fixture, the browse one and
+// the block's records.
+func blockSetup(t *testing.T) {
+	t.Helper()
+	viewsFixture(t)
+	fixedDoctor(t)
+	browseFixture(t)
+	home, _ := os.UserHomeDir()
+	blockFixture(t, home)
+}
+
+// The text of every view on the extended fixture, pinned (-update rewrites).
+func TestStatsBlockViewsGolden(t *testing.T) {
+	blockSetup(t)
+	for _, v := range blockViews {
+		t.Run(v.name, func(t *testing.T) {
+			viewGolden(t, "stats-block-"+v.name+".golden", append(v.args, "--tz", "Europe/Paris")...)
+		})
+	}
+}
+
+// squashed is the text's lines with every run of blanks one space, so a
+// line is compared by its words and not by the width of its columns.
+func squashed(text string) []string {
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		out = append(out, strings.Join(strings.Fields(l), " "))
+	}
+	return out
+}
+
+// wantLines fails for each line of want that text has no line equal to.
+func wantLines(t *testing.T, what, text string, want ...string) {
+	t.Helper()
+	have := squashed(text)
+	for _, w := range want {
+		if !slices.Contains(have, w) {
+			t.Errorf("%s: no line %q in:\n%s", what, w, text)
+		}
+	}
+}
+
+// The numbers of the extended fixture, worked out by hand, as the text
+// says them: the funnel and the hops of time to recall (sess-long-1 sent 30
+// minutes after its last prompt, turned into memories 10 minutes later and
+// recalled 1 h 20 min after that; sess-long-2 sent 30 minutes after its last
+// prompt, its operation failed, so it is still counted on the server; the
+// other four sessions never sent), the scan, the checks' history, the
+// calendar, the memory that helped, where it came from and what changed.
+func TestStatsBlockText(t *testing.T) {
+	blockSetup(t)
+	text := func(args ...string) string {
+		t.Helper()
+		code, out, errOut := run(t, append(append([]string{"stats"}, args...), "--tz", "Europe/Paris")...)
+		if code != output.OK {
+			t.Fatalf("%v: exit %d: %s %s", args, code, out, errOut)
+		}
+		return out
+	}
+
+	wantLines(t, "pipeline", text("pipeline"),
+		"session ended 6 → sent 2 → turned into memories 1 → shown again 1",
+		"not sent 4, still on the server 1, shown, origin not known yet 1",
+		"last turn to sent: 2 sessions, too few for a typical time",
+		"sent to turned into memories: 1 session, too few for a typical time",
+		"turned into memories to shown again: 1 session, too few for a typical time",
+		"the whole way: 1 session, too few for a typical time",
+	)
+
+	wantLines(t, "system", text("system"),
+		"Possible secrets in memory 1 (watch)",
+		"last scan 2026-10-06 14:00, 2 days ago (3 pages read)",
+		"3 runs in the window, 5 days without a run",
+		"Check Now Days ok Days with a warning Days with a problem Last change",
+		"backup warning 1 2 0 2026-10-07, ok → warning",
+		"memory problem 2 0 1 2026-10-08, ok → problem",
+		"settings ok 3 0 0 —",
+	)
+
+	// the calendar line agrees with the rows the JSON carries, and with the
+	// days the fixture has prompts on (6, 7 and 8 October, in Paris)
+	days := text("days")
+	var env struct {
+		Data struct {
+			Tables struct {
+				Calendar []struct {
+					Recorded bool `json:"recorded"`
+				} `json:"calendar"`
+			} `json:"tables"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(runView(t, "stats", "days", "--tz", "Europe/Paris").raw), &env); err != nil {
+		t.Fatal(err)
+	}
+	rec := 0
+	for _, d := range env.Data.Tables.Calendar {
+		if d.Recorded {
+			rec++
+		}
+	}
+	if rec != 3 || len(env.Data.Tables.Calendar) != 396 {
+		t.Fatalf("calendar: %d recorded of %d, want 3 of 396 (Monday 2025-09-08 to 2026-10-08)", rec, len(env.Data.Tables.Calendar))
+	}
+	wantLines(t, "days", days, "calendar: 3 days recorded of 396")
+
+	wantLines(t, "overview", text("overview"),
+		"Helped most",
+		"Memory Project Kind Used Shown",
+		idText("mem-long-1")+" p1 facts about you and your work 1 2",
+	)
+
+	wantLines(t, "memory page", text("memories", "mem-long-1"),
+		"Came from a session on this PC (sess-lon, p1)",
+		"Session ended 2026-10-08 03:00, sent 2026-10-08 03:30, turned into memories 2026-10-08 03:40, first shown 2026-10-08 05:00",
+	)
+
+	rel := text("releases")
+	wantLines(t, "releases", rel, "What changed", "When What")
+	if !strings.Contains(rel, "recall.min_score 0.5 → 0.6") || !strings.Contains(rel, "new version v0.1.18") {
+		t.Errorf("releases: no marker for the version and the setting:\n%s", rel)
+	}
+	// the markers of a day are on its page: the setting changed on the 7th
+	// (18:00 in Paris), the version first seen on the 8th (04:00)
+	if p := text("days", "2026-10-07"); !strings.Contains(p, "recall.min_score 0.5 → 0.6") || strings.Contains(p, "new version") {
+		t.Errorf("the page of the 7th:\n%s", p)
+	}
+	if p := text("days", "2026-10-08"); !strings.Contains(p, "new version v0.1.18 (after v0.1.17)") || strings.Contains(p, "recall.min_score") {
+		t.Errorf("the page of the 8th:\n%s", p)
+	}
+
+	cmp := text("releases", "--compare", "v0.1.17,v0.1.18")
+	if !strings.Contains(cmp, "Comparison of v0.1.17 and v0.1.18 on Turns where Claude used memory") ||
+		!strings.Contains(cmp, "too few to compare: v0.1.17 has 0 active days and 0 turns in its best group; not enough active days") {
+		t.Errorf("a comparison with too few days:\n%s", cmp)
+	}
+}
+
+// A comparison that reads, and the shapes the fixture has no data for, built
+// by hand: the lines the text gives for a matched difference, an unmatched
+// one that disagrees (Simpson's paradox), the groups, the settings, the
+// weeks of yield, an old scan and the origins of a memory.
+func TestStatsBlockTextShapes(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	i := func(v int64) *int64 { return &v }
+	r := result("releases", "used.turn_rate", metrics.Metric{})
+	r.Tables.Compare = &metrics.Comparison{
+		A: "v0.1.16-m7", B: "v0.1.17-m7", Measure: "used.turn_rate", Reading: "differs",
+		Diff: f(0.114625), CI: &[2]float64{0.024783, 0.204466}, PooledA: f(0.489723), PooledB: f(0.604348),
+		RawA: metrics.Rate{Num: 187, Den: 326}, RawB: metrics.Rate{Num: 154, Den: 295}, RawDisagrees: true,
+		SessionsA: 120, SessionsB: 85,
+		Strata: []metrics.StratumRow{
+			{Project: "backsight", Path: "prompt", A: metrics.StratumSide{Num: 140, Den: 200, Days: 21}, B: metrics.StratumSide{Num: 46, Den: 60, Days: 9},
+				Weight: f(46.1538), Diff: f(0.066667), CI: &[2]float64{-0.058021, 0.191355}, Reading: "no_clear_difference", Eligible: true},
+			{Project: "project-b", Path: "unknown", A: metrics.StratumSide{Num: 9, Den: 20, Days: 4}, B: metrics.StratumSide{Num: 15, Den: 33, Days: 8}, Why: "days"},
+		},
+		SettingsDiffer: []metrics.SettingDiff{{Key: "recall.min_score", A: f(0.5), B: f(0.6), ChangedAt: &goldenNow}},
+	}
+	out := viewText(r, false)
+	wantLines(t, "comparison", out,
+		"Comparison of v0.1.16-m7 and v0.1.17-m7 on Turns where Claude used memory",
+		"matched difference +11 pts (+2 to +20), differs",
+		"unmatched −5 pts (57 % → 52 %): read the matched figure",
+		"120 sessions in v0.1.16-m7, 85 in v0.1.17-m7",
+		"Project Shown How v0.1.16-m7 did How v0.1.17-m7 did Difference",
+		"backsight added to the prompt 140 of 200 (21 days) 46 of 60 (9 days) +7 pts (−6 to +19), no clear difference",
+		"project-b not shown to Claude itself 9 of 20 (4 days) 15 of 33 (8 days) not compared: not enough active days",
+		"Settings that differ: recall.min_score 0.5 → 0.6 (changed 2026-10-08 12:00)",
+	)
+	// the unmatched line appears only when it disagrees
+	r.Tables.Compare.RawDisagrees = false
+	if strings.Contains(viewText(r, false), "unmatched") {
+		t.Errorf("an unmatched line without a disagreement")
+	}
+	r.Tables.Compare.Reading = "no_clear_difference"
+	r.Tables.Compare.CI = &[2]float64{-0.02, 0.2}
+	r.Tables.Compare.SettingsDiffer, r.Tables.Compare.SettingsUnknown = nil, true
+	wantLines(t, "no clear difference", viewText(r, false),
+		"matched difference +11 pts (−2 to +20), no clear difference",
+		"Settings of a version are not known: nothing was recorded before its first turn.")
+
+	// time to recall with everything the funnel can say, a yield of four weeks
+	// (one short, one not complete, one not recorded), an old scan
+	y := result("cost", "memory.yield", metrics.Metric{Extra: map[string]any{"withheld": "record_catching_up", "unresolved": int64(3)}, Series: []metrics.Point{
+		{Week: "2026-09-21", Complete: &[]bool{true}[0], Num: i(12), Den: i(40), Value: f(0.3), CI: &[2]float64{0.18, 0.45}, Tokens: i(52000), TokensPerUsed: f(4333.33)},
+		{Week: "2026-09-28", Complete: &[]bool{true}[0], Num: i(3), Den: i(15)},
+		{Week: "2026-10-05", Complete: &[]bool{false}[0]},
+		{Week: "2026-09-14", Complete: &[]bool{true}[0]},
+	}})
+	y.Metrics["memory.yield"] = metrics.Metric{Value: f(0.3), Num: i(12), Den: i(40), Status: metrics.StatusOK, Extra: y.Metrics["memory.yield"].Extra, Series: y.Metrics["memory.yield"].Series}
+	wantLines(t, "yield", viewText(y, false),
+		"week of 2026-09-21: 12 of 40 (30 %, 18 to 45 %), 52,000 tokens, 4,333 tokens per useful memory",
+		"week of 2026-09-28: 3 of 15, too few for a share",
+		"week of 2026-10-05: not complete yet",
+		"week of 2026-09-14: the new memories of that week were not recorded",
+		"shares withheld: the list of which memories are new is still catching up (3 not placed yet)",
+	)
+
+	// a typical time from 20 sessions, the slowest 1 in 20 from 100
+	ms := func(min float64) *float64 { return f(min * 60000) }
+	ttr := result("pipeline", "pipeline.time_to_recall", metrics.Metric{Value: ms(125), Num: i(20), Den: i(31), Status: metrics.StatusOK, Extra: map[string]any{
+		"funnel": map[string]int64{"ended": 40, "sent": 31, "extracted": 28, "recalled": 20, "waiting_or_failed": 9, "never": 2, "on_server": 1, "not_recalled": 8,
+			"unresolved": 0, "before_record": 3, "gone": 0},
+		"hops": []metrics.Hop{{Name: "last_to_sent", P50: ms(0.5), N: 31}, {Name: "sent_to_extracted", P50: ms(7), P95: ms(95), N: 120},
+			{Name: "extracted_to_recalled", P50: ms(60 * 30), P95: ms(60 * 24 * 3), N: 20}, {Name: "whole_way", P50: ms(125), N: 20}},
+	}})
+	wantLines(t, "time to recall", viewText(ttr, false),
+		"session ended 40 → sent 31 → turned into memories 28 → shown again 20",
+		"not sent 9, never turned into memories 2, still on the server 1, not shown again 8, sent before this was recorded 3",
+		"last turn to sent: typical under 1 min (31 sessions)",
+		"sent to turned into memories: typical 7 min, slowest 1 in 20: 95 min (120 sessions)",
+		"turned into memories to shown again: typical 30 h, slowest 1 in 20: 3 days (20 sessions)",
+		"the whole way: typical 2 h (20 sessions)",
+	)
+
+	s := result("system", "secrets.suspects", metrics.Metric{Value: f(2), Status: metrics.StatusWatch, Tags: []string{"old_scan"},
+		Extra: map[string]any{"age_days": int64(45), "pages": int64(3)}})
+	wantLines(t, "old scan", viewText(s, false), "Possible secrets in memory 2 (watch, the last scan is more than 30 days old)")
+
+	// where a memory came from, in each state
+	for state, want := range map[string]string{
+		metrics.OriginOtherPC:   "Came from a session on another PC, made 2026-09-30",
+		metrics.OriginNoSession: "Came from a note or an import",
+		metrics.OriginUnknown:   "Came from a source not known yet",
+	} {
+		created := "2026-09-30"
+		o := &metrics.Origin{State: state, Created: &created}
+		m := result("memories", "used.turn_rate", metrics.Metric{})
+		m.Tables.Memory = &metrics.MemoryPage{Origin: o}
+		if state != metrics.OriginOtherPC {
+			o.Created = nil
+		}
+		wantLines(t, "origin "+state, viewText(m, false), want)
 	}
 }

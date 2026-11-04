@@ -135,11 +135,11 @@ func assess(e env) (assessment, error) {
 	e.q.Window = w // the figures as of now are this window's
 	var ids, twoWindow []string
 	for _, d := range Catalog {
-		if d.Dev {
+		if d.Dev || d.ID == yieldID { // the yield judges nothing and reads the day record: the cost view asks for it itself
 			continue
 		}
 		ids = append(ids, d.ID)
-		if !d.ErrorClass && (d.Absolute.On != "" || d.Relative) {
+		if !d.ErrorClass && d.ID != timeToRecallID && (d.Absolute.On != "" || d.Relative) { // the time to recall has no verdict effect: no earlier window to judge
 			twoWindow = append(twoWindow, d.ID)
 		}
 	}

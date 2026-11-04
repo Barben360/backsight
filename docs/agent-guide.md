@@ -160,6 +160,7 @@ When the user asks whether memory works or is worth it, run `backsight stats ove
 - Each view answers one question: quality (does memory show up and is it right), cost (context, time and server tokens), bank (size and what to review), pipeline (are writes arriving), system (checks, server, jobs).
 - Every rate carries `num` and `den`, its sample. Statuses use confidence bounds, not the raw point: a rate is `watch` or `bad` only when its interval is past the line.
 - `too_few` means not enough data yet and `no_data` means nothing to count: neither is a failure. Say so rather than calling it a problem.
+- `backsight stats releases --compare A,B` compares two versions; it is observational (weeks, projects and settings differ), so report its reading (`differs`, `no clear difference`, `too few to compare`) and never say a version is better or worse.
 - Put flags after the view word: `backsight stats overview --days 30`, `--project <name>`.
 - Never run `backsight stats index rebuild` without the user: it replaces the local index.
 - Never pass `--text` unless the user asks for a memory's text.
