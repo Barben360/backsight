@@ -23,7 +23,7 @@ func indexOptions(d paths.Dirs, home string, progress io.Writer) index.Options {
 
 // localStatusOf reads the local_status row's sources: reach.json and
 // breaker.json (unreadable: nothing known), the notes outbox and its
-// quarantine, and state.json's backup verify, update check (whether it
+// quarantine plus the quarantined sessions' cursors, and state.json's backup verify, update check (whether it
 // failed, never its error) and backfill. Counts and times only.
 func localStatusOf(d paths.Dirs) func() (index.LocalStatus, error) {
 	return func() (index.LocalStatus, error) {
@@ -48,6 +48,12 @@ func localStatusOf(d paths.Dirs) func() (index.LocalStatus, error) {
 		if ls.QuarantineOldestAt, err = q.Oldest(); err != nil {
 			return index.LocalStatus{}, err
 		}
+		// Quarantined sessions count with the notes, as doctor and report do.
+		held, err := retain.QuarantinedSessions(d.CursorsDir())
+		if err != nil {
+			return index.LocalStatus{}, err
+		}
+		ls.Quarantined += len(held)
 		st, err := state.Load(d.StateFile())
 		if err != nil {
 			return index.LocalStatus{}, err

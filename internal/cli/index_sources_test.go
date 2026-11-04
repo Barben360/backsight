@@ -162,3 +162,24 @@ func TestLocalStatusOfAGoodCheck(t *testing.T) {
 		t.Errorf("%+v", ls)
 	}
 }
+
+// A quarantined session counts with the quarantined notes, as doctor and
+// report count them (issue 180); a released session's cursor does not.
+func TestLocalStatusCountsQuarantinedSessions(t *testing.T) {
+	root := t.TempDir()
+	d := paths.Dirs{State: filepath.Join(root, "state"), Config: filepath.Join(root, "config")}
+	q := retain.NewNote("b", "pitfall", "p", "held note", time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC))
+	writeJSONFile(t, notesOutbox(d).QuarantinePath, q)
+	for sid, held := range map[string]bool{"held-1": true, "held-2": true, "released": false} {
+		if err := retain.SaveCursor(d.CursorsDir(), sid, retain.Cursor{Quarantined: held}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ls, err := localStatusOf(d)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ls.Quarantined != 3 {
+		t.Errorf("Quarantined = %d, want 3 (1 note + 2 sessions)", ls.Quarantined)
+	}
+}
