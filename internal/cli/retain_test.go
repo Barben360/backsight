@@ -159,6 +159,46 @@ func TestFlushRefusedCredentialsAreBlocked(t *testing.T) {
 	}
 }
 
+// retain waiting names what has not left this PC and why, so "Waiting on
+// this PC" in the stats can be acted on: a session still being written is
+// not stuck, a quarantined one needs retain retry-quarantine. It never
+// calls the server.
+func TestRetainWaitingNamesEachSessionAndItsReason(t *testing.T) {
+	home := devInstall(t, true) // closed port: nothing may be sent
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // records retain_since before the sessions
+	withClock(t, time.Date(2026, 10, 24, 9, 10, 0, 0, time.UTC))
+	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 5, 0, 0, time.UTC))
+	writeTranscript(t, home, "set-aside", time.Date(2026, 10, 24, 9, 6, 0, 0, time.UTC))
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.CursorsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.CursorsDir(), "set-aside.json"), []byte(`{"quarantined":true}`), 0o600)
+	if _, err := notesOutbox(d).Append(retain.Note{DocumentID: "note:1", Content: "a queued note", CreatedAt: time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := run(t, "retain", "waiting", "--json")
+	var env struct {
+		Data waitingReport `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+		t.Fatalf("exit %d: %v\n%s\n%s", code, err, out, errOut)
+	}
+	got := map[string]string{}
+	for _, w := range env.Data.Sessions {
+		got[w.Session] = w.Reason
+	}
+	if !reflect.DeepEqual(got, map[string]string{"live": retain.WaitNotSettled, "set-aside": retain.WaitQuarantined}) || env.Data.NotesQueued != 1 {
+		t.Errorf("sessions %v, notes %d\n%s", got, env.Data.NotesQueued, out)
+	}
+	_, text, _ := run(t, "retain", "waiting")
+	for _, want := range []string{"live", "still being written", "set-aside", "retain retry-quarantine", "1 note"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q:\n%s", want, text)
+		}
+	}
+}
+
 // Record types Claude Code is not known to write are counted once, when
 // the cursor passes them (a format change shows in stats and doctor);
 // known ones are not.

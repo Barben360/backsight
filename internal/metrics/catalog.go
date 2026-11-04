@@ -307,11 +307,11 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "local.backlog", Label: "Waiting on this PC", Unit: "count", Direction: "none", MinN: 0,
-		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight jobs tick",
+		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight retain waiting",
 		Extra:      []string{"notes_queued", "sessions_waiting", "quarantined", "oldest_ms"},
 		Question:   "Is anything stuck on this PC?",
 		Definition: "Notes queued, sessions waiting to be sent, items set aside, and the age of the oldest (a note logged queued counts only while the notes outbox holds it). Watched when the oldest is over 1 hour, bad over 24 hours.",
-		Action:     "Work is not leaving this PC. Run backsight jobs tick.",
+		Action:     "Work is not leaving this PC. Run backsight retain waiting to see what waits and why.",
 	},
 	{
 		ID: "server.queue", Label: "Waiting on the server", Unit: "count", Direction: "none", MinN: 0,
