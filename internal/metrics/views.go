@@ -165,7 +165,8 @@ func Bank(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Tables.Review = &rv
-		return nil
+		r.Tables.TopShown, err = topShown(e, e.q.Window)
+		return err
 	})
 }
 

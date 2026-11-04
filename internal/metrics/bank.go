@@ -11,7 +11,7 @@ import (
 // memories (the store events and the journal). User-visible wording says
 // "memory".
 
-var bankIDs = []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "bank.churn", "notes.stored", "imports.sent"}
+var bankIDs = []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "bank.churn", "notes.stored", "imports.sent", activeShareID, concentrationID}
 
 func init() { register("bank", bankIDs, bank) }
 
@@ -89,6 +89,12 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 		return nil, nil, err
 	}
 	if err := bankImports(e, w, obs, met); err != nil {
+		return nil, nil, err
+	}
+	if err := bankActiveShare(e, w, obs, met); err != nil {
+		return nil, nil, err
+	}
+	if err := bankConcentration(e, w, obs, met); err != nil {
 		return nil, nil, err
 	}
 	return obs, met, nil

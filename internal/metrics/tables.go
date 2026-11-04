@@ -14,6 +14,7 @@ type Tables struct {
 	Extraction       []ExtractionRow     `json:"extraction,omitzero"`
 	ByProject        []ProjectCount      `json:"by_project,omitzero"`
 	Review           *Review             `json:"review,omitzero"`
+	TopShown         []TopShownRow       `json:"top_shown,omitzero"`
 	FailedOperations []OperationRow      `json:"failed_operations,omitzero"`
 	Jobs             []JobRow            `json:"jobs,omitzero"`
 	NeverExtracted   []NeverExtractedRow `json:"never_extracted,omitzero"`
@@ -103,6 +104,17 @@ type ExtractionRow struct {
 type ProjectCount struct {
 	Project  string `json:"project"`
 	Memories int64  `json:"memories"`
+}
+
+// TopShownRow is one of the memories shown most in the window: its project
+// (that of its latest show), how often it was shown, its share of all the
+// shows, and the credits of verdict used it got in the window.
+type TopShownRow struct {
+	Memory  string  `json:"memory"`
+	Project string  `json:"project"`
+	Shown   int64   `json:"shown"`
+	Share   float64 `json:"share"`
+	Used    int64   `json:"used"`
 }
 
 // Review lists the memories worth a look.

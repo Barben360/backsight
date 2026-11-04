@@ -1367,6 +1367,10 @@
           "dev": true,
           "family": "reach",
           "series": "none",
+          "extra": [
+            "unresolved",
+            "gone"
+          ],
           "drill": "backsight stats bank --dev",
           "n": 0,
           "mdc": null
@@ -1393,8 +1397,13 @@
           "dev": true,
           "family": "reach",
           "series": "none",
+          "extra": [
+            "gini",
+            "top10_share",
+            "shows"
+          ],
           "drill": "backsight stats bank --dev",
-          "n": 0,
+          "n": 3,
           "mdc": null
         },
         {

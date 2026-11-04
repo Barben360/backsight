@@ -31,6 +31,27 @@
       "last_ok": null
     },
     "metrics": {
+      "bank.active_share": {
+        "value": null,
+        "num": 3,
+        "den": 0,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [
+          "partial"
+        ],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats bank --dev",
+        "extra": {
+          "gone": 0,
+          "unresolved": 3
+        }
+      },
       "bank.by_project": {
         "value": 0,
         "num": null,
@@ -158,6 +179,26 @@
         "delta": null,
         "drill": "backsight stats bank"
       },
+      "shows.concentration": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats bank --dev",
+        "extra": {
+          "gini": 0,
+          "shows": 3,
+          "top10_share": 1
+        }
+      },
       "stale.hidden": {
         "value": null,
         "num": null,
@@ -213,7 +254,30 @@
         "never_used": [],
         "hidden": [],
         "reported": []
-      }
+      },
+      "top_shown": [
+        {
+          "memory": "m1",
+          "project": "",
+          "shown": 1,
+          "share": 0.3333333333333333,
+          "used": 0
+        },
+        {
+          "memory": "mem-long-1",
+          "project": "",
+          "shown": 1,
+          "share": 0.3333333333333333,
+          "used": 0
+        },
+        {
+          "memory": "mem-long-2",
+          "project": "",
+          "shown": 1,
+          "share": 0.3333333333333333,
+          "used": 0
+        }
+      ]
     },
     "attention": [],
     "attention_more": 0,

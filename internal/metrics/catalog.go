@@ -400,6 +400,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "bank.active_share", Label: "Share of the memory that came up", Unit: "ratio", Direction: "none", MinN: 20,
 		CI: "wilson", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
+		Extra:      []string{"unresolved", "gone"},
 		Question:   "How much of the memory ever comes up?",
 		Definition: "The memories shown in the window that already existed when it began, out of all the memories the server held then. Memories created inside the window are left out.",
 		Action:     "A low share means most stored memories are never recalled.",
@@ -407,6 +408,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "shows.concentration", Label: "How concentrated shows are", Unit: "ratio", Direction: "none", MinN: 20,
 		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
+		Extra:      []string{"gini", "top10_share", "shows"},
 		Question:   "Do a few memories take all the shows?",
 		Definition: "The Gini index of how often each shown memory was shown in the window: 0 when all are shown equally, near 1 when a few take almost every show. The share of the 10 most shown is given beside it.",
 		Action:     "A few memories take most shows; check that the ranking is not stuck on them.",

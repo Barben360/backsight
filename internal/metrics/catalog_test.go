@@ -70,8 +70,8 @@ var catalogRows = []catalogRow{
 	{"memory.yield", "Memories that proved useful", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", false, "cost", "weekly", "backsight stats cost", "tokens,tokens_per_used,unresolved,gone,pending,resolved_used,withheld"},
 	{"secrets.suspects", "Possible secrets in memory", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight memory scan", "scanned_at,age_days,live,forgotten,pages,ms"},
 	{"doctor.history", "Health checks over time", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "none", "backsight stats system", "days_without"},
-	{"bank.active_share", "Share of the memory that came up", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats bank --dev", ""},
-	{"shows.concentration", "How concentrated shows are", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "reach", "none", "backsight stats bank --dev", ""},
+	{"bank.active_share", "Share of the memory that came up", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats bank --dev", "unresolved,gone"},
+	{"shows.concentration", "How concentrated shows are", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "reach", "none", "backsight stats bank --dev", "gini,top10_share,shows"},
 	{"injection.contradicted", "Corrections after memory was shown", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
 	{"boost.set_changed", "Recalls the learned ranking changed", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "prompts,prompts_set_changed,searches,searches_set_changed"},
 }
