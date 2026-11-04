@@ -90,29 +90,69 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	return c, recs
 }
 
-// Unsent counts the sessions of files that live retain still has records
-// of to send, settled or not, from the transcripts and cursors alone (no
-// server call). Backfill's sessions (started before retain_since) and
-// quarantined ones are not counted; a transcript its cursor reached costs
-// a stat and the cursor.
-func (f *Flusher) Unsent(files []string) int {
-	n := 0
+// Why a session has not left this PC yet (Waiter.Reason).
+const (
+	WaitNotSettled  = "not_settled" // still being written: it settles SettleAfter after its last turn
+	WaitDue         = "due"         // settled: the next tick or retain flush sends it
+	WaitQuarantined = "quarantined" // set aside after the server refused it: retain retry-quarantine
+)
+
+// Waiter is one session that still has records to send.
+type Waiter struct {
+	Session    string        `json:"session"`
+	Transcript string        `json:"transcript"`
+	Project    string        `json:"project,omitempty"`
+	Reason     string        `json:"reason"`
+	Idle       time.Duration `json:"idle_ns,omitempty"` // since its last turn; 0 when quarantined
+}
+
+// Waiting lists the sessions of files that live retain still has records
+// of to send, settled or not, or has set aside, with why, from the
+// transcripts and cursors alone (no server call). Backfill's sessions
+// (started before retain_since) are not listed; a transcript its cursor
+// reached costs a stat and the cursor.
+func (f *Flusher) Waiting(files []string) []Waiter {
+	var out []Waiter
 	for _, file := range files {
 		fi, err := os.Stat(file)
 		if err != nil {
 			continue
 		}
-		cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), strings.TrimSuffix(filepath.Base(file), ".jsonl"))
+		sid := strings.TrimSuffix(filepath.Base(file), ".jsonl")
+		cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), sid)
 		switch {
 		case err != nil:
 			continue
-		case ok && (cur.Quarantined || cur.Backfill || cur.Offset >= fi.Size()):
+		case ok && cur.Quarantined:
+			out = append(out, Waiter{Session: sid, Transcript: file, Reason: WaitQuarantined})
+			continue
+		case ok && (cur.Backfill || cur.Offset >= fi.Size()):
 			continue
 		case !ok && !f.RetainSince.IsZero() && fi.ModTime().Before(f.RetainSince):
 			continue // last written before retain_since: backfill's
 		}
 		c, recs := f.Survey(file)
-		if c.Status == "send" && (ok || f.RetainSince.IsZero() || !recs[0].Timestamp.Before(f.RetainSince)) {
+		if c.Status != "send" || !(ok || f.RetainSince.IsZero() || !recs[0].Timestamp.Before(f.RetainSince)) {
+			continue
+		}
+		w := Waiter{Session: sid, Transcript: file, Project: c.Project, Reason: WaitDue}
+		if f.Now != nil {
+			w.Idle = max(0, f.Now().Sub(recs[len(recs)-1].Timestamp))
+			if w.Idle < SettleAfter {
+				w.Reason = WaitNotSettled
+			}
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// Unsent counts the sessions Waiting lists that a send can still move:
+// settled or not, not the quarantined ones (counted apart).
+func (f *Flusher) Unsent(files []string) int {
+	n := 0
+	for _, w := range f.Waiting(files) {
+		if w.Reason != WaitQuarantined {
 			n++
 		}
 	}
