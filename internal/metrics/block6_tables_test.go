@@ -238,6 +238,49 @@ func TestCalendarOneRowPerLocalDayAcrossDST(t *testing.T) {
 	}
 }
 
+// TestCalendarCountsEachSessionOncePerDay: a session whose prompts fall in
+// several quarter hours and hours of a day counts once for that day and once
+// for each other day it types on; a prompt at local midnight (and one a
+// minute before) belongs to the day it is typed on; a machine line makes a
+// day recorded and counts its session, not a prompt; used turns are placed
+// on the day of their first show, for the days they declared on only.
+func TestCalendarCountsEachSessionOncePerDay(t *testing.T) {
+	x := newFx(t, fxNow)
+	rec := telemetry.Prompt{N: 1, Decision: "recall", Injected: 1, Chars: 10, Plen: 80}
+	none := telemetry.Prompt{N: 2, Decision: "recall", Empty: "below_floor", Plen: 80}
+	machine := telemetry.Prompt{N: 3, Decision: "recall", Reason: "machine", Injected: 1, Plen: 80}
+	for _, p := range []struct {
+		at      time.Time
+		session string
+		p       telemetry.Prompt
+	}{
+		{paris(20, 8, 0), "a", rec}, {paris(20, 8, 14), "a", none}, {paris(20, 8, 16), "a", rec}, {paris(20, 14, 0), "a", rec},
+		{paris(20, 8, 10), "b", rec}, {paris(20, 23, 59), "a", none},
+		{paris(21, 0, 0), "a", rec}, {paris(21, 9, 0), "a", rec}, {paris(21, 9, 1), "c", machine},
+		{paris(22, 7, 0), "c", machine},
+	} {
+		x.calPrompt(p.at, p.session, "alpha", p.p)
+	}
+	x.declaredTurn(paris(20, 8, 1), "a", "declared", "used", "m1")
+	x.declaredTurn(paris(21, 9, 2), "d", "declared", "used", "m1")
+	x.declaredTurn(paris(21, 9, 3), "c", "undeclared", "used", "m1") // not declared: not counted
+
+	by := map[string]CalendarDay{}
+	for _, d := range x.run("days", x.query(7)).Tables.Calendar {
+		by[d.Day] = d
+	}
+	for day, w := range map[string]CalendarDay{
+		"2026-10-20": {Day: "2026-10-20", Prompts: 6, PromptsWithMemory: 4, UsedTurns: 1, Sessions: 2, Recorded: true},
+		"2026-10-21": {Day: "2026-10-21", Prompts: 2, PromptsWithMemory: 2, UsedTurns: 1, Sessions: 2, Recorded: true},
+		"2026-10-22": {Day: "2026-10-22", Sessions: 1, Recorded: true},
+		"2026-10-23": {Day: "2026-10-23"},
+	} {
+		if by[day] != w {
+			t.Errorf("%s = %+v, want %+v", day, by[day], w)
+		}
+	}
+}
+
 // TestOriginStates: where a memory came from, from the memory_doc record
 // only: never a document id; the server is not asked.
 func TestOriginStates(t *testing.T) {
