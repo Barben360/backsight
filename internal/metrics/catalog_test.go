@@ -59,7 +59,7 @@ var catalogRows = []catalogRow{
 	{"imports.sent", "Files imported", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "none", "backsight import list", "by_action"},
 	{"pipeline.flow", "Sessions sent", "ratio", "up", 0, none, none, "", false, true, "wilson", "machine", false, "pipeline", "daily", "backsight stats pipeline", "ok,failed,set_aside,waiting,backlog_oldest_ms"},
 	{"retain.outcomes", "Sends by result", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "daily", "backsight stats pipeline", "by_status,p95_ms"},
-	{"local.backlog", "Waiting on this PC", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "notes_queued,sessions_waiting,quarantined,oldest_ms"},
+	{"local.backlog", "Waiting on this PC", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight retain waiting", "notes_queued,sessions_waiting,quarantined,oldest_ms"},
 	{"server.queue", "Waiting on the server", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight doctor", "pending,processing,failed,failed_total,failed_capped"},
 	{"server.extraction_delay", "Time to turn a session into memories", "ms", "down", 100, 1800000, none, "p95", false, false, "none", "server", false, "pipeline", "none", "backsight doctor", "p50,p95"},
 	{"hooks.failures", "Steps that crashed", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "daily", "backsight doctor", "by_kind,last_24h"},
@@ -252,6 +252,9 @@ func TestCatalogText(t *testing.T) {
 		"server.queue":       "last 7 days",
 		"bank.consolidation": "current total",
 		"context.per_prompt": "typical (median)",
+		// "unknown" is a bucket users meet in the counts: the definition says
+		// what it covers (recalls logged before the reason was recorded).
+		"recall.empty_reasons": "unknown",
 	} {
 		d, _ := DefOf(id)
 		if !strings.Contains(d.Definition, want) {

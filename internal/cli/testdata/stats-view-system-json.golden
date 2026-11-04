@@ -97,7 +97,7 @@
         "mdc": null,
         "previous": null,
         "delta": null,
-        "drill": "backsight jobs tick",
+        "drill": "backsight retain waiting",
         "extra": {
           "notes_queued": 0,
           "oldest_ms": 0,

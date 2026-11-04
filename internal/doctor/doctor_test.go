@@ -1402,6 +1402,30 @@ func opsServer(t *testing.T, failedAt, completedAt string) *httptest.Server {
 	return srv
 }
 
+// listServer answers like opsServer, with the operations of a status listed
+// newest first (the server's order) and paged by limit and offset: failed
+// and completed are the finish times of the retains of that status.
+func listServer(t *testing.T, failed, completed []string) *httptest.Server {
+	next := fakeHandler(map[string]reply{statsPath: {200, `{"total_nodes":3,"failed_operations":1748}`}})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/v1/default/banks/coding-agent%3A%3Amemoire/operations" || r.URL.Query().Get("type") != "retain" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		status := r.URL.Query().Get("status")
+		all := map[string][]string{"failed": failed, "completed": completed}[status]
+		off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		lim, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		page := []string{}
+		for i := off; i < len(all) && len(page) < lim; i++ {
+			page = append(page, `{"id":"op`+strconv.Itoa(i)+`","operation_type":"retain","status":"`+status+`","created_at":"`+all[i]+`","updated_at":"`+all[i]+`"}`)
+		}
+		_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(len(all)) + `,"operations":[` + strings.Join(page, ",") + `]}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // Failed operations say whether extraction fails now (the latest retain
 // failed: server llm check names the cause) or failed in the past (a
 // retain completed since: the sessions sent meanwhile may be missing);
@@ -1416,12 +1440,53 @@ func TestBankSaysWhetherExtractionFailsNow(t *testing.T) {
 		t.Errorf("failing now: %+v", c)
 	}
 	f = newFixture(t)
+	f.env.Now = func() time.Time { return time.Date(2026, 11, 3, 8, 0, 0, 0, time.UTC) }
 	f.reference(opsServer(t, "2026-11-01T08:00:00Z", "2026-11-02T08:00:00Z").URL)
 	c = check(t, f.run(), "bank")
 	expect(t, c, Warn, "bank coding-agent::memoire")
-	if !strings.Contains(c.Detail, "the last extraction failed 2026-11-01 08:00 UTC, they succeed since 2026-11-02 08:00 UTC") ||
+	if !strings.Contains(c.Detail, "the last extraction failed 2026-11-01 08:00 UTC, they succeed again since 2026-11-02 08:00 UTC") ||
 		!strings.Contains(c.Fix, "may be missing from memory") || !strings.Contains(c.Fix, "backsight retain resend-failed --plan") || strings.Contains(c.Fix, "llm_api_key") {
 		t.Errorf("failed in the past: %+v", c)
+	}
+}
+
+// "They succeed again since" is the first success after the last failure,
+// not the latest success, which moves with every run (issue 182).
+func TestBankSinceIsTheFirstSuccessAfterTheLastFailure(t *testing.T) {
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return time.Date(2026, 11, 4, 16, 0, 0, 0, time.UTC) }
+	f.reference(listServer(t, []string{"2026-11-02T08:06:00Z", "2026-11-02T07:00:00Z"},
+		[]string{"2026-11-04T15:01:00Z", "2026-11-03T10:00:00Z", "2026-11-02T09:00:00Z", "2026-11-01T08:00:00Z"}).URL)
+	c := check(t, f.run(), "bank")
+	if !strings.Contains(c.Detail, "they succeed again since 2026-11-02 09:00 UTC") || strings.Contains(c.Detail, "2026-11-04 15:01") {
+		t.Errorf("since: %+v", c)
+	}
+}
+
+// Failed operations older than the stats' 7-day window with extraction
+// working again are history: info, with the count and why; younger ones
+// stay a warning that says when it clears (issue 182).
+func TestBankPastOutageDropsToInfoAfterAWeek(t *testing.T) {
+	failed, completed := []string{"2026-11-02T08:06:00Z"}, []string{"2026-11-04T15:01:00Z", "2026-11-02T09:00:00Z"}
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return time.Date(2026, 11, 9, 8, 7, 0, 0, time.UTC) }
+	f.reference(listServer(t, failed, completed).URL)
+	c := check(t, f.run(), "bank")
+	expect(t, c, Info, "bank coding-agent::memoire")
+	if !strings.Contains(c.Detail, "1748 failed operations") || !strings.Contains(c.Detail, "the last extraction failed 2026-11-02 08:06 UTC") ||
+		!strings.Contains(c.Detail, "more than 7 days ago") || !strings.Contains(c.Fix, "retain resend-failed --plan") {
+		t.Errorf("week after: %+v", c)
+	}
+	if u := check(t, f.run(), "untagged"); strings.HasPrefix(u.Summary, "skipped") {
+		t.Errorf("the bank checks that follow still run: %+v", u)
+	}
+	f = newFixture(t)
+	f.env.Now = func() time.Time { return time.Date(2026, 11, 9, 8, 5, 0, 0, time.UTC) }
+	f.reference(listServer(t, failed, completed).URL)
+	c = check(t, f.run(), "bank")
+	expect(t, c, Warn, "bank coding-agent::memoire")
+	if !strings.Contains(c.Detail, "this warning ends on 2026-11-09 08:06 UTC") {
+		t.Errorf("inside the week: %+v", c)
 	}
 }
 

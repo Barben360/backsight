@@ -198,9 +198,13 @@ func Run(ctx context.Context, env Env) Report {
 			add(checkSkew(srv.version))
 		}
 	}
-	bank := checkBank(ctx, cl, tg, env.Dirs)
+	nowFn := time.Now
+	if env.Now != nil {
+		nowFn = env.Now
+	}
+	bank := checkBank(ctx, cl, tg, env.Dirs, nowFn())
 	add(bank)
-	if bank.Status == OK || bank.Status == Warn {
+	if cl != nil && bank.Status != Error {
 		add(checkUntagged(ctx, cl, tg.Bank))
 		if tg.Source == "config" {
 			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs, cfgErr == nil && cfg.Server.Mode != "local"))
@@ -226,10 +230,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkWrites(env))
 	add(checkReach(env, tg, srv))
 	add(checkBackfill(env.Dirs))
-	now := time.Now
-	if env.Now != nil {
-		now = env.Now
-	}
+	now := nowFn
 	add(checkSplit(env.Dirs))
 	add(checkReplaceUnconfirmed(env.Dirs.TelemetryDir(), now()))
 	add(checkDisk(env))
@@ -438,7 +439,7 @@ func transport(t target.Target) (st Status, detail, fix string) {
 		"prefer a tailnet address (Tailscale: 100.x): on the server's host, backsight server expose --private <tailnet address> --out <file>; then here, backsight connect --token-file <file>"
 }
 
-func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target, d paths.Dirs) Check {
+func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target, d paths.Dirs, now time.Time) Check {
 	c := Check{ID: "bank"}
 	if cl == nil {
 		c.Status, c.Summary = Info, "skipped: "
@@ -482,7 +483,7 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target, d pa
 		c.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
 		c.Fix = "open the Hindsight UI operations page to see the provider errors"
 		if st.FailedOperations > 0 {
-			failedRetains(ctx, cl, t.Bank, &c)
+			failedRetains(ctx, cl, t.Bank, now, &c)
 		}
 	}
 	// jobs tick holds this PC's sends while the provider fails (issue 149):
@@ -499,7 +500,7 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target, d pa
 // failing now (the latest finished retain failed: what is sent meanwhile
 // is lost unless jobs tick holds it) or past ones (a retain completed
 // since). Two small reads; their failure keeps c as it is.
-func failedRetains(ctx context.Context, cl *hindsight.Client, bank string, c *Check) {
+func failedRetains(ctx context.Context, cl *hindsight.Client, bank string, now time.Time, c *Check) {
 	at := func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 	failed, anyFailed, err := cl.LatestOperation(ctx, bank, "failed", "retain")
 	if err != nil || !anyFailed {
@@ -514,8 +515,22 @@ func failedRetains(ctx context.Context, cl *hindsight.Client, bank string, c *Ch
 		c.Fix = "on the server's host, backsight server llm check names the cause; a rejected key: backsight secret set llm_api_key, then backsight server render and backsight server start"
 		return
 	}
-	c.Detail += "; the last extraction failed " + at(failed.FinishedAt()) + ", they succeed since " + at(completed.FinishedAt())
+	// The first success after the failure, not the latest one (which moves
+	// with every run); the latest stands when that read fails.
+	since := completed
+	if first, ok, err := cl.FirstOperationAfter(ctx, bank, "completed", "retain", failed.FinishedAt()); err == nil && ok {
+		since = first
+	}
+	c.Detail += "; the last extraction failed " + at(failed.FinishedAt()) + ", they succeed again since " + at(since.FinishedAt())
 	c.Fix = "the sessions sent while extraction failed may be missing from memory: backsight retain resend-failed --plan lists those of this PC to send again whole"
+	// Past the 7 days stats' server.queue counts, the outage is history:
+	// the count stays on the server, but nothing is wrong now.
+	if end := failed.FinishedAt().Add(7 * 24 * time.Hour); now.Before(end) {
+		c.Detail += "; this warning ends on " + at(end)
+	} else {
+		c.Status = Info
+		c.Detail += " (more than 7 days ago)"
+	}
 }
 
 // checkBankConfig compares the bank's settings with backsight's template

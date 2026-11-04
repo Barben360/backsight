@@ -34,7 +34,7 @@ var sendsConfigLoaded = func() {}
 
 func newRetainCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "retain", Short: "Send settled sessions to the memory", Args: cobra.NoArgs}
-	cmd.AddCommand(newRetainFlushCmd(e), newRetainRetryCmd(e), newRetainBackfillCmd(e), newRetainReattributeCmd(e), newRetainResendFailedCmd(e), newRetainPurgeAgainCmd(e))
+	cmd.AddCommand(newRetainFlushCmd(e), newRetainWaitingCmd(e), newRetainRetryCmd(e), newRetainBackfillCmd(e), newRetainReattributeCmd(e), newRetainResendFailedCmd(e), newRetainPurgeAgainCmd(e))
 	return cmd
 }
 
@@ -350,6 +350,72 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&session, "session", "", "flush only this session id (even one older than live retain)")
 	return cmd
+}
+
+// waitingReport is what retain waiting lists: the sessions with records
+// left to send and the notes in the outbox.
+type waitingReport struct {
+	Sessions         []retain.Waiter `json:"sessions"`
+	NotesQueued      int             `json:"notes_queued"`
+	NotesQuarantined int             `json:"notes_quarantined"`
+}
+
+func waitingText(r waitingReport) string {
+	var b strings.Builder
+	if len(r.Sessions) == 0 && r.NotesQueued+r.NotesQuarantined == 0 {
+		return "nothing waits on this PC\n"
+	}
+	for _, w := range r.Sessions {
+		switch w.Reason {
+		case retain.WaitQuarantined:
+			fmt.Fprintf(&b, "%-38s set aside after the server refused it: backsight retain retry-quarantine --session %s\n", w.Session, w.Session)
+		case retain.WaitNotSettled:
+			fmt.Fprintf(&b, "%-38s still being written (last turn %s ago): it is sent %s after its last turn\n", w.Session, w.Idle.Round(time.Minute), retain.SettleAfter)
+		default:
+			fmt.Fprintf(&b, "%-38s settled (last turn %s ago): the next jobs tick sends it\n", w.Session, w.Idle.Round(time.Minute))
+		}
+	}
+	if r.NotesQueued > 0 {
+		fmt.Fprintf(&b, "%s queued in the outbox: the next jobs tick sends them\n", plural(r.NotesQueued, "note"))
+	}
+	if r.NotesQuarantined > 0 {
+		fmt.Fprintf(&b, "%s set aside: backsight retain retry-quarantine --notes\n", plural(r.NotesQuarantined, "note"))
+	}
+	return b.String()
+}
+
+func newRetainWaitingCmd(e *env) *cobra.Command {
+	return &cobra.Command{
+		Use:   "waiting",
+		Short: "List the sessions and notes waiting on this PC, with why (no server call)",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			d, home, err := machine()
+			if err != nil {
+				return err
+			}
+			cfg, sec, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
+			f, err := newFlusher(d, home, cfg, sec, sendsGeneration(d), false)
+			if err != nil {
+				return err
+			}
+			rep := waitingReport{Sessions: f.Waiting(transcripts(home))}
+			if rep.Sessions == nil {
+				rep.Sessions = []retain.Waiter{}
+			}
+			ob := notesOutbox(d)
+			if rep.NotesQueued, err = ob.Pending(); err != nil {
+				return blocked(err)
+			}
+			if rep.NotesQuarantined, err = ob.Quarantined(); err != nil {
+				return blocked(err)
+			}
+			return e.emit("retain waiting", rep, func() string { return waitingText(rep) })
+		},
+	}
 }
 
 type retryResult struct {
