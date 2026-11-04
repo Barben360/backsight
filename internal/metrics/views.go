@@ -249,12 +249,7 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 }
 
 // viewLoc is the zone the view's times are read in.
-func viewLoc(e env) *time.Location {
-	if e.q.Window.Loc == nil {
-		return time.UTC
-	}
-	return e.q.Window.Loc
-}
+func viewLoc(e env) *time.Location { return viewLocOf(e.q.Window) }
 
 // reachRecorded is, for a view that reads nothing from the server, what
 // this PC last recorded of it: ok for an answer and no failure since, and

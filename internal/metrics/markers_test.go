@@ -163,3 +163,45 @@ func TestReleasesCarryTheUsedSeries(t *testing.T) {
 		t.Errorf("series = %+v, want 28th 1/2 and 29th 1/1 over 4 days", m.Series)
 	}
 }
+
+// TestReleaseMarkerPreviousComesFromBeforeTheWindow: the first prompt of the
+// window is itself the switch, its previous prompt is before since.
+func TestReleaseMarkerPreviousComesFromBeforeTheWindow(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.promptAt(mk(27, 10, 0), "0.1.16")
+	x.promptAt(mk(28, 14, 2), "0.1.17")
+	m := x.run("releases", x.query(2)).Tables.Markers // 28th 12:00 ..
+	if len(m) != 1 || m[0].Version != "0.1.17" || m[0].Previous != "0.1.16" || !m[0].At.Equal(mk(28, 14, 2)) {
+		t.Errorf("markers = %+v, want 0.1.17 after 0.1.16", m)
+	}
+}
+
+// TestMarkersAtTheSameInstant: a release and a config marker recorded at the
+// same instant list the release first.
+func TestMarkersAtTheSameInstant(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.promptAt(mk(27, 10, 0), "0.1.16")
+	x.configAt(mk(27, 10, 0), "a", map[string]float64{"recall.k": 1})
+	x.promptAt(mk(28, 9, 0), "0.1.17")
+	x.configAt(mk(28, 9, 0), "b", map[string]float64{"recall.k": 2})
+	m := x.run("releases", x.query(3)).Tables.Markers
+	if len(m) != 2 || m[0].Kind != "release" || m[1].Kind != "config" || !m[0].At.Equal(m[1].At) {
+		t.Errorf("markers = %+v, want release then config at one instant", m)
+	}
+}
+
+// TestReleaseMarkersIgnoreProjectAndMachine: a switch made by a machine
+// prompt of another project is a marker under a project filter.
+func TestReleaseMarkersIgnoreProjectAndMachine(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.16"
+	x.tel(mk(27, 10, 0), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "s", "alpha")
+	x.binary = "0.1.17"
+	x.tel(mk(28, 14, 2), telemetry.Prompt{N: 1, Decision: "recall", Reason: "machine", Plen: 80}, "s2", "beta")
+	q := x.query(3)
+	q.Project = "alpha"
+	m := x.run("releases", q).Tables.Markers
+	if len(m) != 1 || m[0].Version != "0.1.17" || m[0].Previous != "0.1.16" {
+		t.Errorf("markers = %+v, want the machine prompt of beta to count", m)
+	}
+}
