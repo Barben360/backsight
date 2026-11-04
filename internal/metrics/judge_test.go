@@ -316,6 +316,39 @@ func TestJudgeEveryCatalogRow(t *testing.T) {
 	}
 }
 
+// A slow week whose latest day is back under the line reads watch and
+// improving, not bad (#184); a recent day that is still slow, too small, or
+// absent changes nothing, and a week that is only watch stays watch.
+func TestJudgeLatencyImproving(t *testing.T) {
+	d := mustDef(t, "recall.latency")
+	with := func(den int64, p95 float64, recent *float64, n int64) Observation {
+		o := pct(den, p95)
+		o.Recent, o.RecentN = recent, n
+		return o
+	}
+	cases := []struct {
+		name      string
+		o         Observation
+		status    Status
+		improving bool
+	}{
+		{"bad week, fast day", with(100, 2851, f(320), 43), StatusWatch, true},
+		{"bad week, day at the watch line", with(100, 2851, f(2000), 43), StatusWatch, true},
+		{"bad week, day over the watch line", with(100, 2851, f(2001), 43), StatusBad, false},
+		{"bad week, fast day of 19", with(100, 2851, f(320), 19), StatusBad, false},
+		{"bad week, fast day of 20", with(100, 2851, f(320), 20), StatusWatch, true},
+		{"bad week, no recent figure", with(100, 2851, nil, 43), StatusBad, false},
+		{"watch week, fast day", with(100, 2200, f(320), 43), StatusWatch, false},
+		{"ok week, fast day", with(100, 1500, f(320), 43), StatusOK, false},
+	}
+	for _, c := range cases {
+		j := Judge(d, c.o)
+		if j.Status != c.status || j.Improving != c.improving {
+			t.Errorf("%s: status %s improving %v, want %s %v", c.name, j.Status, j.Improving, c.status, c.improving)
+		}
+	}
+}
+
 func TestWorst(t *testing.T) {
 	for _, c := range []struct{ a, b, want Status }{
 		{StatusOK, StatusOK, StatusOK},

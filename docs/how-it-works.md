@@ -108,7 +108,7 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 
 ## Time and context it costs
 
-**Time.** Only prompts that recall wait for the server; the others add a few milliseconds. On a CPU, nearly all of a recall is the reranker: about 1.5 s typical and 2 to 2.5 s at worst, measured on a desktop CPU with a memory of several thousand items. It grows with the memory. doctor's `latency` check warns when the prompt hook's 95th percentile is over 2.5 s across 7 days; [troubleshooting.md](troubleshooting.md#slow-recall-and-gpu-acceleration) has the levers. After 3 recalls in a row fail, recall pauses for 5 minutes (`network.breaker_*`).
+**Time.** Only prompts that recall wait for the server; the others add a few milliseconds. On a CPU, nearly all of a recall is the reranker: about 1.5 s typical and 2 to 2.5 s at worst, measured on a desktop CPU with a memory of several thousand items. It grows with the memory. doctor's `latency` check warns when the prompt hook's 95th percentile is over 2.5 s across 7 days (not once the last 24 h, from 20 recalls, are back under it: it then reads info, "improving"); [troubleshooting.md](troubleshooting.md#slow-recall-and-gpu-acceleration) has the levers. After 3 recalls in a row fail, recall pauses for 5 minutes (`network.breaker_*`).
 
 **Context.** What backsight adds to Claude's context window:
 

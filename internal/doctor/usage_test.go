@@ -312,6 +312,34 @@ func TestOwnersCheckListsWhatWasLearnt(t *testing.T) {
 	}
 }
 
+// A week of slow recalls whose last day is back under the limit is a fix
+// that has worked, not a slow server: it stays visible (the 7-day figure is
+// in the summary) but no longer warns (#184). A slow last day, or one with
+// too few recalls to judge, keeps the warning.
+func TestLatencyImprovingLastDayDoesNotWarn(t *testing.T) {
+	slow := `"event":"prompt","decision":"recall","plen":80,"ms":3000`
+	fast := `"event":"prompt","decision":"recall","plen":80,"ms":300`
+	mid := `"event":"prompt","decision":"recall","plen":80,"ms":2800`
+	h := time.Hour
+	cases := []struct {
+		name string
+		ev   map[time.Duration][]string
+		want Status
+		in   string
+	}{
+		{"last day fast", map[time.Duration][]string{3 * 24 * h: repeat(80, slow), h: repeat(25, fast)}, Info, "improving"},
+		{"last day still slow", map[time.Duration][]string{3 * 24 * h: repeat(80, slow), h: repeat(25, mid)}, Warn, ""},
+		{"last day too few recalls", map[time.Duration][]string{3 * 24 * h: repeat(80, slow), h: repeat(5, fast)}, Warn, ""},
+		{"fast recalls older than a day", map[time.Duration][]string{3 * 24 * h: repeat(80, slow), 30 * h: repeat(25, fast)}, Warn, ""},
+	}
+	for _, c := range cases {
+		got := byID(checkUsage(events(t, c.ev), usageNow, false))["latency"]
+		if got.Status != c.want || !strings.Contains(got.Summary, c.in) || !strings.Contains(got.Summary, "over 7 days") {
+			t.Errorf("%s: %s (%s), want %s containing %q and the 7-day figure", c.name, got.Status, got.Summary, c.want, c.in)
+		}
+	}
+}
+
 // A type an older binary counted as unknown, and this one knows, is not
 // a format change: it leaves the week's count at once instead of warning
 // for seven more days.
