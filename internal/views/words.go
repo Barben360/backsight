@@ -116,7 +116,7 @@ func StatusText(d metrics.Def, m metrics.Metric) string {
 		s += " — close to the line"
 	}
 	if slices.Contains(m.Tags, metrics.TagImproving) {
-		s += " — improving: the latest day is back under the line"
+		s += " — improving: the last 24 h are back under the line"
 	}
 	return s
 }

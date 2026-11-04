@@ -17,17 +17,17 @@ type Observation struct {
 	Baseline []BaselineValue // the 4 previous 7-day windows, newest first (relative metrics)
 	Watch    *float64        // a run-time watch threshold (context.per_session); nil: Def's
 	Filtered bool            // a server metric whose figure does answer the project filter: no not_filtered tag
-	// Recent is the p95 of the window's latest day over RecentN samples (a
+	// Recent is the p95 of the window's final 24 h (rolling) over RecentN samples (a
 	// latency's fix shows there a week before it leaves the window); nil
-	// when that day has none.
+	// when the final 24 h have none.
 	Recent  *float64
 	RecentN int64
 }
 
-// RecentMinN is the samples the latest day needs to speak for a recovery.
+// RecentMinN is the samples the final 24 h need to speak for a recovery.
 const RecentMinN = 20
 
-// TagImproving marks a metric whose window is bad but whose latest day is
+// TagImproving marks a metric whose window is bad but whose final 24 h are
 // back under the watch line.
 const TagImproving = "improving"
 
@@ -45,7 +45,7 @@ type Judgement struct {
 	Status     Status
 	Reason     string
 	Borderline bool
-	Improving  bool // bad on the window, lowered to watch by a recovered latest day
+	Improving  bool // bad on the window, lowered to watch by recovered final 24 h
 	CI         *[2]float64
 }
 
@@ -86,10 +86,10 @@ func Judge(d Def, o Observation) Judgement {
 	return j
 }
 
-// recovered: a percentile metric judged bad on its window whose latest day
-// has at least RecentMinN samples and a p95 at or under the watch line. The
+// recovered: a percentile metric judged bad on its window whose final 24 h
+// have at least RecentMinN samples and a p95 at or under the watch line. The
 // window's figure is kept; the verdict drops to watch (#184) so a fixed
-// cause does not read bad for a week. A day too small, or still over the
+// cause does not read bad for a week. A recent period too small, or still over the
 // line, changes nothing.
 func recovered(t Threshold, o Observation) bool {
 	watch := t.Watch

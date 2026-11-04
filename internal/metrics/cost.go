@@ -235,8 +235,9 @@ WHERE decision = 'recall' AND injected > 0 AND chars IS NOT NULL AND ts >= ? AND
 
 // samples are the values of a query, whole and by bucket.
 type samples struct {
-	all   []int64
-	byDay [][]int64
+	all    []int64
+	byDay  [][]int64
+	last24 []int64 // the window's final 24 h, rolling
 }
 
 // costSamples reads (ts, value) rows of query (binding since, until, the
@@ -255,6 +256,9 @@ func costSamples(e env, w Window, query string) (samples, []Bucket, error) {
 			return samples{}, nil, err
 		}
 		s.all = append(s.all, v)
+		if !time.UnixMilli(ts).Before(w.Until.Add(-24 * time.Hour)) {
+			s.last24 = append(s.last24, v)
+		}
 		if i := bucketIndex(buckets, time.UnixMilli(ts).In(w.Loc)); i >= 0 {
 			s.byDay[i] = append(s.byDay[i], v)
 		}
@@ -283,8 +287,9 @@ func latency(e env, w Window, id, query string, obs map[string]Observation, met 
 		m.Series = append(m.Series, p)
 	}
 	o := Observation{Den: n, P95: p95}
-	if k := len(m.Series); k > 0 && m.Series[k-1].P95 != nil { // the window's latest day
-		o.Recent, o.RecentN = m.Series[k-1].P95, *m.Series[k-1].N
+	if len(xs.last24) > 0 { // the rolling last 24 h, as doctor reads them: no flapping at midnight
+		r := Percentile(xs.last24, 95)
+		o.Recent, o.RecentN = &r, int64(len(xs.last24))
 	}
 	obs[id], met[id] = o, m
 	return nil
