@@ -236,6 +236,9 @@ func TestCatalogText(t *testing.T) {
 		"server.queue":       "last 7 days",
 		"bank.consolidation": "current total",
 		"context.per_prompt": "typical (median)",
+		// "unknown" is a bucket users meet in the counts: the definition says
+		// what it covers (recalls logged before the reason was recorded).
+		"recall.empty_reasons": "unknown",
 	} {
 		d, _ := DefOf(id)
 		if !strings.Contains(d.Definition, want) {
