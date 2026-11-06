@@ -140,29 +140,97 @@ func reach(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 	return obs, met, nil
 }
 
-// reachPrompts reads the window's prompts once and fills the four prompt
-// metrics.
-func reachPrompts(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
+// promptRow is one prompt as reachPrompts reads it. lastSearch is the time
+// of the latest main-agent memory-tool use of the prompt (session, n), 0
+// for none: the prompt is searched for a window when it is at or after
+// the window's start.
+type promptRow struct {
+	ts                          int64
+	decision, reason, lang, emp sql.NullString
+	plen, injected              sql.NullInt64
+	lastSearch                  int64
+}
+
+// promptRead is the prompts of [since, until) (ms), of the env's project
+// and version, in time order.
+type promptRead struct {
+	since, until int64
+	rows         []promptRow
+}
+
+// readPrompts is the prompts covering w, read once per transaction: the
+// first read spans the view's window, its previous one and its four
+// baselines (what the families ask of reach), a window outside it widens
+// the read to the union. The memo is keyed by the binary version (releases
+// vary it), the rest of the Query being fixed for the env.
+func readPrompts(e env, w Window) (*promptRead, error) {
+	lo, hi := w.Since.UnixMilli(), w.Until.UnixMilli()
+	if e.memo == nil {
+		return loadPrompts(e, lo, hi)
+	}
+	if r, ok := e.memo.prompts[e.q.version]; ok && r.since <= lo && hi <= r.until {
+		return r, nil
+	}
+	if r, ok := e.memo.prompts[e.q.version]; ok {
+		lo, hi = min(lo, r.since), max(hi, r.until)
+	} else if q := e.q.Window; !q.Since.IsZero() {
+		lo, hi = min(lo, q.Previous().Since.UnixMilli(), q.Baselines()[3].Since.UnixMilli()), max(hi, q.Until.UnixMilli())
+	}
+	r, err := loadPrompts(e, lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	if e.memo.prompts == nil {
+		e.memo.prompts = map[string]*promptRead{}
+	}
+	e.memo.prompts[e.q.version] = r
+	return r, nil
+}
+
+// loadPrompts reads the prompts of [lo, hi) with the time of their last
+// memory-tool use. The tool uses are read to the end of time, not to hi: a
+// prompt's search may come after the end of its window.
+func loadPrompts(e env, lo, hi int64) (*promptRead, error) {
 	var names, args []any
 	var cond []string
 	for _, n := range memoryTools {
 		cond = append(cond, fmt.Sprintf(`substr(name, -%d) = ?`, len(n)))
 		names = append(names, n)
 	}
-	args = append(args, w.Since.UnixMilli())
+	args = append(args, lo)
 	args = append(args, names...)
-	args = append(args, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version)
+	args = append(args, lo, hi, e.q.Project, e.q.Project, e.q.version, e.q.version)
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT p.ts, p.decision, p.reason, p.plen, p.lang, p.injected, p.empty, s.n IS NOT NULL
+SELECT p.ts, p.decision, p.reason, p.plen, p.lang, p.injected, p.empty, COALESCE(s.last, 0)
 FROM tel_prompt p
-LEFT JOIN (SELECT DISTINCT session, n FROM tel_tool_use
-           WHERE ts >= ? AND COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)) s
+LEFT JOIN (SELECT session, n, MAX(ts) AS last FROM tel_tool_use
+           WHERE ts >= ? AND COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)
+           GROUP BY session, n) s
        ON s.session = p.session AND s.n = p.n
 WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.binary_version = ?)`, args...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	r := &promptRead{since: lo, until: hi}
+	for rows.Next() {
+		var p promptRow
+		if err := rows.Scan(&p.ts, &p.decision, &p.reason, &p.plen, &p.lang, &p.injected, &p.emp, &p.lastSearch); err != nil {
+			return nil, err
+		}
+		r.rows = append(r.rows, p)
+	}
+	return r, rows.Err()
+}
+
+// reachPrompts buckets the window's prompts (read once for all the
+// windows) and fills the four prompt metrics.
+func reachPrompts(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
+	read, err := readPrompts(e, w)
+	if err != nil {
+		return err
+	}
+	since, until := w.Since.UnixMilli(), w.Until.UnixMilli()
 
 	buckets := w.Buckets()
 	total := newPromptAcc()
@@ -170,16 +238,12 @@ WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.bina
 	for i := range days {
 		days[i] = newPromptAcc()
 	}
-	for rows.Next() {
-		var (
-			ts                          int64
-			decision, reason, lang, emp sql.NullString
-			plen, injected              sql.NullInt64
-			searched                    bool
-		)
-		if err := rows.Scan(&ts, &decision, &reason, &plen, &lang, &injected, &emp, &searched); err != nil {
-			return err
+	for _, p := range read.rows {
+		if p.ts < since || p.ts >= until {
+			continue
 		}
+		ts, decision, reason, lang, emp, plen, injected := p.ts, p.decision, p.reason, p.lang, p.emp, p.plen, p.injected
+		searched := p.lastSearch >= since && p.lastSearch > 0
 		accs := []*promptAcc{total}
 		if i := bucketIndex(buckets, time.UnixMilli(ts).In(w.Loc)); i >= 0 {
 			accs = append(accs, days[i])
@@ -212,9 +276,6 @@ WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.bina
 				}
 			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 
 	// recall.hit_rate

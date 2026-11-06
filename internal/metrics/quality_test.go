@@ -908,3 +908,47 @@ func TestBreakdownStatsKeepTheirJSONNames(t *testing.T) {
 		}
 	}
 }
+
+// stopsPerTurn lays out several stops per turn, in journal order, across
+// sessions: "final" ends declared after a blocked, then a subagent's
+// blocked (not the turn's); "reblocked" declares and is then blocked, so
+// reads undeclared; "other" holds only a subagent's check_skipped stop, so no
+// stop of its own. A final stop read across turns or agents would change
+// one of the three outcomes.
+func stopsPerTurn(x *fx) {
+	x.declaredTurn(hoursAgo(1), "final", "blocked", "used", "m1")
+	x.stop(hoursAgo(1).Add(2*time.Minute), "final", "", "declared")
+	x.stop(hoursAgo(1).Add(3*time.Minute), "final", "agent-1", "blocked")
+	x.declaredTurn(hoursAgo(2), "reblocked", "declared", "used", "m1")
+	x.stop(hoursAgo(2).Add(2*time.Minute), "reblocked", "", "blocked")
+	x.declaredTurn(hoursAgo(3), "other", "", "used", "m1")
+	x.stop(hoursAgo(3).Add(time.Minute), "other", "agent-1", "check_skipped")
+}
+
+// TestSeveralStopsPerTurn: the outcome of a main-agent turn is its last
+// stop by journal order, whatever the subagents' stops around it.
+func TestSeveralStopsPerTurn(t *testing.T) {
+	x := newFx(t, fxNow)
+	stopsPerTurn(x)
+	m := qualityOf(x, x.query(7))
+	if c := m["declare.coverage"]; num(c) != 1 || den(c) != 3 {
+		t.Errorf("coverage = %d/%d, want 1 declared of 3 (final declared; reblocked and stopless undeclared)", num(c), den(c))
+	}
+	if r := m["used.turn_rate"]; num(r) != 1 || den(r) != 1 {
+		t.Errorf("used turn rate = %d/%d, want 1/1 (only the declared turn)", num(r), den(r))
+	}
+}
+
+// TestCalendarUsedTurnsFollowTheFinalMainStop: the calendar's used turns
+// are those of TestSeveralStopsPerTurn's declared turn alone.
+func TestCalendarUsedTurnsFollowTheFinalMainStop(t *testing.T) {
+	x := newFx(t, fxNow)
+	stopsPerTurn(x)
+	var used int64
+	for _, d := range x.run("days", x.query(7)).Tables.Calendar {
+		used += d.UsedTurns
+	}
+	if used != 1 {
+		t.Errorf("calendar used turns = %d, want 1 (the turn whose last main stop declares)", used)
+	}
+}

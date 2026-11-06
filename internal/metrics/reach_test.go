@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -445,5 +446,45 @@ func TestRotatedFileKeepsItsRows(t *testing.T) {
 	m := reachOf(x, x.query(7))["recall.hit_rate"]
 	if m.Num == nil || *m.Num != 12 || *m.Den != 24 {
 		t.Errorf("after rotation: %v/%v, want 12/24", m.Num, m.Den)
+	}
+}
+
+// TestPromptsReadOnceKeepWindowBoundaries: one read of the prompts serves
+// the window and the one before it, each prompt in exactly one window
+// (Since included, Until excluded), a search logged in the current window
+// still crediting a prompt of the previous one.
+func TestPromptsReadOnceKeepWindowBoundaries(t *testing.T) {
+	x := newFx(t, fxNow)
+	w, err := NewWindow(fxNow, 7, time.Time{}, time.Time{}, fxParis, "Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := func(at time.Time, session string, injected int) {
+		x.tel(at, telemetry.Prompt{N: 1, Decision: "recall", Plen: 80, Injected: injected}, session, "alpha")
+	}
+	prompt(w.Since, "at-since", 1)                    // current
+	prompt(w.Since.Add(-time.Millisecond), "prev", 0) // previous
+	prompt(w.Since.Add(time.Hour), "inside", 0)       // current
+	prompt(w.Until, "at-until", 1)                    // neither
+	x.toolUse(w.Since.Add(2*time.Hour), "prev", "alpha", 1, "memory_search", false)
+	x.toolUse(w.Since.Add(3*time.Hour), "inside", "alpha", 1, "memory_search", false)
+
+	var cur, prev map[string]Metric
+	err = withTx(context.Background(), x.source(), Query{Window: w, Machines: "this"}, x.need, func(e env) error {
+		var err error
+		if _, cur, err = reach(e, w); err != nil {
+			return err
+		}
+		_, prev, err = reach(e, w.Previous()) // served by the first read
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, p := cur["recall.hit_rate"], prev["recall.hit_rate"]; num(h) != 1 || den(h) != 2 || num(p) != 0 || den(p) != 1 {
+		t.Errorf("hit rate = %d/%d, previous %d/%d; want 1/2 and 0/1 (Since in, Until out)", num(h), den(h), num(p), den(p))
+	}
+	if s, p := cur["search.rate"], prev["search.rate"]; num(s) != 1 || den(s) != 2 || num(p) != 1 || den(p) != 1 {
+		t.Errorf("search rate = %d/%d, previous %d/%d; want 1/2 and 1/1 (the search logged after the previous window's end)", num(s), den(s), num(p), den(p))
 	}
 }
