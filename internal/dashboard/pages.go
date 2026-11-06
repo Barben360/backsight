@@ -477,8 +477,8 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				q.Del("from")
 				q.Del("to")
 			}
-			// The Overview's calendar colouring is the page's own: no view takes it.
-			if spec.Name == "overview" {
+			// The calendar's colouring is the page's own (Overview, Days): no view takes it.
+			if spec.Name == "overview" || spec.Name == "days" {
 				hm = q.Get("hm")
 				q.Del("hm")
 			}

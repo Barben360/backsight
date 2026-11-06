@@ -190,6 +190,13 @@
 {{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{if .Pill.Word}}<span class="pill st {{.Pill.Class}}">{{.Pill.Word}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
 {{end}}
 
+{{/* calendarcard: dot is a CalendarCard (Head, Colour, Chart); the Overview and the Days page draw it alike. */}}
+{{define "calendarcard"}}{{template "card-open" .Head}}
+<div class="row"><span class="small sub">Colour by</span>
+<nav class="seg" aria-label="Colour the days by">{{range .Colour}}{{template "seglink" .}}{{end}}</nav></div>
+{{.Chart}}
+{{template "card-close" .Head}}{{end}}
+
 {{define "info"}}{{if .Info.Label}}<details class="info"><summary aria-label="{{.Info.Label}}" aria-describedby="{{.ID}}-info"><span class="i i-info"></span></summary><div class="pop" id="{{.ID}}-info" role="note"><b>{{.Info.Name}}</b>
 {{if or .Info.What .Info.Limits .Info.BasedOn .Info.Smallest}}<dl>{{with .Info.What}}<dt>What</dt><dd>{{.}}</dd>{{end}}{{with .Info.Limits}}<dt>Limits</dt><dd>{{.}}</dd>{{end}}{{with .Info.BasedOn}}<dt>Based on</dt><dd>{{.}}</dd>{{end}}{{with .Info.Smallest}}<dt>Smallest change it can see</dt><dd>{{.}}</dd>{{end}}</dl>
 {{end}}{{range .Info.Paras}}<p>{{.}}</p>

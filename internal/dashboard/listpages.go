@@ -503,7 +503,61 @@ type DayPage struct {
 	Tiles      []TileGroup
 	Note       string
 	Prev, Next Ref // the days around it; Href "" at the end of the history
+	Markers    MarkersCard
 	Sessions   SessionsCard
+}
+
+// MarkersCard is "Did anything change that day?": the releases and settings
+// changes recorded that day. Lines is empty, and the card left out, on a day
+// with neither.
+type MarkersCard struct {
+	Head  Head
+	Lines []MarkerLine
+}
+
+// MarkerLine is one line of the card: a new version, a settings change, or
+// the sentence that no setting changed on a day with a new version.
+type MarkerLine struct {
+	Kind     string // "release", "config" or "unchanged"
+	At       format.Time
+	Version  Ref // the new version, linked to its row on the Releases page
+	Previous string
+	Changes  []MarkerChange
+}
+
+// MarkerChange is one setting that differs: Key, then its value before and after.
+type MarkerChange struct{ Key, From, To string }
+
+// markersOf is the card of the day's markers.
+func (d PageData) markersOf(ms []metrics.Marker) MarkersCard {
+	c := MarkersCard{Head: fixedHead("markers", "Did anything change that day?", "machine", d.CLI)}
+	value := func(v *float64) string {
+		if v == nil {
+			return "none"
+		}
+		return strconv.FormatFloat(*v, 'f', -1, 64)
+	}
+	var released, changed bool
+	for _, m := range ms {
+		at := m.At.In(zoneOr(d.Loc))
+		line := MarkerLine{Kind: m.Kind, At: format.Time{Text: at.Format("15:04"), Datetime: at.Format(time.RFC3339), Title: when(d.Loc, m.At)}}
+		switch m.Kind {
+		case "release":
+			line.Version, line.Previous, released = Ref{Text: m.Version, Href: d.versionHref(m.Version)}, m.Previous, true
+		case "config":
+			for _, ch := range m.Changes {
+				line.Changes = append(line.Changes, MarkerChange{Key: ch.Key, From: value(ch.From), To: value(ch.To)})
+			}
+			changed = true
+		default:
+			continue
+		}
+		c.Lines = append(c.Lines, line)
+	}
+	if released && !changed {
+		c.Lines = append(c.Lines, MarkerLine{Kind: "unchanged"})
+	}
+	return c
 }
 
 func dayOf(d PageData) DayPage {
@@ -527,6 +581,9 @@ func dayOf(d PageData) DayPage {
 		}
 	}
 	pg.Tiles = tilesOf(r, p, d.L, d.Loc, d.Frame.Prefs.Dev)
+	if t != nil {
+		pg.Markers = d.markersOf(t.Markers)
+	}
 	pg.Note = "One day is often too few to judge; the numbers are shown with their counts."
 
 	pg.Sessions = SessionsCard{Head: fixedHead("day-sessions", "Sessions that day", "machine", d.CLI)}

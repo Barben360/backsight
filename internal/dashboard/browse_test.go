@@ -113,6 +113,12 @@ func hrefs(page, rel string) []string {
 	return out
 }
 
+// withoutCalendar is the page without its days calendar, whose squares link to
+// days as the table's rows do.
+func withoutCalendar(page string) string {
+	return regexp.MustCompile(`(?s)<section class="card" aria-labelledby="w-calendar">.*?</section>`).ReplaceAllString(page, "")
+}
+
 func TestBrowseListsMatchTheAPI(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
@@ -133,6 +139,7 @@ func TestBrowseListsMatchTheAPI(t *testing.T) {
 		if r.StatusCode != 200 {
 			t.Fatalf("GET %s: %d", l.path, r.StatusCode)
 		}
+		b = withoutCalendar(b)
 		if got := strings.Count(b, l.link); got != want {
 			t.Errorf("%s: %d row links, the API has %d rows", l.path, got, want)
 		}
@@ -142,6 +149,7 @@ func TestBrowseListsMatchTheAPI(t *testing.T) {
 		if r.StatusCode != 200 {
 			t.Fatalf("GET %s: %d", page, r.StatusCode)
 		}
+		b = withoutCalendar(b)
 		if got := strings.Count(b, l.link); got != 2 {
 			t.Errorf("%s: %d row links, want 2", page, got)
 		}

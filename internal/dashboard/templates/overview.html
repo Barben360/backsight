@@ -94,11 +94,7 @@
 </div>
 
 {{/* widget: days calendar. Reads .V.days.Tables.Calendar (Day, Prompts, PromptsWithMemory, UsedTurns, Sessions, Recorded) through calendar (CalendarCard: Head, Colour, Chart). */}}
-{{with calendar $days $r.Window $.P $.HM $.Frame.Path $.Frame.Window}}{{template "card-open" .Head}}
-<div class="row"><span class="small sub">Colour by</span>
-<nav class="seg" aria-label="Colour the days by">{{range .Colour}}{{template "seglink" .}}{{end}}</nav></div>
-{{.Chart}}
-{{template "card-close" .Head}}{{end}}
+{{with calendar $days $r.Window $.P $.HM $.Frame.Path $.Frame.Window}}{{template "calendarcard" .}}{{end}}
 
 <details class="why summary-text"><summary>Summary as text</summary><pre class="sample"><code>{{$txt}}</code></pre></details>
 {{template "foot" .}}
