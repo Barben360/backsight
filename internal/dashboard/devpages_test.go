@@ -693,6 +693,18 @@ func pillDesc(n *node) string {
 	return "pill " + strconv.Quote(n.text()) + " of class " + strconv.Quote(n.attr("class"))
 }
 
+// settingsLine is the "Settings differ" line of the comparison card.
+func settingsLine(t *testing.T, card *node) *node {
+	t.Helper()
+	for _, s := range card.find("div.state") {
+		if strings.HasPrefix(s.text(), "Settings differ:") {
+			return s
+		}
+	}
+	t.Fatal("no settings line")
+	return nil
+}
+
 // notStatus fails when the pill is drawn in a status colour.
 func notStatus(t *testing.T, what string, n *node) {
 	t.Helper()
@@ -718,6 +730,12 @@ func TestComparisonPage(t *testing.T) {
 	}
 	if settings == nil {
 		t.Fatal("no settings line")
+	}
+	// A caveat, not a fault: drawn as the page's other caveats are, with the
+	// info mark and no status colour.
+	notStatus(t, "the settings line", settings)
+	if settings.attr("class") != "state st-few" || settings.first("span.i-info") == nil {
+		t.Errorf("settings line is %q with info mark %v, want the caveat style (state st-few, i-info)", settings.attr("class"), settings.first("span.i-info") != nil)
 	}
 	if got := settings.text(); got != "Settings differ: was 0.5 under v0.1.16-m7 and 0.55 under v0.1.17-m7 (changed Oct 7). A difference may come from the setting, not the release." {
 		t.Errorf("settings line: %q", got)
@@ -1093,7 +1111,7 @@ func TestComparisonTooFewAndNoDifference(t *testing.T) {
 	two := recordComparison()
 	two.SettingsDiffer = append(two.SettingsDiffer, metrics.SettingDiff{Key: "recall.prompt_hits", A: nil, B: fp(3)})
 	var codes []string
-	for _, k := range compareCard(t, compareHTML(t, two)).find("div.st-watch code") {
+	for _, k := range settingsLine(t, compareCard(t, compareHTML(t, two))).find("code") {
 		codes = append(codes, k.Text)
 	}
 	if !slices.Equal(codes, []string{"recall.min_score", "recall.prompt_hits"}) {
@@ -1143,7 +1161,7 @@ func TestComparisonEscapesVersions(t *testing.T) {
 	if got := needFirst(t, card, "div.lead span.sub").text(); got != "(+2 to +20) "+b+" minus "+a+", matched" {
 		t.Errorf("headline detail %q", got)
 	}
-	if got := needFirst(t, card, "div.st-watch").text(); !strings.Contains(got, "under "+a+" and 0.55 under "+b) {
+	if got := settingsLine(t, card).text(); !strings.Contains(got, "under "+a+" and 0.55 under "+b) {
 		t.Errorf("settings line %q", got)
 	}
 	if got := needAll(t, card, "div.lead div", 3)[2].text(); !strings.Contains(got, b+" ran mostly on project-a (190 of its 295 turns), and "+a+" mostly on "+project+" (200 of 326).") {

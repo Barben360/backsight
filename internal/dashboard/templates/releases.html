@@ -18,7 +18,7 @@
 {{end}}{{with .Intro}}<p class="small sub">{{.}}</p>
 {{end}}{{with .Few}}<div class="state st-few"><span class="i i-few"></span><span>{{.}}</span></div>
 {{end}}{{with .Result}}<div class="state st-few"><span class="i i-info"></span><span><b>{{.Observational}}</b> {{.Caveat}}</span></div>
-{{if .Settings}}<div class="state st-watch"><span class="i i-watch"></span><span><b>Settings differ:</b> {{range $i, $s := .Settings}}{{if $i}}; {{end}}<code>{{$s.Key}}</code> {{$s.Rest}}{{end}}. {{.SettingsTail}}</span></div>
+{{if .Settings}}<div class="state st-few"><span class="i i-info"></span><span><b>Settings differ:</b> {{range $i, $s := .Settings}}{{if $i}}; {{end}}<code>{{$s.Key}}</code> {{$s.Rest}}{{end}}. {{.SettingsTail}}</span></div>
 {{end}}{{with .Unknown}}<div class="state st-few"><span class="i i-info"></span><span>{{.}}</span></div>
 {{end}}<div class="row lead">
 <div><span class="big">{{.Big}}</span> <span class="small sub">{{.Sub}}</span></div>
