@@ -273,7 +273,7 @@ func section(b *strings.Builder, heading string, head []string, rows [][]string)
 	table(b, head, rows)
 }
 
-func whenText(t time.Time, loc *time.Location) string { return t.In(loc).Format("2006-01-02 15:04") }
+func whenText(t time.Time, loc *time.Location) string { return views.When(t, loc) }
 
 func whenPtr(t *time.Time, loc *time.Location) string {
 	if t == nil || t.IsZero() {
