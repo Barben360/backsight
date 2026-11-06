@@ -903,6 +903,10 @@ func TestDaysPageCalendar(t *testing.T) {
 		d.Frame.Path = "/days?days=7"
 		d.P.Days = 7
 		cal = d.V["days"].Tables.Calendar
+		// The ring follows the view's window, not the page's days parameter: Oct 6 to Oct 8.
+		w := d.V["days"].Window
+		w.Since, w.Until = time.Date(2026, 10, 6, 14, 0, 0, 0, w.Since.Location()), time.Date(2026, 10, 8, 14, 0, 0, 0, w.Since.Location())
+		d.V["days"].Window = w
 		d.V["days"].Tables.Days = []metrics.DayRow{{Day: "2026-10-08", Sessions: 4, Prompts: 29}, {Day: "2026-10-07", Sessions: 1, Prompts: 2}}
 	})
 	m := mainOf(t, n)
@@ -912,11 +916,10 @@ func TestDaysPageCalendar(t *testing.T) {
 	if got := len(m.find("a.hm-c")); got != len(cal) {
 		t.Errorf("%d squares, want one per calendar day (%d)", got, len(cal))
 	}
-	// The golden's window is [Oct 1 14:00, Oct 8 14:00): the ring is on Oct 1 to Oct 8.
-	if got := len(m.find("a.hm-c.inwin")); got != 8 {
-		t.Errorf("%d days ringed, want 8", got)
+	if got := len(m.find("a.hm-c.inwin")); got != 3 {
+		t.Errorf("%d days ringed, want 3 (Oct 6 to Oct 8)", got)
 	}
-	if first := m.first("a.hm-c.inwin"); first == nil || !strings.HasPrefix(first.attr("aria-label"), "Thu, Oct 1:") {
+	if first := m.first("a.hm-c.inwin"); first == nil || !strings.HasPrefix(first.attr("aria-label"), "Tue, Oct 6:") {
 		t.Errorf("first ringed day %v", first)
 	}
 	// The calendar is above the table, and the table keeps the page's days and its note.
@@ -953,12 +956,15 @@ func TestDaysPageColourChoice(t *testing.T) {
 func TestDayMarkers(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 5, h, m, 0, 0, time.UTC) }
-	markers := func(t *testing.T, ms ...metrics.Marker) *node {
-		return mainOf(t, pageNode(t, "day", false, func(d *PageData) {
-			d.Loc = time.UTC
+	edit := func(loc *time.Location, ms []metrics.Marker) func(d *PageData) {
+		return func(d *PageData) {
+			d.Loc = loc
 			d.V["days"].Tables.Day.Day = "2026-10-05"
 			d.V["days"].Tables.Day.Markers = ms
-		}))
+		}
+	}
+	markers := func(t *testing.T, ms ...metrics.Marker) *node {
+		return mainOf(t, pageNode(t, "day", false, edit(time.UTC, ms)))
 	}
 	release := metrics.Marker{At: at(14, 2), Kind: "release", Version: "v0.1.17-m7", Previous: "v0.1.16-m7"}
 	config := metrics.Marker{At: at(16, 30), Kind: "config", Changes: []metrics.SettingChange{
@@ -977,6 +983,9 @@ func TestDayMarkers(t *testing.T) {
 		}
 		t.Errorf("release day lines %q", got)
 	}
+	if len(lis) == 0 {
+		t.Fatal("release day: no lines")
+	}
 	if a := lis[0].first("a"); a == nil || !strings.HasPrefix(a.attr("href"), "/releases") || !strings.HasSuffix(a.attr("href"), "#release-v0.1.17-m7") {
 		t.Errorf("the version does not link to its row: %v", a)
 	}
@@ -989,7 +998,11 @@ func TestDayMarkers(t *testing.T) {
 	// The keys are <code>, which the reader's text leaves out.
 	want := "Settings changed (recorded at 16:30): 0.5 → 0.55, none → 8."
 	if len(lis) != 1 || lis[0].text() != want {
-		t.Errorf("settings day: %d lines, first %q, want %q", len(lis), lis[0].text(), want)
+		got := ""
+		if len(lis) > 0 {
+			got = lis[0].text()
+		}
+		t.Fatalf("settings day: %d lines, first %q, want %q", len(lis), got, want)
 	}
 
 	if codes := lis[0].find("code"); len(codes) != 2 || codes[0].text() != "recall.min_score" || codes[1].text() != "recall.limit" {
@@ -1005,10 +1018,26 @@ func TestDayMarkers(t *testing.T) {
 	if m = markers(t); len(m.find("#w-markers")) != 0 || strings.Contains(m.text(), "Did anything change") {
 		t.Error("a day with no marker has the card")
 	}
+	// The page's zone sets the clock time and the offset of the time element.
+	plus2 := time.FixedZone("CEST", 2*3600)
+	zoned := mainOf(t, pageNode(t, "day", false, edit(plus2, []metrics.Marker{release, config})))
+	zl := zoned.find("section.card[aria-labelledby=w-markers] ul.markers li")
+	if len(zl) != 2 || !strings.HasPrefix(zl[0].text(), "New version at 16:02:") || !strings.HasPrefix(zl[1].text(), "Settings changed (recorded at 18:30)") {
+		t.Fatalf("zoned lines %v", zl)
+	}
+	if tm := zl[0].first("time"); tm == nil || tm.attr("datetime") != "2026-10-05T16:02:00+02:00" {
+		t.Errorf("zoned time element %v", tm)
+	}
+
 	// The note stays under the tiles, after the card.
 	m = markers(t, release)
 	if got := m.first("p.small.muted").text(); got != "One day is often too few to judge; the numbers are shown with their counts." {
 		t.Errorf("note %q", got)
+	}
+	page := pageHTML(t, "day", edit(time.UTC, []metrics.Marker{release}))
+	tiles, card2, note := strings.Index(page, `class="tgroups"`), strings.Index(page, `id="w-markers"`), strings.Index(page, "One day is often too few")
+	if tiles < 0 || card2 < 0 || note < 0 || tiles >= card2 || card2 >= note {
+		t.Errorf("order tiles %d, markers card %d, note %d: want tiles, then the card, then the note", tiles, card2, note)
 	}
 }
 
