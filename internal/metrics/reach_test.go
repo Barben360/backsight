@@ -160,7 +160,7 @@ func TestHitRateRelativeAndFloor(t *testing.T) {
 // older lines), typed skips by theirs.
 func TestEmptyReasons(t *testing.T) {
 	x := newFx(t, fxNow)
-	reasons := []string{"no_candidates", "no_candidates", "below_floor", "all_seen", "capped", ""}
+	reasons := []string{"no_candidates", "no_candidates", "below_floor", "all_seen", "capped", "error", ""}
 	day1 := fxNow.Add(-30 * time.Hour)
 	x.prompts("alpha", "e", day1, len(reasons), func(i int, p *telemetry.Prompt) { p.Empty = reasons[i] })
 	x.prompts("alpha", "inj", fxNow.Add(-2*time.Hour), 2, injecting(2))
@@ -172,10 +172,10 @@ func TestEmptyReasons(t *testing.T) {
 	skip("m", "machine", 4) // machine messages are not typed prompts
 
 	m := reachOf(x, x.query(7))["recall.empty_reasons"]
-	if m.Value == nil || *m.Value != 6 {
-		t.Fatalf("value = %v, want 6", m.Value)
+	if m.Value == nil || *m.Value != 7 {
+		t.Fatalf("value = %v, want 7", m.Value)
 	}
-	if got, want := m.Extra["empty"], map[string]int64{"no_candidates": 2, "below_floor": 1, "all_seen": 1, "capped": 1, "unknown": 1}; !sameMap(got, want) {
+	if got, want := m.Extra["empty"], map[string]int64{"no_candidates": 2, "below_floor": 1, "all_seen": 1, "capped": 1, "error": 1, "unknown": 1}; !sameMap(got, want) {
 		t.Errorf("empty = %v, want %v", got, want)
 	}
 	if got, want := m.Extra["skips"], map[string]int64{"gap": 2, "too_short": 1}; !sameMap(got, want) {
@@ -197,8 +197,8 @@ func TestEmptyReasons(t *testing.T) {
 			t.Errorf("day %s: value %v but parts %v", p.Day, *p.Value, p.Parts)
 		}
 	}
-	if parts != 6 {
-		t.Errorf("series parts sum to %d, want 6", parts)
+	if parts != 7 {
+		t.Errorf("series parts sum to %d, want 7", parts)
 	}
 }
 

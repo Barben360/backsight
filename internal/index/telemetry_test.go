@@ -48,6 +48,12 @@ var typedCases = []typedCase{
 		"n": 4, "decision": "recall", "reason": "gap", "plen": 42, "lang": "fr", "above": 3, "injected": 2,
 		"ids_n": 3, "top": 0.75, "ms": 120, "nudged": true, "hinted": false, "detector": "rule", "chars": 900, "empty": "below_floor",
 	}},
+	// A failed recall is kept as its own empty reason (#191).
+	{"prompt", map[string]any{"decision": "recall", "injected": 0, "ids": []string{}, "empty": "error"},
+		"tel_prompt", map[string]any{
+			"n": nil, "decision": "recall", "reason": nil, "plen": nil, "lang": nil, "above": nil, "injected": 0,
+			"ids_n": 0, "top": nil, "ms": nil, "nudged": nil, "hinted": nil, "detector": nil, "chars": nil, "empty": "error",
+		}},
 	{"prompt", map[string]any{"decision": "skip", "reason": "machine", "plen": 10, "ids": []string{}, "detector": nil},
 		"tel_prompt", map[string]any{
 			"n": nil, "decision": "skip", "reason": "machine", "plen": 10, "lang": nil, "above": nil, "injected": nil,

@@ -318,6 +318,9 @@ var (
 	// /memories/{id}; projectEntities answers /tags and /entities.
 	recallAnswer string
 	recallTags   []string
+	// recallFailTag: a recall asking for this tag fails (500), the others
+	// answer: one scope down, the rest up.
+	recallFailTag string
 	// recallSourceFacts is the "source_facts" JSON object added to every
 	// recall answer when set; recallAskedSources counts the recalls that
 	// asked for source facts in their include.
@@ -398,6 +401,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
 	retainedDocIDs, retainedStrategies = nil, nil
 	fakeDocCreated = map[string]time.Time{}
+	recallFailTag = ""
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	memoryStatus, memoryHistory = map[string]int{}, map[string]string{}
 	recallQueries, recallSourceFacts, recallAskedSources = nil, "", 0
@@ -572,6 +576,10 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			recallTags = append(recallTags, strings.Join(body.Tags, ","))
 			recallQueries = append(recallQueries, body.Query)
+			if recallFailTag != "" && slices.Contains(body.Tags, recallFailTag) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			if st := recallStatus.Load(); st != 0 {
 				w.WriteHeader(int(st))
 				return

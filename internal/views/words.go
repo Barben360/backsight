@@ -273,7 +273,7 @@ func Age(ms int64) string {
 }
 
 // EmptyWords and KindWords name reasons and kinds in plain words.
-var EmptyWords = strings.NewReplacer("no_candidates", "no candidates", "below_floor", "below the cut-off", "all_seen", "all already seen", "capped", "cut short by the size limit", "unknown", "reason not recorded")
+var EmptyWords = strings.NewReplacer("error", "the search failed", "no_candidates", "no candidates", "below_floor", "below the cut-off", "all_seen", "all already seen", "capped", "cut short by the size limit", "unknown", "reason not recorded")
 
 var KindWords = map[string]string{"world": "facts about you and your work", "experience": "facts from sessions", "observation": "summaries"}
 

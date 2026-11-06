@@ -261,6 +261,10 @@ func TestCatalogText(t *testing.T) {
 			t.Errorf("%s: definition lacks %q", id, want)
 		}
 	}
+	// A failed recall is its own reason, not an empty bank (#191).
+	if d, _ := DefOf("recall.empty_reasons"); !strings.Contains(d.Definition, "the search failed") {
+		t.Errorf("recall.empty_reasons: definition lacks the failed-search reason: %q", d.Definition)
+	}
 }
 
 func TestOnlyTheListedMetricsAreRelative(t *testing.T) {

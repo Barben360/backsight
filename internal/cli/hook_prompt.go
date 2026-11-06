@@ -406,7 +406,8 @@ func (h *hookEnv) sticky() session.Sticky {
 // unmuted memories above the reranker floor, within PromptChars; flags
 // holds set_changed when the boost changed which ones (boostChangedSet).
 // empty says why nothing was chosen (the prompt event's empty field):
-// no_candidates, below_floor, all_seen or capped; "" when something was.
+// error (the search failed, whatever the bank holds), no_candidates,
+// below_floor, all_seen or capped; "" when something was.
 func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block string, chosen []recall.Hit, flags []string, items []session.Injection, res recall.Result, empty string) {
 	_, res = h.searchPrompt(prompt)
 	counts := h.sticky().Load(now(), h.stickyWindow())
@@ -417,6 +418,8 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block str
 	block, chosen = selectHits(res.Hits, rc, skip)
 	if len(chosen) == 0 {
 		switch {
+		case len(res.Hits) == 0 && searchFailed(res):
+			empty = "error"
 		case len(res.Hits) == 0 && rawHits(res) == 0:
 			empty = "no_candidates"
 		case len(res.Hits) == 0:
@@ -437,6 +440,19 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block str
 		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
 	}
 	return block, chosen, flags, items, res, ""
+}
+
+// searchFailed: every scope failed (server error, timeout, refused key), so
+// the empty result says nothing about the bank. One scope answering is
+// enough for the hits to speak. An open breaker never gets here: it skips the
+// recall ("breaker").
+func searchFailed(res recall.Result) bool {
+	for _, m := range res.Scopes {
+		if m.OK {
+			return false
+		}
+	}
+	return len(res.Scopes) > 0
 }
 
 // rawHits is how many hits the scopes returned before the reranker floor.

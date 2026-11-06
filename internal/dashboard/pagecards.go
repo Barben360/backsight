@@ -165,7 +165,7 @@ type ReportedLine struct {
 }
 
 // emptyOrder are the reasons a prompt got nothing, bottom of the bars first.
-var emptyOrder = []string{"no_candidates", "below_floor", "all_seen", "capped", "unknown"}
+var emptyOrder = []string{"error", "no_candidates", "below_floor", "all_seen", "capped", "unknown"}
 
 func qualityOf(d PageData) QualityPage {
 	r := d.V["quality"]
@@ -219,9 +219,13 @@ func qualityOf(d PageData) QualityPage {
 	if q.Empty.Note.Text == "" {
 		words := wordsOf(emptyOrder, views.EmptyWords.Replace)
 		q.Empty.Charts = []PathChart{{HTML: partsOf(l, "Prompts that got nothing, by why, per day", d.more(), empty, emptyOrder, words,
-			[]string{"f-seq1", "f-seq2", "f-seq3", "f-aside", "f-neutral"}, "")}}
+			[]string{"f-failed", "f-seq1", "f-seq2", "f-seq3", "f-aside", "f-neutral"}, "")}}
 		q.Empty.Extras = extrasOf(empty)
-		if topEmpty(empty) == "no_candidates" {
+		switch topEmpty(empty) {
+		case "error":
+			q.Empty.Hint = "Most prompts got nothing because the memory could not be searched, not because it is empty. Check the server:"
+			q.Empty.HintCmd = "backsight doctor"
+		case "no_candidates":
 			q.Empty.Hint = "Most prompts get nothing because nothing close enough is in memory."
 			if p.Project != "" {
 				q.Empty.Hint += " Importing a project's past sessions helps:"

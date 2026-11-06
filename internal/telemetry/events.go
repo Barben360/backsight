@@ -26,7 +26,7 @@ type Prompt struct {
 	Hinted   bool                   `json:"hinted"`
 	Detector *string                `json:"detector"` // rule | approval | null
 	Chars    int                    `json:"chars"`
-	// Empty: why a recall decision injected nothing (no_candidates |
+	// Empty: why a recall decision injected nothing (error | no_candidates |
 	// below_floor | all_seen | capped); unset when it injected something.
 	Empty string `json:"empty,omitempty"`
 }
