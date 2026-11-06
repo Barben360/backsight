@@ -25,13 +25,30 @@ func Defs(ctx context.Context, s Source, q Query) (Result, error) {
 	q.Window, q.Project = w, "" // the catalog's n is for every project
 	return runView(ctx, s, q, "defs", nil, func(e env, r *Result) error {
 		rows := []DefRow{}
+		// Each family runs once, for the steps filling every id the page
+		// lists (a run per id would repeat a step two ids share).
+		var fams []*family
+		wanted := map[*family][]string{}
+		for _, d := range Catalog {
+			if fam := families.byID[d.ID]; fam != nil && d.Unit == "ratio" && (id == "" || d.ID == id) {
+				if wanted[fam] == nil {
+					fams = append(fams, fam)
+				}
+				wanted[fam] = append(wanted[fam], d.ID)
+			}
+		}
+		for _, fam := range fams {
+			if _, _, err := e.runIDs(fam, w, wanted[fam]); err != nil {
+				return err
+			}
+		}
 		for _, d := range Catalog {
 			if id != "" && d.ID != id {
 				continue
 			}
 			row := DefRow{Def: d}
 			if fam := families.byID[d.ID]; fam != nil && d.Unit == "ratio" {
-				obs, _, err := e.run(fam, w)
+				obs, _, err := e.runIDs(fam, w, []string{d.ID}) // only the step filling it
 				if err != nil {
 					return err
 				}

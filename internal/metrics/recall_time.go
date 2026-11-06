@@ -342,30 +342,40 @@ SELECT memory_id, ts FROM shows WHERE memory_id IS NOT NULL AND ts >= ? ORDER BY
 // has given a row: gone when the record covers their first show's day (they
 // were forgotten before it was listed), unresolved otherwise.
 func readUnresolved(e env, w Window, run *recallRun) error {
-	covered, err := coveredUntil(e)
-	if err != nil {
-		return err
-	}
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT (SELECT MIN(f.ts) FROM shows f WHERE f.memory_id = c.memory_id)
-FROM (SELECT DISTINCT memory_id FROM shows WHERE memory_id IS NOT NULL AND ts >= ? AND ts < ?) c
+FROM (SELECT memory_id FROM shows WHERE memory_id IS NOT NULL AND ts >= ? AND ts < ? GROUP BY memory_id) c
 WHERE NOT EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id)`, w.Since.UnixMilli(), w.Until.UnixMilli())
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
+	var firsts []int64
 	for rows.Next() {
 		var first int64
 		if err := rows.Scan(&first); err != nil {
 			return err
 		}
+		firsts = append(firsts, first)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(firsts) == 0 { // none to place: the coverage is not read
+		return nil
+	}
+	covered, err := coveredUntil(e)
+	if err != nil {
+		return err
+	}
+	for _, first := range firsts {
 		if goneBy(covered, first) {
 			run.gone++
 		} else {
 			run.unresolved++
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // coveredUntil is the last day (UTC date) the day lists cover, NULL when

@@ -145,7 +145,7 @@ func flagship(e env, w Window, version string) (map[string]Metric, error) {
 	for _, id := range ReleaseFlagship {
 		d, _ := DefOf(id)
 		fam := families.byID[id]
-		obs, met, err := ve.run(fam, w)
+		obs, met, err := ve.runIDs(fam, w, []string{id}) // only the step filling id
 		if err != nil {
 			return nil, err
 		}

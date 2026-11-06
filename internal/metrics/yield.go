@@ -277,10 +277,10 @@ func readUsedWithoutRow(e env, w Window, r *yieldRun) error {
 		return err
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id),
-  (SELECT MIN(f.ts) FROM shows f WHERE f.memory_id = c.memory_id)
-FROM (SELECT DISTINCT memory_id FROM credits WHERE verdict = 'used' AND memory_id IS NOT NULL AND ts >= ? AND ts < ?) c
-ORDER BY c.memory_id`, from, w.Until.UnixMilli())
+SELECT x.has, CASE WHEN x.has THEN NULL ELSE (SELECT MIN(f.ts) FROM shows f WHERE f.memory_id = x.memory_id) END
+FROM (SELECT c.memory_id, EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id) AS has
+FROM (SELECT DISTINCT memory_id FROM credits WHERE verdict = 'used' AND memory_id IS NOT NULL AND ts >= ? AND ts < ?) c) x
+ORDER BY x.memory_id`, from, w.Until.UnixMilli())
 	if err != nil {
 		return err
 	}
