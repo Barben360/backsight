@@ -29,7 +29,7 @@ const none = -1.0 // no threshold value
 var catalogRows = []catalogRow{
 	{"recall.hit_rate", "Prompts that got memory", "ratio", "up", 20, 0.10, none, "hi", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats sessions --has memory", ""},
 	{"recall.empty_reasons", "Why prompts got nothing", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "reach", "daily", "backsight stats quality", "empty,skips"},
-	{"recall.by_lang", "Prompts that got memory, by language", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats quality --dev", "by_lang"},
+	{"recall.by_lang", "Prompts that got memory, by language", "ratio", "up", 20, none, none, "test", false, false, "wilson", "machine", true, "reach", "none", "backsight stats quality --dev", "by_lang,test"},
 	{"search.rate", "Prompts where Claude searched memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", ""},
 	{"search.empty_rate", "Searches that found nothing", "ratio", "down", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", "failed"},
 	{"used.turn_rate", "Turns where Claude used memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "quality", "daily", "backsight stats sessions --has used", "worst_case,pending,check_skipped,subagent_turns"},
@@ -47,11 +47,11 @@ var catalogRows = []catalogRow{
 	{"context.per_prompt", "Context added per prompt that got memory", "chars", "down", 20, none, none, "", false, false, "none", "machine", false, "cost", "none", "backsight stats cost", "p50,p95"},
 	{"recall.latency", "Time memory adds to a prompt", "ms", "down", 100, 2000, 2500, "p95", false, false, "none", "machine", false, "cost", "daily", "backsight stats days", "p50,p95"},
 	{"search.latency", "Time of a memory search", "ms", "down", 100, 3000, none, "p95", false, false, "none", "machine", false, "cost", "daily", "backsight doctor", "p50,p95"},
-	{"extraction.tokens", "What the server's model spent", "tokens", "none", 0, none, none, "", false, false, "none", "server", false, "cost", "daily", "backsight stats cost", "input,cached,output,by_operation,days_covered,failed_operations"},
+	{"extraction.tokens", "What the server's model spent", "tokens", "none", 0, none, none, "", false, false, "none", "server", false, "cost", "daily", "backsight stats cost", "input,cached,output,by_operation,days_covered,failed_operations,record_from"},
 	{"extraction.cost", "What the server's model spent", "money", "none", 0, none, none, "", false, false, "none", "server", false, "cost", "daily", "backsight stats cost", "price_set,currency,by_operation,failed_operations"},
 	{"extraction.per_session", "Extraction per session sent", "tokens", "none", 0, none, none, "", false, false, "none", "server", true, "cost", "none", "backsight stats cost --dev", "sessions_sent,window_days"},
 	{"bank.size", "Memories", "count", "none", 0, none, none, "", false, false, "none", "server", false, "bank", "none", "backsight stats bank", "world,experience,observation,documents,links"},
-	{"bank.growth", "New memories per day", "count", "none", 0, none, none, "", false, false, "none", "server", false, "bank", "daily", "backsight stats bank", "world,experience,observation,days_covered"},
+	{"bank.growth", "New memories per day", "count", "none", 0, none, none, "", false, false, "none", "server", false, "bank", "daily", "backsight stats bank", "world,experience,observation,days_covered,record_from"},
 	{"bank.by_project", "Memories per project", "count", "none", 0, none, none, "", false, false, "none", "server", false, "bank", "none", "backsight stats projects", ""},
 	{"bank.consolidation", "Summaries waiting", "count", "none", 0, none, none, "", false, true, "none", "server", false, "bank", "none", "backsight doctor", "pending,failed,last_consolidated_at"},
 	{"bank.churn", "Retired, hidden, restored", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "weekly", "backsight memory stale", "forget,retire,hide,unhide"},
@@ -66,13 +66,21 @@ var catalogRows = []catalogRow{
 	{"server.reach", "Memory server answering", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "last_ok,failing_since,breaker_open_until,skipped_prompts"},
 	{"doctor.check", "Health checks", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "ok,info,warn,error"},
 	{"jobs.last_run", "Background jobs", "ms", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "tick,maintain"},
+	{"pipeline.time_to_recall", "From session to recalled memory", "ms", "down", 20, 3600000, none, "p95", false, false, "none", "machine", false, "pipeline", "none", "backsight stats pipeline", "funnel,hops"},
+	{"memory.yield", "Memories that proved useful", "ratio", "up", 20, none, none, "", false, false, "wilson", "machine", false, "cost", "weekly", "backsight stats cost", "tokens,tokens_per_used,unresolved,gone,pending,resolved_used,withheld"},
+	{"secrets.suspects", "Possible secrets in memory", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight memory scan", "scanned_at,age_days,live,forgotten,pages,ms"},
+	{"doctor.history", "Health checks over time", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "none", "backsight stats system", "days_without"},
+	{"bank.active_share", "Share of the memory that came up", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "reach", "none", "backsight stats bank --dev", "unresolved,gone"},
+	{"shows.concentration", "How concentrated shows are", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "reach", "none", "backsight stats bank --dev", "gini,top10_share,shows"},
+	{"injection.contradicted", "Corrections after memory was shown", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
+	{"boost.set_changed", "Recalls the learned ranking changed", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "prompts,prompts_set_changed,searches,searches_set_changed"},
 }
 
 // A typo in any value of any row goes red: each Def is read back against the
 // row stated above, in order.
 func TestCatalogRows(t *testing.T) {
-	if len(catalogRows) != 39 || len(Catalog) != 39 {
-		t.Fatalf("rows: table %d, catalog %d, want 39 each", len(catalogRows), len(Catalog))
+	if len(catalogRows) != 47 || len(Catalog) != 47 {
+		t.Fatalf("rows: table %d, catalog %d, want 47 each", len(catalogRows), len(Catalog))
 	}
 	num := func(p *float64) float64 {
 		if p == nil {
@@ -127,6 +135,13 @@ func TestCatalogSources(t *testing.T) {
 		want[id] = "server"
 	}
 	want["doctor.check"] = "doctor"
+	for _, id := range []string{"pipeline.time_to_recall", "memory.yield", "secrets.suspects", "doctor.history"} {
+		want[id] = "collection"
+	}
+	want["bank.active_share"] = "journal"
+	want["shows.concentration"] = "journal"
+	want["injection.contradicted"] = "telemetry"
+	want["boost.set_changed"] = "journal"
 	if len(want) != len(Catalog) {
 		t.Fatalf("source table covers %d rows, catalog has %d", len(want), len(Catalog))
 	}
@@ -140,7 +155,7 @@ func TestCatalogSources(t *testing.T) {
 // Every id is unique and every row carries its text and source.
 func TestCatalogRowsAreComplete(t *testing.T) {
 	seen := map[string]bool{}
-	sources := []string{"telemetry", "journal", "ledger", "local", "server", "doctor"}
+	sources := []string{"telemetry", "journal", "ledger", "local", "server", "doctor", "collection"}
 	for _, d := range Catalog {
 		if seen[d.ID] {
 			t.Errorf("duplicate id %s", d.ID)
@@ -154,7 +169,8 @@ func TestCatalogRowsAreComplete(t *testing.T) {
 		if !slices.Contains(sources, d.Source) {
 			t.Errorf("%s: source %q", d.ID, d.Source)
 		}
-		if (d.Scope == "server") != (d.Source == "server") {
+		// The scan reads the server's memories, but its record is local.
+		if d.ID != "secrets.suspects" && (d.Scope == "server") != (d.Source == "server") {
 			t.Errorf("%s: scope %q but source %q", d.ID, d.Scope, d.Source)
 		}
 	}
@@ -260,7 +276,7 @@ func TestOnlyTheListedMetricsAreRelative(t *testing.T) {
 	slices.Sort(rel)
 	slices.Sort(errc)
 	wantRel := []string{"recall.hit_rate", "search.empty_rate", "search.rate", "used.turn_rate"}
-	wantErr := []string{"bank.consolidation", "doctor.check", "hooks.failures", "jobs.last_run", "local.backlog", "pipeline.flow", "server.queue", "server.reach"}
+	wantErr := []string{"bank.consolidation", "doctor.check", "hooks.failures", "jobs.last_run", "local.backlog", "pipeline.flow", "secrets.suspects", "server.queue", "server.reach"}
 	if !slices.Equal(rel, wantRel) {
 		t.Errorf("relative = %v, want %v", rel, wantRel)
 	}

@@ -299,7 +299,16 @@ func TestNoRuleIsOkStaleIsInfo(t *testing.T) {
 // row reads no_data when absent, and with no data at all too_few above a
 // minimum n, info for the stale lists and ok otherwise.
 func TestJudgeEveryCatalogRow(t *testing.T) {
+	seen := map[string]bool{}
+	defer func() {
+		for _, id := range []string{"pipeline.time_to_recall", "memory.yield", "secrets.suspects", "doctor.history", "bank.active_share", "shows.concentration", "injection.contradicted", "boost.set_changed"} {
+			if !seen[id] {
+				t.Errorf("%s is not in the catalog the judge ran over", id)
+			}
+		}
+	}()
 	for _, d := range Catalog {
+		seen[d.ID] = true
 		if j := Judge(d, Observation{Absent: true, Reason: "not_built"}); j.Status != StatusNoData || j.Reason != "not_built" {
 			t.Errorf("%s absent: %s %q, want no_data not_built", d.ID, j.Status, j.Reason)
 		}

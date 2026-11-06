@@ -129,6 +129,10 @@ func canaryState(t *testing.T) string {
 		`{"event":"replace_unconfirmed","ts":"` + ts + `","session":"s1","reason":"CANARY-REASON"}`,
 		`{"event":"mystery_kind","ts":"` + ts + `","session":"s1","text":"CANARY-UNKNOWN"}`,
 		`{"event":"config","ts":"` + ts + `","model":"CANARY-CONFIG","top_k":5}`,
+		// two settings records that differ: a marker, whose key may only be a numeric setting and whose canary key must not come through
+		`{"event":"config","ts":"` + at.Add(-2*time.Minute).Format(time.RFC3339Nano) + `","sha256":"` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","recall.min_score":0.5,"CANARY-KEY":1}`,
+		`{"event":"config","ts":"` + at.Add(-time.Minute).Format(time.RFC3339Nano) + `","sha256":"` + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" + `","recall.min_score":0.6,"CANARY-KEY":2}`,
+		`{"event":"prompt","ts":"` + at.Add(-3*time.Minute).Format(time.RFC3339Nano) + `","session":"s1","project":"` + ctlProject + `","decision":"skip","binary_version":"v0.0.1"}`,
 		``,
 	}, "\n")
 	writeTelemetryRaw(t, d.TelemetryDir(), month, tel)

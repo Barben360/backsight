@@ -216,6 +216,9 @@ func (x *fx) source() Source {
 	now := x.now
 	src := Source{Index: x.ix, Fresh: fr, Now: func() time.Time { return now }, Config: cfg, Configured: true, ServerHost: fxHost}
 	if x.server != nil {
+		x.server.mu.Lock()
+		x.server.clock = now
+		x.server.mu.Unlock()
 		src.Server = x.server
 	}
 	if x.doctor != nil {
@@ -302,6 +305,7 @@ type fakeServer struct {
 	errs   map[string]error
 	blocks map[string]bool
 	calls  []string
+	clock  time.Time // the fixture's now: the periods count back from it (zero: no filtering)
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -362,6 +366,24 @@ var kindStatus = map[hindsight.Kind]int{
 	hindsight.BadRequest: http.StatusBadRequest, hindsight.Unavailable: http.StatusServiceUnavailable,
 	hindsight.ServerError: http.StatusInternalServerError, hindsight.RateLimited: http.StatusTooManyRequests,
 	hindsight.Redirected: http.StatusFound,
+}
+
+// inPeriod reports whether a bucket starting at t (of width trunc, a day
+// by default) overlaps the period counting back from the fixture's now, as
+// the server answers: only the buckets inside the period.
+func (s *fakeServer) inPeriod(t time.Time, trunc, period string) bool {
+	if s.clock.IsZero() || period == "" {
+		return true
+	}
+	days, err := strconv.Atoi(strings.TrimSuffix(period, "d"))
+	if err != nil {
+		return true
+	}
+	width := 24 * time.Hour
+	if trunc == "hour" {
+		width = time.Hour
+	}
+	return t.Add(width).After(s.clock.Add(-time.Duration(days) * 24 * time.Hour))
 }
 
 func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
@@ -457,6 +479,9 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		buckets := []map[string]any{}
 		for _, b := range d.Series.Buckets {
+			if !s.inPeriod(b.Time, d.Series.Trunc, q.Get("period")) {
+				continue
+			}
 			buckets = append(buckets, map[string]any{"time": b.Time.UTC().Format(time.RFC3339),
 				"world": b.World, "experience": b.Experience, "observation": b.Observation})
 		}
@@ -468,6 +493,9 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 			trunc = bs[0].Trunc
 		}
 		for _, b := range d.LLM[q.Get("operation")] {
+			if !s.inPeriod(b.Time, b.Trunc, q.Get("period")) {
+				continue
+			}
 			buckets = append(buckets, map[string]any{"time": b.Time.UTC().Format(time.RFC3339),
 				"statuses": b.Statuses, "total": b.Total, "tokens": map[string]any{"input": b.Input,
 					"output": b.Output, "cached": b.Cached, "thoughts": b.Thoughts,

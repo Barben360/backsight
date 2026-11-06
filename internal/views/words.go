@@ -55,6 +55,9 @@ var NoDataWords = map[string]string{
 	metrics.ReasonServerDown:        "memory server not answering",
 	metrics.ReasonNotConfigured:     "no memory server set up",
 	metrics.ReasonServerUnsupported: "this memory server does not provide it",
+	metrics.ReasonRecordCatchingUp:  "still reading which memories are new",
+	metrics.ReasonNoRecord:          "the new memories of that week were not recorded",
+	metrics.ReasonNoCompleteWeek:    "no week is old enough yet",
 	"not_built":                     "not built yet",
 }
 
@@ -303,6 +306,34 @@ var PathWords = map[string]string{
 
 // MemoryStateWords name the state of a memory.
 var MemoryStateWords = map[string]string{"hidden": "hidden", "wrong": "reported wrong", "never_used": "often shown, never used", "": "—"}
+
+// FunnelWords name the steps a session's memories go through.
+var FunnelWords = map[string]string{
+	"ended": "session ended", "sent": "sent", "waiting_or_failed": "not sent", "extracted": "turned into memories",
+	"never": "never turned into memories", "on_server": "still on the server", "recalled": "shown again", "not_recalled": "not shown again",
+	"unresolved": "shown, origin not known yet", "before_record": "sent before this was recorded", "gone": "shown, since forgotten",
+}
+
+// OriginWords name where a memory came from.
+var OriginWords = map[string]string{
+	"this_pc": "a session on this PC", "other_pc": "a session on another PC", "no_session": "a note or an import", "unknown": "not known yet",
+}
+
+// NeverExtractedWords say why a sent session gave no memories.
+var NeverExtractedWords = map[string]string{
+	"failed": "the server failed on it", "no_memory": "nothing worth keeping", "none": "no trace of it on the server",
+}
+
+// ReadingWords name the reading of a comparison between two versions.
+var ReadingWords = map[string]string{
+	"differs": "differs", "no_clear_difference": "no clear difference", "too_few": "too few to compare",
+}
+
+// TagWords say what a metric's tag means, for those a person reads.
+var TagWords = map[string]string{"old_scan": "the last scan is more than 30 days old"}
+
+// DayStatusWords name a doctor check's status on a day of its history.
+var DayStatusWords = map[string]string{"ok": "ok", "watch": "warning", "bad": "problem", "none": "no run"}
 
 // Word is the word of k in m, k itself when it has none.
 func Word(m map[string]string, k string) string {

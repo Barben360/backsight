@@ -46,7 +46,18 @@ func Releases(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Tables.Releases, r.Tables.Page = rows[lo:hi], &page
 		r.Tables.Settings = settingsOf(e.src.Config)
 		r.Tables.Note = releaseNote
-		return nil
+		if r.Tables.Markers, err = Markers(e, e.q.Window); err != nil {
+			return err
+		}
+		if e.q.Compare[0] != "" {
+			c, err := Compare(e, e.q.Compare, e.q.Measure)
+			if err != nil {
+				return err
+			}
+			r.Tables.Compare = &c
+		}
+		r.Metrics, err = computeMetrics(e, e.q.Window, []string{"used.turn_rate"})
+		return err
 	})
 }
 
@@ -134,7 +145,7 @@ func flagship(e env, w Window, version string) (map[string]Metric, error) {
 	for _, id := range ReleaseFlagship {
 		d, _ := DefOf(id)
 		fam := families.byID[id]
-		obs, met, err := ve.run(fam, w)
+		obs, met, err := ve.runIDs(fam, w, []string{id}) // only the step filling id
 		if err != nil {
 			return nil, err
 		}

@@ -20,7 +20,7 @@ var axisMetrics = map[string][]string{
 	"found":   {"recall.hit_rate", "recall.empty_reasons"},
 	"right":   {"used.turn_rate", "declare.coverage", "verdict.wrong_rate"},
 	"cost":    {"context.per_session", "recall.latency"},
-	"flowing": {"pipeline.flow", "local.backlog", "server.queue", "bank.consolidation", "hooks.failures", "jobs.last_run", "server.reach", "doctor.check"},
+	"flowing": {"pipeline.flow", "local.backlog", "server.queue", "bank.consolidation", "hooks.failures", "jobs.last_run", "server.reach", "doctor.check", "secrets.suspects"},
 }
 
 // axisOrder is the order of the axes on the banner and in the attention
@@ -119,6 +119,14 @@ type judgingRun struct {
 	rightCur, rightPrv map[string]Metric
 }
 
+// verdictSkips are the figures no verdict rule reads, each costly to make
+// (the yield and the time to recall read the day record and the telemetry's
+// operations, the doctor's history its runs): the views showing them ask
+// for them themselves.
+func verdictSkips(id string) bool {
+	return id == yieldID || id == timeToRecallID || id == doctorHistoryID
+}
+
 func assess(e env) (assessment, error) {
 	loc := e.q.Window.Loc
 	if loc == nil {
@@ -135,7 +143,7 @@ func assess(e env) (assessment, error) {
 	e.q.Window = w // the figures as of now are this window's
 	var ids, twoWindow []string
 	for _, d := range Catalog {
-		if d.Dev {
+		if d.Dev || verdictSkips(d.ID) {
 			continue
 		}
 		ids = append(ids, d.ID)
@@ -497,8 +505,18 @@ func (r *judgingRun) items(root bool) (out, warns []Item, err error) {
 				return nil, nil, err
 			}
 		}
-		out = append(out, Item{Metric: d.ID, Severity: sev, Axis: familyAxis[d.Family],
-			Text: itemText(d, m, w.Days, median, hasMedian), Why: d.Action, Command: d.Command})
+		it := Item{Metric: d.ID, Severity: sev, Axis: familyAxis[d.Family],
+			Text: itemText(d, m, w.Days, median, hasMedian), Why: d.Action, Command: d.Command}
+		if d.ID == secretsID {
+			n, _ := m.Extra["age_days"].(int64)
+			at, _ := m.Extra["scanned_at"].(time.Time)
+			found := int64(0)
+			if m.Value != nil {
+				found = int64(*m.Value)
+			}
+			it.Why, it.reason = secretsWhy(found, n), secretsBanner(found, at, viewLocOf(w))
+		}
+		out = append(out, it)
 	}
 	if doctorRead(r.e) {
 		d, _ := DefOf("doctor.check")
@@ -586,14 +604,14 @@ func withItems(reasons []Reason, items []Item, axis string, root *Item) []Reason
 	}
 	added := 0
 	for _, it := range mine {
-		if i := slices.IndexFunc(reasons, func(r Reason) bool { return r.Metric == it.Metric && r.Text == it.Text }); i >= 0 {
+		if i := slices.IndexFunc(reasons, func(r Reason) bool { return r.Metric == it.Metric && r.Text == it.bannerText() }); i >= 0 {
 			reasons[i].Command = it.Command
 			continue
 		}
 		if added == axisItems {
 			break
 		}
-		reasons = append(reasons, Reason{Metric: it.Metric, Severity: it.Severity, Text: it.Text, Command: it.Command})
+		reasons = append(reasons, Reason{Metric: it.Metric, Severity: it.Severity, Text: it.bannerText(), Command: it.Command})
 		added++
 	}
 	return reasons

@@ -20,12 +20,13 @@ type Params struct {
 	Dev, DevSet      bool // DevSet: dev was given (a page's query beats the preference)
 	Limit, Offset    int  // Limit: metrics.DefaultLimit when not given
 	Has, Sort, State string
-	Text             bool // CLI only: the API never sets it
+	Text             bool   // CLI only: the API never sets it
+	Compare, Measure string // releases: the two versions "A,B" and the measure
 }
 
 // Allowed values of the view parameters.
 var (
-	hasValues   = []string{"used", "wrong", "undeclared", "memory"}
+	hasValues   = []string{"used", "wrong", "undeclared", "memory", "never_extracted", "contradicted"}
 	sortValues  = []string{"shown", "used", "rate", "last_shown"}
 	stateValues = []string{"hidden", "wrong", "never_used"}
 )
@@ -102,11 +103,40 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 			return metrics.Query{}, Usage("--%s: one of %s", c.name, strings.Join(c.allowed, ", "))
 		}
 	}
+	cmp, err := compareOf(p)
+	if err != nil {
+		return metrics.Query{}, err
+	}
 	if p.Text && id == "" {
 		return metrics.Query{}, Usage("--text needs a memory id")
 	}
 	return metrics.Query{Window: w, Project: p.Project, Path: p.Path, ID: id, Limit: p.Limit, Offset: p.Offset,
-		Has: p.Has, Sort: p.Sort, State: p.State, Dev: p.Dev, Text: p.Text}, nil
+		Has: p.Has, Sort: p.Sort, State: p.State, Dev: p.Dev, Text: p.Text,
+		Compare: cmp, Measure: p.Measure}, nil
+}
+
+// compareOf reads --compare A,B and --measure: two different, non-empty
+// versions, a measure that comparisons know, and no measure without a
+// comparison. A measure is set to its default when only --compare is given.
+func compareOf(p Params) ([2]string, error) {
+	if p.Measure != "" && !slices.Contains(metrics.CompareMeasures, p.Measure) {
+		return [2]string{}, Usage("--measure: one of %s", strings.Join(metrics.CompareMeasures, ", "))
+	}
+	if p.Compare == "" {
+		if p.Measure != "" {
+			return [2]string{}, Usage("--measure needs --compare")
+		}
+		return [2]string{}, nil
+	}
+	parts := strings.Split(p.Compare, ",")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return [2]string{}, Usage("--compare: two versions, as A,B")
+	}
+	a, b := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	if a == b {
+		return [2]string{}, Usage("--compare: A and B are the same version")
+	}
+	return [2]string{a, b}, nil
 }
 
 // zone is the zone of tz, this machine's when empty, and its name.

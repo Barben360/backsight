@@ -1,0 +1,43 @@
+Is the memory healthy? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Found
+Share of the memory that came up             1 of 0                   (n=0, too few, 20 more needed)
+  partial: some of it could not be read
+  1 memory shown, not placed yet, count as older
+How concentrated shows are                   —                        (too few)
+
+Memory
+Memories                                     0                        (ok, no history)
+  0 facts about you and your work, 0 facts from sessions, 0 summaries
+New memories per day                         —                        (no data: nothing recorded yet)
+Memories per project                         0                        (ok, no history)
+Summaries waiting                            0                        (ok, no history)
+Retired, hidden, restored                    —                        (no data: nothing recorded yet)
+Facts stored                                 —                        (no data: nothing recorded yet)
+Files imported                               —                        (no data: nothing recorded yet)
+
+To review
+Often shown, never used                      1                        (info, no change vs previous)
+Hidden                                       0                        (info, no change vs previous)
+Reported wrong                               0                        (info, no change vs previous)
+
+Memories per project
+none
+
+Most shown
+Memory    Project  Shown  Share of all shows  Used
+mem-long  p1       2      50 %                1
+m1                 1      25 %                0
+mem-long           1      25 %                0
+
+To review: Often shown, never used
+Memory    Project  Shown  Last shown        Look at it
+mem-long           12     2026-10-07 11:00  backsight forget mem-long-2
+
+To review: Hidden
+none
+
+To review: Reported wrong
+none
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

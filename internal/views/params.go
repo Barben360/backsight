@@ -16,7 +16,7 @@ import (
 var CommonParams = []string{"days", "since", "until", "tz", "project", "path", "dev", "limit", "offset"}
 
 // ViewParams are the parameters that only some views take.
-var ViewParams = map[string][]string{"sessions": {"has"}, "memories": {"sort", "state"}}
+var ViewParams = map[string][]string{"sessions": {"has"}, "memories": {"sort", "state"}, "releases": {"compare", "measure"}}
 
 // parseTime reads a window bound: RFC 3339 or YYYY-MM-DDTHH:MM with a
 // zone, or a date alone, which is midnight in loc.
@@ -95,6 +95,10 @@ func FromValues(view string, v url.Values) (Params, error) {
 			p.Sort = s
 		case "state":
 			p.State = s
+		case "compare":
+			p.Compare = s
+		case "measure":
+			p.Measure = s
 		}
 	}
 	return p, nil

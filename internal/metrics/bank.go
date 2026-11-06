@@ -11,7 +11,7 @@ import (
 // memories (the store events and the journal). User-visible wording says
 // "memory".
 
-var bankIDs = []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "bank.churn", "notes.stored", "imports.sent"}
+var bankIDs = []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "bank.churn", "notes.stored", "imports.sent", activeShareID, concentrationID}
 
 func init() { register("bank", bankIDs, bank) }
 
@@ -58,12 +58,12 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 	for _, s := range []struct {
 		id   string
 		keys []string
-		fill func(env, Window, map[string]Observation, map[string]Metric)
+		fill func(env, Window, map[string]Observation, map[string]Metric) error
 	}{
-		{"bank.size", sizeKeys(e.q), bankSize},
+		{"bank.size", sizeKeys(e.q), plainFill(bankSize)},
 		{"bank.growth", []string{"series"}, bankGrowth},
-		{"bank.by_project", []string{"tags"}, bankByProject},
-		{"bank.consolidation", []string{"stats"}, bankConsolidation},
+		{"bank.by_project", []string{"tags"}, plainFill(bankByProject)},
+		{"bank.consolidation", []string{"stats"}, plainFill(bankConsolidation)},
 	} {
 		reason := ""
 		for _, k := range s.keys {
@@ -78,7 +78,9 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 			absent(s.id, reason)
 			continue
 		}
-		s.fill(e, w, obs, met)
+		if err := s.fill(e, w, obs, met); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := bankChurn(e, w, obs, met); err != nil {
 		return nil, nil, err
@@ -89,7 +91,21 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 	if err := bankImports(e, w, obs, met); err != nil {
 		return nil, nil, err
 	}
+	if err := bankActiveShare(e, w, obs, met); err != nil {
+		return nil, nil, err
+	}
+	if err := bankConcentration(e, w, obs, met); err != nil {
+		return nil, nil, err
+	}
 	return obs, met, nil
+}
+
+// plainFill is a fill that reads nothing but the server's data.
+func plainFill(f func(env, Window, map[string]Observation, map[string]Metric)) func(env, Window, map[string]Observation, map[string]Metric) error {
+	return func(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
+		f(e, w, obs, met)
+		return nil
+	}
 }
 
 // bankSize fills bank.size: the nodes of every fact type, or under a
@@ -132,8 +148,10 @@ var bankSizeExtras = []string{"world", "experience", "observation", "documents",
 // bankGrowth fills bank.growth from the server's time series, read for the
 // period asked (seriesPeriod): the buckets overlapping the window, whole
 // (as inWindow keeps them), summed by kind (extra) and re-bucketed to
-// local days.
-func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metric) {
+// local days. A window reaching back past the series (90 days) reads the
+// days before the server's first one from the daily record, each point
+// saying where its figure came from (server, record, none).
+func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	const id = "bank.growth"
 	buckets := w.Buckets()
 	width := bucketWidth(e.srv.Series.Trunc)
@@ -145,10 +163,12 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 	var total int64
 	byKind := map[string]int64{}
 	var kept int
+	var times []time.Time
 	for _, b := range e.srv.Series.Buckets {
 		if !b.Time.Add(width).After(w.Since) || !b.Time.Before(w.Until) {
 			continue
 		}
+		times = append(times, b.Time)
 		local := b.Time.In(w.Loc)
 		seen[local.Format("2006-01-02")] = true
 		kept++
@@ -165,23 +185,72 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 		}
 	}
 	covered := len(seen)
-	if covered == 0 { // the server holds nothing for the window
+	// Past the series' reach the record fills the days before the server's
+	// first one.
+	beyond := w.Since.Before(reachStart(e.now, maxSeriesDays))
+	first, hasServer := firstBucket(times, width, w.Since, w.Until)
+	held := make([]bool, len(buckets))
+	var recordDays int
+	if beyond {
+		cutoff := w.Until
+		if hasServer {
+			cutoff = first
+		}
+		rows, err := readRecordedNew(e, recordFromMs(w.Since), cutoff.UnixMilli())
+		if err != nil {
+			return err
+		}
+		recorded := map[string]bool{}
+		for _, r := range rows {
+			local := r.Bucket.In(w.Loc)
+			if local.Before(w.Since) {
+				local = w.Since
+			}
+			i := bucketIndex(buckets, local)
+			if i < 0 {
+				continue
+			}
+			for k, n := range map[string]int64{"world": r.World, "experience": r.Experience, "observation": r.Observation} {
+				total += n
+				byKind[k] += n
+				byDay[i][k] += n
+			}
+			held[i] = true
+			recorded[r.Bucket.Format(dateLayout)] = true
+		}
+		recordDays = len(recorded)
+	}
+	if covered+recordDays == 0 { // neither the server nor the record holds anything for the window
 		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, Metric{}
-		return
+		return nil
 	}
 	// The rate is over the time the counted buckets span (whole buckets,
 	// the first one possibly before the window), not the window's length.
-	days := float64(kept) * width.Hours() / 24
+	days := float64(kept)*width.Hours()/24 + float64(recordDays)
 	m := Metric{Tags: []string{tagSnapshot}, Extra: map[string]any{}}
 	for _, k := range seriesKinds { // the memories added over the buckets kept, by kind
 		m.Extra[k] = byKind[k]
 	}
-	if w.Length() > maxSeriesDays*day { // the series cannot reach back further
-		m.Extra["days_covered"] = covered
+	if w.Length() > maxSeriesDays*day || beyond { // the series cannot reach back further
+		m.Extra["days_covered"] = covered + recordDays
+	}
+	if beyond {
+		from, err := recordFrom(e, false)
+		if err != nil {
+			return err
+		}
+		m.Extra["record_from"] = from
 	}
 	m.Value = ptr(float64(total) / days)
 	for i, b := range buckets {
 		p := pointOf(w, b.Key)
+		if beyond {
+			p.Source = sourceOf(b.Key, w, hasServer, first, held[i])
+		}
+		if p.Source == sourceNone {
+			m.Series = append(m.Series, p)
+			continue
+		}
 		p.Parts = map[string]int64{}
 		var sum int64
 		for _, k := range seriesKinds {
@@ -192,6 +261,7 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 		m.Series = append(m.Series, p)
 	}
 	obs[id], met[id] = Observation{}, m
+	return nil
 }
 
 // bankByProject fills bank.by_project: the number of projects with a tag.

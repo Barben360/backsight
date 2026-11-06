@@ -17,6 +17,7 @@ type Observation struct {
 	Baseline []BaselineValue // the 4 previous 7-day windows, newest first (relative metrics)
 	Watch    *float64        // a run-time watch threshold (context.per_session); nil: Def's
 	Filtered bool            // a server metric whose figure does answer the project filter: no not_filtered tag
+	Test     Status          // a test the family ran itself (Absolute.On "test"): its result, "" when none
 	// Recent is the p95 of the window's final 24 h (rolling) over RecentN samples (a
 	// latency's fix shows there a week before it leaves the window); nil
 	// when the final 24 h have none.
@@ -134,6 +135,8 @@ func absolute(t Threshold, o Observation, lo, hi float64) (Status, bool) {
 				borderline = true
 			}
 		}
+	case "test": // the family's own test (the language test): its result stands
+		status = o.Test
 	case "p95", "value":
 		v := o.P95
 		if t.On == "value" {

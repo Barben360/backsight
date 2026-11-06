@@ -27,6 +27,27 @@
       "partial": false
     },
     "metrics": {
+      "boost.set_changed": {
+        "value": 0.3333333333333333,
+        "num": 1,
+        "den": 3,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats quality --dev",
+        "extra": {
+          "prompts": 2,
+          "prompts_set_changed": 1,
+          "searches": 1,
+          "searches_set_changed": 0
+        }
+      },
       "declare.coverage": {
         "value": null,
         "num": 0,
@@ -98,6 +119,24 @@
           "pending": 0
         }
       },
+      "injection.contradicted": {
+        "value": 0,
+        "num": 0,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0,
+          0.7934567085261071
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats quality --dev"
+      },
       "recall.by_lang": {
         "value": 0.8,
         "num": 4,
@@ -147,6 +186,19 @@
               ],
               "status": "too_few"
             }
+          },
+          "test": {
+            "reference": "en",
+            "reference_num": 0,
+            "reference_den": 1,
+            "gaps": [],
+            "left_out": [
+              {
+                "lang": "fr",
+                "num": 1,
+                "den": 1
+              }
+            ]
           }
         }
       },

@@ -6,31 +6,38 @@ import "time"
 // only its own. A table the view does not fill (nil) is left out; one it
 // fills with no rows marshals as [] (omitzero, not omitempty).
 type Tables struct {
-	Page             *Page              `json:"page,omitzero"`
-	Activity         *Activity          `json:"activity,omitzero"`
-	Lately           []SessionRow       `json:"lately,omitzero"`
-	OutcomeMix       []OutcomeDay       `json:"outcome_mix,omitzero"`
-	Reported         []ReportedRow      `json:"reported,omitzero"`
-	Extraction       []ExtractionRow    `json:"extraction,omitzero"`
-	ByProject        []ProjectCount     `json:"by_project,omitzero"`
-	Review           *Review            `json:"review,omitzero"`
-	FailedOperations []OperationRow     `json:"failed_operations,omitzero"`
-	Jobs             []JobRow           `json:"jobs,omitzero"`
-	Doctor           []DoctorRow        `json:"doctor,omitzero"`
-	System           *SystemInfo        `json:"system,omitzero"`
-	Projects         []ProjectRow       `json:"projects,omitzero"`
-	Pooled           *PooledRow         `json:"pooled,omitzero"`
-	Project          *ProjectPage       `json:"project,omitzero"`
-	Sessions         []SessionRow       `json:"sessions,omitzero"`
-	Session          *SessionPage       `json:"session,omitzero"`
-	Memories         []MemoryRow        `json:"memories,omitzero"`
-	Memory           *MemoryPage        `json:"memory,omitzero"`
-	Days             []DayRow           `json:"days,omitzero"`
-	Day              *DayPage           `json:"day,omitzero"`
-	Releases         []ReleaseRow       `json:"releases,omitzero"`
-	Settings         map[string]float64 `json:"settings,omitzero"`
-	Defs             []DefRow           `json:"defs,omitzero"`
-	Note             string             `json:"note,omitzero"`
+	Page             *Page               `json:"page,omitzero"`
+	Activity         *Activity           `json:"activity,omitzero"`
+	Lately           []SessionRow        `json:"lately,omitzero"`
+	OutcomeMix       []OutcomeDay        `json:"outcome_mix,omitzero"`
+	Reported         []ReportedRow       `json:"reported,omitzero"`
+	Extraction       []ExtractionRow     `json:"extraction,omitzero"`
+	ByProject        []ProjectCount      `json:"by_project,omitzero"`
+	Review           *Review             `json:"review,omitzero"`
+	TopShown         []TopShownRow       `json:"top_shown,omitzero"`
+	FailedOperations []OperationRow      `json:"failed_operations,omitzero"`
+	Jobs             []JobRow            `json:"jobs,omitzero"`
+	NeverExtracted   []NeverExtractedRow `json:"never_extracted,omitzero"`
+	Doctor           []DoctorRow         `json:"doctor,omitzero"`
+	DoctorHistory    []DoctorHistoryRow  `json:"doctor_history,omitzero"`
+	System           *SystemInfo         `json:"system,omitzero"`
+	Projects         []ProjectRow        `json:"projects,omitzero"`
+	Pooled           *PooledRow          `json:"pooled,omitzero"`
+	Project          *ProjectPage        `json:"project,omitzero"`
+	Sessions         []SessionRow        `json:"sessions,omitzero"`
+	Session          *SessionPage        `json:"session,omitzero"`
+	Memories         []MemoryRow         `json:"memories,omitzero"`
+	Memory           *MemoryPage         `json:"memory,omitzero"`
+	Days             []DayRow            `json:"days,omitzero"`
+	Calendar         []CalendarDay       `json:"calendar,omitzero"`
+	Helped           []HelpedRow         `json:"helped,omitzero"`
+	Day              *DayPage            `json:"day,omitzero"`
+	Releases         []ReleaseRow        `json:"releases,omitzero"`
+	Markers          []Marker            `json:"markers,omitzero"`
+	Settings         map[string]float64  `json:"settings,omitzero"`
+	Compare          *Comparison         `json:"compare,omitzero"`
+	Defs             []DefRow            `json:"defs,omitzero"`
+	Note             string              `json:"note,omitzero"`
 }
 
 // Page is a browse view's paging.
@@ -103,6 +110,18 @@ type ProjectCount struct {
 	Memories int64  `json:"memories"`
 }
 
+// TopShownRow is one of the memories shown most in the window: its project
+// (that of its latest show), how often it was shown (every kind of show,
+// answers from sources included, as the concentration counts them), its
+// share of all the shows, and the credits of verdict used it got in the window.
+type TopShownRow struct {
+	Memory  string  `json:"memory"`
+	Project string  `json:"project"`
+	Shown   int64   `json:"shown"`
+	Share   float64 `json:"share"`
+	Used    int64   `json:"used"`
+}
+
 // Review lists the memories worth a look.
 type Review struct {
 	NeverUsed []ReviewRow `json:"never_used"`
@@ -140,6 +159,33 @@ type DoctorRow struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 	Fix    string `json:"fix"`
+}
+
+// DoctorHistoryRow is one doctor check over the window: how many days it
+// read ok, watch and bad, how it reads now (its latest day with a run), its
+// last change and each day (ok, watch, bad, or none for a day without a run).
+type DoctorHistoryRow struct {
+	Check      string        `json:"check"`
+	Now        string        `json:"now"`
+	OK         int64         `json:"ok"`
+	Watch      int64         `json:"watch"`
+	Bad        int64         `json:"bad"`
+	LastChange *DoctorChange `json:"last_change"`
+	Days       []DoctorDay   `json:"days"`
+}
+
+// DoctorDay is one check's status on one local day.
+type DoctorDay struct {
+	Day    string `json:"day"`
+	Status string `json:"status"`
+}
+
+// DoctorChange is the latest day a check's status differed from the one
+// before it (days without a run left out).
+type DoctorChange struct {
+	Day  string `json:"day"`
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // SystemInfo is the system page.
@@ -266,7 +312,60 @@ type MemoryPage struct {
 	Shows         []ShowMark       `json:"shows"`
 	Retirements   []RetireMark     `json:"retirements"`
 	RankHistogram map[string]int64 `json:"rank_histogram"`
+	Origin        *Origin          `json:"origin"`
 	Commands      []string         `json:"commands"`
+}
+
+// Origin says where a memory came from, from the record of the day lists
+// (never a document id): the kind of its document and, for a session's, the
+// session. The times are those of the session on this PC (null when not
+// reached); Created is the day another PC's memory was made.
+type Origin struct {
+	State      string     `json:"state"` // this_pc | other_pc | no_session | unknown
+	DocKind    string     `json:"doc_kind"`
+	Session    string     `json:"session"`
+	Project    string     `json:"project"`
+	Ended      *time.Time `json:"ended"`
+	Sent       *time.Time `json:"sent"`
+	Extracted  *time.Time `json:"extracted"`
+	FirstShown *time.Time `json:"first_shown"` // null when never shown
+	Created    *string    `json:"created"`     // another PC's: the UTC date of the day list; else null
+}
+
+// The states of an Origin.
+const (
+	OriginThisPC    = "this_pc"
+	OriginOtherPC   = "other_pc"
+	OriginNoSession = "no_session"
+	OriginUnknown   = "unknown"
+)
+
+// OriginStates are the states of an Origin, the words the views name.
+var OriginStates = []string{OriginThisPC, OriginOtherPC, OriginNoSession, OriginUnknown}
+
+// HelpedRow is one of the memories that helped most in the window: its
+// project (that of its latest show), its kind (from the day lists, empty
+// when not known), the credits of verdict used it got and how often it was
+// shown, both in the window.
+type HelpedRow struct {
+	Memory   string `json:"memory"`
+	Project  string `json:"project"`
+	FactType string `json:"fact_type"`
+	Used     int64  `json:"used"`
+	Shown    int64  `json:"shown"`
+}
+
+// CalendarDay is one local day of the days view's calendar, whatever the
+// window: the typed prompts, those that got memory, the turns where Claude
+// used memory, the sessions that prompted, and whether anything was
+// recorded that day.
+type CalendarDay struct {
+	Day               string `json:"day"`
+	Prompts           int64  `json:"prompts"`
+	PromptsWithMemory int64  `json:"prompts_with_memory"`
+	UsedTurns         int64  `json:"used_turns"`
+	Sessions          int64  `json:"sessions"`
+	Recorded          bool   `json:"recorded"`
 }
 
 // ShowMark is one showing of a memory.
@@ -306,6 +405,7 @@ type DayRow struct {
 type DayPage struct {
 	Day      string       `json:"day"`
 	Sessions []SessionRow `json:"sessions"`
+	Markers  []Marker     `json:"markers"`
 }
 
 // ReleaseRow is one binary version of the releases view.
@@ -326,4 +426,101 @@ type DefRow struct {
 	Def
 	N   int64    `json:"n"`
 	MDC *float64 `json:"mdc"`
+}
+
+// Marker is a point on a time chart where something changed: a version seen
+// for the first time after another one (Kind "release", with Version and
+// Previous), or a recorded change of the settings (Kind "config", with
+// Changes). At is when it was recorded.
+type Marker struct {
+	At       time.Time       `json:"at"`
+	Kind     string          `json:"kind"`
+	Version  string          `json:"version,omitzero"`
+	Previous string          `json:"previous,omitzero"`
+	Changes  []SettingChange `json:"changes,omitzero"`
+}
+
+// SettingChange is one setting that differs from the previous record: From
+// is null for a setting that is new, To for one that is gone.
+type SettingChange struct {
+	Key  string   `json:"key"`
+	From *float64 `json:"from"`
+	To   *float64 `json:"to"`
+}
+
+// Rate is a count over a count.
+type Rate struct {
+	Num int64 `json:"num"`
+	Den int64 `json:"den"`
+}
+
+// Comparison is the releases view's answer to --compare A,B: one measure
+// of two versions, compared stratum by stratum (project and recall path)
+// and pooled over the strata that have enough days and units on both
+// sides, with an interval that treats the units of a session as one
+// observation. Reading is differs, no_clear_difference or too_few; never
+// better or worse. Diff (B minus A), CI, PooledA and PooledB are null when
+// the reading is too_few.
+type Comparison struct {
+	A               string        `json:"a"`
+	B               string        `json:"b"`
+	Measure         string        `json:"measure"`
+	Reading         string        `json:"reading"`
+	Diff            *float64      `json:"diff"`
+	CI              *[2]float64   `json:"ci"`
+	PooledA         *float64      `json:"pooled_a"`
+	PooledB         *float64      `json:"pooled_b"`
+	RawA            Rate          `json:"raw_a"`
+	RawB            Rate          `json:"raw_b"`
+	RawDisagrees    bool          `json:"raw_disagrees"`
+	Strata          []StratumRow  `json:"strata"`
+	SessionsA       int           `json:"sessions_a"`
+	SessionsB       int           `json:"sessions_b"`
+	TooFew          *TooFew       `json:"too_few"`
+	SettingsDiffer  []SettingDiff `json:"settings_differ"`
+	SettingsUnknown bool          `json:"settings_unknown"`
+}
+
+// StratumRow is one (project, path) stratum of a comparison. Weight, Diff,
+// CI and Reading's figures are null for a stratum that is not eligible;
+// Why then names the first gate it missed (days, units or sessions).
+type StratumRow struct {
+	Project  string      `json:"project"`
+	Path     string      `json:"path"`
+	A        StratumSide `json:"a"`
+	B        StratumSide `json:"b"`
+	Weight   *float64    `json:"weight"`
+	Diff     *float64    `json:"diff"`
+	CI       *[2]float64 `json:"ci"`
+	Reading  string      `json:"reading"`
+	Eligible bool        `json:"eligible"`
+	Why      string      `json:"why,omitzero"`
+}
+
+// StratumSide is one version's units in a stratum: the successes, the
+// units and the distinct active days.
+type StratumSide struct {
+	Num  int64 `json:"num"`
+	Den  int64 `json:"den"`
+	Days int   `json:"days"`
+}
+
+// TooFew says what a comparison lacks: the version that misses the first
+// gate (days, units, then sessions), what it has in the best stratum, and
+// when the days gate could be met at the earliest.
+type TooFew struct {
+	Version    string     `json:"version"`
+	Days       int        `json:"days"`
+	Units      int        `json:"units"`
+	Why        string     `json:"why"`
+	RetryAfter *time.Time `json:"retry_after,omitzero"`
+}
+
+// SettingDiff is a numeric setting whose value in effect differs between
+// the two versions; ChangedAt is the record that changed it.
+type SettingDiff struct {
+	Key       string     `json:"key"`
+	A         *float64   `json:"a"`
+	B         *float64   `json:"b"`
+	ChangedAt *time.Time `json:"changed_at"`
 }

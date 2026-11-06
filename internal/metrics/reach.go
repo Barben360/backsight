@@ -250,9 +250,9 @@ WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.bina
 	met["recall.empty_reasons"] = er
 
 	// recall.by_lang: the top-level status is the envelope of the overall
-	// hit rate, so the metric reads too_few or ok; it is not a per-language
-	// verdict. Each language carries its own status below, judged with the
-	// same min_n.
+	// hit rate, so the metric reads too_few or ok, or watch when the language
+	// test finds a language far behind. Each language carries its own status
+	// below, judged with the same min_n.
 	def, _ := DefOf("recall.by_lang")
 	byLang := make(map[string]langStat, len(total.langs))
 	for lang, c := range total.langs {
@@ -260,9 +260,16 @@ WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.bina
 		j := Judge(def, Observation{Num: c[0], Den: c[1]})
 		byLang[lang] = langStat{Num: c[0], Den: c[1], Value: float64(c[0]) / float64(c[1]), CI: &[2]float64{lo, hi}, Status: j.Status}
 	}
-	obs["recall.by_lang"] = Observation{Num: total.injecting, Den: total.recalls}
+	// The language test (Absolute.On "test"): watch when a language is far
+	// behind the most used one.
+	test, behind := langTestOf(total.langs, int64(def.MinN))
+	testStatus := StatusOK
+	if behind {
+		testStatus = StatusWatch
+	}
+	obs["recall.by_lang"] = Observation{Num: total.injecting, Den: total.recalls, Test: testStatus}
 	met["recall.by_lang"] = Metric{Num: i64(total.injecting), Den: i64(total.recalls), Value: ratio(total.injecting, total.recalls),
-		Extra: map[string]any{"by_lang": byLang}}
+		Extra: map[string]any{"by_lang": byLang, "test": test}}
 	return nil
 }
 

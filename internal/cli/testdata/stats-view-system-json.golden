@@ -52,6 +52,22 @@
           "warn": 1
         }
       },
+      "doctor.history": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats system"
+      },
       "jobs.last_run": {
         "value": null,
         "num": null,
@@ -88,6 +104,22 @@
           "quarantined": 0,
           "sessions_waiting": 0
         }
+      },
+      "secrets.suspects": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory scan"
       },
       "server.reach": {
         "value": 0,
@@ -135,6 +167,7 @@
           "fix": "backsight doctor"
         }
       ],
+      "doctor_history": [],
       "system": {
         "server_version": "1.1.0",
         "runtime": "docker",

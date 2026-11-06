@@ -38,6 +38,11 @@ Memory server answering                      yes                      (ok, no ch
 Health checks                                1 failed                 (watch)
   1 failed, 1 with a warning
 Background jobs                              —                        (no data: nothing recorded yet)
+From session to recalled memory              —                        (n=0, too few, 20 more needed)
+  partial: some of it could not be read
+  session ended 3 → sent 0 → turned into memories 0 → shown again 0
+  not sent 3, shown, origin not known yet 3
+Possible secrets in memory                   —                        (no data: nothing recorded yet)
 
 To review
 Often shown, never used                      —                        (no data: nothing recorded yet)
@@ -59,5 +64,8 @@ s1                 2026-10-07 18:00  0        0            3      0     0      0
 s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
 sess-lon  p1       2026-10-08 03:00  1        1            0      0     0      0              —
 sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              —
+
+Helped most
+none
 
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

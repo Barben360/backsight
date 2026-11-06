@@ -3,6 +3,8 @@ package metrics
 import (
 	"database/sql"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -14,9 +16,20 @@ import (
 // to build memory (the server's LLM stats, for every PC using the server).
 
 var costIDs = []string{"context.per_session", "context.per_prompt", "recall.latency", "search.latency",
-	"extraction.tokens", "extraction.cost", "extraction.per_session"}
+	"extraction.tokens", "extraction.cost", "extraction.per_session", yieldID}
 
-func init() { register("cost", costIDs, cost) }
+// costStepOf names the step that fills each id: memory.yield reads the day
+// record, which the other cost figures (and the verdict) never need.
+var costStepOf = func() map[string]string {
+	m := map[string]string{}
+	for _, id := range costIDs {
+		m[id] = "main"
+	}
+	m[yieldID] = "yield"
+	return m
+}()
+
+func init() { registerSteps("cost", costIDs, costStepOf, cost) }
 
 // extractionOps are the server operations whose LLM use is named in
 // extraction.tokens and extraction.cost; the rest of the total is "other".
@@ -27,12 +40,23 @@ var extractionOps = []string{"retain", "consolidation", "refresh_mental_model"}
 
 // CostServerNeeds are the server reads of a view holding the cost family
 // (loadServer keys): the LLM stats of all operations and of each
-// extraction operation over the view's period, and the 30-day stats of
-// extraction.per_session.
+// extraction operation over the view's period, the 30-day stats of
+// extraction.per_session and the reads of memory.yield.
 func CostServerNeeds() []string {
 	needs := []string{"llm:", llm30dKey}
 	for _, op := range extractionOps {
 		needs = append(needs, "llm:"+op)
+	}
+	return slices.Concat(needs, YieldServerNeeds())
+}
+
+// YieldServerNeeds are the server reads of memory.yield: the memories
+// series and the LLM stats of its operations, each over the yield's own
+// 90-day span ending at the window's end, not the view's.
+func YieldServerNeeds() []string {
+	needs := []string{yieldSeriesKey}
+	for _, op := range yieldOps {
+		needs = append(needs, yieldLLMPrefix+op)
 	}
 	return needs
 }
@@ -76,6 +100,14 @@ func cost(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 			met[id] = Metric{}
 		}
 	}
+	if e.runs("yield") {
+		if err := yield(e, w, obs, met); err != nil {
+			return nil, nil, err
+		}
+	}
+	if !e.runs("main") {
+		return obs, met, nil
+	}
 	// context.*: prompts and briefings; recall.latency: prompts;
 	// search.latency: tool calls.
 	for _, s := range []struct {
@@ -108,7 +140,9 @@ func cost(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 			return nil, nil, err
 		}
 	}
-	costExtraction(e, w, obs, met)
+	if err := costExtraction(e, w, obs, met); err != nil {
+		return nil, nil, err
+	}
 	if err := costPerSession(e, w, obs, met); err != nil {
 		return nil, nil, err
 	}
@@ -317,6 +351,12 @@ type tokens struct{ input, cached, output int64 }
 
 func (t tokens) total() int64 { return t.input + t.output }
 
+func (t *tokens) plus(o tokens) {
+	t.input += o.input
+	t.cached += o.cached
+	t.output += o.output
+}
+
 func (t *tokens) add(b hindsight.LLMBucket) {
 	t.input += b.Input
 	t.cached += b.Cached
@@ -378,6 +418,9 @@ func llmRead(e env, key string) ([]hindsight.LLMBucket, string) {
 	if key == llm30dKey {
 		return e.srv.LLM30, ""
 	}
+	if op, ok := strings.CutPrefix(key, yieldLLMPrefix); ok {
+		return e.srv.YieldLLM[op], ""
+	}
 	return e.srv.LLM[key[len("llm:"):]], ""
 }
 
@@ -412,7 +455,7 @@ func byOperation(named map[string]tokens, total tokens, p retain.Prices, withOth
 // costExtraction fills extraction.tokens and extraction.cost from the
 // server's LLM stats over the view's period. A failed read of the total or
 // of an operation makes both metrics no_data with the read's reason.
-func costExtraction(e env, w Window, obs map[string]Observation, met map[string]Metric) {
+func costExtraction(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	ids := []string{"extraction.tokens", "extraction.cost"}
 	fail := func(reason string) {
 		for _, id := range ids {
@@ -424,7 +467,7 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 	all, reason := llmRead(e, "llm:")
 	if reason != "" {
 		fail(reason)
-		return
+		return nil
 	}
 	total, byDay, covered := inWindow(all, w.Since, w.Until, w.Loc, buckets)
 	// The total has its own read. An operation that cannot be read (the
@@ -441,9 +484,25 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		}
 		named[op], _, _ = inWindow(bs, w.Since, w.Until, w.Loc, buckets)
 	}
-	if covered == 0 { // the server holds nothing for the window
+	// Past the server's 30 days, the record gives the days before its first.
+	rec, srcs, err := recordedExtraction(e, w, buckets, all, named)
+	if err != nil {
+		return err
+	}
+	if rec != nil {
+		total.plus(rec.total[""])
+		for i := range byDay {
+			byDay[i].plus(rec.byOp[""][i])
+		}
+		for op, t := range named {
+			t.plus(rec.total[op])
+			named[op] = t
+		}
+		covered += rec.days
+	}
+	if covered == 0 { // neither the server nor the record holds anything for the window
 		fail(ReasonNoEvents)
-		return
+		return nil
 	}
 	cfg := e.src.Config.LLM
 	prices := retain.PricesFor(cfg.Model, cfg.PriceInput, cfg.PriceCached, cfg.PriceOutput, cfg.Currency)
@@ -453,6 +512,13 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		Extra: map[string]any{"input": total.input, "cached": total.cached, "output": total.output,
 			"by_operation": ops, "days_covered": covered}}
 	cm := Metric{Extra: map[string]any{"price_set": prices.Known(), "currency": prices.Currency, "by_operation": ops}}
+	if rec != nil {
+		from, err := recordFrom(e, true)
+		if err != nil {
+			return err
+		}
+		tm.Extra["record_from"] = from
+	}
 	if failedOps > 0 {
 		tm.Tags, cm.Tags = []string{tagPartial}, []string{tagPartial}
 		tm.Extra["failed_operations"], cm.Extra["failed_operations"] = failedOps, failedOps
@@ -462,16 +528,25 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 	}
 	for i, b := range buckets {
 		p := pointOf(w, b.Key)
-		p.Value = ptr(float64(byDay[i].total()))
+		if srcs != nil {
+			p.Source = srcs[i]
+		}
+		if p.Source != sourceNone {
+			p.Value = ptr(float64(byDay[i].total()))
+		}
 		tm.Series = append(tm.Series, p)
 		p = pointOf(w, b.Key)
-		if prices.Known() {
+		if srcs != nil {
+			p.Source = srcs[i]
+		}
+		if prices.Known() && p.Source != sourceNone {
 			p.Value = ptr(prices.Cost(byDay[i].input, byDay[i].cached, byDay[i].output, 0))
 		}
 		cm.Series = append(cm.Series, p)
 	}
 	obs["extraction.tokens"], met["extraction.tokens"] = Observation{}, tm
 	obs["extraction.cost"], met["extraction.cost"] = Observation{}, cm
+	return nil
 }
 
 func ptr[T any](v T) *T { return &v }

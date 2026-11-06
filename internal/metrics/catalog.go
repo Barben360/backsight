@@ -4,11 +4,12 @@ package metrics
 // own value, without a baseline. On names what is compared: hi is the upper
 // bound of a rate's interval (the rule fires when it is below Watch), lo its
 // lower bound (fires when above Watch or Bad), p95 and value the figure
-// itself (fires when above).
+// itself (fires when above); test is a rule the metric's family runs on its
+// own detail (the language test of recall.by_lang) and hands over as a result.
 type Threshold struct {
 	Watch *float64 `json:"watch,omitempty"`
 	Bad   *float64 `json:"bad,omitempty"`
-	On    string   `json:"on"` // hi | lo | p95 | value, empty when there is no absolute rule
+	On    string   `json:"on"` // hi | lo | p95 | value | test, empty when there is no absolute rule
 }
 
 // Def describes one metric: what it is called, what it answers, how it is
@@ -66,11 +67,12 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "recall.by_lang", Label: "Prompts that got memory, by language", Unit: "ratio", Direction: "up", MinN: 20,
-		CI: "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "reach", Series: "none", Command: "backsight stats quality --dev",
-		Extra:      []string{"by_lang"},
+		Absolute: Threshold{On: "test"},
+		CI:       "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "reach", Series: "none", Command: "backsight stats quality --dev",
+		Extra:      []string{"by_lang", "test"},
 		Question:   "Does memory show up as often in every language?",
 		Definition: "The share of prompt recalls that injected a memory, split by the language of the prompt. Each language needs its own 20 prompts before it is judged.",
-		Action:     "A language far below the others means memory misses across languages.",
+		Action:     "A language far from the most used one, higher or lower, means memory does not serve every language alike.",
 	},
 	{
 		ID: "search.rate", Label: "Prompts where Claude searched memory", Unit: "ratio", Direction: "up", MinN: 20,
@@ -212,9 +214,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "extraction.tokens", Label: "What the server's model spent", Unit: "tokens", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
-		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered", "failed_operations"},
+		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered", "failed_operations", "record_from"},
 		Question:   "How many tokens does the server's model use to build memory?",
-		Definition: "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+		Definition: "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
 		Action:     "Use it to see which operation costs the most before changing the model or the projects sent.",
 	},
 	{
@@ -222,7 +224,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
 		Extra:      []string{"price_set", "currency", "by_operation", "failed_operations"},
 		Question:   "How much does the server's model cost?",
-		Definition: "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server.",
+		Definition: "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
 		Action:     "Set the model prices to see the cost; a high cost calls for a cheaper model or fewer projects sent.",
 	},
 	{
@@ -244,9 +246,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "bank.growth", Label: "New memories per day", Unit: "count", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "bank", Series: "daily", Command: "backsight stats bank",
-		Extra:      []string{"world", "experience", "observation", "days_covered"},
+		Extra:      []string{"world", "experience", "observation", "days_covered", "record_from"},
 		Question:   "Is memory still growing?",
-		Definition: "Memories added per day, by kind, from the server's time series.",
+		Definition: "Memories added per day, by kind, from the server's time series (90 days); older days come from the days this PC recorded, and a day neither holds is left empty.",
 		Action:     "A flat line while you work means memory is not learning; run backsight doctor.",
 	},
 	{
@@ -361,6 +363,70 @@ var Catalog = withDrills([]Def{
 		Question:   "Are the background jobs running?",
 		Definition: "The last tick and maintain runs, with status and duration. Bad when a job is more than twice its cadence late and prompts or tool events happened since it was due (a sleeping laptop is not a fault).",
 		Action:     "Background work is not running. Run backsight jobs tick.",
+	},
+	{
+		ID: "pipeline.time_to_recall", Label: "From session to recalled memory", Unit: "ms", Direction: "down", MinN: 20,
+		Absolute: Threshold{Watch: f(3600000), On: "p95"}, CI: "none", Scope: "machine", Source: "collection", Family: "pipeline", Series: "none",
+		Command:    "backsight stats pipeline",
+		Extra:      []string{"funnel", "hops"},
+		Question:   "How long until a session's memories come back?",
+		Definition: "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way; the slowest 1 in 20 of the sent-to-memories step needs 100 sessions and is watched above 1 hour.",
+		Action:     "Memories take long to come back. Check the server with backsight doctor.",
+	},
+	{
+		ID: "memory.yield", Label: "Memories that proved useful", Unit: "ratio", Direction: "up", MinN: 20,
+		CI: "wilson", Scope: "machine", Source: "collection", Family: "cost", Series: "weekly", Command: "backsight stats cost",
+		Extra:      []string{"tokens", "tokens_per_used", "unresolved", "gone", "pending", "resolved_used", "withheld"},
+		Question:   "Do new memories turn out useful?",
+		Definition: "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
+		Action:     "Few new memories prove useful. Compare what is stored with what Claude finds.",
+	},
+	{
+		ID: "secrets.suspects", Label: "Possible secrets in memory", Unit: "count", Direction: "none", MinN: 0,
+		ErrorClass: true, CI: "none", Scope: "server", Source: "collection", Family: "pipeline", Series: "none", Command: "backsight memory scan",
+		Extra:      []string{"scanned_at", "age_days", "live", "forgotten", "pages", "ms"},
+		Question:   "Could memory hold a secret?",
+		Definition: "The memories the last scan found that look like a key, token or password. Watched as soon as the last scan found one.",
+		Action:     "Run backsight memory scan to see which memories, then forget them.",
+	},
+	{
+		ID: "doctor.history", Label: "Health checks over time", Unit: "count", Direction: "none", MinN: 0,
+		CI: "none", Scope: "machine", Source: "collection", Family: "pipeline", Series: "none", Command: "backsight stats system",
+		Extra:      []string{"days_without"},
+		Question:   "Have the health checks passed lately?",
+		Definition: "For each check and each day, the result of the day's last daily run: ok, watch or bad. A day without a run is shown as none, which is not a fault.",
+		Action:     "A check that keeps failing needs fixing; backsight doctor says how.",
+	},
+	{
+		ID: "bank.active_share", Label: "Share of the memory that came up", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "wilson", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
+		Extra:      []string{"unresolved", "gone"},
+		Question:   "How much of the memory ever comes up?",
+		Definition: "The memories shown in the window that already existed when it began, out of all the memories the server held then. Memories created inside the window are left out.",
+		Action:     "A low share means most stored memories are never recalled.",
+	},
+	{
+		ID: "shows.concentration", Label: "How concentrated shows are", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "reach", Series: "none", Command: "backsight stats bank --dev",
+		Extra:      []string{"gini", "top10_share", "shows"},
+		Question:   "Do a few memories take all the shows?",
+		Definition: "The Gini index of how often each shown memory was shown in the window: 0 when all are shown equally, near 1 when a few take almost every show. The share of the 10 most shown is given beside it. Every kind of show counts, answers from sources included.",
+		Action:     "A few memories take most shows; check that the ranking is not stuck on them.",
+	},
+	{
+		ID: "injection.contradicted", Label: "Corrections after memory was shown", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Question:   "Does the user correct Claude after memory is shown?",
+		Definition: "The share of turns with injected memories where the next prompt looked like a correction.",
+		Action:     "Frequent corrections after memory is shown point to memories that mislead.",
+	},
+	{
+		ID: "boost.set_changed", Label: "Recalls the learned ranking changed", Unit: "ratio", Direction: "none", MinN: 20,
+		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Extra:      []string{"prompts", "prompts_set_changed", "searches", "searches_set_changed"},
+		Question:   "How often does the learned ranking change what is shown?",
+		Definition: "The share of recalls, prompts and searches, whose shown memories differ from what the ranking would show without what it learned from past feedback.",
+		Action:     "A share near 0 means the learned ranking has no effect yet.",
 	},
 })
 

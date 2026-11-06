@@ -22,6 +22,7 @@ var qualityIDs = []string{
 	"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate",
 	"verdict.wrong_rate",
 	"stale.never_used", "stale.hidden", "stale.reported",
+	"injection.contradicted", "boost.set_changed",
 }
 
 // qualityStepOf names the step that fills each id: the family runs only the
@@ -31,6 +32,7 @@ var qualityStepOf = map[string]string{
 	"used.share_confident": "shows", "used.rank": "shows", "used.by_path": "shows", "search.rescue_rate": "shows",
 	"verdict.wrong_rate": "verdicts",
 	"stale.never_used":   "stale", "stale.hidden": "stale", "stale.reported": "stale",
+	"injection.contradicted": stepContradicted, "boost.set_changed": stepSetChanged,
 }
 
 func init() { registerSteps("quality", qualityIDs, qualityStepOf, quality) }
@@ -95,11 +97,21 @@ func quality(e env, w Window) (map[string]Observation, map[string]Metric, error)
 		{"shows", []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate"}, "shows", qualityShows},
 		{"verdicts", []string{"verdict.wrong_rate"}, "credits", qualityVerdicts},
 		{"stale", []string{"stale.never_used", "stale.hidden", "stale.reported"}, "ledger", qualityStale},
+		{stepContradicted, []string{"injection.contradicted"}, "tel_outcome", qualityContradicted},
+		{stepSetChanged, []string{"boost.set_changed"}, "show_sets", qualitySetChanged},
 	} {
 		if !e.runs(s.step) {
 			continue
 		}
-		found, err := hasRows(s.table)
+		var found bool
+		var err error
+		if s.step == stepContradicted || s.step == stepSetChanged {
+			var none bool
+			none, err = devQualityAbsent(e, s.step)
+			found = !none
+		} else {
+			found, err = hasRows(s.table)
+		}
 		if err != nil {
 			return nil, nil, err
 		}

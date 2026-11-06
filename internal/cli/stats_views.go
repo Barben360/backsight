@@ -38,6 +38,7 @@ type viewFlags struct {
 	limit, offset    int
 	has, sort, state string
 	text             bool
+	compare, measure string
 }
 
 // Allowed values of the view flags.
@@ -142,6 +143,9 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 		},
 	}
 	switch view {
+	case "releases":
+		cmd.Flags().StringVar(&f.compare, "compare", "", "compare two versions, as A,B (matched by project and path, clustered by session)")
+		cmd.Flags().StringVar(&f.measure, "measure", "", "with --compare: "+strings.Join(metrics.CompareMeasures, ", ")+" (default used.turn_rate)")
 	case "sessions":
 		cmd.Flags().StringVar(&f.has, "has", "", "only sessions that have this: "+strings.Join(hasValues, ", "))
 	case "memories":
@@ -156,7 +160,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 func (f viewFlags) params() views.Params {
 	return views.Params{Days: f.days, DaysSet: f.daysSet, Since: f.since, Until: f.until, TZ: f.tz,
 		Project: f.project, Path: f.path, Dev: f.dev, Limit: f.limit, Offset: f.offset,
-		Has: f.has, Sort: f.sort, State: f.state, Text: f.text}
+		Has: f.has, Sort: f.sort, State: f.state, Text: f.text, Compare: f.compare, Measure: f.measure}
 }
 
 // viewQuery maps the flags and the id of a view to its Query.

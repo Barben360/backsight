@@ -140,12 +140,12 @@ func TestTablesRowNames(t *testing.T) {
 		System:   &SystemInfo{},
 		Projects: []ProjectRow{{}}, Pooled: &PooledRow{}, Project: &ProjectPage{},
 		Sessions: []SessionRow{{}}, Session: &SessionPage{Turns: []TurnRow{{Shows: []ShowChip{{}}}}},
-		Memories: []MemoryRow{{}}, Memory: &MemoryPage{Shows: []ShowMark{{}}, Retirements: []RetireMark{{}}},
-		Days: []DayRow{{}}, Day: &DayPage{}, Releases: []ReleaseRow{{}},
+		Memories: []MemoryRow{{}}, Memory: &MemoryPage{Shows: []ShowMark{{}}, Retirements: []RetireMark{{}}, Origin: &Origin{}},
+		Days: []DayRow{{}}, Calendar: []CalendarDay{{}}, Helped: []HelpedRow{{}}, Day: &DayPage{}, Releases: []ReleaseRow{{}},
 		Settings: map[string]float64{"a": 1}, Note: "n",
 	}
 	m := asMap(t, tb)
-	wantKeys(t, "tables", m, "activity by_project day days doctor extraction failed_operations jobs lately memories memory note outcome_mix page pooled project projects releases reported review session sessions settings system")
+	wantKeys(t, "tables", m, "activity by_project calendar day days doctor extraction failed_operations helped jobs lately memories memory note outcome_mix page pooled project projects releases reported review session sessions settings system")
 	first := func(k string) map[string]any { return m[k].([]any)[0].(map[string]any) }
 	wantKeys(t, "page", sub(t, m, "page"), "limit offset total")
 	wantKeys(t, "activity", sub(t, m, "activity"), "credits machine prompts recalls retains with_hits")
@@ -174,10 +174,13 @@ func TestTablesRowNames(t *testing.T) {
 	wantKeys(t, "chip", turn["shows"].([]any)[0].(map[string]any), "memory_id outcome path rank")
 	wantKeys(t, "memory row", first("memories"), "boost id ignored last_shown last_used project rate shown state used")
 	mem := sub(t, m, "memory")
-	wantKeys(t, "memory page", mem, "commands created kind rank_histogram retirements row server_state shows")
+	wantKeys(t, "memory page", mem, "commands created kind origin rank_histogram retirements row server_state shows")
 	wantKeys(t, "show mark", mem["shows"].([]any)[0].(map[string]any), "at outcome path prompt rank rank_without_boost score_without_boost session turn")
 	wantKeys(t, "retire mark", mem["retirements"].([]any)[0].(map[string]any), "at kind")
 	wantKeys(t, "day row", first("days"), "context_chars day prompts prompts_with_memory recalls sent_failed sent_ok sessions used_turns wrong")
-	wantKeys(t, "day page", sub(t, m, "day"), "day sessions")
+	wantKeys(t, "origin", sub(t, mem, "origin"), "created doc_kind ended extracted first_shown project sent session state")
+	wantKeys(t, "calendar day", first("calendar"), "day prompts prompts_with_memory recorded sessions used_turns")
+	wantKeys(t, "helped row", first("helped"), "fact_type memory project shown used")
+	wantKeys(t, "day page", sub(t, m, "day"), "day markers sessions")
 	wantKeys(t, "release row", first("releases"), "bank_size first flagship last n project_shares prompts_per_day version")
 }

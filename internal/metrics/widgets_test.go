@@ -126,6 +126,10 @@ func fullFx(t *testing.T) *fx {
 		BackupCreatedAt: ago(20 * time.Hour), BackupVerifiedAt: ago(19 * time.Hour), BackupOK: true, UpdateCheckedAt: ago(2 * time.Hour), UpdateNewer: 1})
 	x.doctor = []DoctorCheck{{ID: "server", Status: "ok", Fix: "backsight doctor"}, {ID: "update", Status: "warn"},
 		{ID: "metrics-index", Status: "error", Fix: "backsight stats index rebuild"}}
+	x.scan(ago(2*day), 0) // a clean scan: Flowing is not changed
+	for d := range 4 {    // the daily upkeep's doctor runs
+		x.doctorRun(ago(time.Duration(d)*day+4*time.Hour), map[string]string{"server": "ok", "backup": []string{"ok", "warn"}[d%2]})
+	}
 	x.server.set(func(d *fakeData) {
 		d.Version = hindsight.Version{APIVersion: "0.5.2"}
 		d.Stats = hindsight.BankStats{NodesByFactType: map[string]int{"world": 900, "experience": 300, "observation": 41},

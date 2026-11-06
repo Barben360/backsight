@@ -41,5 +41,13 @@ hooks.failures           Steps that crashed                          count   0  
 server.reach             Memory server answering                     count   0        0      —
 doctor.check             Health checks                               count   0        0      —
 jobs.last_run            Background jobs                             time    0        0      —
+pipeline.time_to_recall  From session to recalled memory             time    20       0      —
+memory.yield             Memories that proved useful                 rate    20       0      —
+secrets.suspects         Possible secrets in memory                  count   0        0      —
+doctor.history           Health checks over time                     count   0        0      —
+bank.active_share        Share of the memory that came up            rate    20       0      —
+shows.concentration      How concentrated shows are                  rate    20       3      —
+injection.contradicted   Corrections after memory was shown          rate    20       1      —
+boost.set_changed        Recalls the learned ranking changed         rate    20       3      —
 
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

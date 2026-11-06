@@ -165,6 +165,8 @@ func itemText(d Def, m Metric, days int, median float64, hasMedian bool) string 
 				return fmt.Sprintf("%s crashed in the last 24 h.", count(n, "step", "steps"))
 			}
 		}
+	case secretsID:
+		return "Possible secrets in memory: run backsight memory scan."
 	case "pipeline.flow":
 		failed, _ := m.Extra["failed"].(int64)
 		setAside, _ := m.Extra["set_aside"].(int64)

@@ -103,6 +103,9 @@ func TestErrorClassDefinitionsStateTheirRule(t *testing.T) {
 	if n == 0 {
 		t.Error("no error-class metric")
 	}
+	if d, _ := DefOf("secrets.suspects"); !d.ErrorClass || !strings.Contains(d.Definition, "Watched") {
+		t.Errorf("secrets.suspects: error class %v, definition %q lacks Watched", d.ErrorClass, d.Definition)
+	}
 }
 
 func TestCatalogRowsUseNoJargon(t *testing.T) {

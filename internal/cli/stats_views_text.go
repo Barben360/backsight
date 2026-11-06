@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -176,6 +178,13 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 			for _, x := range metricDetails(d, m, r.Window.Loc) {
 				lines = append(lines, "  "+x)
 			}
+			loc := r.Window.Loc
+			if loc == nil {
+				loc = time.UTC
+			}
+			for _, x := range blockDetails(d, m, loc) {
+				lines = append(lines, "  "+x)
+			}
 		}
 		if len(lines) > 0 {
 			b.WriteString("\n" + fh.Heading + "\n" + strings.Join(lines, "\n") + "\n")
@@ -201,7 +210,10 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 	case m.Status != metrics.StatusNoData && d.Unit == "ratio" && m.Num != nil && m.Den != nil && *m.Den < handful:
 		value = fmt.Sprintf("%s of %s", grouped(*m.Num), grouped(*m.Den)) // a percentage over so few would be a guess
 	case m.Status != metrics.StatusNoData && d.ID == "server.reach" && m.Value != nil:
-		value = map[bool]string{true: "yes", false: "no"}[serverUp] // what the view's header says, not the skipped-prompt count
+		value = "no" // what the view's header says, not the skipped-prompt count
+		if serverUp {
+			value = "yes"
+		}
 	case m.Status != metrics.StatusNoData && d.ID == "recall.empty_reasons" && m.Value != nil:
 		value = countOf(int64(*m.Value), "prompt", "prompts")
 	case m.Status != metrics.StatusNoData && d.ID == "doctor.check" && m.Value != nil:
@@ -222,6 +234,11 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 	}
 	if slices.Contains(m.Tags, "not_filtered") {
 		parts = append(parts, "not filtered by project")
+	}
+	for _, tag := range m.Tags {
+		if w, ok := views.TagWords[tag]; ok {
+			parts = append(parts, w)
+		}
 	}
 	if dl := deltaText(d, m); dl != "" {
 		parts = append(parts, dl)
@@ -287,6 +304,17 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 	if r.View == "overview" {
 		section(b, "Lately", sessionHead, sessionRows(t.Lately, loc))
 	}
+	if t.Helped != nil {
+		var rows [][]string
+		for _, h := range t.Helped {
+			kind := "—"
+			if h.FactType != "" {
+				kind = word(kindWords, h.FactType)
+			}
+			rows = append(rows, []string{idText(h.Memory), clipText(h.Project), kind, n64(h.Used), n64(h.Shown)})
+		}
+		section(b, "Helped most", []string{"Memory", "Project", "Kind", "Used", "Shown"}, rows)
+	}
 	if t.OutcomeMix != nil {
 		var rows [][]string
 		for _, d := range t.OutcomeMix {
@@ -323,6 +351,13 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 		}
 		section(b, "Memories per project", []string{"Project", "Memories"}, rows)
 	}
+	if t.TopShown != nil {
+		var rows [][]string
+		for _, x := range t.TopShown {
+			rows = append(rows, []string{idText(x.Memory), clipText(x.Project), n64(x.Shown), percentOf(x.Share) + " %", n64(x.Used)})
+		}
+		section(b, "Most shown", []string{"Memory", "Project", "Shown", "Share of all shows", "Used"}, rows)
+	}
 	if rv := t.Review; rv != nil {
 		for _, l := range []struct {
 			name string
@@ -338,6 +373,9 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 		}
 		section(b, "Server tasks that failed", []string{"Task", "Age", "Retries"}, rows)
 	}
+	if t.NeverExtracted != nil {
+		section(b, "Sessions sent that gave no memories", []string{"Session", "Project", "Sent", "What happened", "Retries"}, neverRows(t.NeverExtracted, loc))
+	}
 	if t.Jobs != nil {
 		var rows [][]string
 		for _, j := range t.Jobs {
@@ -351,6 +389,9 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 			rows = append(rows, []string{metrics.DoctorName(c.ID), c.Status, c.Fix})
 		}
 		section(b, "Health checks", []string{"Check", "Status", "Fix"}, rows)
+	}
+	if t.DoctorHistory != nil {
+		doctorHistoryText(b, t.DoctorHistory)
 	}
 	if s := t.System; s != nil {
 		systemText(b, *s, loc)
@@ -512,6 +553,11 @@ func memoriesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 		}
 		fmt.Fprintf(b, "Kind %s, created %s, on the server: %s\n", kind, created, state)
 	}
+	if p.Origin != nil {
+		for _, l := range originLine(*p.Origin, loc) {
+			b.WriteString(l + "\n")
+		}
+	}
 	var rows [][]string
 	for _, s := range p.Shows {
 		rank := "—"
@@ -532,6 +578,15 @@ func memoriesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 }
 
 func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
+	if t.Calendar != nil {
+		recorded := 0
+		for _, c := range t.Calendar {
+			if c.Recorded {
+				recorded++
+			}
+		}
+		fmt.Fprintf(b, "\ncalendar: %d days recorded of %d\n", recorded, len(t.Calendar))
+	}
 	if t.Days != nil {
 		var rows [][]string
 		for _, d := range t.Days {
@@ -542,6 +597,9 @@ func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 	}
 	if d := t.Day; d != nil {
 		section(b, "Sessions of "+d.Day, sessionHead, sessionRows(d.Sessions, loc))
+		if len(d.Markers) > 0 {
+			markersText(b, "What changed on "+d.Day, d.Markers, loc)
+		}
 	}
 }
 
@@ -556,6 +614,12 @@ func releasesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 			rows = append(rows, []string{x.Version, whenText(x.First, loc), whenText(x.Last, loc), n64(x.N), fmt.Sprintf("%.1f", x.PromptsPerDay), bank})
 		}
 		section(b, "Versions that ran", []string{"Version", "First", "Last", "Events", "Prompts per day", "Memories"}, rows)
+	}
+	if len(t.Markers) > 0 {
+		markersText(b, "What changed", t.Markers, loc)
+	}
+	if t.Compare != nil {
+		compareText(b, *t.Compare, loc)
 	}
 	if len(t.Settings) > 0 {
 		keys := make([]string, 0, len(t.Settings))
@@ -598,4 +662,351 @@ func defsText(b *strings.Builder, defs []metrics.DefRow) {
 		rows = append(rows, []string{d.ID, d.Label, word(unitWords, d.Unit), n64(int64(d.MinN)), n64(d.N), mdc})
 	}
 	section(b, "Metrics", []string{"Id", "What it is", "Unit", "Needs n", "n now", "Smallest change"}, rows)
+}
+
+// extraAs reads an extra of a metric as a T, whatever type the computing
+// code stored it in or a decoded envelope gave it.
+func extraAs[T any](m metrics.Metric, key string) (v T, ok bool) {
+	raw, found := m.Extra[key]
+	if !found || raw == nil {
+		return v, false
+	}
+	b, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(b, &v) != nil {
+		return v, false
+	}
+	return v, true
+}
+
+// spanText is a duration the way a person reads it: minutes up to two
+// hours, then hours, then days.
+func spanText(ms float64) string {
+	min := int64(math.Round(ms / 60000))
+	switch {
+	case ms < 60000:
+		return "under 1 min"
+	case min < 120:
+		return strconv.FormatInt(min, 10) + " min"
+	case min < 48*60:
+		return strconv.FormatInt(int64(math.Round(float64(min)/60)), 10) + " h"
+	}
+	return strconv.FormatInt(int64(math.Round(float64(min)/(24*60))), 10) + " days"
+}
+
+// hopWords name the steps of the way from a session to a recalled memory.
+var hopWords = map[string]string{
+	"last_to_sent": "last turn to sent", "sent_to_extracted": "sent to turned into memories",
+	"extracted_to_recalled": "turned into memories to shown again", "whole_way": "the whole way",
+}
+
+// funnelRest are the funnel's counts beside the four steps, in the order
+// the line says them.
+var funnelRest = []string{"waiting_or_failed", "never", "on_server", "not_recalled", "before_record", "unresolved", "gone"}
+
+// blockDetails are the indented lines under the metrics this release added:
+// what their number does not say by itself.
+func blockDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string {
+	var out []string
+	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+	switch d.ID {
+	case "pipeline.time_to_recall":
+		f, ok := extraAs[map[string]int64](m, "funnel")
+		if !ok || f["ended"] == 0 {
+			break
+		}
+		add("%s %d → %s %d → %s %d → %s %d", views.FunnelWords["ended"], f["ended"], views.FunnelWords["sent"], f["sent"],
+			views.FunnelWords["extracted"], f["extracted"], views.FunnelWords["recalled"], f["recalled"])
+		var rest []string
+		for _, k := range funnelRest {
+			if f[k] > 0 {
+				rest = append(rest, fmt.Sprintf("%s %d", views.FunnelWords[k], f[k]))
+			}
+		}
+		if len(rest) > 0 {
+			add("%s", strings.Join(rest, ", "))
+		}
+		hops, _ := extraAs[[]metrics.Hop](m, "hops")
+		for _, h := range hops {
+			if h.N == 0 {
+				continue
+			}
+			if h.P50 == nil { // a typical time needs 20 sessions
+				add("%s: %s, too few for a typical time", word(hopWords, h.Name), countOf(h.N, "session", "sessions"))
+				continue
+			}
+			line := fmt.Sprintf("%s: typical %s", word(hopWords, h.Name), spanText(*h.P50))
+			if h.P95 != nil {
+				line += ", slowest 1 in 20: " + spanText(*h.P95)
+			}
+			add("%s (%s)", line, countOf(h.N, "session", "sessions"))
+		}
+	case "memory.yield":
+		for _, p := range m.Series {
+			add("%s", yieldWeekLine(p))
+		}
+		if w, _ := extraAs[string](m, "withheld"); w != "" {
+			n, _ := extraAs[int64](m, "unresolved")
+			add("shares withheld: the list of which memories are new is still catching up (%s not placed yet)", grouped(n))
+		}
+	case "secrets.suspects":
+		if at, ok := extraAs[time.Time](m, "scanned_at"); ok {
+			line := "last scan " + whenText(at, loc)
+			if age, ok := extraAs[int64](m, "age_days"); ok {
+				if age == 0 {
+					line += ", today"
+				} else {
+					line += ", " + countOf(age, "day", "days") + " ago"
+				}
+			}
+			if pages, ok := extraAs[int64](m, "pages"); ok && pages > 0 {
+				line += " (" + countOf(pages, "page", "pages") + " read)"
+			}
+			add("%s", line)
+		}
+	case "doctor.history":
+		if m.Num != nil {
+			without, _ := extraAs[int64](m, "days_without")
+			add("%s in the window, %s without a run", countOf(*m.Num, "run", "runs"), countOf(without, "day", "days"))
+		}
+	case "bank.active_share":
+		if n, _ := extraAs[int64](m, "unresolved"); n > 0 {
+			add("%s shown, not placed yet, count as older", countOf(n, "memory", "memories"))
+		}
+		if n, _ := extraAs[int64](m, "gone"); n > 0 {
+			add("%s shown, since forgotten, left out", countOf(n, "memory", "memories"))
+		}
+	case "shows.concentration":
+		if share, ok := extraAs[float64](m, "top10_share"); ok && m.Status != metrics.StatusTooFew { // too few shows: no share to quote
+			shows, _ := extraAs[int64](m, "shows")
+			add("the 10 most shown memories take %s %% of the %s", percentOf(share), countOf(shows, "show", "shows"))
+		}
+	case "boost.set_changed":
+		prompts, _ := extraAs[int64](m, "prompts")
+		pc, _ := extraAs[int64](m, "prompts_set_changed")
+		searches, _ := extraAs[int64](m, "searches")
+		sc, _ := extraAs[int64](m, "searches_set_changed")
+		add("prompts %s of %s, searches %s of %s", grouped(pc), grouped(prompts), grouped(sc), grouped(searches))
+	case "recall.by_lang":
+		t, ok := extraAs[struct {
+			Reference string `json:"reference"`
+			RefNum    int64  `json:"reference_num"`
+			RefDen    int64  `json:"reference_den"`
+			Gaps      []struct {
+				Lang     string     `json:"lang"`
+				Num, Den int64      `json:"-"`
+				Value    float64    `json:"value"`
+				Gap      float64    `json:"gap"`
+				Interval [2]float64 `json:"interval"`
+			} `json:"gaps"`
+			LeftOut []struct {
+				Lang string `json:"lang"`
+				Num  int64  `json:"num"`
+				Den  int64  `json:"den"`
+			} `json:"left_out"`
+		}](m, "test")
+		if !ok || t.Reference == "" {
+			break
+		}
+		for _, g := range t.Gaps {
+			add("%s: %s %% of prompts got memory, %s pts behind %s (%s to %s)", g.Lang, percentOf(g.Value), signedPoints(g.Gap), t.Reference, signedPoints(g.Interval[0]), signedPoints(g.Interval[1]))
+		}
+		for _, l := range t.LeftOut {
+			add("%s: %d of %d, too few to compare", l.Lang, l.Num, l.Den)
+		}
+	case "bank.growth", "extraction.tokens":
+		if from, _ := extraAs[string](m, "record_from"); from != "" {
+			add("older days come from the days this PC recorded, from %s", from)
+		}
+	}
+	return out
+}
+
+// signedPoints is a ratio difference in whole points, with its sign (a real
+// minus sign for a fall, none for a zero).
+func signedPoints(r float64) string {
+	n := int(math.Round(r * 100))
+	switch {
+	case n > 0:
+		return "+" + strconv.Itoa(n)
+	case n < 0:
+		return "−" + strconv.Itoa(-n)
+	}
+	return "0"
+}
+
+func yieldWeekLine(p metrics.Point) string {
+	head := "week of " + p.Week + ": "
+	switch {
+	case p.Complete == nil || !*p.Complete:
+		return head + "not complete yet"
+	case p.Den == nil || p.Num == nil:
+		return head + "the new memories of that week were not recorded"
+	}
+	line := fmt.Sprintf("%s%s of %s", head, grouped(*p.Num), grouped(*p.Den))
+	switch {
+	case p.Value != nil && p.CI != nil:
+		line += fmt.Sprintf(" (%s %%, %s to %s %%)", percentOf(*p.Value), percentOf(p.CI[0]), percentOf(p.CI[1]))
+	case p.Value != nil:
+		line += " (" + percentOf(*p.Value) + " %)"
+	default:
+		line += ", too few for a share"
+	}
+	if p.Tokens != nil {
+		line += ", " + grouped(*p.Tokens) + " tokens"
+		if p.TokensPerUsed != nil {
+			line += ", " + grouped(int64(math.Round(*p.TokensPerUsed))) + " tokens per useful memory"
+		}
+	}
+	return line
+}
+
+// neverRows lists the sessions sent that gave no memories.
+func neverRows(rows []metrics.NeverExtractedRow, loc *time.Location) [][]string {
+	var out [][]string
+	for _, x := range rows {
+		out = append(out, []string{idText(x.Session), clipText(x.Project), whenText(x.Sent, loc), word(views.NeverExtractedWords, x.State), n64(int64(x.Retries))})
+	}
+	return out
+}
+
+func doctorHistoryText(b *strings.Builder, rows []metrics.DoctorHistoryRow) {
+	var out [][]string
+	for _, r := range rows {
+		change := "—"
+		if c := r.LastChange; c != nil {
+			change = fmt.Sprintf("%s, %s → %s", c.Day, word(views.DayStatusWords, c.From), word(views.DayStatusWords, c.To))
+		}
+		out = append(out, []string{metrics.DoctorName(r.Check), word(views.DayStatusWords, r.Now), n64(r.OK), n64(r.Watch), n64(r.Bad), change})
+	}
+	section(b, "Health checks over time", []string{"Check", "Now", "Days ok", "Days with a warning", "Days with a problem", "Last change"}, out)
+}
+
+func numText(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+
+// markerText says what a marker records.
+func markerText(m metrics.Marker) string {
+	if m.Kind == "release" {
+		return "new version " + m.Version + " (after " + m.Previous + ")"
+	}
+	var parts []string
+	for _, c := range m.Changes {
+		switch {
+		case c.From == nil && c.To != nil:
+			parts = append(parts, c.Key+" set to "+numText(*c.To))
+		case c.To == nil && c.From != nil:
+			parts = append(parts, c.Key+" removed (was "+numText(*c.From)+")")
+		case c.From != nil && c.To != nil:
+			parts = append(parts, c.Key+" "+numText(*c.From)+" → "+numText(*c.To))
+		}
+	}
+	return "settings changed: " + strings.Join(parts, "; ")
+}
+
+func markersText(b *strings.Builder, heading string, ms []metrics.Marker, loc *time.Location) {
+	var rows [][]string
+	for _, m := range ms {
+		rows = append(rows, []string{whenText(m.At, loc), markerText(m)})
+	}
+	section(b, heading, []string{"When", "What"}, rows)
+}
+
+// originLine says where a memory came from, and when its session went through
+// each step.
+func originLine(o metrics.Origin, loc *time.Location) []string {
+	switch o.State {
+	case metrics.OriginThisPC:
+		lines := []string{fmt.Sprintf("Came from %s (%s, %s)", views.OriginWords[o.State], idText(o.Session), clipText(o.Project))}
+		var steps []string
+		for _, s := range []struct {
+			name string
+			at   *time.Time
+		}{{"ended", o.Ended}, {"sent", o.Sent}, {"turned into memories", o.Extracted}} {
+			if s.at != nil {
+				steps = append(steps, s.name+" "+whenText(*s.at, loc))
+			}
+		}
+		if o.FirstShown != nil {
+			steps = append(steps, "first shown "+whenText(*o.FirstShown, loc))
+		} else {
+			steps = append(steps, "never shown")
+		}
+		return append(lines, "Session "+strings.Join(steps, ", "))
+	case metrics.OriginOtherPC:
+		line := "Came from " + views.OriginWords[o.State]
+		if o.Created != nil {
+			line += ", made " + *o.Created
+		}
+		return []string{line}
+	case metrics.OriginNoSession:
+		return []string{"Came from " + views.OriginWords[o.State]}
+	}
+	return []string{"Came from a source " + views.OriginWords[metrics.OriginUnknown]}
+}
+
+// compareText is the comparison of two versions: the pooled difference of the
+// matched groups, the raw one when it disagrees, the groups and the settings.
+func compareText(b *strings.Builder, c metrics.Comparison, loc *time.Location) {
+	label := c.Measure
+	if d, ok := metrics.DefOf(c.Measure); ok {
+		label = d.Label
+	}
+	unit := map[string]string{"used.turn_rate": "turns", "recall.hit_rate": "prompts", "verdict.wrong_rate": "verdicts"}[c.Measure]
+	fmt.Fprintf(b, "\nComparison of %s and %s on %s\n", c.A, c.B, label)
+	if c.TooFew != nil || c.Diff == nil || c.CI == nil {
+		why := ""
+		if t := c.TooFew; t != nil {
+			why = fmt.Sprintf("%s has %s and %s in its best group; %s", t.Version, countOf(int64(t.Days), "active day", "active days"),
+				countOf(int64(t.Units), strings.TrimSuffix(unit, "s"), unit), map[string]string{
+					"days": "not enough active days", "units": "not enough " + unit, "sessions": "not enough sessions"}[t.Why])
+			if t.RetryAfter != nil {
+				why += ", at the earliest from " + t.RetryAfter.In(loc).Format("2006-01-02")
+			}
+		}
+		fmt.Fprintf(b, "%s: %s\n", word(views.ReadingWords, "too_few"), why)
+		return
+	}
+	fmt.Fprintf(b, "matched difference %s pts (%s to %s), %s\n", signedPoints(*c.Diff), signedPoints(c.CI[0]), signedPoints(c.CI[1]), word(views.ReadingWords, c.Reading))
+	if c.RawDisagrees && c.RawA.Den > 0 && c.RawB.Den > 0 {
+		a, bb := float64(c.RawA.Num)/float64(c.RawA.Den), float64(c.RawB.Num)/float64(c.RawB.Den)
+		fmt.Fprintf(b, "unmatched %s pts (%s %% → %s %%): read the matched figure\n", signedPoints(bb-a), percentOf(a), percentOf(bb))
+	}
+	fmt.Fprintf(b, "%s in %s, %d in %s\n", countOf(int64(c.SessionsA), "session", "sessions"), c.A, c.SessionsB, c.B)
+	var rows [][]string
+	for _, s := range c.Strata {
+		side := func(x metrics.StratumSide) string {
+			return fmt.Sprintf("%s of %s (%s)", grouped(x.Num), grouped(x.Den), countOf(int64(x.Days), "day", "days"))
+		}
+		result := "not compared: " + map[string]string{"days": "not enough active days", "units": "not enough " + unit, "sessions": "not enough sessions"}[s.Why]
+		if s.Eligible && s.Diff != nil && s.CI != nil {
+			result = fmt.Sprintf("%s pts (%s to %s), %s", signedPoints(*s.Diff), signedPoints(s.CI[0]), signedPoints(s.CI[1]), strings.ToLower(word(views.ReadingWords, s.Reading)))
+		}
+		path := word(pathWords, s.Path)
+		if s.Path == "unknown" {
+			path = "not shown to Claude itself"
+		}
+		rows = append(rows, []string{clipText(s.Project), path, side(s.A), side(s.B), result})
+	}
+	b.WriteString("\n")
+	table(b, []string{"Project", "Shown", "How " + c.A + " did", "How " + c.B + " did", "Difference"}, rows)
+	if len(c.SettingsDiffer) > 0 {
+		var parts []string
+		for _, s := range c.SettingsDiffer {
+			p := s.Key + " " + ptrNum(s.A) + " → " + ptrNum(s.B)
+			if s.ChangedAt != nil {
+				p += " (changed " + whenText(*s.ChangedAt, loc) + ")"
+			}
+			parts = append(parts, p)
+		}
+		fmt.Fprintf(b, "\nSettings that differ: %s\n", strings.Join(parts, "; "))
+	}
+	if c.SettingsUnknown {
+		b.WriteString("\nSettings of a version are not known: nothing was recorded before its first turn.\n")
+	}
+}
+
+func ptrNum(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	return numText(*v)
 }

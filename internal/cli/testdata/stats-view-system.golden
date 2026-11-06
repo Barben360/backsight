@@ -6,6 +6,8 @@ Memory server answering                      yes                      (ok, no ch
 Health checks                                1 failed                 (watch)
   1 failed, 1 with a warning
 Background jobs                              —                        (no data: nothing recorded yet)
+Possible secrets in memory                   —                        (no data: nothing recorded yet)
+Health checks over time                      —                        (no data: nothing recorded yet)
 
 Background jobs
 none
@@ -16,6 +18,9 @@ settings       ok
 memory server  ok
 backup         warn    backsight backup create
 memory         error   backsight doctor
+
+Health checks over time
+none
 
 System
 Memory server   version 1.1.0, running in docker, mode local

@@ -73,3 +73,22 @@ func TestTroubleshootingDashboardErrorPages(t *testing.T) {
 		"backsight dashboard link", "already running", "replaced on its own",
 		"process id was reused", "delete `dashboard/dashboard.json` in the state directory (`backsight paths` shows it)")
 }
+
+// The docs say how to compare two versions and what the comparison is: the
+// flags, the groups it matches turns in (the `unknown` path is a turn that no
+// main-agent show started), that it only observes, and the new `--has` values.
+func TestDocsNameTheComparison(t *testing.T) {
+	requireInSection(t, "../../docs/dashboard.md", "What each view answers",
+		"backsight stats releases --compare A,B", "--measure", "observational", "unknown",
+		"never_extracted", "contradicted")
+	raw, err := os.ReadFile("../../docs/commands.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"--compare", "--measure", "used.turn_rate|recall.hit_rate|verdict.wrong_rate", "never_extracted", "contradicted", "`unknown`", "observational"} {
+		if !strings.Contains(strings.ReplaceAll(string(raw), `\|`, "|"), w) {
+			t.Errorf("docs/commands.md does not name %s", w)
+		}
+	}
+	requireInSection(t, "../../docs/agent-guide.md", "Is memory working?", "stats releases --compare", "observational")
+}

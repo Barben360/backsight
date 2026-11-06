@@ -87,7 +87,7 @@ type Metric struct {
 	Status      Status         `json:"status"`
 	Reason      string         `json:"reason,omitempty"`
 	Borderline  bool           `json:"borderline"`
-	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial
+	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial, old_scan
 	CI          *[2]float64    `json:"ci"`
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`
@@ -109,6 +109,17 @@ type Point struct {
 	P50   *float64         `json:"p50,omitempty"`
 	P95   *float64         `json:"p95,omitempty"`
 	Parts map[string]int64 `json:"parts,omitempty"`
+	// Source: where a day's or week's server figures came from: "server"
+	// (its live series), "record" (the days this PC recorded) or "none".
+	Source string `json:"source,omitempty"`
+	// Complete: a weekly cohort whose 28 days after its last day have
+	// passed. Tokens and TokensPerUsed: the server's extraction tokens of
+	// the week and per useful memory (yield).
+	Complete      *bool    `json:"complete,omitempty"`
+	Tokens        *int64   `json:"tokens,omitempty"`
+	TokensPerUsed *float64 `json:"tokens_per_used,omitempty"`
+	// CI: the 95 % Wilson interval of a weekly share, set with its value.
+	CI *[2]float64 `json:"ci,omitempty"`
 	// Partial: the window covers only part of this day or hour (its first
 	// or last), so its counts are not a dip.
 	Partial bool `json:"partial,omitempty"`
@@ -122,6 +133,18 @@ type Item struct {
 	Text     string   `json:"text"`
 	Why      string   `json:"why"`
 	Command  string   `json:"command"`
+
+	// reason, when set, is the banner's wording of the item (its Text is the
+	// list's).
+	reason string
+}
+
+// bannerText is the item's wording on a verdict axis's banner.
+func (it Item) bannerText() string {
+	if it.reason != "" {
+		return it.reason
+	}
+	return it.Text
 }
 
 // InfoItem is one counted, non-alarming line.

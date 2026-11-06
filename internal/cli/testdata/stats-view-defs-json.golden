@@ -31,7 +31,7 @@
       "page": {
         "limit": 50,
         "offset": 0,
-        "total": 39
+        "total": 47
       },
       "defs": [
         {
@@ -101,20 +101,21 @@
           "direction": "up",
           "min_n": 20,
           "absolute": {
-            "on": ""
+            "on": "test"
           },
           "relative": false,
           "error_class": false,
           "ci": "wilson",
           "scope": "machine",
           "source": "telemetry",
-          "action": "A language far below the others means memory misses across languages.",
+          "action": "A language far from the most used one, higher or lower, means memory does not serve every language alike.",
           "command": "backsight stats quality --dev",
           "dev": true,
           "family": "reach",
           "series": "none",
           "extra": [
-            "by_lang"
+            "by_lang",
+            "test"
           ],
           "drill": "backsight stats quality --dev",
           "n": 5,
@@ -625,7 +626,7 @@
           "id": "extraction.tokens",
           "label": "What the server's model spent",
           "question": "How many tokens does the server's model use to build memory?",
-          "definition": "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+          "definition": "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
           "unit": "tokens",
           "aggregation": "raw",
           "direction": "none",
@@ -649,7 +650,8 @@
             "output",
             "by_operation",
             "days_covered",
-            "failed_operations"
+            "failed_operations",
+            "record_from"
           ],
           "drill": "backsight stats cost",
           "n": 0,
@@ -659,7 +661,7 @@
           "id": "extraction.cost",
           "label": "What the server's model spent",
           "question": "How much does the server's model cost?",
-          "definition": "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server.",
+          "definition": "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server. The server keeps 30 days; older days come from the days this PC recorded, and a day neither holds is left empty.",
           "unit": "money",
           "aggregation": "raw",
           "direction": "none",
@@ -754,7 +756,7 @@
           "id": "bank.growth",
           "label": "New memories per day",
           "question": "Is memory still growing?",
-          "definition": "Memories added per day, by kind, from the server's time series.",
+          "definition": "Memories added per day, by kind, from the server's time series (90 days); older days come from the days this PC recorded, and a day neither holds is left empty.",
           "unit": "count",
           "aggregation": "raw",
           "direction": "none",
@@ -776,7 +778,8 @@
             "world",
             "experience",
             "observation",
-            "days_covered"
+            "days_covered",
+            "record_from"
           ],
           "drill": "backsight stats bank",
           "n": 0,
@@ -1211,6 +1214,254 @@
           ],
           "drill": "backsight jobs tick",
           "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "pipeline.time_to_recall",
+          "label": "From session to recalled memory",
+          "question": "How long until a session's memories come back?",
+          "definition": "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way; the slowest 1 in 20 of the sent-to-memories step needs 100 sessions and is watched above 1 hour.",
+          "unit": "ms",
+          "aggregation": "raw",
+          "direction": "down",
+          "min_n": 20,
+          "absolute": {
+            "watch": 3600000,
+            "on": "p95"
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "none",
+          "scope": "machine",
+          "source": "collection",
+          "action": "Memories take long to come back. Check the server with backsight doctor.",
+          "command": "backsight stats pipeline",
+          "dev": false,
+          "family": "pipeline",
+          "series": "none",
+          "extra": [
+            "funnel",
+            "hops"
+          ],
+          "drill": "backsight stats pipeline",
+          "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "memory.yield",
+          "label": "Memories that proved useful",
+          "question": "Do new memories turn out useful?",
+          "definition": "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
+          "unit": "ratio",
+          "aggregation": "raw",
+          "direction": "up",
+          "min_n": 20,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "wilson",
+          "scope": "machine",
+          "source": "collection",
+          "action": "Few new memories prove useful. Compare what is stored with what Claude finds.",
+          "command": "backsight stats cost",
+          "dev": false,
+          "family": "cost",
+          "series": "weekly",
+          "extra": [
+            "tokens",
+            "tokens_per_used",
+            "unresolved",
+            "gone",
+            "pending",
+            "resolved_used",
+            "withheld"
+          ],
+          "drill": "backsight stats cost",
+          "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "secrets.suspects",
+          "label": "Possible secrets in memory",
+          "question": "Could memory hold a secret?",
+          "definition": "The memories the last scan found that look like a key, token or password. Watched as soon as the last scan found one.",
+          "unit": "count",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 0,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": true,
+          "ci": "none",
+          "scope": "server",
+          "source": "collection",
+          "action": "Run backsight memory scan to see which memories, then forget them.",
+          "command": "backsight memory scan",
+          "dev": false,
+          "family": "pipeline",
+          "series": "none",
+          "extra": [
+            "scanned_at",
+            "age_days",
+            "live",
+            "forgotten",
+            "pages",
+            "ms"
+          ],
+          "drill": "backsight memory scan",
+          "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "doctor.history",
+          "label": "Health checks over time",
+          "question": "Have the health checks passed lately?",
+          "definition": "For each check and each day, the result of the day's last daily run: ok, watch or bad. A day without a run is shown as none, which is not a fault.",
+          "unit": "count",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 0,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "none",
+          "scope": "machine",
+          "source": "collection",
+          "action": "A check that keeps failing needs fixing; backsight doctor says how.",
+          "command": "backsight stats system",
+          "dev": false,
+          "family": "pipeline",
+          "series": "none",
+          "extra": [
+            "days_without"
+          ],
+          "drill": "backsight stats system",
+          "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "bank.active_share",
+          "label": "Share of the memory that came up",
+          "question": "How much of the memory ever comes up?",
+          "definition": "The memories shown in the window that already existed when it began, out of all the memories the server held then. Memories created inside the window are left out.",
+          "unit": "ratio",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 20,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "wilson",
+          "scope": "machine",
+          "source": "journal",
+          "action": "A low share means most stored memories are never recalled.",
+          "command": "backsight stats bank --dev",
+          "dev": true,
+          "family": "reach",
+          "series": "none",
+          "extra": [
+            "unresolved",
+            "gone"
+          ],
+          "drill": "backsight stats bank --dev",
+          "n": 0,
+          "mdc": null
+        },
+        {
+          "id": "shows.concentration",
+          "label": "How concentrated shows are",
+          "question": "Do a few memories take all the shows?",
+          "definition": "The Gini index of how often each shown memory was shown in the window: 0 when all are shown equally, near 1 when a few take almost every show. The share of the 10 most shown is given beside it. Every kind of show counts, answers from sources included.",
+          "unit": "ratio",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 20,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "none",
+          "scope": "machine",
+          "source": "journal",
+          "action": "A few memories take most shows; check that the ranking is not stuck on them.",
+          "command": "backsight stats bank --dev",
+          "dev": true,
+          "family": "reach",
+          "series": "none",
+          "extra": [
+            "gini",
+            "top10_share",
+            "shows"
+          ],
+          "drill": "backsight stats bank --dev",
+          "n": 3,
+          "mdc": null
+        },
+        {
+          "id": "injection.contradicted",
+          "label": "Corrections after memory was shown",
+          "question": "Does the user correct Claude after memory is shown?",
+          "definition": "The share of turns with injected memories where the next prompt looked like a correction.",
+          "unit": "ratio",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 20,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "wilson",
+          "scope": "machine",
+          "source": "telemetry",
+          "action": "Frequent corrections after memory is shown point to memories that mislead.",
+          "command": "backsight stats quality --dev",
+          "dev": true,
+          "family": "quality",
+          "series": "none",
+          "drill": "backsight stats quality --dev",
+          "n": 1,
+          "mdc": null
+        },
+        {
+          "id": "boost.set_changed",
+          "label": "Recalls the learned ranking changed",
+          "question": "How often does the learned ranking change what is shown?",
+          "definition": "The share of recalls, prompts and searches, whose shown memories differ from what the ranking would show without what it learned from past feedback.",
+          "unit": "ratio",
+          "aggregation": "raw",
+          "direction": "none",
+          "min_n": 20,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "none",
+          "scope": "machine",
+          "source": "journal",
+          "action": "A share near 0 means the learned ranking has no effect yet.",
+          "command": "backsight stats quality --dev",
+          "dev": true,
+          "family": "quality",
+          "series": "none",
+          "extra": [
+            "prompts",
+            "prompts_set_changed",
+            "searches",
+            "searches_set_changed"
+          ],
+          "drill": "backsight stats quality --dev",
+          "n": 3,
           "mdc": null
         }
       ]

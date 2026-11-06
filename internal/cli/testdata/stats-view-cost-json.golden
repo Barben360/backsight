@@ -306,6 +306,31 @@
         "delta": null,
         "drill": "backsight stats cost"
       },
+      "memory.yield": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats cost",
+        "extra": {
+          "gone": 0,
+          "pending": 0,
+          "resolved_used": 0,
+          "tokens": null,
+          "tokens_per_used": null,
+          "unresolved": 0,
+          "withheld": null
+        }
+      },
       "recall.latency": {
         "value": null,
         "num": null,

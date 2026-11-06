@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 )
@@ -59,14 +60,15 @@ var staleIDs = []string{"stale.never_used", "stale.hidden", "stale.reported"}
 // latelyRows is how many sessions the overview lists.
 const latelyRows = 5
 
-// overviewIDs are the overview's metrics: every axis's, the bank tiles
-// and the review-queue counts.
+// overviewIDs are the overview's metrics: every axis's, the bank tiles, the
+// review-queue counts and the time to recall (no axis's metric: it carries
+// no verdict and no attention item).
 func overviewIDs() []string {
 	var ids []string
 	for _, axis := range axisOrder {
 		ids = append(ids, axisMetrics[axis]...)
 	}
-	return append(ids, append([]string{"bank.size", "bank.growth"}, staleIDs...)...)
+	return append(ids, append([]string{"bank.size", "bank.growth", timeToRecallID}, staleIDs...)...)
 }
 
 // overviewNeeds are the overview's server reads: what Flowing judges (the
@@ -86,11 +88,17 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		ids := append(overviewIDs(), "extraction.cost") // the cost is the summary's only
-		m, reused := a.metricsFor(e.q, ids)
-		if !reused {
-			if m, err = computeMetrics(e, e.q.Window, ids); err != nil {
+		// The verdict leaves out the time to recall (no rule reads it): the
+		// overview makes it, for the same window, beside the verdict's figures.
+		m, reused := a.metricsFor(e.q, slices.DeleteFunc(slices.Clone(ids), verdictSkips))
+		if reused {
+			ttr, err := computeMetrics(e, e.q.Window, []string{timeToRecallID})
+			if err != nil {
 				return err
 			}
+			maps.Copy(m, ttr)
+		} else if m, err = computeMetrics(e, e.q.Window, ids); err != nil {
+			return err
 		}
 		sum := summary(m)
 		delete(m, "extraction.cost")
@@ -114,7 +122,10 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Tables.Activity = &act
-		r.Tables.Lately, err = lately(e, e.q.Window)
+		if r.Tables.Lately, err = lately(e, e.q.Window); err != nil {
+			return err
+		}
+		r.Tables.Helped, err = helped(e, e.q.Window)
 		return err
 	})
 }
@@ -145,8 +156,8 @@ func Cost(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Metrics = m
-		r.Tables.Extraction = extractionRows(e, e.q.Window)
-		return nil
+		r.Tables.Extraction, err = extractionRows(e, e.q.Window)
+		return err
 	})
 }
 
@@ -164,7 +175,8 @@ func Bank(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Tables.Review = &rv
-		return nil
+		r.Tables.TopShown, err = topShown(e, e.q.Window)
+		return err
 	})
 }
 
@@ -179,12 +191,13 @@ func Pipeline(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Tables.FailedOperations = failedOperations(e)
 		r.Tables.Jobs = jobRows(m["jobs.last_run"])
 		r.Tables.Doctor = doctorRows(e)
-		return nil
+		r.Tables.NeverExtracted, err = neverExtracted(e, e.q.Window)
+		return err
 	})
 }
 
 // systemIDs are the system page's metrics.
-var systemIDs = []string{"doctor.check", "server.reach", "jobs.last_run", "local.backlog"}
+var systemIDs = []string{"doctor.check", "server.reach", "jobs.last_run", "local.backlog", secretsID, doctorHistoryID}
 
 // System is the doctor's checks and the state of the services.
 func System(ctx context.Context, s Source, q Query) (Result, error) {
@@ -196,6 +209,11 @@ func System(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Metrics = m
 		r.Tables.Doctor = doctorRows(e)
 		r.Tables.Jobs = jobRows(m["jobs.last_run"])
+		dh, err := readDoctorHistory(e, e.q.Window)
+		if err != nil {
+			return err
+		}
+		r.Tables.DoctorHistory = dh.rows
 		info, err := systemInfo(e)
 		if err != nil {
 			return err
@@ -241,12 +259,7 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 }
 
 // viewLoc is the zone the view's times are read in.
-func viewLoc(e env) *time.Location {
-	if e.q.Window.Loc == nil {
-		return time.UTC
-	}
-	return e.q.Window.Loc
-}
+func viewLoc(e env) *time.Location { return viewLocOf(e.q.Window) }
 
 // reachRecorded is, for a view that reads nothing from the server, what
 // this PC last recorded of it: ok for an answer and no failure since, and

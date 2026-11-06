@@ -5,6 +5,7 @@ Memory mem-long
 Memory    Project  Shown  Used  Ignored  Used rate  Learned ranking  Last shown        Last used  State
 mem-long  p1       4      1.5   0.0      100 %      +0.01            2026-10-08 05:00  never      —
 Kind, creation and state on the server: unknown (the server did not answer)
+Came from a source not known yet
 
 Showings
 When              Shown                What happened  Session and prompt  Rank

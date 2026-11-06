@@ -20,6 +20,9 @@ const (
 	ReasonServerDown        = "server_down"
 	ReasonNotConfigured     = "not_configured" // no memory server set up on this PC
 	ReasonServerUnsupported = "server_unsupported"
+	ReasonRecordCatchingUp  = "record_catching_up" // memory.yield: the day lists do not cover enough memories yet
+	ReasonNoRecord          = "no_record"          // memory.yield: neither the server nor the record holds the week's days
+	ReasonNoCompleteWeek    = "no_complete_week"   // memory.yield: no cohort is old enough to judge
 )
 
 // tagNotFiltered marks a server-scope metric under a project filter: the
@@ -57,10 +60,13 @@ type env struct {
 type memo struct {
 	runs      map[runKey]familyRun
 	backlog   *time.Duration
-	docStatus map[string]string    // document_status
-	stale     *feedback.StaleLists // feedback.Stale of the index's ledger, as of now
-	ledger    *feedback.Ledger     // the index's ledger
-	projects  map[string]string    // every memory's project (memoryProjects)
+	docStatus map[string]string       // document_status
+	stale     *feedback.StaleLists    // feedback.Stale of the index's ledger, as of now
+	ledger    *feedback.Ledger        // the index's ledger
+	projects  map[string]string       // every memory's project (memoryProjects)
+	recall    map[[2]int64]*recallRun // pipeline.time_to_recall's reads, by window
+	yield     map[[2]int64]*yieldRun  // memory.yield's reads, by window
+	doctor    map[[2]int64]*doctorRun // doctor.history's reads, by window
 }
 
 // newMemo is an empty memo.
