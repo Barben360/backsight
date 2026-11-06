@@ -67,6 +67,7 @@ type memo struct {
 	recall    map[[2]int64]*recallRun // pipeline.time_to_recall's reads, by window
 	yield     map[[2]int64]*yieldRun  // memory.yield's reads, by window
 	doctor    map[[2]int64]*doctorRun // doctor.history's reads, by window
+	prompts   map[string]*promptRead  // reach's prompts over the span of every window asked, by binary version
 }
 
 // newMemo is an empty memo.
