@@ -1,9 +1,11 @@
 package metrics
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -708,5 +710,59 @@ func TestCompareSettingsMidSpan(t *testing.T) {
 	d := c.SettingsDiffer[0]
 	if d.Key != "recall.min_score" || d.A == nil || *d.A != 0.5 || d.B == nil || *d.B != 0.55 || d.ChangedAt == nil || !d.ChangedAt.Equal(mk(22, 9, 30)) {
 		t.Errorf("difference = %+v, want recall.min_score 0.5 -> 0.55 changed 2026-10-22 09:30", d)
+	}
+}
+
+// The engine's answer for the fixture of record, as the API gives it: the
+// dashboard's page tests read this file, so the page runs on what the engine
+// says and not on a copy written by hand. Regenerate with -update.
+func TestCompareRecordGolden(t *testing.T) {
+	c := compareOf(recordFixture(1), "v0.1.16-m7", "v0.1.17-m7", "used.turn_rate", fxParis)
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The last digits of a float depend on the order the engine sums in:
+	// the file keeps nine decimals.
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	var round func(v any) any
+	round = func(v any) any {
+		switch x := v.(type) {
+		case float64:
+			return math.Round(x*1e9) / 1e9
+		case []any:
+			for i := range x {
+				x[i] = round(x[i])
+			}
+		case map[string]any:
+			for k := range x {
+				x[k] = round(x[k])
+			}
+		}
+		return v
+	}
+	got, err := json.MarshalIndent(round(tree), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	const path = "testdata/compare-record.golden.json"
+	if *updateDoc {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update)", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("the comparison of the fixture of record changed (run with -update and review the diff):\n%s", got)
 	}
 }

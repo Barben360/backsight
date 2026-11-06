@@ -1,0 +1,113 @@
+{
+  "a": "v0.1.16-m7",
+  "b": "v0.1.17-m7",
+  "ci": [
+    0.024782634,
+    0.204466378
+  ],
+  "diff": 0.114624506,
+  "measure": "used.turn_rate",
+  "pooled_a": 0.48972332,
+  "pooled_b": 0.604347826,
+  "raw_a": {
+    "den": 326,
+    "num": 187
+  },
+  "raw_b": {
+    "den": 295,
+    "num": 154
+  },
+  "raw_disagrees": true,
+  "reading": "differs",
+  "sessions_a": 270,
+  "sessions_b": 250,
+  "settings_differ": [],
+  "settings_unknown": false,
+  "strata": [
+    {
+      "a": {
+        "days": 21,
+        "den": 200,
+        "num": 140
+      },
+      "b": {
+        "days": 9,
+        "den": 60,
+        "num": 46
+      },
+      "ci": [
+        -0.058021488,
+        0.191354821
+      ],
+      "diff": 0.066666667,
+      "eligible": true,
+      "path": "prompt",
+      "project": "backsight",
+      "reading": "no_clear_difference",
+      "weight": 46.153846154
+    },
+    {
+      "a": {
+        "days": 20,
+        "den": 36,
+        "num": 17
+      },
+      "b": {
+        "days": 7,
+        "den": 12,
+        "num": 6
+      },
+      "ci": null,
+      "diff": null,
+      "eligible": false,
+      "path": "search",
+      "project": "backsight",
+      "reading": "too_few",
+      "weight": null,
+      "why": "units"
+    },
+    {
+      "a": {
+        "days": 18,
+        "den": 70,
+        "num": 21
+      },
+      "b": {
+        "days": 9,
+        "den": 190,
+        "num": 87
+      },
+      "ci": [
+        0.029024388,
+        0.286765086
+      ],
+      "diff": 0.157894737,
+      "eligible": true,
+      "path": "prompt",
+      "project": "project-a",
+      "reading": "differs",
+      "weight": 51.153846154
+    },
+    {
+      "a": {
+        "days": 4,
+        "den": 20,
+        "num": 9
+      },
+      "b": {
+        "days": 8,
+        "den": 33,
+        "num": 15
+      },
+      "ci": null,
+      "diff": null,
+      "eligible": false,
+      "path": "prompt",
+      "project": "project-b",
+      "reading": "too_few",
+      "weight": null,
+      "why": "days"
+    }
+  ],
+  "too_few": null
+}

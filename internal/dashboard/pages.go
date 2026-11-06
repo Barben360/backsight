@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -495,7 +496,14 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			// A comparison the view would refuse (the same version twice) is
 			// refused here, not redirected to.
 			if err == nil && picked {
-				_, err = views.Query(first, p, id, s.now())
+				if _, qerr := views.Query(first, p, id, s.now()); qerr != nil {
+					var oe *output.Error
+					if !errors.As(qerr, &oe) || oe.Code != output.Usage { // not a refusal of the request
+						s.failurePage(w, r, title, prefs, qerr)
+						return
+					}
+					err = qerr
+				}
 			}
 		}
 		if err != nil {

@@ -1,8 +1,11 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"math"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -615,31 +618,23 @@ func inside(n *node, name string) bool {
 // versionA and versionB are the versions of the design's fixture of record.
 const versionA, versionB = "v0.1.16-m7", "v0.1.17-m7"
 
-// recordComparison is the fixture of record, as the view answers it: four
-// groups (two compared, one short of turns, one short of days), the pooled
-// difference and the raw figures that disagree with it. The numbers are
-// hand-computed (the weights 200*60/260 and 70*190/260, the pooled
-// difference 0.114625).
+// recordComparison is the engine's answer for the fixture of record (the
+// golden internal/metrics writes: four groups, two compared, one short of
+// turns, one short of days; the pooled difference 0.114625; raw figures that
+// disagree with it), plus the setting that differs, which the engine reads
+// from the config records and the golden does not hold.
 func recordComparison() *metrics.Comparison {
-	side := func(num, den int64, days int) metrics.StratumSide {
-		return metrics.StratumSide{Num: num, Den: den, Days: days}
+	raw, err := os.ReadFile(filepath.Join("..", "metrics", "testdata", "compare-record.golden.json"))
+	if err != nil {
+		panic(err)
+	}
+	c := &metrics.Comparison{}
+	if err := json.Unmarshal(raw, c); err != nil {
+		panic(err)
 	}
 	changed := time.Date(2026, 10, 7, 18, 0, 0, 0, parisZone())
-	return &metrics.Comparison{
-		A: versionA, B: versionB, Measure: "used.turn_rate", Reading: "differs",
-		Diff: fp(0.114625), CI: &[2]float64{0.024783, 0.204466}, PooledA: fp(0.489723), PooledB: fp(0.604348),
-		RawA: metrics.Rate{Num: 187, Den: 326}, RawB: metrics.Rate{Num: 154, Den: 295}, RawDisagrees: true,
-		SessionsA: 270, SessionsB: 250,
-		Strata: []metrics.StratumRow{
-			{Project: "backsight", Path: "prompt", A: side(140, 200, 21), B: side(46, 60, 9), Weight: fp(46.1538),
-				Diff: fp(0.066667), CI: &[2]float64{-0.058021, 0.191355}, Reading: "no_clear_difference", Eligible: true},
-			{Project: "backsight", Path: "search", A: side(17, 36, 20), B: side(6, 12, 7), Reading: "too_few", Why: "units"},
-			{Project: "project-a", Path: "prompt", A: side(21, 70, 18), B: side(87, 190, 9), Weight: fp(51.1538),
-				Diff: fp(0.157895), CI: &[2]float64{0.029024, 0.286765}, Reading: "differs", Eligible: true},
-			{Project: "project-b", Path: "prompt", A: side(9, 20, 4), B: side(15, 33, 8), Reading: "too_few", Why: "days"},
-		},
-		SettingsDiffer: []metrics.SettingDiff{{Key: "recall.min_score", A: fp(0.5), B: fp(0.55), ChangedAt: &changed}},
-	}
+	c.SettingsDiffer = []metrics.SettingDiff{{Key: "recall.min_score", A: fp(0.5), B: fp(0.55), ChangedAt: &changed}}
+	return c
 }
 
 // compareHTML is the Releases page with the comparison c in its view.
@@ -668,6 +663,28 @@ func compareCard(t *testing.T, page string) *node {
 	return nil
 }
 
+// needFirst is the first element of n matching sel; the test stops without one.
+func needFirst(t *testing.T, n *node, sel string) *node {
+	t.Helper()
+	f := n.first(sel)
+	if f == nil {
+		t.Fatalf("no %s", sel)
+	}
+	return f
+}
+
+// needAll are the elements of n matching sel, at least min of them.
+func needAll(t *testing.T, n *node, sel string, min int) []*node {
+	t.Helper()
+	all := n.find(sel)
+	if len(all) < min {
+		t.Fatalf("%d of %s, want %d", len(all), sel, min)
+	}
+	return all
+}
+
+func lastOf(ns []*node) *node { return ns[len(ns)-1] }
+
 // pillDesc describes a pill for a failure message; n may be nil.
 func pillDesc(n *node) string {
 	if n == nil {
@@ -690,7 +707,7 @@ func TestComparisonPage(t *testing.T) {
 	c := compareCard(t, compareHTML(t, recordComparison()))
 
 	// the readings first: Observational, the settings, the headline
-	if got := c.first("div.state").text(); got != "Observational, not an experiment. The two versions ran on different weeks, on different work, with different memory. Matching by project and place removes some of that, not all." {
+	if got := needFirst(t, c, "div.state").text(); got != "Observational, not an experiment. The two versions ran on different weeks, on different work, with different memory. Matching by project and place removes some of that, not all." {
 		t.Errorf("the observational box: %q", got)
 	}
 	var settings *node
@@ -712,10 +729,10 @@ func TestComparisonPage(t *testing.T) {
 	if lead == nil {
 		t.Fatal("no headline")
 	}
-	if got := lead.first("span.big").text(); got != "+11 pts" {
+	if got := needFirst(t, lead, "span.big").text(); got != "+11 pts" {
 		t.Errorf("headline %q", got)
 	}
-	if got := lead.first("span.sub").text(); got != "(+2 to +20) v0.1.17-m7 minus v0.1.16-m7, matched" {
+	if got := needFirst(t, lead, "span.sub").text(); got != "(+2 to +20) v0.1.17-m7 minus v0.1.16-m7, matched" {
 		t.Errorf("headline detail %q", got)
 	}
 	pill := lead.first("span.pill")
@@ -723,7 +740,7 @@ func TestComparisonPage(t *testing.T) {
 		t.Fatalf("reading: %s", pillDesc(pill))
 	}
 	notStatus(t, "the reading", pill)
-	if got := lead.find("div")[2].text(); got != "Unmatched, the raw numbers say the opposite, −5 pts (57 % → 52 %): the mix of projects differs between the two versions. Read the matched figure." {
+	if got := needAll(t, lead, "div", 3)[2].text(); got != "Unmatched, the raw numbers say the opposite, −5 pts (57 % → 52 %): v0.1.17-m7 ran mostly on project-a (190 of its 295 turns), and v0.1.16-m7 mostly on backsight (236 of 326). Read the matched figure." {
 		t.Errorf("raw line %q", got)
 	}
 	if strings.Contains(c.text(), "No clear difference: the interval includes 0") {
@@ -743,7 +760,7 @@ func TestComparisonPage(t *testing.T) {
 	}
 	var titles []string
 	for _, l := range plot.find("line.ci-ln") {
-		titles = append(titles, l.first("title").text())
+		titles = append(titles, needFirst(t, l, "title").text())
 	}
 	wantTitles := []string{
 		"backsight · added to the prompt: +7 pts (−6 to +19), no clear difference",
@@ -760,13 +777,13 @@ func TestComparisonPage(t *testing.T) {
 	if want := []string{"too few: v0.1.17-m7 has 12 turns, 30 needed", "too few: v0.1.16-m7 ran 4 days, 7 needed"}; !slices.Equal(few, want) {
 		t.Errorf("groups too few: %q, want %q", few, want)
 	}
-	if got := plot.find("text.ta-e")[len(plot.find("text.ta-e"))-1].text(); !strings.Contains(got, "lower in v0.1.17-m7") {
+	if got := lastOf(needAll(t, plot, "text.ta-e", 1)).text(); !strings.Contains(got, "lower in v0.1.17-m7") {
 		t.Errorf("axis note %q", got)
 	}
 
 	// the table: one row a group, then the pooled and the unmatched rows
 	tbl := tableCaptioned(t, c, "Each project and place, and the matched total")
-	if got := tbl.first("thead tr").text(); got != "Project Where memory was shown v0.1.16-m7 v0.1.17-m7 Difference (95 %) Reading" {
+	if got := needFirst(t, tbl, "thead tr").text(); got != "Project Where memory was shown v0.1.16-m7 v0.1.17-m7 Difference (95 %) Reading" {
 		t.Errorf("table head %q", got)
 	}
 	want := [][]string{
@@ -781,10 +798,10 @@ func TestComparisonPage(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("table rows\n got %q\nwant %q", got, want)
 	}
-	if tr := tbl.find("tbody tr")[4]; tr.attr("class") != "total" {
+	if tr := needAll(t, tbl, "tbody tr", 6)[4]; tr.attr("class") != "total" {
 		t.Errorf("the pooled row is not the total row: %q", tr.attr("class"))
 	}
-	if got := c.first("p.tbl-more").text(); got != "Pooled rates are each version's rate in the matched pairs, weighted by pair size (the two versions' turns combined as a·b / (a + b): 46 and 51), so the same weights apply to both versions." {
+	if got := needFirst(t, c, "p.tbl-more").text(); got != "Pooled rates are each version's rate in the matched pairs, weighted by pair size (the two versions' turns combined as a·b / (a + b): 46 and 51), so the same weights apply to both versions." {
 		t.Errorf("weights note %q", got)
 	}
 	// the cell of a group too few in its days is a neutral pill, not a colour
@@ -800,8 +817,36 @@ func TestComparisonPage(t *testing.T) {
 		t.Error("a raw sentence without a disagreement")
 	}
 	rows := rowsOf(tableCaptioned(t, card, "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
 	if last := rows[len(rows)-1]; last[len(last)-1] != "raw figures, not matched" {
 		t.Errorf("unmatched row without a disagreement: %q", last)
+	}
+	// the raw sentence names where each version mostly ran, in its measure's units
+	prompts := recordComparison()
+	prompts.Measure = "recall.hit_rate"
+	if got := needAll(t, compareCard(t, compareHTML(t, prompts)), "div.lead div", 3)[2].text(); !strings.Contains(got, "(190 of its 295 prompts), and v0.1.16-m7 mostly on backsight (236 of 326). Read") {
+		t.Errorf("raw line in prompts: %q", got)
+	}
+	// no project holds half of a version's units: the generic sentence, no project named
+	spread := recordComparison()
+	for i := range spread.Strata {
+		spread.Strata[i].Project = "proj-" + strconv.Itoa(i)
+	}
+	spread.Strata[0].A.Den = 162 // 162 of 326 is just under half
+	line := needAll(t, compareCard(t, compareHTML(t, spread)), "div.lead div", 3)[2].text()
+	if want := "Unmatched, the raw numbers say the opposite, −5 pts (57 % → 52 %): the mix of projects differs between the two versions. Read the matched figure."; line != want {
+		t.Errorf("raw line without a majority:\n got %q\nwant %q", line, want)
+	}
+	// the side that has a majority is not enough: both must
+	oneSide := recordComparison() // B keeps project-a (190 of 295); A is spread over four projects
+	oneSide.Strata[0].A.Den = 100
+	for i, name := range []string{"w", "x", "project-a", "z"} {
+		oneSide.Strata[i].Project = name
+	}
+	if got := needAll(t, compareCard(t, compareHTML(t, oneSide)), "div.lead div", 3)[2].text(); !strings.Contains(got, "the mix of projects differs") {
+		t.Errorf("raw line with one side spread: %q", got)
 	}
 	// no setting differs: no settings line; a measure of verdicts counts verdicts
 	plain := recordComparison()
@@ -812,6 +857,9 @@ func TestComparisonPage(t *testing.T) {
 	verdicts := recordComparison()
 	verdicts.Measure = "verdict.wrong_rate"
 	vrows := rowsOf(tableCaptioned(t, compareCard(t, compareHTML(t, verdicts)), "Each project and place, and the matched total"))
+	if len(vrows) != 6 {
+		t.Fatalf("%d verdict rows, want 6", len(vrows))
+	}
 	if vrows[0][2] != "70 % (140 of 200 verdicts, 21 d)" || vrows[5][0] != "All verdicts, unmatched" {
 		t.Errorf("verdict units: %q", vrows)
 	}
@@ -819,11 +867,11 @@ func TestComparisonPage(t *testing.T) {
 
 func TestComparisonShowsWhatItAsksAndHowToAskIt(t *testing.T) {
 	c := compareCard(t, compareHTML(t, recordComparison(), func(d *PageData) { d.P.Measure = "recall.hit_rate" }))
-	cmd := c.first("details.cli code").Text
+	cmd := needFirst(t, c, "details.cli code").Text
 	if cmd != "backsight stats releases --days 30 --compare v0.1.16-m7,v0.1.17-m7 --measure recall.hit_rate" {
 		t.Errorf("command %q", cmd)
 	}
-	if got := c.find("p.sub")[0].text(); got != "Comparing v0.1.16-m7 with v0.1.17-m7 on turns where Claude used memory:" {
+	if got := needAll(t, c, "p.sub", 1)[0].text(); got != "Comparing v0.1.16-m7 with v0.1.17-m7 on turns where Claude used memory:" {
 		t.Errorf("which comparison: %q", got)
 	}
 	if info := c.first("details.info div.pop"); info == nil || !strings.Contains(info.text(), "Never “better”") {
@@ -862,6 +910,21 @@ func TestComparisonPicker(t *testing.T) {
 		if r.StatusCode != 400 || r.Header.Get("Location") != "" || !strings.Contains(visibleText(body(t, r)), c.want) {
 			t.Errorf("%s: %d %q, want 400 with %q", c.query, r.StatusCode, r.Header.Get("Location"), c.want)
 		}
+	}
+	// the filters travel through the redirect
+	r = h.do("GET", "/releases?a=v1&b=v2&project=p1", hdr...)
+	if r.StatusCode != 303 || r.Header.Get("Location") != "/releases?compare=v1,v2&project=p1" {
+		t.Errorf("project: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	// a version that never ran in the window is too few, not an error
+	r = h.do("GET", "/releases?a=v9&b=v2", hdr...)
+	if r.StatusCode != 303 || r.Header.Get("Location") != "/releases?compare=v9,v2" {
+		t.Errorf("unknown version: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	r = h.do("GET", "/releases?compare=v9,v2", hdr...)
+	card := compareCard(t, body(t, r))
+	if r.StatusCode != 200 || !strings.Contains(card.text(), "Too few to compare. v9 has run 0 days with 0 turns that said what they used;") {
+		t.Errorf("unknown version page: %d %q", r.StatusCode, card.text())
 	}
 	// the picker is only the Releases page's
 	if r := h.do("GET", "/quality?a=v1&b=v2", hdr...); r.StatusCode != 400 {
@@ -949,7 +1012,7 @@ func TestComparisonTooFewAndNoDifference(t *testing.T) {
 	// too few by days, with a date to come back
 	c := compareCard(t, compareHTML(t, few("days", "v0.1.18-m7", 3, 11, &retry)))
 	sentence := "Too few to compare. v0.1.18-m7 has run 3 days with 11 turns that said what they used; each version needs 7 days and 30 such turns in at least one shared project and place. Try again around Nov 6."
-	if got := c.first("div.state").text(); got != sentence {
+	if got := needFirst(t, c, "div.state").text(); got != sentence {
 		t.Errorf("too few:\n got %q\nwant %q", got, sentence)
 	}
 	pill := c.first("div.card-head span.pill")
@@ -964,19 +1027,19 @@ func TestComparisonTooFewAndNoDifference(t *testing.T) {
 	}
 	// by units, nothing to wait for: no date; one day and one turn are singular
 	c = compareCard(t, compareHTML(t, few("units", "v0.1.18-m7", 1, 1, nil)))
-	if got, want := c.first("div.state").text(), "Too few to compare. v0.1.18-m7 has run 1 day with 1 turn that said what it used; each version needs 7 days and 30 such turns in at least one shared project and place."; got != want {
+	if got, want := needFirst(t, c, "div.state").text(), "Too few to compare. v0.1.18-m7 has run 1 day with 1 turn that said what it used; each version needs 7 days and 30 such turns in at least one shared project and place."; got != want {
 		t.Errorf("too few by units:\n got %q\nwant %q", got, want)
 	}
 	// the other measures count their own units
 	prompts := few("units", "v0.1.18-m7", 8, 12, nil)
 	prompts.Measure = "recall.hit_rate"
-	if got, want := compareCard(t, compareHTML(t, prompts)).first("div.state").text(), "Too few to compare. v0.1.18-m7 has run 8 days with 12 prompts; each version needs 7 days and 30 such prompts in at least one shared project and place."; got != want {
+	if got, want := needFirst(t, compareCard(t, compareHTML(t, prompts)), "div.state").text(), "Too few to compare. v0.1.18-m7 has run 8 days with 12 prompts; each version needs 7 days and 30 such prompts in at least one shared project and place."; got != want {
 		t.Errorf("too few prompts:\n got %q\nwant %q", got, want)
 	}
 	// by sessions: the pooled comparison needs 10 sessions a version
 	sess := few("sessions", versionA, 21, 200, nil)
 	sess.SessionsA = 4
-	if got := compareCard(t, compareHTML(t, sess)).first("div.state").text(); !strings.HasSuffix(got, " Together they need 10 sessions in each version; v0.1.16-m7 has 4.") {
+	if got := needFirst(t, compareCard(t, compareHTML(t, sess)), "div.state").text(); !strings.HasSuffix(got, " Together they need 10 sessions in each version; v0.1.16-m7 has 4.") {
 		t.Errorf("too few sessions: %q", got)
 	}
 
@@ -985,10 +1048,10 @@ func TestComparisonTooFewAndNoDifference(t *testing.T) {
 	nd.Reading, nd.Diff, nd.CI, nd.RawDisagrees, nd.SettingsDiffer = "no_clear_difference", fp(0.012), &[2]float64{-0.041, 0.058}, false, nil
 	c = compareCard(t, compareHTML(t, nd))
 	lead := c.first("div.lead")
-	if got := lead.first("span.big").text(); got != "+1 pt" {
+	if got := needFirst(t, lead, "span.big").text(); got != "+1 pt" {
 		t.Errorf("headline %q", got)
 	}
-	if got := lead.first("span.sub").text(); got != "(−4 to +6) v0.1.17-m7 minus v0.1.16-m7, matched" {
+	if got := needFirst(t, lead, "span.sub").text(); got != "(−4 to +6) v0.1.17-m7 minus v0.1.16-m7, matched" {
 		t.Errorf("headline detail %q", got)
 	}
 	pill = lead.first("span.pill")
@@ -1004,6 +1067,9 @@ func TestComparisonTooFewAndNoDifference(t *testing.T) {
 		t.Errorf("no sentence about the interval: %q", said)
 	}
 	rows := rowsOf(tableCaptioned(t, c, "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
 	if got := rows[4][4]; got != "no clear difference" {
 		t.Errorf("pooled reading %q", got)
 	}
@@ -1011,6 +1077,9 @@ func TestComparisonTooFewAndNoDifference(t *testing.T) {
 	down := recordComparison()
 	down.Diff, down.CI = fp(-0.1), &[2]float64{-0.15, -0.05}
 	rows = rowsOf(tableCaptioned(t, compareCard(t, compareHTML(t, down)), "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
 	if got := rows[4][4]; got != "differs: lower in v0.1.17-m7" {
 		t.Errorf("pooled reading downward %q", got)
 	}
@@ -1071,11 +1140,14 @@ func TestComparisonEscapesVersions(t *testing.T) {
 			t.Errorf("select %s lacks the versions: %q", name, vals)
 		}
 	}
-	if got := card.first("div.lead span.sub").text(); got != "(+2 to +20) "+b+" minus "+a+", matched" {
+	if got := needFirst(t, card, "div.lead span.sub").text(); got != "(+2 to +20) "+b+" minus "+a+", matched" {
 		t.Errorf("headline detail %q", got)
 	}
-	if got := card.first("div.st-watch").text(); !strings.Contains(got, "under "+a+" and 0.55 under "+b) {
+	if got := needFirst(t, card, "div.st-watch").text(); !strings.Contains(got, "under "+a+" and 0.55 under "+b) {
 		t.Errorf("settings line %q", got)
+	}
+	if got := needAll(t, card, "div.lead div", 3)[2].text(); !strings.Contains(got, b+" ran mostly on project-a (190 of its 295 turns), and "+a+" mostly on "+project+" (200 of 326).") {
+		t.Errorf("raw line %q", got)
 	}
 	var svgText []string
 	for _, n := range card.find("div.chart-plot svg text") {
@@ -1085,7 +1157,7 @@ func TestComparisonEscapesVersions(t *testing.T) {
 		t.Errorf("chart texts %q", svgText)
 	}
 	for _, l := range card.find("div.chart-plot svg line.ci-ln") {
-		if title := l.first("title").text(); strings.HasPrefix(title, project) && !strings.Contains(title, "differs") && !strings.Contains(title, "no clear") {
+		if title := needFirst(t, l, "title").text(); strings.HasPrefix(title, project) && !strings.Contains(title, "differs") && !strings.Contains(title, "no clear") {
 			t.Errorf("mark title %q", title)
 		}
 	}
@@ -1093,6 +1165,9 @@ func TestComparisonEscapesVersions(t *testing.T) {
 		t.Errorf("chart label %q", svg.attr("aria-label"))
 	}
 	rows := rowsOf(tableCaptioned(t, card, "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
 	if rows[0][0] != project || rows[2][5] != "differs: higher in "+b {
 		t.Errorf("table rows %q", rows)
 	}
@@ -1139,7 +1214,7 @@ func TestReleasesMarkersChart(t *testing.T) {
 		r.Tables.Markers = append(r.Tables.Markers, metrics.Marker{At: time.Date(2026, 8, 1, 9, 0, 0, 0, parisZone()), Kind: "release", Version: "v0.0.1"})
 	}
 	card := usedCardOf(t, pageHTML(t, "releases", two))
-	if card.first("div.card-head span.chip") == nil || card.find("div.card-head span.chip")[0].text() != "this PC" {
+	if card.first("div.card-head span.chip") == nil || lastOf(card.find("div.card-head span.chip")[:1]).text() != "this PC" {
 		t.Errorf("the chart does not say it is this PC's")
 	}
 	var rel, cfg []string
@@ -1162,7 +1237,7 @@ func TestReleasesMarkersChart(t *testing.T) {
 	}
 	head := tbl.first("thead tr").find("th")
 	if head[len(head)-1].text() != "Marker" {
-		t.Fatalf("table head %q", tbl.first("thead tr").text())
+		t.Fatalf("table head %q", needFirst(t, tbl, "thead tr").text())
 	}
 	rows := rowsOf(tbl)
 	if len(rows) != len(days) {
@@ -1180,8 +1255,8 @@ func TestReleasesMarkersChart(t *testing.T) {
 			t.Errorf("%s: marker %q, want %q", r[0], got, want)
 		}
 	}
-	if !strings.Contains(card.first("div.legend").text(), "new version") || !strings.Contains(card.first("div.legend").text(), "settings changed") {
-		t.Errorf("legend %q", card.first("div.legend").text())
+	if !strings.Contains(needFirst(t, card, "div.legend").text(), "new version") || !strings.Contains(needFirst(t, card, "div.legend").text(), "settings changed") {
+		t.Errorf("legend %q", needFirst(t, card, "div.legend").text())
 	}
 	// the line is the rate of used turns, with the faint bars of the turns
 	var valued int

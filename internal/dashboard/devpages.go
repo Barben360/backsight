@@ -490,8 +490,8 @@ func (d PageData) compareOf(r *metrics.Result) CompareCard {
 	res.Pill = Word{Word: views.Word(views.ReadingWords, cmp.Reading), Class: "st-info"}
 	if cmp.RawDisagrees && cmp.RawA.Den > 0 && cmp.RawB.Den > 0 {
 		ra, rb := float64(cmp.RawA.Num)/float64(cmp.RawA.Den), float64(cmp.RawB.Num)/float64(cmp.RawB.Den)
-		res.Raw = "Unmatched, the raw numbers say the opposite, " + ptsWord(rb-ra) + " (" + l.Percent(ra) + " → " + l.Percent(rb) +
-			"): the mix of projects differs between the two versions. Read the matched figure."
+		res.Raw = "Unmatched, the raw numbers say the opposite, " + ptsWord(rb-ra) + " (" + l.Percent(ra) + " → " + l.Percent(rb) + "): " +
+			rawMix(l, *cmp, unit.many) + "Read the matched figure."
 	}
 	if cmp.Reading == "no_clear_difference" {
 		res.NoClear = compareNoClear
@@ -564,6 +564,33 @@ func (d PageData) compareOf(r *metrics.Result) CompareCard {
 		B: cmp.B, Rows: forest, More: d.compareCLI(cmp) + " --json"}.HTML()
 	c.Result = res
 	return c
+}
+
+// mostlyOn is the project that holds at least half of a version's units, the
+// first by name among equals, with its units; ok is false when none does.
+func mostlyOn(c metrics.Comparison, side func(metrics.StratumRow) int64, total int64) (project string, units int64, ok bool) {
+	by := map[string]int64{}
+	for _, s := range c.Strata {
+		by[s.Project] += side(s)
+	}
+	for _, name := range slices.Sorted(maps.Keys(by)) {
+		if n := by[name]; n > units {
+			project, units = name, n
+		}
+	}
+	return project, units, total > 0 && units*2 >= total
+}
+
+// rawMix says where each version ran, as far as the raw figures differ for
+// that reason; the generic sentence when no project holds half of a side.
+func rawMix(l format.Locale, c metrics.Comparison, unit string) string {
+	pa, na, okA := mostlyOn(c, func(s metrics.StratumRow) int64 { return s.A.Den }, c.RawA.Den)
+	pb, nb, okB := mostlyOn(c, func(s metrics.StratumRow) int64 { return s.B.Den }, c.RawB.Den)
+	if !okA || !okB {
+		return "the mix of projects differs between the two versions. "
+	}
+	return c.B + " ran mostly on " + pb + " (" + l.Int(nb) + " of its " + l.Int(c.RawB.Den) + " " + unit + "), and " +
+		c.A + " mostly on " + pa + " (" + l.Int(na) + " of " + l.Int(c.RawA.Den) + "). "
 }
 
 // pct is a share as a number of percentage points.
