@@ -534,8 +534,8 @@ WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
 			row.Machine = short(self.Machine, ids)
 		}
 		if err := e.tx.QueryRowContext(e.ctx, `
-SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine') AND `+versionClause,
-			w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.version, e.q.version).Scan(&row.Prompts); err != nil {
+SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine') AND `+projectClause+` AND `+versionClause,
+			w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version).Scan(&row.Prompts); err != nil {
 			return nil, err
 		}
 		row.Active = row.Prompts > 0

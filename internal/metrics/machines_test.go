@@ -1252,3 +1252,33 @@ func TestMergeCostLeavesThisPCsRunAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Under a project filter this PC's By PC row counts the project's typed
+// prompts only (A8: this PC filtered, the others whole). This PC: 4 prompts
+// of "alpha" and 3 of "beta"; filter beta -> 3, filter gamma -> 0 and not
+// active. The other PC keeps its whole 40 prompts either way.
+func TestByPCRowFollowsTheProjectFilter(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "a", fxNow, 4, nil)
+	x.prompts("beta", "b", fxNow, 3, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcRows(latRow(pcOther1, "2026-10-29", 40, [9]int64{}))
+	for _, c := range []struct {
+		project string
+		prompts int64
+		active  bool
+	}{{"beta", 3, true}, {"gamma", 0, false}, {"", 7, true}} {
+		q := x.allQuery()
+		q.Project = c.project
+		rows := x.runAs("cost", q).Tables.ByPC
+		if len(rows) != 2 {
+			t.Fatalf("project %q: rows %+v", c.project, rows)
+		}
+		if rows[0].Prompts != c.prompts || rows[0].Active != c.active {
+			t.Errorf("project %q: this PC prompts %d active %v, want %d %v", c.project, rows[0].Prompts, rows[0].Active, c.prompts, c.active)
+		}
+		if rows[1].Prompts != 40 || !rows[1].Active {
+			t.Errorf("project %q: other PC %+v, want whole 40 and active", c.project, rows[1])
+		}
+	}
+}
