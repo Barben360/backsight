@@ -120,7 +120,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "daily", Command: "backsight stats quality --dev",
 		Extra:      []string{"unknown", "shown", "forgotten", "pending", "path"},
 		Question:   "When memory is sure of itself, is it right?",
-		Definition: "Settled shows credited as used, out of shows credited or confidently missed, for the prompt path by default. Shows with an unknown outcome, shows of memories forgotten since, and shows still pending are reported beside it.",
+		Definition: "Settled shows credited as used or confirmed, out of shows credited or confidently missed, for the prompt path by default. Shows with an unknown outcome, shows of memories forgotten since, and shows still pending are reported beside it.",
 		Action:     "Confident rankings that go unused mean the ranking over-trusts some memories.",
 	},
 	{

@@ -53,7 +53,7 @@ type creditArgs struct {
 	IDs        []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
 	Verdict    string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; confirmed: these memories match what this session established independently (the user's words, a file, a command output), they did not inform the answer; none: no memory shown informed it; wrong: this session shows them false; outdated: they were true but no longer are"`
 	Correction string   `json:"correction,omitempty" jsonschema:"with wrong or outdated: the right fact, 1-3 sentences, as for memory_store"`
-	Evidence   string   `json:"evidence,omitempty" jsonschema:"with wrong or outdated: what in this session shows it (the user's words, a file, a command output), at most 300 characters; optional with confirmed"`
+	Evidence   string   `json:"evidence,omitempty" jsonschema:"with wrong or outdated: what in this session shows it (the user's words, a file, a command output), at most 300 characters"`
 }
 
 // live is the session and project of the Claude Code session this server
@@ -392,12 +392,8 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 			if strings.TrimSpace(a.Correction) != "" {
 				return "", errors.New("correction: a confirmed memory needs none; to correct a memory use verdict wrong or outdated")
 			}
-			evidence := singleLine(a.Evidence)
-			if utf8.RuneCountInString(evidence) > maxEvidence {
-				return "", fmt.Errorf("evidence: at most %d characters", maxEvidence)
-			}
-			if _, kinds := redact.Text(evidence); len(kinds) > 0 {
-				return "", errors.New("the evidence holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory")
+			if strings.TrimSpace(a.Evidence) != "" {
+				return "", errors.New("evidence: only with wrong or outdated; drop it")
 			}
 		}
 	case "none":
@@ -422,9 +418,6 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 		return "", errors.New("memory session not ready: call memory_credit again")
 	}
 	if verdict == "none" {
-		if d.creditedThisTurn(live.SessionID) {
-			return "", errors.New("verdict none after a credit in this turn: drop it, the memories credited stand")
-		}
 		return creditNonePrefix + " no memory used.", nil
 	}
 	shown := shownInSession(d.dirs, live.SessionID)
@@ -467,25 +460,6 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 		lines = append(lines, build(p, groups[p]))
 	}
 	return prefix + " " + printLines(lines) + "\n" + strings.Join(lines, "\n"), nil
-}
-
-// creditedThisTurn: the main agent of session sess already credited
-// memories (used, confirmed, wrong or outdated) in its current turn, per
-// the journal and the session's turn pointer. The server does not know
-// which agent calls it: only the main agent's credits count. False when
-// either cannot be read.
-func (d mcpDeps) creditedThisTurn(sess string) bool {
-	t, ok := feedback.CurrentTurn(d.dirs.FeedbackDir(), sess)
-	if !ok {
-		return false
-	}
-	events, err := sessionJournal(d.dirs, sess)
-	if err != nil {
-		return false
-	}
-	return slices.ContainsFunc(events, func(e feedback.Event) bool {
-		return e.Kind == "credit" && e.Session == sess && e.Turn == t.ID && e.Agent == "" && len(e.IDs) > 0
-	})
 }
 
 // shownProjects is the project of each memory shown: the one its latest

@@ -285,7 +285,7 @@ var SentWords = map[string]string{
 
 // OutcomeWords say what became of a memory that was shown.
 var OutcomeWords = map[string]string{
-	"credit": "used by Claude", "confident_miss": "shown, then ignored", "unknown": "not declared",
+	"credit": "used or confirmed", "confident_miss": "shown, then ignored", "unknown": "not declared",
 	"shown": "shown only", "pending": "pending", "undeclared": "not declared",
 }
 

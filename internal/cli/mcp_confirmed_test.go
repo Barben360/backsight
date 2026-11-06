@@ -7,26 +7,20 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 )
 
-func confirmed(evidence string, ids ...string) map[string]any {
-	a := map[string]any{"ids": ids, "verdict": "confirmed"}
-	if evidence != "" {
-		a["evidence"] = evidence
-	}
-	return a
+func confirmed(ids ...string) map[string]any {
+	return map[string]any{"ids": ids, "verdict": "confirmed"}
 }
 
-// A confirmed verdict hands back its own line, not the used one, with
-// or without evidence, and journals nothing itself (the hook does).
+// A confirmed verdict hands back its own line, not the used one, and
+// journals nothing itself (the hook does).
 func TestCreditConfirmedReturnsItsOwnLine(t *testing.T) {
 	cs, home := creditSession(t)
 	showIn(t, home, "S", creditA, creditB)
 	before := len(journalEvents(t, home))
-	for _, ev := range []string{"", "the user: rtk was removed"} {
-		out, isErr := call(t, cs, "memory_credit", confirmed(ev, "aaaaaaaa"))
-		if isErr || !strings.HasPrefix(out, "Confirmed.") || !strings.Contains(out, "> 🧠✔ **Confirmed by memory (proj · aaaaaaaa)** — ") ||
-			strings.Contains(out, "From memory") || !strings.Contains(out, "final message") {
-			t.Errorf("evidence %q: %v\n%s", ev, isErr, out)
-		}
+	out, isErr := call(t, cs, "memory_credit", confirmed("aaaaaaaa"))
+	if isErr || !strings.HasPrefix(out, "Confirmed.") || !strings.Contains(out, "> 🧠✔ **Confirmed by memory (proj · aaaaaaaa)** — ") ||
+		strings.Contains(out, "From memory") || !strings.Contains(out, "final message") {
+		t.Errorf("%v\n%s", isErr, out)
 	}
 	if n := len(journalEvents(t, home)); n != before {
 		t.Errorf("the server journaled %d events: only the hook does", n-before)
@@ -43,28 +37,25 @@ func TestCreditConfirmedRefusals(t *testing.T) {
 	for i := range eleven {
 		eleven[i] = creditA
 	}
-	withCorrection := confirmed("", "aaaaaaaa")
+	withCorrection := confirmed("aaaaaaaa")
 	withCorrection["correction"] = "Billing runs PostgreSQL 16."
+	withEvidence := confirmed("aaaaaaaa")
+	withEvidence["evidence"] = "the user: rtk was removed"
 	for name, c := range map[string]struct {
 		args map[string]any
 		want string
 	}{
-		"unknown id":       {confirmed("", "cccccccc"), "cccccccc: not shown in this session"},
-		"secret evidence":  {confirmed("the key is AKIAIOSFODNN7EXAMPLE", "aaaaaaaa"), "secret"},
-		"long evidence":    {confirmed(strings.Repeat("é", 301), "aaaaaaaa"), "300"},
+		"unknown id":       {confirmed("cccccccc"), "cccccccc: not shown in this session"},
+		"evidence":         {withEvidence, "evidence: only with wrong or outdated"},
 		"correction":       {withCorrection, "correction"},
 		"no ids":           {map[string]any{"verdict": "confirmed"}, "ids"},
-		"eleven ids":       {confirmed("", eleven...), "1 to 10"},
-		"one unknown of 2": {confirmed("", "aaaaaaaa", "cccccccc"), "cccccccc: not shown"},
+		"eleven ids":       {confirmed(eleven...), "1 to 10"},
+		"one unknown of 2": {confirmed("aaaaaaaa", "cccccccc"), "cccccccc: not shown"},
 	} {
 		out, isErr := call(t, cs, "memory_credit", c.args)
 		if !isErr || !strings.Contains(out, c.want) || strings.Contains(out, "Confirmed by memory") {
 			t.Errorf("%s: %v %s", name, isErr, out)
 		}
-	}
-	// 300 characters is the limit, not over it
-	if out, isErr := call(t, cs, "memory_credit", confirmed(strings.Repeat("é", 300), "aaaaaaaa")); isErr || !strings.HasPrefix(out, "Confirmed.") {
-		t.Errorf("300 characters: %v %s", isErr, out)
 	}
 }
 
@@ -72,7 +63,7 @@ func TestCreditConfirmedRefusals(t *testing.T) {
 func TestCreditConfirmedNamesEachProject(t *testing.T) {
 	cs, home := creditSession(t)
 	showItems(t, home, "S", "search", "billing", feedback.Item{ID: creditB, Rank: 1, Project: "infra"}, feedback.Item{ID: creditA, Rank: 2, Project: "billing"})
-	out, isErr := call(t, cs, "memory_credit", confirmed("", creditB, "aaaaaaaa"))
+	out, isErr := call(t, cs, "memory_credit", confirmed(creditB, "aaaaaaaa"))
 	want := "Confirmed. Print these lines in your final message:\n" +
 		"> 🧠✔ **Confirmed by memory (infra · bbbbbbbb)** — <what this session confirmed, in your words>\n" +
 		"> 🧠✔ **Confirmed by memory (billing · aaaaaaaa)** — <what this session confirmed, in your words>"
@@ -89,52 +80,6 @@ func TestCreditUnknownVerdictStaysInvalid(t *testing.T) {
 	}
 	if !creditEvent(t, home, `"verdict":"invalid"`) {
 		t.Errorf("telemetry:\n%s", telemetryText(t, home))
-	}
-}
-
-// creditedInTurn makes turn the current turn of session S and journals what the
-// hook would: a credit event of verdict in it, by agent.
-func creditedInTurn(t *testing.T, home, turn, agent, verdict string, ids ...string) {
-	t.Helper()
-	dir := pathsOf(home).FeedbackDir()
-	if err := feedback.SetTurn(dir, "S", feedback.Turn{ID: turn, N: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if verdict == "" {
-		return
-	}
-	j := feedback.NewJournal(dir, feedback.Common{Session: "S", Project: "proj"})
-	if err := j.Append(feedback.Event{Kind: "credit", Turn: turn, Agent: agent, IDs: ids, Verdict: verdict}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// none contradicts a credit of the same turn: refused. A new turn, a
-// subagent's credit or an earlier none leaves it accepted.
-func TestCreditNoneAfterACreditIsRefused(t *testing.T) {
-	for _, v := range []string{"used", "confirmed", "wrong", "outdated"} {
-		cs, home := creditSession(t)
-		showIn(t, home, "S", creditA)
-		creditedInTurn(t, home, "p-2", "", v, creditA)
-		out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "none"})
-		if !isErr || !strings.Contains(out, "verdict none after a credit in this turn") {
-			t.Errorf("none after %s: %v %q", v, isErr, out)
-		}
-	}
-	cs, home := creditSession(t)
-	showIn(t, home, "S", creditA)
-	creditedInTurn(t, home, "p-2", "", "used", creditA)
-	creditedInTurn(t, home, "p-3", "", "") // a fresh turn
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "none"}); isErr || out != "Noted: no memory used." {
-		t.Errorf("none in a fresh turn: %v %q", isErr, out)
-	}
-	creditedInTurn(t, home, "p-4", "", "none") // none first, a credit after
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, "Credited.") {
-		t.Errorf("credit after none: %v %q", isErr, out)
-	}
-	creditedInTurn(t, home, "p-5", "a7", "used", creditA) // another agent's credit
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "none"}); isErr {
-		t.Errorf("none after a subagent's credit: %q", out)
 	}
 }
 

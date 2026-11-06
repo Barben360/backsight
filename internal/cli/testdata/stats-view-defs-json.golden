@@ -270,7 +270,7 @@
           "id": "used.share_confident",
           "label": "Confidently ranked memories that were used",
           "question": "When memory is sure of itself, is it right?",
-          "definition": "Settled shows credited as used, out of shows credited or confidently missed, for the prompt path by default. Shows with an unknown outcome, shows of memories forgotten since, and shows still pending are reported beside it.",
+          "definition": "Settled shows credited as used or confirmed, out of shows credited or confidently missed, for the prompt path by default. Shows with an unknown outcome, shows of memories forgotten since, and shows still pending are reported beside it.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "up",

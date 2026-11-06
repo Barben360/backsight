@@ -138,7 +138,7 @@ func TestQualityCards(t *testing.T) {
 		for _, s := range c.find("figure.chart .legend span") {
 			legend = append(legend, s.text())
 		}
-		if w := []string{"used by Claude", "shown, then ignored", "not declared", "shown only", "pending"}; !slices.Equal(legend, w) {
+		if w := []string{"used or confirmed", "shown, then ignored", "not declared", "shown only", "pending"}; !slices.Equal(legend, w) {
 			t.Errorf("legend %v, want %v", legend, w)
 		}
 		if len(c.find("rect.seg.f-pending")) == 0 || len(c.find("line.hatch-ln")) == 0 {

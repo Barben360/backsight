@@ -101,7 +101,7 @@ func Resolve(ref string, shown []Show) (string, error) {
 type Check struct {
 	Shown             []Show
 	Declared, Blocked bool
-	None              bool     // a credit of the turn said none
+	None              bool     // the turn's only declaration was none
 	Credited          []string // the ids its used credits named
 }
 
@@ -115,6 +115,7 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 			c.Shown = append(c.Shown, s)
 		}
 	}
+	none, credited := false, false
 	for _, e := range events {
 		if e.Session != session || e.Turn != turn || e.Agent != agent {
 			continue
@@ -122,7 +123,8 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 		switch {
 		case e.Kind == "credit":
 			c.Declared = true
-			c.None = c.None || e.Verdict == "none"
+			none = none || e.Verdict == "none"
+			credited = credited || len(e.IDs) > 0
 			if e.Verdict != "used" {
 				continue // a wrong/outdated report need not echo the memory
 			}
@@ -135,6 +137,7 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 			c.Blocked = true
 		}
 	}
+	c.None = none && !credited // a credit beside a none stands: the turn is not a none
 	return c
 }
 

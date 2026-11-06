@@ -973,3 +973,16 @@ func TestWrongRateCountsConfirmedAsRight(t *testing.T) {
 		t.Errorf("used.turn_rate = %d/%d, want 1/4: a confirmed turn used nothing", num(u), den(u))
 	}
 }
+
+// A turn that declared a used credit and a none counts as used, never as
+// declared without use, whichever came first.
+func TestUsedTurnRateCreditBeatsNone(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.declaredTurn(hoursAgo(1), "a", "declared", "used", "m1")
+	x.credit(hoursAgo(1).Add(10*time.Second), "a", "", "alpha", "none")
+	x.declaredTurn(hoursAgo(2), "b", "declared", "none", "m2")
+	m := qualityOf(x, x.query(7))
+	if u := m["used.turn_rate"]; num(u) != 1 || den(u) != 2 {
+		t.Errorf("used.turn_rate = %d/%d, want 1/2", num(u), den(u))
+	}
+}

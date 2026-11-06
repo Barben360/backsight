@@ -213,7 +213,7 @@ func TestStopBlocksAnUndeclaredTurn(t *testing.T) {
 		"- 0b4c2a52 \"Billing keeps PostgreSQL 16 because partial indexes need it…\"\n" + // 60 characters
 		"- 2d4c2a52 \"Deploys go through staging.\"\n" +
 		"- 1c4c2a52 (text not kept)\n" +
-		"Call memory_credit with the ids that informed your answer, or verdict none. If you credit any, add the line it returns to your answer."
+		"Call memory_credit with the ids that informed your answer (verdict used), or that this session independently confirmed (verdict confirmed), or verdict none. If you credit any, add the line it returns to your answer."
 	if decision != "block" || reason != want {
 		t.Fatalf("decision %q, reason:\n%s\nwant:\n%s", decision, reason, want)
 	}

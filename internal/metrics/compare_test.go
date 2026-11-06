@@ -334,7 +334,7 @@ func TestCompareMeasures(t *testing.T) {
 		x := newFx(t, fxNow)
 		// The hits are wrong and outdated alternately: both count (a hit that
 		// were only "wrong" would leave the outdated ones out of the 12 and 21).
-		n := 0
+		n, rest := 0, 0
 		journalUnits(x, false, func(hit bool) string {
 			if hit {
 				n++
@@ -342,6 +342,11 @@ func TestCompareMeasures(t *testing.T) {
 					return "outdated"
 				}
 				return "wrong"
+			}
+			// The rest are used and confirmed alternately: a confirmed
+			// credit is in the denominator and never a hit.
+			if rest++; rest%2 == 0 {
+				return "confirmed"
 			}
 			return "used"
 		})

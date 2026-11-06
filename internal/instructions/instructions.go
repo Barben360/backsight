@@ -141,7 +141,7 @@ const GateReason = "Before asking the user, look for the answer in their memory:
 // then the ask.
 const (
 	StopCheckHeader = "Memories were shown to you this turn " + HintsLine + ":"
-	StopCheckAsk    = "Call memory_credit with the ids that informed your answer, or verdict none. If you credit any, add the line it returns to your answer."
+	StopCheckAsk    = "Call memory_credit with the ids that informed your answer (verdict used), or that this session independently confirmed (verdict confirmed), or verdict none. If you credit any, add the line it returns to your answer."
 )
 
 // RecallHeader frames injected memories as cues to verify; the prompt
@@ -221,11 +221,11 @@ const (
 		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
 		"Memories were shown but none informed the answer: `verdict: none`, without ids. Only memories shown in this session count: a search sent in the same message " +
 		"must return its result first. " +
-		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): it did not inform the answer, and you checked it here. Never as a default, never for a memory you did not check; evidence is optional, at most 300 characters; it returns its own line to print. " +
+		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): it did not inform the answer, and you checked it here. Never as a default, never for a memory you did not check; it takes no evidence and returns its own line to print. " +
 		"When verdicts differ, make one call per verdict. " +
 		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output). " +
 		"Examples: {\"ids\": [\"0b4c2a52\"]} after using that memory · {\"verdict\": \"none\"} when the memories shown were off-topic · " +
-		"{\"ids\": [\"5a1d0c33\"], \"verdict\": \"confirmed\", \"evidence\": \"the user: rtk was removed\"} · " +
+		"{\"ids\": [\"5a1d0c33\"], \"verdict\": \"confirmed\"} when the user said rtk was removed and a memory already says so · " +
 		"{\"ids\": [\"7e1f9d03\"], \"verdict\": \"wrong\", \"correction\": \"Billing runs PostgreSQL 16, not 15.\", \"evidence\": \"psql --version printed 16.4\"} · " +
 		"{\"ids\": [\"c93a0e17\"], \"verdict\": \"outdated\", \"correction\": \"Deploys moved from Jenkins to GitHub Actions on 2026-10-20.\", \"evidence\": \"the user: we dropped Jenkins last week\"}."
 )

@@ -361,6 +361,7 @@ func TestCreditDescriptionTeachesConfirmedWithItsGuard(t *testing.T) {
 		"verdict confirmed only for a memory whose fact this session established independently",
 		"Never as a default, never for a memory you did not check",
 		"one call per verdict",
+		"it takes no evidence",
 		`"verdict": "confirmed"`,
 	} {
 		if !strings.Contains(CreditDescription, want) {
@@ -387,7 +388,7 @@ var wordings = map[string]string{
 	"v10": "951a7ad31110632dda7081ea584084a93ecb0ede29141181d32ff0fb8f0a1295",
 	"v11": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
 	"v12": "8e8aec126cbede943fcee5c75d31a2a9e781059316444c66255602ae4c94c9a0",
-	"v13": "3604f461366ee756fc69b3e3583a0af3ac9eaf8ebe5a543aef7d853e98a8240f",
+	"v13": "daf579e2e998c49a849a2c7d5f27ba20b181e5261ea1ce3aa80f026b980110bb",
 }
 
 func wordingHash() string {
