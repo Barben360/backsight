@@ -1,0 +1,269 @@
+//go:build !race
+
+package dashboard
+
+// The race detector's slowdown breaks the one-second window of the g key,
+// so this file is not built under -race (same split as race_off_test.go).
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Barben360/backsight/internal/dashboard/chart"
+)
+
+// domHarness fronts a started dashboard with a test-only wrapper on its own
+// listener: it logs every request, serves testdata/harness.js, and adds the
+// harness script and a page fragment (a calendar, Copy summary) to HTML.
+type domHarness struct {
+	h    *harness
+	keys atomic.Bool // whether the preference cookie turns shortcuts on
+
+	mu  sync.Mutex
+	log []string
+}
+
+const tipText = `<p class="hm-tip" aria-live="polite"></p>`
+
+// domFragment is what the wrapper adds before </main>: a calendar of 60 days
+// whose today is the 31st, the page's Copy summary button and its text.
+func domFragment() string {
+	var days []chart.CalDay
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 60; i++ {
+		d := start.AddDate(0, 0, i)
+		days = append(days, chart.CalDay{Day: d, Value: int64(i), Recorded: true, Today: i == 30, Href: "/day/" + d.Format("2006-01-02")})
+	}
+	cal := chart.Calendar{Label: "Prompts per day", What: "prompts", Steps: [4]int64{1, 10, 20, 40},
+		StepLabels: [5]string{"Prompts", "1", "10", "20", "40+"}, Days: days, Window: "test"}
+	return `<div id="dom-fragment">` + string(cal.HTML()) + tipText +
+		`<button class="copy" type="button" hidden data-copy="Summary line" aria-label="Copy summary">Copy summary</button>` +
+		`<details class="summary-text"><summary>Summary as text</summary><pre>Summary line</pre></details></div>`
+}
+
+func newDOMHarness(t *testing.T) *domHarness {
+	t.Helper()
+	d := &domHarness{h: dataHarness(t)}
+	ck := d.h.login()
+	script, err := os.ReadFile("testdata/harness.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyTag := `<script src="` + assetPath("copy.js") + `" defer></script>`
+	inner := d.h.s.srv.Handler
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /_test/harness.js", func(w http.ResponseWriter, r *http.Request) {
+		d.record(r)
+		securityHeaders(w.Header(), false)
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(script)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		d.record(r)
+		prefs := Prefs{Theme: "light", Keys: d.keys.Load()}
+		r.Header.Set("Cookie", ck.Name+"="+ck.Value+"; "+prefsCookie+"="+prefs.cookie())
+		rec := httptest.NewRecorder()
+		inner.ServeHTTP(rec, r)
+		out := rec.Body.Bytes()
+		if strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+			out = bytes.Replace(out, []byte(copyTag), []byte(copyTag+`<script src="/_test/harness.js" defer></script>`), 1)
+			out = bytes.Replace(out, []byte("</main>"), []byte(domFragment()+"</main>"), 1)
+			rec.Header().Set("Content-Length", strconv.Itoa(len(out)))
+		}
+		for k, v := range rec.Header() {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(out)
+	})
+	d.h.s.srv.Handler = mux
+	return d
+}
+
+func (d *domHarness) record(r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.log = append(d.log, r.Method+" "+r.URL.RequestURI())
+}
+
+func (d *domHarness) requests() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.log...)
+}
+
+// indexOf is the position of the first request equal to want, or -1.
+func indexOf(log []string, want string) int {
+	for i, l := range log {
+		if l == want {
+			return i
+		}
+	}
+	return -1
+}
+
+var resultRE = regexp.MustCompile(`data-result="([^"]*)"`)
+
+// run opens the page with Chrome for one scenario and returns the request
+// log and body[data-result] of the dumped DOM ("" when it has none).
+func (d *domHarness) run(t *testing.T, chrome, scenario string) ([]string, string) {
+	t.Helper()
+	d.mu.Lock()
+	d.log = nil
+	d.mu.Unlock()
+	args := []string{"--headless=new", "--disable-gpu", "--no-first-run", "--window-size=1280,900", "--user-data-dir=" + t.TempDir()}
+	if os.Getuid() == 0 {
+		args = append(args, "--no-sandbox")
+	}
+	args = append(args, "--virtual-time-budget=5000", "--dump-dom", "http://"+d.h.host()+"/?days=14#s="+scenario)
+	cmd := exec.Command(chrome, args...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("chrome %s: %v\n%s", scenario, err, errb.String())
+	}
+	// A scenario that navigates leaves the new page's DOM: no result.
+	res := ""
+	if m := resultRE.FindStringSubmatch(out.String()); m != nil {
+		res = m[1]
+	}
+	return d.requests(), res
+}
+
+func TestScriptBehaviourInChrome(t *testing.T) {
+	if os.Getenv("BACKSIGHT_CHROME_TESTS") != "1" {
+		t.Skip("BACKSIGHT_CHROME_TESTS is not 1")
+	}
+	chrome := chromePath()
+	if chrome == "" {
+		t.Fatal("BACKSIGHT_CHROME_TESTS=1 but no Chrome or Chromium on PATH")
+	}
+	d := newDOMHarness(t)
+	d.keys.Store(true)
+	const page = "GET /?days=14"
+
+	t.Run("wrapper", func(t *testing.T) {
+		r := d.h.do("GET", "/?days=14")
+		b := body(t, r)
+		if got := r.Header.Get("Content-Security-Policy"); got != csp || !strings.Contains(csp, "script-src 'self'") {
+			t.Errorf("CSP %q", got)
+		}
+		tag := `<script src="` + assetPath("copy.js") + `" defer></script><script src="/_test/harness.js" defer></script>`
+		if !strings.Contains(b, tag) {
+			t.Errorf("the harness script does not follow copy.js")
+		}
+		if strings.Contains(b, "<script>") {
+			t.Error("an inline script (the CSP would refuse it)")
+		}
+	})
+
+	stays := func(t *testing.T, scenario, want string) {
+		t.Helper()
+		log, res := d.run(t, chrome, scenario)
+		if res != want {
+			t.Errorf("%s: data-result %q, want %q", scenario, res, want)
+		}
+		if i := indexOf(log, page); i != 0 {
+			t.Errorf("%s: the page's own request is at %d in %q", scenario, i, log)
+		}
+		for _, l := range log {
+			if strings.HasPrefix(l, "GET /quality") {
+				t.Errorf("%s: navigated: %q", scenario, log)
+			}
+		}
+	}
+
+	t.Run("g then q goes to Quality with the query", func(t *testing.T) {
+		log, _ := d.run(t, chrome, "gq")
+		if indexOf(log, "GET /_test/harness.js") < 0 {
+			t.Errorf("the harness did not load: %q", log)
+		}
+		i, j := indexOf(log, page), indexOf(log, "GET /quality?days=14")
+		if i != 0 || j <= i {
+			t.Errorf("request log %q: want %q first, then GET /quality?days=14", log, page)
+		}
+	})
+	t.Run("r follows Refresh", func(t *testing.T) {
+		log, _ := d.run(t, chrome, "refresh")
+		n := 0
+		for _, l := range log {
+			if l == page {
+				n++
+			}
+		}
+		if n != 2 {
+			t.Errorf("%d requests of %s in %q, want 2", n, page, log)
+		}
+	})
+	t.Run("Ctrl+g then q", func(t *testing.T) { stays(t, "ctrl", "stayed") })
+	t.Run("Alt+g then q", func(t *testing.T) { stays(t, "alt", "stayed") })
+	t.Run("Meta+g then q", func(t *testing.T) { stays(t, "meta", "stayed") })
+	t.Run("g then Ctrl+q", func(t *testing.T) { stays(t, "ctrlq", "stayed") })
+	t.Run("g q typed in the project field", func(t *testing.T) { stays(t, "typing", "stayed") })
+	t.Run("g, 1.5 s, q", func(t *testing.T) { stays(t, "slow", "stayed") })
+
+	t.Run("slash opens the project filter", func(t *testing.T) {
+		_, res := d.run(t, chrome, "slash")
+		if want := "open=true;focus=input.[project]"; res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+	t.Run("? opens the list, Esc closes it and focus returns", func(t *testing.T) {
+		_, res := d.run(t, chrome, "help")
+		want := "opened=true:button.btn+btn-quiet;closed=true;focus=a.btn+btn-quiet+refresh-t;before=a.btn+btn-quiet+refresh-t"
+		if res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+	t.Run("the footer button opens the list", func(t *testing.T) {
+		_, res := d.run(t, chrome, "footer")
+		want := "hidden=false;opened=true:button.btn+btn-quiet;closed=true;focus=button.btn+btn-quiet+keyhint-btn;btn=button.btn+btn-quiet+keyhint-btn"
+		if res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+	t.Run("calendar arrow keys", func(t *testing.T) {
+		_, res := d.run(t, chrome, "cal")
+		want := strings.Join([]string{
+			"right:/day/2026-10-08:0:-1:tip=ok", "down:/day/2026-10-09:0:-1:tip=ok",
+			"end:/day/2026-10-30:0:-1:tip=ok", "home:/day/2026-09-01:0:-1:tip=ok", "zeros=1"}, ";")
+		if res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+	t.Run("Copy summary refused shows the text", func(t *testing.T) {
+		_, res := d.run(t, chrome, "copyfail")
+		if want := "open=true;label=Couldn't copy: the text is shown below"; res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+	t.Run("Copy summary copies data-copy", func(t *testing.T) {
+		_, res := d.run(t, chrome, "copyok")
+		if want := "text=Summary line;open=false;label=Copied"; res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+
+	t.Run("shortcuts off", func(t *testing.T) {
+		d.keys.Store(false)
+		defer d.keys.Store(true)
+		log, _ := d.run(t, chrome, "gq")
+		if indexOf(log, "GET /_test/harness.js") < 0 || indexOf(log, "GET /quality?days=14") >= 0 {
+			t.Errorf("g q with shortcuts off: %q", log)
+		}
+		_, res := d.run(t, chrome, "nodialog")
+		if want := "dialog=false;button=false"; res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+}

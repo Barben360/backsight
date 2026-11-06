@@ -149,11 +149,28 @@
 <span>backsight <a href="{{versionlink .Frame.Version}}">{{.Frame.Version}}</a></span>
 <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">Help: backsight guide dashboard</a>
 <a href="/defs">Definitions</a>
-<span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Frame.RenderedAt .Frame.RenderedAt .Loc}}</time> in {{.Frame.RenderMS}} ms</span>
+{{if .Frame.Prefs.Keys}}<button class="btn btn-quiet keyhint-btn" type="button" hidden aria-keyshortcuts="?"><span class="keyhint"><kbd>?</kbd>Keyboard shortcuts</span></button>
+{{end}}<span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Frame.RenderedAt .Frame.RenderedAt .Loc}}</time> in {{.Frame.RenderMS}} ms</span>
 </div>
 <p class="sr-only" id="copy-status" aria-live="polite"></p>
 </footer>
-</div>
+{{if .Frame.Prefs.Keys}}<dialog class="keys" aria-labelledby="keys-h">
+<div class="keys-head"><h2 id="keys-h">Keyboard shortcuts</h2><button class="btn btn-quiet" type="button" aria-label="Close keyboard shortcuts">Close <kbd>Esc</kbd></button></div>
+<dl>
+<dt><kbd>g</kbd> <kbd>o</kbd></dt><dd>Overview</dd>
+<dt><kbd>g</kbd> <kbd>q</kbd></dt><dd>Quality</dd>
+<dt><kbd>g</kbd> <kbd>c</kbd></dt><dd>Cost</dd>
+<dt><kbd>g</kbd> <kbd>b</kbd></dt><dd>Bank</dd>
+<dt><kbd>g</kbd> <kbd>p</kbd></dt><dd>Pipeline</dd>
+<dt><kbd>g</kbd> <kbd>s</kbd></dt><dd>System</dd>
+<dt><kbd>/</kbd></dt><dd>Filter by project</dd>
+<dt><kbd>r</kbd></dt><dd>Refresh this page</dd>
+<dt><kbd>?</kbd></dt><dd>This list</dd>
+<dt><kbd>Esc</kbd></dt><dd>Close this list or an open menu</dd>
+</dl>
+<p class="xs muted">Press g, then the letter within a second. Keys do nothing while you type in a field. Turn shortcuts off in Preferences.</p>
+</dialog>
+{{end}}</div>
 </body>
 </html>
 {{end}}

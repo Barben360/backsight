@@ -120,12 +120,12 @@ func TestCopyScriptBudget(t *testing.T) {
 		t.Errorf("copy.js is %d bytes, over 10240", len(b))
 	}
 	js := string(b)
-	for _, want := range []string{"'use strict'", "button.copy", "navigator.clipboard", "copy-status"} {
+	for _, want := range []string{"'use strict'", "button.copy", "navigator.clipboard", "copy-status", "showModal", "data-keys", "hm-c", "data-copy"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("copy.js lacks %q", want)
 		}
 	}
-	for _, bad := range []string{"innerHTML", "eval(", "Function(", "fetch(", "XMLHttpRequest", "document.write"} {
+	for _, bad := range []string{"innerHTML", "eval(", "Function(", "fetch(", "XMLHttpRequest", "document.write", "import("} {
 		if strings.Contains(js, bad) {
 			t.Errorf("copy.js contains %q", bad)
 		}
@@ -204,4 +204,54 @@ func TestHeadLinksTheAssets(t *testing.T) {
 		t.Fatalf("GET / without a session: %d", r.StatusCode)
 	}
 	check("401", body(t, r), "light dark")
+}
+
+// keysList is the shortcuts dialog's list, as the design words it.
+var keysList = [][2]string{
+	{"g o", "Overview"}, {"g q", "Quality"}, {"g c", "Cost"}, {"g b", "Bank"}, {"g p", "Pipeline"}, {"g s", "System"},
+	{"/", "Filter by project"}, {"r", "Refresh this page"}, {"?", "This list"}, {"Esc", "Close this list or an open menu"},
+}
+
+func TestKeysDialogMarkup(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	on := parseHTML(t, body(t, h.do("GET", "/cost", withPrefs(ck, "v1.system.0.0.comfortable.1")...)))
+	dlgs := on.find("dialog.keys")
+	if len(dlgs) != 1 {
+		t.Fatalf("shortcuts on: %d dialog.keys, want 1", len(dlgs))
+	}
+	dlg := dlgs[0]
+	if dlg.has("open") {
+		t.Error("the dialog is rendered open")
+	}
+	head := dlg.first("h2")
+	if head == nil || head.attr("id") == "" || dlg.attr("aria-labelledby") != head.attr("id") || head.text() != "Keyboard shortcuts" {
+		t.Errorf("dialog title %+v, aria-labelledby %q", head, dlg.attr("aria-labelledby"))
+	}
+	if cl := dlg.find("button"); len(cl) != 1 || cl[0].attr("aria-label") != "Close keyboard shortcuts" || cl[0].text() != "Close Esc" {
+		t.Errorf("close buttons %+v", cl)
+	}
+	dts, dds := dlg.find("dt"), dlg.find("dd")
+	if len(dts) != len(keysList) || len(dds) != len(keysList) {
+		t.Fatalf("%d dt and %d dd, want %d", len(dts), len(dds), len(keysList))
+	}
+	for i, want := range keysList {
+		if dts[i].text() != want[0] || dds[i].text() != want[1] {
+			t.Errorf("row %d: %q = %q, want %q = %q", i, dts[i].text(), dds[i].text(), want[0], want[1])
+		}
+	}
+	if !strings.Contains(dlg.text(), "Press g, then the letter within a second. Keys do nothing while you type in a field. Turn shortcuts off in Preferences.") {
+		t.Errorf("dialog note: %q", dlg.text())
+	}
+	btns := on.find("footer button.keyhint-btn")
+	if len(btns) != 1 || !btns[0].has("hidden") || btns[0].attr("aria-keyshortcuts") != "?" || btns[0].text() != "?Keyboard shortcuts" {
+		t.Errorf("footer buttons %d, first text %q", len(btns), btns[0].text())
+	}
+
+	for _, c := range []string{"v1.system.0.0.comfortable.0", "v1.system.0.0"} {
+		off := parseHTML(t, body(t, h.do("GET", "/cost", withPrefs(ck, c)...)))
+		if n := len(off.find("dialog")) + len(off.find("button.keyhint-btn")) + len(off.find(".keys")); n != 0 {
+			t.Errorf("%s: shortcuts off but %d dialog or button elements", c, n)
+		}
+	}
 }

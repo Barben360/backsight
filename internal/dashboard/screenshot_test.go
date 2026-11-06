@@ -74,18 +74,22 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 `
 
+// chromePath is the first Chrome or Chromium on PATH, or "".
+func chromePath() string {
+	for _, c := range []string{"google-chrome-stable", "google-chrome", "chromium", "chromium-browser"} {
+		if p, err := exec.LookPath(c); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 func TestScreenshots(t *testing.T) {
 	dir := os.Getenv("BACKSIGHT_SCREENSHOTS")
 	if dir == "" {
 		t.Skip("BACKSIGHT_SCREENSHOTS names no directory")
 	}
-	chrome := ""
-	for _, c := range []string{"google-chrome-stable", "google-chrome", "chromium", "chromium-browser"} {
-		if p, err := exec.LookPath(c); err == nil {
-			chrome = p
-			break
-		}
-	}
+	chrome := chromePath()
 	if chrome == "" {
 		t.Skip("no Chrome or Chromium on PATH")
 	}
@@ -96,6 +100,7 @@ func TestScreenshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keysOn := false
 	page := func(s shot, theme string) []byte {
 		spec := set.specs[s.page]
 		d := fixtureData(t, spec, false)
@@ -111,7 +116,7 @@ func TestScreenshots(t *testing.T) {
 		d.Frame = Frame{
 			Title: pageTitle(spec, s.id), Path: path, Version: "dev", HelpURL: helpURL,
 			Nav: navFor(path, false), Windows: windowsFor(path, url.Values{}), PrefMenu: prefMenu(path, Prefs{Theme: theme}),
-			Prefs: Prefs{Theme: theme}, AllProjects: path, Keep: [][2]string{{"days", "7"}},
+			Prefs: Prefs{Theme: theme, Keys: keysOn}, AllProjects: path, Keep: [][2]string{{"days", "7"}},
 		}
 		head := d.V[spec.Views[0]]
 		d.Frame.Scope, d.Frame.Generated, d.Loc = &head.Scope, head.GeneratedAt, head.Window.Loc
@@ -167,6 +172,9 @@ func TestScreenshots(t *testing.T) {
 		t.Fatal("the probe script was not added")
 	}
 	serve("/probe", probe)
+	keysOn = true
+	serve("/overview-keys", page(shots[0], "light"))
+	keysOn = false
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	if !strings.HasPrefix(srv.URL, "http://127.0.0.1:") {
@@ -219,6 +227,15 @@ func TestScreenshots(t *testing.T) {
 		t.Errorf("no button.copy without hidden in the dumped DOM")
 	}
 
+	// Shortcuts on: the script ran and showed the footer button; off: none.
+	if btn := tagWith(dom, "button", "keyhint-btn"); btn != "" {
+		t.Errorf("shortcuts off but the page has the button: %s", btn)
+	}
+	kd := string(run("--dump-dom", srv.URL+"/overview-keys"))
+	if btn := tagWith(kd, "button", "keyhint-btn"); btn == "" || strings.Contains(btn, "hidden") {
+		t.Errorf("shortcuts on: footer button tag %q, want it present and without hidden after the script ran", btn)
+	}
+
 	// The fallback path: no clipboard API, then a refusing one, then a working one.
 	pd := string(run("--dump-dom", "--virtual-time-budget=5000", srv.URL+"/probe"))
 	for _, want := range []string{
@@ -249,6 +266,25 @@ func hasVisibleCopyButton(dom string) bool {
 		tag := rest[:j]
 		if strings.Contains(tag, `class="copy"`) && !strings.Contains(tag, "hidden") {
 			return true
+		}
+		rest = rest[j:]
+	}
+}
+
+// tagWith is the first <tag ...> start tag of dom whose text holds class, or "".
+func tagWith(dom, tag, class string) string {
+	for rest := dom; ; {
+		i := strings.Index(rest, "<"+tag)
+		if i < 0 {
+			return ""
+		}
+		rest = rest[i:]
+		j := strings.Index(rest, ">")
+		if j < 0 {
+			return ""
+		}
+		if strings.Contains(rest[:j], class) {
+			return rest[:j+1]
 		}
 		rest = rest[j:]
 	}
