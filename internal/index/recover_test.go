@@ -655,7 +655,8 @@ func TestFullDiskDuringAMigrationLeavesTheFile(t *testing.T) {
 
 // TestASlowQuickCheckDoesNotFailTheOpen: a quick_check that outlasts its
 // own bound is skipped: the open succeeds within the caller's context,
-// nothing is stamped, and the next open runs it again.
+// CheckedAt is not stamped, but CheckTriedAt is: the next opens within
+// checkEvery do not pay the bound again, one after it does.
 func TestASlowQuickCheckDoesNotFailTheOpen(t *testing.T) {
 	prevRun, prevTimeout := runQuickCheck, quickCheckTimeout
 	t.Cleanup(func() { runQuickCheck, quickCheckTimeout = prevRun, prevTimeout })
@@ -667,19 +668,73 @@ func TestASlowQuickCheckDoesNotFailTheOpen(t *testing.T) {
 		return ctx.Err()
 	}
 	r := newRecEnv(t)
-	for i := 1; i <= 2; i++ {
+	open := func(n, wantCalls int) {
+		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		ix, err := Open(ctx, r.opts())
 		cancel()
 		if err != nil {
-			t.Fatalf("open %d: %v", i, err)
+			t.Fatalf("open %d: %v", n, err)
 		}
 		mustClose(t, ix)
+		if calls != wantCalls {
+			t.Errorf("open %d: %d quick_check(s), want %d", n, calls, wantCalls)
+		}
+	}
+	open(1, 1)
+	open(2, 1)
+	if st := r.status(); !st.CheckedAt.IsZero() || !sameTime(st.CheckTriedAt, clock) {
+		t.Errorf("checked %v, tried %v: want only the attempt stamped", st.CheckedAt, st.CheckTriedAt)
+	}
+	r.clock.Add(25 * time.Hour)
+	open(3, 2)
+	if st := r.status(); !sameTime(st.CheckTriedAt, clock.Add(25*time.Hour)) {
+		t.Errorf("tried %v, want the third open's time", st.CheckTriedAt)
+	}
+}
+
+// TestACancelledQuickCheckIsNotStamped: the caller's context ending is not
+// the check being too slow; the next open runs it again.
+func TestACancelledQuickCheckIsNotStamped(t *testing.T) {
+	prevRun := runQuickCheck
+	t.Cleanup(func() { runQuickCheck = prevRun })
+	calls := 0
+	var cancel context.CancelFunc
+	runQuickCheck = func(ctx context.Context, _ *sql.DB) error {
+		calls++
+		cancel() // the caller gives up while the check runs
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r := newRecEnv(t)
+	for i := 1; i <= 2; i++ {
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		ix, err := Open(ctx, r.opts())
+		cancel()
+		if err == nil {
+			mustClose(t, ix)
+		}
 		if calls != i {
 			t.Errorf("open %d: %d quick_check(s), want %d", i, calls, i)
 		}
 	}
-	if st := r.status(); !st.CheckedAt.IsZero() {
-		t.Errorf("a skipped check was stamped: %v", st.CheckedAt)
+	if st := r.status(); !st.CheckTriedAt.IsZero() || !st.CheckedAt.IsZero() {
+		t.Errorf("a cancelled check was stamped: %+v", st)
+	}
+}
+
+// TestACorruptionClearsTheCheckAttempt: a corruption found by a statement
+// makes the check due at once, whatever a slow earlier attempt stamped.
+func TestACorruptionClearsTheCheckAttempt(t *testing.T) {
+	r := newRecEnv(t)
+	d := r.d
+	if err := writeStatus(d, recoveryState{CheckTriedAt: clock}); err != nil {
+		t.Fatal(err)
+	}
+	ix := &Index{opts: r.opts()}
+	_ = ix.statementError(errQuickCheck)
+	if st := r.status(); !st.CheckTriedAt.IsZero() {
+		t.Errorf("CheckTriedAt kept: %v", st.CheckTriedAt)
 	}
 }

@@ -312,14 +312,16 @@ func removeCompanions(path string) error {
 // dailyCheck runs PRAGMA quick_check when the last one that passed is
 // checkEvery old (or unknown, or in the future), and stamps CheckedAt
 // when it passes. Only a corruption is an error: a check that cannot run
-// (busy) or does not finish within quickCheckTimeout or the caller's
-// context is skipped, not stamped, and tried at the next open; the open
-// goes on (a slow check must not fail every open, or the index would
-// never catch up).
+// (busy), or does not finish within the caller's context, is skipped, not
+// stamped, and tried at the next open; the open goes on (a slow check
+// must not fail every open, or the index would never catch up). One that
+// outlasts quickCheckTimeout itself stamps CheckTriedAt, and is not tried
+// again for checkEvery: a file too big to check in time would otherwise
+// cost every open that long.
 func (ix *Index) dailyCheck(ctx context.Context) error {
 	now := ix.opts.Now()
 	st, err := readStatus(ix.opts.Dirs)
-	if err == nil && !st.CheckedAt.IsZero() && !now.Before(st.CheckedAt) && now.Sub(st.CheckedAt) < checkEvery {
+	if err == nil && (fresh(st.CheckedAt, now) || fresh(st.CheckTriedAt, now)) {
 		return nil
 	}
 	// A status that cannot be written leaves CheckedAt as it was: the
@@ -331,13 +333,25 @@ func (ix *Index) dailyCheck(ctx context.Context) error {
 		if isCorrupt(err) {
 			return err
 		}
+		if ctx.Err() == nil && errors.Is(cctx.Err(), context.DeadlineExceeded) {
+			_ = updateStatus(ix.opts.Dirs, func(st *recoveryState) bool {
+				st.CheckTriedAt = now
+				return true
+			})
+		}
 		return nil
 	}
 	_ = updateStatus(ix.opts.Dirs, func(st *recoveryState) bool {
 		st.CheckedAt = now
+		st.CheckTriedAt = time.Time{}
 		return true
 	})
 	return nil
+}
+
+// fresh: at is set, not in the future, and less than checkEvery before now.
+func fresh(at, now time.Time) bool {
+	return !at.IsZero() && !now.Before(at) && now.Sub(at) < checkEvery
 }
 
 // quickCheck is PRAGMA quick_check: a single "ok" row, else
@@ -375,10 +389,10 @@ func (ix *Index) statementError(err error) error {
 		return ErrDiskFull
 	case "corrupt", "notadb":
 		_ = updateStatus(ix.opts.Dirs, func(st *recoveryState) bool {
-			if st.CheckedAt.IsZero() {
+			if st.CheckedAt.IsZero() && st.CheckTriedAt.IsZero() {
 				return false
 			}
-			st.CheckedAt = time.Time{}
+			st.CheckedAt, st.CheckTriedAt = time.Time{}, time.Time{}
 			return true
 		})
 	}
