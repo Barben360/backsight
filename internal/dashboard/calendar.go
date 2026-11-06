@@ -118,7 +118,7 @@ func calendarOf(r *metrics.Result, win metrics.Window, p views.Params, hm, path,
 		v, of := m.valueOf(row)
 		d := chart.CalDay{Day: day, Value: v, Of: of, Recorded: row.Recorded, Today: i == len(rows)-1,
 			InWindow: !since.IsZero() && !day.Before(dateOf(since)) && !day.After(dateOf(until)),
-			Href:     "/days/" + url.PathEscape(row.Day) + tzQuery(p)}
+			Href:     "/days/" + url.PathEscape(row.Day) + dayScope(p)}
 		cal.Days = append(cal.Days, d)
 		if first == "" {
 			first = day.Format("Jan 2 2006")
@@ -134,12 +134,4 @@ func calendarOf(r *metrics.Result, win metrics.Window, p views.Params, hm, path,
 func dateOf(t time.Time) time.Time {
 	y, mo, d := t.Date()
 	return time.Date(y, mo, d, 0, 0, 0, 0, t.Location())
-}
-
-// tzQuery keeps the page's zone on a link to a day, so the day is read in it.
-func tzQuery(p views.Params) string {
-	if p.TZ == "" {
-		return ""
-	}
-	return "?tz=" + url.QueryEscape(p.TZ)
 }

@@ -45,6 +45,10 @@ func windowQuery(p views.Params, keys ...string) string {
 			q.Set(k, p.Until)
 		case k == "tz" && p.TZ != "":
 			q.Set(k, p.TZ)
+		case k == "project" && p.Project != "":
+			q.Set(k, p.Project)
+		case k == "path" && p.Path != "":
+			q.Set(k, p.Path)
 		}
 	}
 	if len(q) == 0 {
@@ -52,6 +56,12 @@ func windowQuery(p views.Params, keys ...string) string {
 	}
 	return "?" + q.Encode()
 }
+
+// dayScope is the query a link to a day keeps: the zone, so that the day is
+// read in it, and the project and path the page is filtered by, so that a
+// filtered calendar opens a filtered day. The window is not kept: a day is
+// its own window.
+func dayScope(p views.Params) string { return windowQuery(p, "tz", "project", "path") }
 
 // idLink is an id as the chip shows it: 8 characters, the whole id on hover.
 func idLink(prefix, id string) Ref {
@@ -397,7 +407,7 @@ func daysOf(d PageData) DaysPage {
 	p.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
 	for _, day := range r.Tables.Days {
 		ln := DayLine{
-			Day:      Ref{Text: views.Plain(day.Day, ""), Full: views.Plain(day.Day, ""), Href: pathHref("/days/", day.Day, windowQuery(d.P, "tz"))},
+			Day:      Ref{Text: views.Plain(day.Day, ""), Full: views.Plain(day.Day, ""), Href: pathHref("/days/", day.Day, dayScope(d.P))},
 			Sessions: l.Int(day.Sessions), Prompts: l.Int(day.Prompts), Lookups: l.Int(day.Recalls), Got: l.Int(day.PromptsWithMemory),
 			Used: l.Int(day.UsedTurns), Wrong: l.Int(day.Wrong), Context: l.Size(float64(day.ContextChars), "chars"),
 			Sent: l.Int(day.SentOK), Failed: l.Int(day.SentFailed),
@@ -573,7 +583,7 @@ func dayOf(d PageData) DayPage {
 		// The tiles are the day's: their links list that day's sessions.
 		p.Days, p.DaysSet = 0, false
 		p.Since, p.Until = day, at.AddDate(0, 0, 1).Format("2006-01-02")
-		tz := windowQuery(d.P, "tz")
+		tz := dayScope(d.P)
 		pg.Prev = Ref{Text: "← " + at.AddDate(0, 0, -1).Format("Jan 2"), Href: "/days/" + at.AddDate(0, 0, -1).Format("2006-01-02") + tz}
 		today := r.GeneratedAt.In(zoneOr(d.Loc))
 		if at.Before(time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)) {

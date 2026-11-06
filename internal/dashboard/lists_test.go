@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1058,5 +1059,49 @@ func TestDayNeighbours(t *testing.T) {
 		if as[0].attr("href") != c.prevHref || as[1].attr("href") != c.nextHref {
 			t.Errorf("%s: hrefs %q / %q", c.day, as[0].attr("href"), as[1].attr("href"))
 		}
+	}
+}
+
+// A day opened from a filtered page is filtered the same way: the calendar's
+// squares, the Days list and the Day page's neighbours keep the project (and
+// path) along with the zone.
+func TestDayLinksKeepTheScope(t *testing.T) {
+	const scope = "?path=%2Fsrc&project=p%261&tz=Europe%2FParis"
+	edit := func(d *PageData) { d.P.TZ, d.P.Project, d.P.Path = "Europe/Paris", "p&1", "/src" }
+
+	r := goldenResult(t, "days")
+	card := calendarOf(r, r.Window, views.Params{Days: 7, TZ: "Europe/Paris", Project: "p&1", Path: "/src"}, "got", "/", "last 7 days")
+	squares := parseHTML(t, string(card.Chart)).find("a.hm-c")
+	if len(squares) == 0 {
+		t.Fatal("no day on the calendar")
+	}
+	for _, a := range squares {
+		if h := a.attr("href"); !strings.HasPrefix(h, "/days/") || !strings.HasSuffix(h, scope) {
+			t.Fatalf("calendar day links to %q, want the scope %q kept", h, scope)
+		}
+	}
+
+	table := listTable(t, pageNode(t, "days", false, func(d *PageData) {
+		edit(d)
+		d.V["days"].Tables.Days = []metrics.DayRow{{Day: "2026-10-08", Sessions: 4}}
+	}))
+	rows, _ := bodyRows(table)
+	if len(rows) != 1 {
+		t.Fatalf("%d day rows, want 1", len(rows))
+	}
+	if h := rows[0].find("td")[colOf(t, table, "Day")].first("a").attr("href"); h != "/days/2026-10-08"+scope {
+		t.Errorf("Days list link %q", h)
+	}
+
+	n := pageNode(t, "day", false, func(d *PageData) {
+		edit(d)
+		d.V["days"].Tables.Day.Day = "2026-10-05"
+	})
+	var hrefs []string
+	for _, a := range mainOf(t, n).find("div.day-nav a") {
+		hrefs = append(hrefs, a.attr("href"))
+	}
+	if want := []string{"/days/2026-10-04" + scope, "/days/2026-10-06" + scope}; !slices.Equal(hrefs, want) {
+		t.Errorf("day navigation %q, want %q", hrefs, want)
 	}
 }
