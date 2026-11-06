@@ -10,7 +10,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -501,51 +500,66 @@ func TestIncrementalEqualsRebuild(t *testing.T) {
 	}
 }
 
-// TestConcurrentAppendDuringIngest: lines appended while the ingest runs
-// are each ingested once.
+// TestConcurrentAppendDuringIngest: lines appended while an ingest runs,
+// the last one of each append cut in the middle, are each ingested once
+// and no half line is. The appends happen in the afterBatch hook, so the
+// overlap is forced, not left to the scheduler.
 func TestConcurrentAppendDuringIngest(t *testing.T) {
+	const initial, total, lineSize, chunk = 9, 60, 100, 150
+	prev := maxBatchBytes
+	maxBatchBytes = 250 // 3 lines a transaction
+	t.Cleanup(func() { maxBatchBytes = prev })
+
+	var head, tail strings.Builder
+	for i := 1; i <= total; i++ {
+		if i <= initial {
+			head.WriteString(fixedLine(i, lineSize))
+		} else {
+			tail.WriteString(fixedLine(i, lineSize))
+		}
+	}
+	rest := tail.String()
 	e := newEnv(t)
-	e.write("2026-10", "")
-	var wg sync.WaitGroup
-	done := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(done)
-		f, err := os.OpenFile(e.telPath("2026-10"), os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			t.Error(err)
+	e.write("2026-10", head.String())
+
+	hooks, appended := 0, 0
+	setAfterBatch(t, func() {
+		hooks++
+		if len(rest) == 0 {
 			return
 		}
-		defer func() { _ = f.Close() }()
-		for i := 1; i <= 2000; i++ {
-			if _, err := f.Write([]byte(promptLine(i, i%50))); err != nil {
-				t.Error(err)
-				return
-			}
-			if i%100 == 0 {
-				time.Sleep(time.Millisecond) // let ingests run between appends
-			}
-		}
-	}()
-	runs := 0
-	for running := true; running; runs++ {
-		select {
-		case <-done:
-			running = false
-		default:
-		}
-		if _, err := e.ix.ingestSources(context.Background(), time.Time{}); err != nil {
-			t.Fatal(err)
-		}
+		n := min(chunk, len(rest)) // a line and a half: the next hook completes the half line
+		e.append("2026-10", rest[:n])
+		rest = rest[n:]
+		appended += n
+	})
+	st, err := e.ix.ingestSources(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	wg.Wait()
-	if runs < 2 {
-		t.Logf("only %d ingests overlapped the appends", runs)
+	if hooks < 4 || appended < 3*chunk {
+		t.Fatalf("only %d transactions and %d bytes appended during the ingest", hooks, appended)
+	}
+	// Lines appended mid-ingest were read by that very ingest (the last
+	// append, made after its final read, and any cut line, were not).
+	if st.Lines < initial+2*3 {
+		t.Errorf("the ingest read %d lines: the appends made during it were not read", st.Lines)
+	}
+	if got := e.ns(); !slices.Equal(got, seq(st.Lines)) {
+		t.Errorf("mid-ingest rows %v, want 1..%d once each, no half line", got, st.Lines)
+	}
+
+	// The rest of the stream, again cut mid-line, one ingest at a time.
+	afterBatch = func() {}
+	for len(rest) > 0 {
+		n := min(chunk, len(rest))
+		e.append("2026-10", rest[:n])
+		rest = rest[n:]
+		e.ingest()
 	}
 	e.ingest()
-	if got := e.ns(); !slices.Equal(got, seq(2000)) {
-		t.Errorf("%d prompts", len(got))
+	if got := e.ns(); !slices.Equal(got, seq(total)) {
+		t.Errorf("%d prompts, want 1..%d once each", len(got), total)
 	}
 	if got, want := dump(t, e.ix), freshDump(t, e); got != want {
 		t.Error("the concurrent ingest differs from a rebuild")
