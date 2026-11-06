@@ -37,6 +37,8 @@ func corpus() []string {
 	full.Limits = []Limit{{"limit", 0.9, "thr"}, {"watch", 0.5, "thr-w"}}
 	full.Series = append(full.Series, Series{Name: "Said", Class: "s-coverage", Dashed: true, Y: ys(v...)})
 	full.Series[0].Band = true
+	full.Markers = []Mark2{{X: 5, Kind: "config", Label: "settings changed", Title: "t"}, {X: 9, Kind: "release", Label: "v1", Title: "t"}}
+	full.Bands, full.SourceAt = []Band{{From: 12, To: 14}}, 20
 	for i := range full.Series[0].Y {
 		full.Series[0].Y[i].Num, full.Series[0].Y[i].Den = int64(i%7), 7
 	}
@@ -49,7 +51,7 @@ func corpus() []string {
 		spark("Found per day", 24, 31, 27, 22, 30, 29, 28), spark("L", 1),
 		string(Spark{Label: "L", Fmt: plain, Y: []*float64{nil, p(1), p(2)}}.HTML()),
 	}
-	return append(append(out, histStripOutputs()...), calStatusOutputs()...)
+	return append(append(append(out, histStripOutputs()...), calStatusOutputs()...), rangeOutputs()...)
 }
 
 func spark(label string, vs ...float64) string {
@@ -257,6 +259,22 @@ func TestChartEscapesText(t *testing.T) {
 	for _, want := range []string{`aria-label="` + escaped + `"`, `<th scope="col">` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
 		if !strings.Contains(line, want) {
 			t.Errorf("line lacks %q", want)
+		}
+	}
+	// markers: label, title and table cell are escaped.
+	c.Markers = []Mark2{{X: 0, Kind: "release", Label: markup, Title: markup}, {X: 1, Kind: "config", Label: markup, Title: markup}}
+	marked := keep(string(c.HTML()))
+	for _, want := range []string{`<text class="mk-t ta-e" x="`, `>` + escaped + `</text>`, `y2="200.0"><title>` + escaped + `</title></line>`, `<td class="r">` + escaped + `</td>`} {
+		if !strings.Contains(marked, want) {
+			t.Errorf("markers lack %q", want)
+		}
+	}
+	if strings.Contains(marked, "<b>") {
+		t.Errorf("raw markup in markers: %s", marked)
+	}
+	for name, out := range map[string]string{"ranges": markupRanges(), "forest": markupForest(), "cohort": markupCohort()} {
+		if !strings.Contains(out, escaped) || strings.Contains(out, "<b>") || strings.Contains(out, `x"'`) {
+			t.Errorf("%s: markup not escaped: %s", name, out)
 		}
 	}
 }
@@ -698,5 +716,122 @@ func TestSizeClassIsWhitelisted(t *testing.T) {
 	out := string(c.HTML())
 	if strings.Contains(out, "onload") {
 		t.Errorf("unknown size class passed through: %s", out)
+	}
+}
+
+// overlayLine is thirty days of one series, with the markers of the design.
+func overlayLine() Line {
+	x := make([]string, 30)
+	v := make([]*float64, 30)
+	for i := range x {
+		x[i], v[i] = fmt.Sprintf("Oct %d", i+1), p(0.5)
+	}
+	c := usedLine(x, v...)
+	c.Markers = []Mark2{
+		{X: 19, Kind: "config", Label: "settings changed", Title: "Oct 20: settings changed (recall.min_score 0.5 → 0.55)"},
+		{X: 27, Kind: "release", Label: "v0.1.17-m7", Title: "Oct 28: backsight v0.1.17-m7 installed"},
+	}
+	return c
+}
+
+// lineX is the x of position j of thirty on a Half chart: 8 inside the left of
+// the plot, evenly spread to 8 inside its right.
+func lineX(j int) float64 { return 52 + float64(j)*(552-44-16)/29 }
+
+func near(t *testing.T, what string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 0.06 {
+		t.Errorf("%s = %v, want %v", what, got, want)
+	}
+}
+
+func num(t *testing.T, s string) float64 {
+	t.Helper()
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		t.Fatalf("not a number: %q", s)
+	}
+	return v
+}
+
+func TestLineMarkers(t *testing.T) {
+	out := keep(string(overlayLine().HTML()))
+	cfg := regexp.MustCompile(`<line class="cfg-mk" x1="([\d.]+)" x2="([\d.]+)" y1="14.0" y2="200.0"><title>([^<]*)</title></line>`).FindAllStringSubmatch(out, -1)
+	rel := regexp.MustCompile(`<line class="rel-mk" x1="([\d.]+)" x2="([\d.]+)" y1="14.0" y2="200.0"><title>([^<]*)</title></line>`).FindAllStringSubmatch(out, -1)
+	if len(cfg) != 1 || len(rel) != 1 {
+		t.Fatalf("markers: %d settings, %d release: %s", len(cfg), len(rel), out)
+	}
+	near(t, "settings x", num(t, cfg[0][1]), lineX(19))
+	near(t, "release x", num(t, rel[0][1]), lineX(27))
+	if cfg[0][1] != cfg[0][2] || cfg[0][3] != "Oct 20: settings changed (recall.min_score 0.5 → 0.55)" || rel[0][3] != "Oct 28: backsight v0.1.17-m7 installed" {
+		t.Errorf("settings marker: %v, release marker: %v", cfg[0], rel[0])
+	}
+	// the labels: a release's ends at its line, a setting's starts after it.
+	must(t, out,
+		`<text class="mk-t" x="`+f(lineX(19)+4)+`" y="24">settings changed</text>`,
+		`<text class="mk-t ta-e" x="`+f(lineX(27)-4)+`" y="24">v0.1.17-m7</text>`,
+		`<span><i class="sw sw-rel"></i>new version</span>`, `<span><i class="sw sw-cfg"></i>settings changed</span>`,
+		`<th class="r" scope="col">Marker</th>`,
+		`<tr><td>Oct 20</td><td class="r">50 %</td><td class="r">settings changed</td></tr>`,
+		`<tr><td>Oct 28</td><td class="r">50 %</td><td class="r">v0.1.17-m7</td></tr>`,
+		`<tr><td>Oct 21</td><td class="r">50 %</td><td class="r">—</td></tr>`)
+	if strings.Contains(out, "gap-band") || strings.Contains(out, "src-mk") {
+		t.Errorf("no band or source asked: %s", out)
+	}
+
+	// only the kinds present are in the legend; a marker off the chart or of an unknown kind is dropped.
+	c := overlayLine()
+	c.Markers = []Mark2{{X: 3, Kind: "release", Label: "v1", Title: "t"}, {X: 30, Kind: "release"}, {X: -1, Kind: "config"}, {X: 5, Kind: "other"}}
+	one := string(c.HTML())
+	if strings.Count(one, "rel-mk") != 1 || strings.Contains(one, "cfg-mk") || strings.Contains(one, "sw-cfg") || strings.Count(one, "mk-t") != 1 {
+		t.Errorf("one release marker only: %s", one)
+	}
+	// no marker: no column, no legend entry.
+	plainOut := string(usedLine([]string{"a", "b"}, p(1), p(1)).HTML())
+	if strings.Contains(plainOut, "Marker") || strings.Contains(plainOut, "sw-rel") {
+		t.Errorf("markers appear without any: %s", plainOut)
+	}
+}
+
+func TestGapBandAndSource(t *testing.T) {
+	c := overlayLine()
+	c.Markers = nil
+	c.Bands = []Band{{From: 3, To: 5}}
+	c.SourceAt = 10
+	out := keep(string(c.HTML()))
+	band := regexp.MustCompile(`<rect class="gap-band" x="([\d.]+)" y="24.0" width="([\d.]+)" height="176.0"></rect>`).FindAllStringSubmatch(out, -1)
+	if len(band) != 1 {
+		t.Fatalf("bands: %s", out)
+	}
+	step := lineX(1) - lineX(0)
+	near(t, "band x", num(t, band[0][1]), lineX(3)-step/2)
+	near(t, "band width", num(t, band[0][2]), 3*step)
+	src := regexp.MustCompile(`<line class="src-mk" x1="([\d.]+)" x2="([\d.]+)" y1="24.0" y2="200.0"></line>`).FindAllStringSubmatch(out, -1)
+	if len(src) != 1 {
+		t.Fatalf("source marks: %s", out)
+	}
+	near(t, "source x", num(t, src[0][1]), lineX(10))
+	must(t, out,
+		`>from this PC&#39;s daily record</text>`, `>kept by the server (20 days)</text>`,
+		`>no record</text>`, `no record: the daily upkeep could not reach the server</span>`,
+		`viewBox="0 0 560 250"`)
+	// the source labels need the extra height; a chart without them keeps its own.
+	if !strings.Contains(string(overlayLine().HTML()), `viewBox="0 0 560 230"`) {
+		t.Error("a chart without a source change changed height")
+	}
+	// out-of-range bands are clipped, empty ones dropped, a source off the chart is none.
+	c.Bands = []Band{{From: -4, To: 1}, {From: 28, To: 40}, {From: 9, To: 7}, {From: 40, To: 50}}
+	c.SourceAt = 30
+	got := string(c.HTML())
+	if strings.Count(got, `class="gap-band"`) != 2+1 /* the legend swatch */ || strings.Contains(got, "src-mk") || strings.Contains(got, "kept by the server") {
+		t.Errorf("clipping: %s", got)
+	}
+	// bucketed: 600 positions are 2 per bucket; the band covers whole buckets.
+	big := many(600)
+	big.Bands, big.SourceAt = []Band{{From: 10, To: 13}}, 300
+	bo := string(big.HTML())
+	must(t, bo, `>kept by the server (300 days)</text>`)
+	if strings.Count(bo, `<rect class="gap-band"`) != 2 { // the band and the legend swatch
+		t.Errorf("bucketed band: %d", strings.Count(bo, `<rect class="gap-band"`))
 	}
 }

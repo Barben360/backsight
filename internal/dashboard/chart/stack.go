@@ -19,6 +19,10 @@ type Stack struct {
 	Fmt    Num
 	Empty  string
 	More   string
+	// Markers, Bands and SourceAt are as in Line: positions of X.
+	Markers  []Mark2
+	Bands    []Band
+	SourceAt int
 }
 
 const (
@@ -96,6 +100,8 @@ func (c Stack) frame(d stackData, top float64, centre func(j int) float64, hit f
 		b.WriteString(`<line class="gl" x1="` + f(left) + `" x2="` + f(right) + `" y1="` + f(gy) + `" y2="` + f(gy) + `"></line>`)
 		b.WriteString(`<text class="ta-e" x="38" y="` + f(gy+4) + `">` + esc(c.Fmt.format(top/4*float64(g))) + `</text>`)
 	}
+	ov := newOverlay(c.Markers, c.Bands, c.SourceAt, len(c.X))
+	ov.draw(&b, centre, hit)
 	draw(&b)
 	b.WriteString(`<line class="bl" x1="` + f(left) + `" x2="` + f(right) + `" y1="` + f(plotBase) + `" y2="` + f(plotBase) + `"></line>`)
 	m := len(d.xs)
@@ -119,15 +125,23 @@ func (c Stack) frame(d stackData, top float64, centre func(j int) float64, hit f
 		legend = append(legend, legendItem{known(part.Class), part.Name})
 		head = append(head, part.Name)
 	}
+	mkCol := ov.markerColumn(m)
+	if mkCol != nil {
+		head = append(head, "Marker")
+	}
 	rows := make([][]string, m)
 	for j := range rows {
 		row := []string{d.xs[j]}
 		for p := range c.Parts {
 			row = append(row, c.Fmt.format(d.counts[p][j]))
 		}
+		if mkCol != nil {
+			row = append(row, mkCol[j])
+		}
 		rows[j] = row
 	}
-	return template.HTML(figure(c.Label, c.Size, !focus, b.String(), legend, tableData{head: head, rows: rows, more: c.More}))
+	return template.HTML(figureLegend(c.Label, ov.size(c.Size), !focus, b.String(), legendSpans(legend)+ov.legend(), false,
+		tableData{head: head, rows: rows, more: c.More}))
 }
 
 // r1 rounds to the one decimal geometry is written with.

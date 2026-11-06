@@ -512,3 +512,50 @@ func TestValueLabelsDoNotOverlap(t *testing.T) {
 		prev = x
 	}
 }
+
+func TestStackMarkersBandsAndSource(t *testing.T) {
+	c := thirty()
+	c.Markers = []Mark2{{X: 19, Kind: "config", Label: "settings changed", Title: "Oct 20: settings changed"}, {X: 27, Kind: "release", Label: "v0.1.17-m7", Title: "Oct 28: installed"}}
+	c.Bands = []Band{{From: 3, To: 5}}
+	c.SourceAt = 20
+	// a bar chart's slot is (552-44)/30 wide; an area's position is 8 inside the left edge, evenly spread.
+	slot := (552.0 - 44) / 30
+	areaX := func(j int) float64 { return 52 + float64(j)*(552-44-16)/29 }
+	for name, tc := range map[string]struct {
+		out string
+		x   func(int) float64
+		x0  float64 // left edge of the band
+	}{
+		"bars": {kept(string(c.Bars())), func(j int) float64 { return 44 + slot*(float64(j)+0.5) }, 44 + slot*3},
+		"area": {kept(string(c.Area())), areaX, areaX(3) - (areaX(1)-areaX(0))/2},
+	} {
+		line := regexp.MustCompile(`<line class="(cfg|rel)-mk" x1="([\d.]+)" x2="[\d.]+" y1="14.0" y2="200.0"><title>([^<]*)</title></line>`).FindAllStringSubmatch(tc.out, -1)
+		if len(line) != 2 {
+			t.Fatalf("%s markers: %s", name, tc.out)
+		}
+		near(t, name+" settings x", num(t, line[0][2]), tc.x(19))
+		near(t, name+" release x", num(t, line[1][2]), tc.x(27))
+		band := regexp.MustCompile(`<rect class="gap-band" x="([\d.]+)" y="24.0" width="([\d.]+)" height="176.0"></rect>`).FindAllStringSubmatch(tc.out, -1)
+		if len(band) != 1 {
+			t.Fatalf("%s bands: %s", name, tc.out)
+		}
+		near(t, name+" band x", num(t, band[0][1]), tc.x0)
+		near(t, name+" band width", num(t, band[0][2]), 3*(tc.x(1)-tc.x(0)))
+		src := regexp.MustCompile(`<line class="src-mk" x1="([\d.]+)"`).FindStringSubmatch(tc.out)
+		if src == nil {
+			t.Fatalf("%s: no source mark", name)
+		}
+		near(t, name+" source x", num(t, src[1]), tc.x(20))
+		must(t, tc.out, `>from this PC&#39;s daily record</text>`, `>kept by the server (10 days)</text>`, `viewBox="0 0 560 250"`,
+			`<span><i class="sw sw-rel"></i>new version</span>`, `<span><i class="sw sw-cfg"></i>settings changed</span>`,
+			`no record: the daily upkeep could not reach the server</span>`, `<th class="r" scope="col">Marker</th>`,
+			`<tr><td>Oct 20</td><td class="r">1</td><td class="r">2</td><td class="r">3</td><td class="r">settings changed</td></tr>`)
+	}
+	// without any of the three, the output is the chart's own.
+	plainOut := string(thirty().Bars())
+	for _, s := range []string{"Marker", "gap-band", "src-mk", "rel-mk", "viewBox=\"0 0 560 250\""} {
+		if strings.Contains(plainOut, s) {
+			t.Errorf("a stack without markers holds %q", s)
+		}
+	}
+}
