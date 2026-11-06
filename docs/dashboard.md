@@ -38,28 +38,79 @@ Each page asks one question, and its cards answer parts of it. Overview, Quality
 
 | Page | The question it asks | What it shows | `stats` view |
 |---|---|---|---|
-| Overview | Is my memory working? | The verdict on four axes (Found, Right, Cost, Flowing) for the last 7 days, a summary line, six tiles with their change from the previous period and a small trend, what to do about it, how big the memory is and what happened lately. | `backsight stats overview` |
+| Overview | Is my memory working? | The verdict on four axes (Found, Right, Cost, Flowing) for the last 7 days, a summary line with a Copy summary button, six tiles with their change from the previous period and a small trend, what to do about it, what happened lately, how big the memory is, the memories that helped most and a calendar of the days memory helped. | `backsight stats overview` |
 | Quality | Is it right? | How many prompts got memory, whether Claude used the memories shown, whether it says which it used, memories reported wrong, why some prompts got nothing, Claude's own searches and what became of each memory shown. | `backsight stats quality` |
 | Cost | Is it worth it? | The context backsight adds per session and where it adds it, the time memory adds to a prompt and to a search, and what the server's model spent. | `backsight stats cost` |
 | Bank | Is the memory healthy? | The memory's size by kind, its growth, memories per project, summaries waiting, facts stored, memories retired, hidden or restored, files imported from a folder, and which memories need a look. | `backsight stats bank` |
-| Pipeline | Is it flowing? | Sessions sent, what waits on this PC and on the server, the time to turn a session into memories, the background jobs and the steps that crashed. | `backsight stats pipeline` |
-| System | Is the service up? | The memory server, this PC, what needs a look here and the doctor's checks. | `backsight stats system` |
-| Releases | Did a release or a setting help? | The numbers per backsight version, the settings in effect and a command that replays a setting. Read differences as hints, not proof. | `backsight stats releases` |
+| Pipeline | Is it flowing? | Sessions sent, what waits on this PC and on the server, the time to turn a session into memories, how long until a session's memories come back, the sessions sent that never turned into memories, the background jobs and the steps that crashed. | `backsight stats pipeline` |
+| System | Is the service up? | The memory server, this PC, what needs a look here, the doctor's checks, how they did day by day and whether the last scan found a possible secret. | `backsight stats system` |
+| Releases | Did a release or a setting help? | The numbers per backsight version, a comparison of two versions, the days Claude used memory, the settings in effect and a command that replays a setting. Read differences as hints, not proof. | `backsight stats releases` |
 | Definitions | What does each number mean? | Every number: its question, what it counts, when it is watched and how many events it needs, grouped by axis (Found, Right, Cost, Flowing, memory, review). | `backsight stats defs` |
 | Projects | Which projects use memory? | One row per project; a project's name opens its own page. | `backsight stats projects` |
 | Sessions | Which sessions used memory? | One row per session, which you can filter; an id opens that session turn by turn ("What happened in session ...?"). | `backsight stats sessions` |
 | Memories | Which memories were shown? | One row per memory, with an order and a filter and badges for what to review; an id opens that memory ("How has memory ... done?"). | `backsight stats memories` |
-| Days | How did each day go? | One row per day; a date opens that day ("What happened on Friday, Oct 30?"). | `backsight stats days` |
+| Days | How did each day go? | A calendar of the last 13 months, then one row per day; a date opens that day ("What happened on Friday, Oct 30?"). | `backsight stats days` |
 
 Each card is titled with the question it answers. Its info button says what the number counts, its limits and the smallest change it can show, and its CLI button gives the `backsight stats` command that prints the same numbers.
 
-**Window and project.** Most pages have a window picker (24 h, 7 d, 30 d, 90 d; 7 d by default) and a project filter, where you type a project's name or choose one from the Projects page. The Overview's verdict always judges the last 7 days. The page of one day shows that day and has no picker; the page of one session shows the days the session spans, and the page of one memory reads "all time", neither with a picker.
+**Window and project.** Most pages have a window picker (24 h, 7 d, 30 d, 90 d; 7 d by default, or a custom window, see below) and a project filter, where you type a project's name or choose one from the Projects page. The Overview's verdict always judges the last 7 days. The page of one day shows that day and has no picker; the page of one session shows the days the session spans, and the page of one memory reads "all time", neither with a picker.
+
+**Custom window.** The picker's last entry, Custom window, takes a From and a To day. Both days are included, and the first can be up to 13 months back, as far as this PC keeps its history. A pair of days that does not fit (a To before the From, a day in the future or too far back) is refused with the reason, and the picker stays open with what you typed. The window's days then appear in the page's address as `since` and `until`, like the flags of `backsight stats`.
 
 **Language.** Numbers and dates follow your browser's language setting. The words stay in English.
 
 Every number on a page is in `backsight stats <view> --json`: that is what scripts and agents read. The dashboard's own address `/api/v1/<view>` returns the same JSON, but only to a browser that is signed in, to feed the pages; it is not an interface for scripts.
 
 A memory's text is not on the pages. Its own page has a "Show text" link; the text is read from the server when you click and is never stored.
+
+## What the newer cards show
+
+These cards come from the daily upkeep's record (see the notes of v0.1.28-m7 in [releases](releases/v0.1.28-m7.md)) and from the numbers added to `backsight stats` then. A card that has too little history says so in its own words rather than showing a number.
+
+**Overview**
+- **Which memories helped most?** The 3 memories Claude said it used most in the window, each with its project, its kind and how often it was used and shown. A name opens the memory's page.
+- **Which days did memory help?** A calendar of the last 13 months, a column per week. Colour by picks what the squares show: Prompts that got memory, Turns where Claude used memory or Sessions. A dashed square is a day with nothing recorded; the window's days and today are outlined. Show as a table lists the same days as text, and a day opens its page. It does not follow the window: it always covers 13 months, for the project you filtered by.
+- **Copy summary** copies the page's numbers as plain text, 72 characters wide at most, in English whatever your browser's language, ready to paste into an issue or a chat. The same text is in the Summary as text disclosure at the foot of the page, which works without scripts. It holds counts, rates, statuses and commands: no memory text, no session or memory id. The memory server's address shows only when it is on this PC; any other is written "a remote server".
+- **Flowing tile.** Its subline gains the typical time from a session's last turn to its first memory recalled, when there are enough sessions to say.
+
+**Days and one day**
+- The Days page opens with the calendar above, filtered by the project and not by the window.
+- A day's page has links to the previous and the next day with something recorded, and **Did anything change that day?** lists each new backsight version and each settings change recorded that day, "recorded at" the hour the change was noticed.
+
+**Pipeline**
+- **How long until a session's memories come back?** For each session ended on this PC: how many were sent, turned into memories and recalled, and the time each step took (typical and slow). A session counts as ended 30 minutes after its last turn. A step shows its times only once it has 20 sessions (the slow time, 100), so a new install reads "Too few to time yet" with the counts.
+- **Sent, never turned into memories** lists the newest of those sessions with what happened: the server's task failed, it finished with no memory, or nothing was recorded. Sessions still being turned into memories (sent less than 24 hours ago) are not in it.
+
+**System**
+- **Have the health checks passed lately?** Each check's result for each day, from the daily upkeep's run: ok, watch or problem. A day without a run is shown as none, which is not a fault. Checks that had a non-ok day come first.
+- **Could memory hold a secret?** Four states: no scan yet, a scan that found nothing, a scan that found some (with the command to list and forget them) and a scan older than 30 days, which is only a reminder. A scan that found some puts the Overview's Flowing axis on watch.
+
+**Cost and Bank**
+- **Do new memories turn out useful?** (Cost) Per week, the share of the memories created that week that Claude used within 28 days, and the extraction tokens per useful memory. A week counts once its 28 days have passed, so the newest weeks wait. The memories come from the server and the uses from this PC: with several PCs the share reads low.
+- Charts of days the server no longer keeps (Bank: 90 days; Cost: 30) fill from this PC's daily record, and say where. Days from neither the server nor the record are shaded, and "Show as a table" says for each day where it comes from.
+
+**Memory page**
+- **Where did it come from?** The session the memory was made from, when it was sent and turned into memories, and when it was first shown. A memory from a session of another PC says "made" and its day; a note or an import has no session.
+
+**Developer mode** adds these cards: the share of the memory that came up and how concentrated the shows are (Bank); the share of turns followed by a correction and the share of recalls the learned ranking changed (Quality); and, in **Does memory show up as often in every language?**, whether a language differs from the most used one by more than chance (a gap of more than 15 points is watched). The learned-ranking share undercounts recalls from before it was recorded, until `backsight stats index rebuild`.
+
+**Releases** (developer mode)
+- **Do two versions differ?** Pick two versions and a measure. The answer is a difference with its 95 % interval, matched by project and by where memory was shown, read as differs, no clear difference or too few, with what is missing and when to look again. It is observational: the two versions ran on different weeks, work and settings, so it never says one is better. When the raw numbers point the other way it says so.
+- **When did Claude use memory?** The share of turns where Claude used memory over time, with a marker at each version switch and settings change recorded on this PC.
+
+## Keyboard shortcuts
+
+Off by default; turn them on in Preferences. Then `g` followed by a letter within a second opens a page, and a footer button, or `?`, lists them all.
+
+| Keys | Action |
+|---|---|
+| `g` `o` / `g` `q` / `g` `c` / `g` `b` / `g` `p` / `g` `s` | Overview / Quality / Cost / Bank / Pipeline / System |
+| `/` | Filter by project |
+| `r` | Refresh this page |
+| `?` | This list |
+| `Esc` | Close this list or an open menu |
+
+Keys do nothing while you type in a field or with Ctrl, Alt or Meta held. On the calendar, the arrow keys move from day to day and Enter opens the day. They need scripts; everything they do is also a link or a button.
 
 ## Privacy
 
@@ -100,19 +151,21 @@ A page that is not found, a malformed request and a page that fails keep the pag
 
 ## Preferences
 
-The Preferences menu in the top bar keeps three choices in a cookie in your browser, for a year. The server writes the theme into the page it sends, so the page opens in the right colours with no flash.
+The Preferences menu in the top bar keeps five choices in a cookie in your browser, for a year. The server writes the theme into the page it sends, so the page opens in the right colours with no flash.
 
 - **Theme.** System follows your system's light or dark setting; Light and Dark force one.
 - **Developer mode.** Off by default. On, the top bar gets a Developer menu with Releases and Definitions; each card and tile names the id of the numbers it shows; Quality gains a card on how well memory is ranked and per-path charts of what became of each memory shown; Cost gains the extraction per session; a memory's page shows its learned ranking as a number; and the CLI commands carry `--dev`.
 - **Auto-refresh.** Off by default. On ("Every minute"), the page reloads itself every minute. The Refresh link in the top bar reloads it once. A page left open for more than 5 minutes shows "Updated over 5 min ago. Refresh."
+- **Density.** Comfortable by default; Compact fits more on a screen, and touch targets keep their size.
+- **Keyboard shortcuts.** Off by default (see Keyboard shortcuts).
 
-The dashboard changes memory in no way: a preference only changes what you see.
+The cookie still works if it was written by an older backsight, which kept fewer choices. The dashboard changes memory in no way: a preference only changes what you see.
 
 ## Keyboard and screen readers
 
 - **Skip to content.** The first Tab stop on every page is "Skip to content", which jumps over the top bar.
 - **Tab order.** On the Overview it runs: Skip to content, the logo, the pages (Overview, Quality, Cost, Bank, Pipeline, Browse, System), the window picker (24 h, 7 d, 30 d, 90 d), the project filter, Refresh, Preferences, then the verdict's info and CLI buttons, and the cards from top to bottom. Enter or Space opens a menu.
-- **Charts have a table.** Every chart card has a "Show as a table" control with the same numbers as text, which a screen reader can walk. It needs no script. The small trends in the Overview's tiles have a spoken summary instead.
+- **Charts have a table.** Every chart card has a "Show as a table" control with the same numbers as text, which a screen reader can walk. It needs no script. On a window over 200 days a chart shows no per-day values on hover, and its table lists the latest 120 days. The small trends in the Overview's tiles have a spoken summary instead.
 - **Copy buttons need scripts.** Commands the page suggests have a Copy button. Without scripts the button is absent and the command is plain text you can select. With scripts, if the browser does not let the page use the clipboard, the button selects the command and says "Selected: press Ctrl+C".
 - **Works without scripts.** Everything else, including the menus, the preferences and the table views, works with scripts off.
 - **Contrast and colours.** Text has at least 4.5:1 contrast in the light and the dark theme, and the colours that carry a meaning in charts (used, ignored, a path's state) have at least 3:1. The shades of the stacked bars do not, so a legend and the table behind each chart say the same. Status is never only a colour: it is also a word or an icon. In a high-contrast mode (forced colours) the page's text, borders and focus follow your system's colours; charts keep their own colours, with an outline in the system's text colour.
@@ -155,6 +208,10 @@ Flags go after the view word: `backsight stats overview --days 30`, `--project <
 - **"Last 7 days" whatever the window.** The verdict and the attention list always judge the last 7 days against the 7 before, for the selected project. The window you choose (`--days`, `--since`) changes the displayed counts, charts and tables, not the verdict. A few metrics are judged on "now" (hook failures over the last 24 hours, the current local backlog); the window only sets their displayed counts.
 - **The 28-day fallback.** Right needs enough turns to judge. When the last 7 days have too few, its metrics are judged on 28 days and tagged `judged_28d`; the axis says so after its own reasons.
 - **This PC or the server.** Metrics marked *this PC* count only this machine's usage. Metrics marked *server (all PCs)* come from the server and cover every PC using it, so they ignore the project filter (tagged `not_filtered`). A server that does not answer never fails a view: its sections read `ok: false` with the reason. On a PC with no memory server set up, the server's numbers read `no_data` with the reason `not_configured` ("no memory server set up"), not a failure.
+- **A week that is not complete.** In the memory yield card, a week that is not yet complete shows no count of new memories and reads "not complete until" the day it can be judged.
+- **Days without a record.** A chart of days past the server's reach reads this PC's daily record. A day neither holds is shaded and left empty, never counted as zero.
+- **Memory yield needs four weeks.** The share of new memories used within 28 days is shown for a week only 28 days after it ends, and a week with fewer than 20 new memories shows its counts without a share.
+- **Time to recall needs a few days of history.** It starts from the day the daily upkeep began to record, and reads "too few" until 20 sessions have gone the whole way.
 - **Partial.** `partial` means the figures are incomplete: the index was still catching up, a day was cut by the window, or part of a server read failed (the failed part is counted beside the total).
 
 ### The verdict

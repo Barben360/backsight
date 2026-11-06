@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,16 +22,31 @@ import (
 // how its data is built.
 type shot struct {
 	name, page, id string
+	height         int // the window's height; 900 when zero
+	dev            bool
 	build          func(t *testing.T, d *PageData)
 }
 
-// shots are the five pages screenshotted, each in both themes.
+// shots are the pages screenshotted, each in both themes. The first five are
+// 1440 x 900, as the README shows them; the others are taller, to show the
+// cards that sit below the first screen.
 var shots = []shot{
 	{name: "overview-healthy", page: "overview", build: func(t *testing.T, d *PageData) { overviewShot(t, d, "healthy") }},
 	{name: "overview-serverdown", page: "overview", build: func(t *testing.T, d *PageData) { overviewShot(t, d, "serverdown") }},
 	{name: "overview-new", page: "overview", build: func(t *testing.T, d *PageData) { overviewShot(t, d, "new") }},
 	{name: "session", page: "session", id: "sess-long-1"},
 	{name: "memory", page: "memory", id: "mem-long-1"},
+	{name: "overview-full", page: "overview", height: 2300, build: func(t *testing.T, d *PageData) {
+		overviewShot(t, d, "healthy")
+		d.V["overview"].Tables.Helped = goldenResult(t, "overview").Tables.Helped // the scenario holds none
+	}},
+	{name: "pipeline", page: "pipeline", height: 2000},
+	{name: "system", page: "system", height: 1700},
+	{name: "releases-compare", page: "releases", dev: true, height: 2400, build: func(t *testing.T, d *PageData) {
+		c := recordComparison()
+		d.V["releases"].Tables.Compare = c
+		d.P.Compare = c.A + "," + c.B
+	}},
 }
 
 func overviewShot(t *testing.T, d *PageData, scenario string) {
@@ -107,6 +123,8 @@ func TestScreenshots(t *testing.T) {
 		d.L, d.P = en, views.Params{Days: 7}
 		path := "/"
 		switch s.page {
+		case "pipeline", "system", "releases":
+			path = "/" + s.page
 		case "session":
 			path = "/sessions/" + s.id
 		case "memory":
@@ -115,7 +133,7 @@ func TestScreenshots(t *testing.T) {
 		d.ID = s.id
 		d.Frame = Frame{
 			Title: pageTitle(spec, s.id), Path: path, Version: "dev", HelpURL: helpURL,
-			Nav: navFor(path, false), Windows: windowsFor(path, url.Values{}), PrefMenu: prefMenu(path, Prefs{Theme: theme}),
+			Nav: navFor(path, s.dev), Windows: windowsFor(path, url.Values{}), PrefMenu: prefMenu(path, Prefs{Theme: theme}),
 			Prefs: Prefs{Theme: theme, Keys: keysOn}, AllProjects: path, Keep: [][2]string{{"days", "7"}},
 		}
 		head := d.V[spec.Views[0]]
@@ -160,12 +178,15 @@ func TestScreenshots(t *testing.T) {
 		})
 	}
 	var names []string
+	heights := map[string]int{}
 	for _, s := range shots {
 		for _, theme := range []string{"light", "dark"} {
 			serve("/"+s.name+"-"+theme, page(s, theme))
 			names = append(names, s.name+"-"+theme)
+			heights[s.name+"-"+theme] = max(900, s.height)
 		}
 	}
+	heightOf := func(name string) int { return heights[name] }
 	// The probe is the healthy Overview with one more script after the copy script.
 	probe := bytes.Replace(page(shots[0], "light"), []byte("</body>"), []byte(`<script src="/probe.js" defer></script></body>`), 1)
 	if !bytes.Contains(probe, []byte("/probe.js")) {
@@ -204,7 +225,7 @@ func TestScreenshots(t *testing.T) {
 	}
 	for _, n := range names {
 		file := filepath.Join(dir, n+".png")
-		run("--window-size=1440,900", "--screenshot="+file, srv.URL+"/"+n)
+		run("--window-size=1440,"+strconv.Itoa(heightOf(n)), "--screenshot="+file, srv.URL+"/"+n)
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -216,8 +237,8 @@ func TestScreenshots(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", file, err)
 		}
-		if b := img.Bounds(); b.Dx() != 1440 || b.Dy() != 900 {
-			t.Errorf("%s: %dx%d, want 1440x900", file, b.Dx(), b.Dy())
+		if b := img.Bounds(); b.Dx() != 1440 || b.Dy() != heightOf(n) {
+			t.Errorf("%s: %dx%d, want 1440x%d", file, b.Dx(), b.Dy(), heightOf(n))
 		}
 	}
 

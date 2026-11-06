@@ -715,7 +715,8 @@ func TestGuideDashboardPages(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"Show as a table", "Developer mode", "Skip to content", "When a number is missing",
-		"too few to judge", "Selected: press Ctrl+C", "Judged on the last 28 days: too few turns in 7."} {
+		"too few to judge", "Selected: press Ctrl+C", "Judged on the last 28 days: too few turns in 7.",
+		"Keyboard shortcuts", "Custom window", "Copy summary", "Which days did memory help?"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("guide dashboard lacks %q", want)
 		}

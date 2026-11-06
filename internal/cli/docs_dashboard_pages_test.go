@@ -97,3 +97,68 @@ func TestCatalogCommandsExist(t *testing.T) {
 		t.Errorf("only %d catalog commands checked", named)
 	}
 }
+
+// The dashboard guide describes each page's newer cards under their titles,
+// the custom window, the density, the shortcuts and the limits a reader hits.
+func TestDashboardGuideNewCards(t *testing.T) {
+	requireInSection(t, "../../docs/dashboard.md", "What the newer cards show",
+		"Which memories helped most?", "Which days did memory help?", "Colour by", "Copy summary", "Summary as text",
+		"no memory text, no session or memory id", "a remote server",
+		"Did anything change that day?", "How long until a session's memories come back?",
+		"Sent, never turned into memories", "Have the health checks passed lately?", "Could memory hold a secret?",
+		"Do new memories turn out useful?", "Where did it come from?", "Do two versions differ?", "When did Claude use memory?",
+		"never says one is better")
+	requireInSection(t, "../../docs/dashboard.md", "Keyboard shortcuts",
+		"`g` `o`", "Filter by project", "Refresh this page", "Ctrl, Alt or Meta", "Off by default")
+	requireInSection(t, "../../docs/dashboard.md", "What the pages show",
+		"Custom window", "Both days are included", "13 months")
+	requireInSection(t, "../../docs/dashboard.md", "Preferences", "Density", "Compact", "Keyboard shortcuts")
+	requireInSection(t, "../../docs/dashboard.md", "Keyboard and screen readers",
+		"over 200 days", "the latest 120 days")
+	requireInSection(t, "../../docs/dashboard.md", "Reading the numbers",
+		"Memory yield needs four weeks", "Time to recall needs a few days of history", "not complete until")
+}
+
+func TestPrivacyCopySummary(t *testing.T) {
+	requireInSection(t, "../../docs/privacy.md", "The dashboard",
+		"**Copy summary**", "no memory text and no session or memory id", "(`127.0.0.1` or `localhost`)", "a remote server")
+}
+
+// The command reference names what the new numbers add to each view.
+func TestCommandsNameTheNewNumbers(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/commands.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for view, want := range map[string]string{
+		"overview": "helped most", "cost": "extraction tokens per useful memory", "bank": "share of the memory that came up",
+		"pipeline": "never turned into memories", "system": "per day", "days": "calendar of the last 13 months",
+		"releases": "version switch and settings change", "memories": "where it came from",
+	} {
+		found := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "| `backsight stats "+view) {
+				found = true
+				if !strings.Contains(line, want) {
+					t.Errorf("docs/commands.md, the stats %s row, lacks %q", view, want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("docs/commands.md has no stats %s row", view)
+		}
+	}
+}
+
+// The notes of the release that put the new cards on the pages say what is
+// new and the limits in a reader's words, and point back to the release that
+// began recording the numbers.
+func TestReleaseNotesOfThePages(t *testing.T) {
+	const notes = "../../docs/releases/v0.1.29-m7.md"
+	requireInSection(t, notes, "What changed",
+		"Which memories helped most?", "Which days did memory help?", "Copy summary", "Do two versions differ?",
+		"never which is better", "Custom window", "Density", "Keyboard shortcuts", "v0.1.28-m7.md")
+	requireInSection(t, notes, "Known limits",
+		"on a day's page and on Releases only", "13 months", "Time to recall needs a few days of history",
+		"Memory yield needs four weeks", "over 200 days", "latest 120 days", "not complete shows no count of new memories")
+}
