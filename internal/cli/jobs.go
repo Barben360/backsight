@@ -15,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
@@ -73,6 +74,25 @@ type tickResult struct {
 	SharedMachines int    `json:"shared_machines,omitempty"`
 	SharedSkipped  int    `json:"shared_skipped,omitempty"`
 	SharedError    string `json:"shared_error,omitempty"`
+	// MetricsUp: this PC's daily figures were sent to the server this tick
+	// (publishMetrics); MetricsDays and MetricsBytes: their size;
+	// MetricsWaiting: the index was not caught up, the next tick retries;
+	// MetricsEmpty: the index holds no complete day yet;
+	// MetricsFailure: the class of a failed publish (compute, budget,
+	// server, too_large), never an error's text; MetricsError: the publish
+	// record could not be written.
+	MetricsUp      bool   `json:"metrics_up,omitempty"`
+	MetricsDays    int    `json:"metrics_days,omitempty"`
+	MetricsBytes   int    `json:"metrics_bytes,omitempty"`
+	MetricsWaiting bool   `json:"metrics_waiting,omitempty"`
+	MetricsEmpty   bool   `json:"metrics_empty,omitempty"`
+	MetricsFailure string `json:"metrics_failure,omitempty"`
+	MetricsError   string `json:"metrics_error,omitempty"`
+	// metricsDropped: what the write cap left out of the document.
+	metricsDropped machines.Dropped
+	// metricsIndex: the index line of the publish's catch-up, when it ran
+	// one (the tick's own is then skipped: one catch-up per tick).
+	metricsIndex string
 	// MetricsIndex: the catch-up of the metrics index, run on every way
 	// out of the tick (tickIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
@@ -110,12 +130,23 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res := tickResult{Status: "done"}
 			// Every way out goes through finish: the metrics index catches up
 			// first, so that the tick's own job event waits for the next one.
+			// publishFigures: the sharing step cleared the publish of the daily
+			// figures; it runs in finish, with the tick's one catch-up of the
+			// metrics index (its own when it is due, else tickIndex's).
+			publishFigures := false
+			var f *retain.Flusher
 			finish := func(failed error) error {
-				res.MetricsIndex = tickIndex(cmd.Context(), d, home)
+				if publishFigures && f != nil && otherServer(d, cfg) == nil && f.StartedOver() == nil {
+					res.applyMetrics(publishMetrics(cmd.Context(), f.Client, d, home, cfg, f.MachineID, now()))
+				}
+				if res.MetricsIndex = res.metricsIndex; res.MetricsIndex == "" {
+					res.MetricsIndex = tickIndex(cmd.Context(), d, home)
+				}
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
 					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History, "import_sent": res.importSent,
-						"shared_up": res.SharedUp, "shared_machines": res.SharedMachines, "shared_skipped": res.SharedSkipped, "shared_error": res.SharedError}})
+						"shared_up": res.SharedUp, "shared_machines": res.SharedMachines, "shared_skipped": res.SharedSkipped, "shared_error": res.SharedError,
+						"metrics_up": res.MetricsUp, "metrics_days": res.MetricsDays, "metrics_bytes": res.MetricsBytes, "metrics_failure": res.MetricsFailure}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -148,7 +179,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Server = startLateServer(sctx, d, cfg)
 			scancel()
 
-			f, err := newFlusher(d, home, cfg, sec, generation, true)
+			f, err = newFlusher(d, home, cfg, sec, generation, true)
 			if err != nil {
 				res.Status, res.Reason = "failed", clientSetupFailed
 				return finish(err)
@@ -176,6 +207,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedger(sctx, f.Client, d, cfg, f.MachineID, now()); err != nil {
 					res.SharedError = err.Error()
 				}
+				publishFigures = true
 			}
 			files := transcripts(home)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
@@ -353,6 +385,9 @@ func tickText(r tickResult) string {
 	}
 	if r.SharedSkipped > 0 {
 		msg += fmt.Sprintf(", %d shared document(s) skipped (unreadable or of a newer version)", r.SharedSkipped)
+	}
+	if t := r.metricsText(); t != "" {
+		msg += ", " + t
 	}
 	return msg + metrics + "\n"
 }

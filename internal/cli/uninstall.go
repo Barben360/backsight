@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -119,7 +120,8 @@ func shellWord(s string) string {
 // jobLockWait bounds the wait for a running jobs tick or jobs maintain.
 var jobLockWait = 2 * time.Minute
 
-// uninstallShareBudget bounds the delete of this machine's shared counts.
+// uninstallShareBudget bounds the deletes of this machine's shared counts and
+// daily figures together.
 var uninstallShareBudget = 5 * time.Second
 
 // The Windows seams; tests replace them (TestMain refuses both).
@@ -477,7 +479,11 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// This machine's shared counts, with the machine id they are named
 	// after: before the server stops.
 	if f.purgeLocal {
-		add(uninstallSharedCounts(ctx, d, cfg, sec, generation, f.plan))
+		// One budget for both deletes: the uninstall waits 5 s at most.
+		sctx, scancel := context.WithTimeout(ctx, uninstallShareBudget)
+		add(uninstallSharedCounts(sctx, d, cfg, sec, generation, f.plan))
+		add(uninstallMetricsDocument(sctx, d, cfg, sec, generation, f.plan))
+		scancel()
 	}
 
 	// 4. The server: kept, stopped, or deleted with its data. Its images
@@ -957,6 +963,46 @@ func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config,
 		return a
 	}
 	a.Status, a.Detail = "done", "this machine's counts ("+id+") deleted from the server"
+	return a
+}
+
+// uninstallMetricsDocument deletes this machine's daily figures document
+// from the server this PC joined, under uninstallSharedCounts's rules:
+// skipped when this machine never published one (no record of a send),
+// another server answers at the joined address, or connect moved this PC
+// since uninstall read its config; kept with one line when the server
+// fails or does not answer within uninstallShareBudget.
+func uninstallMetricsDocument(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, generation int, plan bool) undoAction {
+	a := undoAction{Name: "daily figures"}
+	machine := retain.ReadMachineID(d.State)
+	if rec, ok := machines.LoadPublished(d.MetricsDir()); machine == "" || !ok || rec.At.IsZero() {
+		a.Status, a.Detail = "skipped", "this machine never shared its daily figures"
+		return a
+	}
+	if otherServer(d, cfg) != nil {
+		a.Status, a.Detail = "skipped", "another server answers at "+cfg.Server.URL+": nothing is deleted there (the other machines ignore this machine's figures after 30 days)"
+		return a
+	}
+	id := machines.DocPrefix + machine
+	if plan {
+		a.Status, a.Detail = "planned", "this machine's daily figures ("+id+") deleted from the server"
+		return a
+	}
+	if err := sendsGate(d, generation)(); err != nil {
+		a.Status, a.Detail = "skipped", startedOverText(err, "uninstall")+": nothing is deleted on "+cfg.Server.URL
+		return a
+	}
+	ctx, cancel := context.WithTimeout(ctx, uninstallShareBudget)
+	defer cancel()
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, uninstallShareBudget)
+	if err == nil {
+		err = retain.DeleteControlDocument(ctx, cl, cfg.Server.Bank, id)
+	}
+	if err != nil {
+		a.Status, a.Detail = "kept", "this machine's daily figures ("+id+") stay on the server, "+strings.Join(strings.Fields(errMessage(err)), " ")+": the other machines ignore them after 30 days"
+		return a
+	}
+	a.Status, a.Detail = "done", "this machine's daily figures ("+id+") deleted from the server"
 	return a
 }
 
