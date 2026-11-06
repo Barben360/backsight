@@ -347,7 +347,7 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 		if wk.complete && wk.den != nil {
 			p.Num, p.Den = i64(wk.num), wk.den
 			if *wk.den >= int64(minYieldN()) && !withheld {
-				p.Value = ptr(float64(wk.num) / float64(*wk.den))
+				p.Value = ratioAtMostOne(wk.num, *wk.den) // a forgotten memory can still be credited
 				lo, hi := Wilson(wk.num, *wk.den)
 				p.CI = &[2]float64{lo, hi}
 			}

@@ -257,7 +257,7 @@ func compareOf(units []cmpUnit, a, b, measure string, loc *time.Location) Compar
 		c.CI = ci
 		if c.RawA.Den > 0 && c.RawB.Den > 0 {
 			rawDiff := float64(c.RawB.Num)/float64(c.RawB.Den) - float64(c.RawA.Num)/float64(c.RawA.Den)
-			c.RawDisagrees = sign(rawDiff) != sign(d)
+			c.RawDisagrees = sign(rawDiff) != 0 && sign(d) != 0 && sign(rawDiff) != sign(d) // 0 is no direction
 		}
 		return c
 	}

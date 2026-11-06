@@ -233,6 +233,26 @@ func TestYieldFourteenOfFortyFive(t *testing.T) {
 	}
 }
 
+// TestYieldShareIsAtMostOne: a memory the server's series no longer counts
+// (forgotten) can still be credited, so the week's numerator can pass its
+// denominator: the share stops at 100 %, as its interval does.
+func TestYieldShareIsAtMostOne(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays(ydWeek, 35)
+	x.ydListed()
+	x.ydUsedMemories("o", 40)
+	m := yieldOf(x, x.query(90))
+	p := weekOf(t, m, ydWeek)
+	if p.Num == nil || p.Den == nil || *p.Num != 40 || *p.Den != 35 {
+		t.Fatalf("week %v/%v, want 40/35", p.Num, p.Den)
+	}
+	wantFloat(t, "week value", p.Value, 1)
+	wantFloat(t, "value", m.Value, 1)
+	if p.CI == nil || p.CI[1] > 1 {
+		t.Errorf("interval %v", p.CI)
+	}
+}
+
 func TestYieldWeekWithNoMemories(t *testing.T) {
 	x := ydFx(t)
 	x.ydDays("2026-09-14", 0)
