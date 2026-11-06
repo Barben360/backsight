@@ -8,16 +8,17 @@ import (
 	"unicode/utf8"
 )
 
-// No free text reaches the index. Three guards stand between a line's
+// No free text reaches the index. Four guards stand between a line's
 // strings and a column:
 //   - closed: a reason, status or kind that could carry text keeps one of
 //     the values the code emits, else "other";
 //   - shape: an enum-like value the code may extend (a hook, a job, a
 //     language) keeps a short lower-case token, else "other", so a value
 //     emitted tomorrow is not lost;
-//   - name: an id, session, project, document, version or tool name keeps
+//   - name: a project, document, version or tool name keeps
 //     valid UTF-8 of at most nameMax bytes without a control character,
-//     else NULL.
+//     else NULL;
+//   - id: a session or memory id is a name without whitespace too.
 // An empty string is no value: NULL.
 
 // other replaces a value outside its closed set or shape.
@@ -104,6 +105,20 @@ func nameOK(s string) bool {
 		return false
 	}
 	return !strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// idOK: a name without whitespace, for a session or memory id (never
+// prose). A project, document or tool name may hold spaces: nameOK.
+func idOK(s string) bool {
+	return nameOK(s) && !strings.ContainsFunc(s, unicode.IsSpace)
+}
+
+// idValue is s when it is an id, nil otherwise.
+func idValue(s string) any {
+	if !idOK(s) {
+		return nil
+	}
+	return s
 }
 
 // nameValue is s when it is a valid name, nil otherwise.

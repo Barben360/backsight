@@ -165,7 +165,7 @@ func (ix *Index) mirrorLedger(ctx context.Context) (sum string, good bool, err e
 }
 
 // replaceLedger empties the ledger table and inserts every entry whose id
-// is a name, without the hiding's verdict and note.
+// is an id (a name without whitespace), without the hiding's verdict and note.
 func replaceLedger(ctx context.Context, tx *sql.Tx, l feedback.Ledger) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM ledger`); err != nil {
 		return err
@@ -179,7 +179,7 @@ func replaceLedger(ctx context.Context, tx *sql.Tx, l feedback.Ledger) error {
 	defer func() { _ = st.Close() }()
 	ids := make([]string, 0, len(l.Memories))
 	for id := range l.Memories {
-		if nameOK(id) {
+		if idOK(id) {
 			ids = append(ids, id)
 		}
 	}
