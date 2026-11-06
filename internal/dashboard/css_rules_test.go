@@ -126,7 +126,10 @@ func touchSelectors(t *testing.T, always bool) []string {
 func TestTouchTargetsUnder900(t *testing.T) {
 	got := touchSelectors(t, false)
 	for _, want := range []string{".btn", ".copy", "details.cli > summary", ".seg a", "details.info > summary", ".badge", ".mchip", ".tabs a",
-		"details.why > summary", ".idc", ".menu > summary", ".nav a"} {
+		"details.why > summary", ".idc", ".menu > summary", ".nav a",
+		// The added controls: the custom window's summary and date fields, the calendar's days, the
+		// shortcuts' button, the fold of the sessions never turned into memories.
+		".seg details.wpick > summary", ".field input", ".field select", "a.hm-c", ".btn.keyhint-btn", "details.never > summary"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("under 900 px, %q has no min-height: var(--touch) (have %q)", want, got)
 		}
@@ -199,6 +202,77 @@ func inRunningText(a *node) bool {
 // touchExempt are the controls that are not a target of their own and need
 // no rule: none today.
 var touchExempt = map[string]bool{}
+
+// TestDensityKeepsTouchTargets: the compact density tightens spacing, never a control. The token that
+// sizes a target is not redefined by it, none of its rules sets the height of a link, button, summary or
+// field, and every control on a compact page still has its 40 px rule under 900 px.
+func TestDensityKeepsTouchTargets(t *testing.T) {
+	tokens, err := assetFS.ReadFile("assets/tokens.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`--touch:\s*(\d+)px`).FindStringSubmatch(string(tokens))
+	if m == nil {
+		t.Fatal("tokens.css defines no --touch in px")
+	}
+	if px, _ := strconv.Atoi(m[1]); px < 40 {
+		t.Errorf("--touch is %d px, want at least 40", px)
+	}
+	var compact []cssRule
+	for _, r := range cssRules(dashboardCSS(t)) {
+		for _, sel := range r.Sel {
+			if strings.Contains(sel, "d-compact") {
+				compact = append(compact, r)
+				break
+			}
+		}
+	}
+	if len(compact) < 5 {
+		t.Fatalf("%d compact rules read from the stylesheet", len(compact))
+	}
+	for _, r := range compact {
+		if regexp.MustCompile(`--touch\s*:`).MatchString(r.Body) {
+			t.Errorf("%q redefines --touch", r.Sel)
+		}
+	}
+	pages, controls := 0, 0
+	all := touchSelectors(t, true)
+	for _, p := range allA11yPages(t) {
+		if len(p.Doc.find(".page.d-compact")) == 0 {
+			continue
+		}
+		pages++
+		walk(p.Doc, func(n *node) {
+			control := n.Name == "a" && n.has("href") || n.Name == "button" || n.Name == "summary" || n.Name == "input" || n.Name == "select"
+			if !control || n.Name == "input" && n.attr("type") == "hidden" {
+				return
+			}
+			controls++
+			for _, r := range compact {
+				if !r.declStarts("min-height", "") && !r.declStarts("height", "") && !r.declStarts("max-height", "") {
+					continue
+				}
+				for _, s := range r.Sel {
+					if selMatch(n, s) {
+						t.Errorf("%s: %s %q (line %d) is sized by the compact rule %q", p.Name, n.Name, n.attr("class"), n.line, s)
+					}
+				}
+			}
+			if n.Name == "a" && n.attr("class") == "" && inRunningText(n) {
+				return
+			}
+			for _, s := range all {
+				if selMatch(n, s) {
+					return
+				}
+			}
+			t.Errorf("%s: %s %q (line %d) has no touch-target rule under 900 px", p.Name, n.Name, n.attr("class"), n.line)
+		})
+	}
+	if pages < 16 || controls < 500 {
+		t.Errorf("the compact pages are %d with %d controls: the check sees nothing", pages, controls)
+	}
+}
 
 func TestFocusIsVisible(t *testing.T) {
 	css := dashboardCSS(t)
@@ -297,6 +371,11 @@ func TestForcedColors(t *testing.T) {
 		{".v-ico", "background", "CanvasText"},
 		{".chart svg rect.seg", "stroke", "CanvasText"},
 		{`.chart svg path.seg[class*="f-"]`, "stroke", "CanvasText"},
+		{".hm-c", "forced-color-adjust", "none"},
+		{".hm-c.q0", "border-color", "CanvasText"},
+		{".hm-c.none", "border-color", "CanvasText"},
+		{".chart .norun", "stroke", "CanvasText"},
+		{".chart .gap-band", "fill", "Canvas"},
 	} {
 		if !has(c[0], c[1], c[2]) {
 			t.Errorf("forced-colors: %q lacks %s: %s", c[0], c[1], c[2])
@@ -306,7 +385,7 @@ func TestForcedColors(t *testing.T) {
 	for _, r := range rules {
 		if r.At == "@media (forced-colors: active)" && r.declStarts("forced-color-adjust", "none") && !r.declStarts("background", "CanvasText") {
 			for _, s := range r.Sel {
-				if !strings.HasPrefix(s, ".chart svg") && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
+				if !strings.HasPrefix(s, ".chart svg") && s != ".hm-c" && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
 					t.Errorf("forced-colors: %q switches forced colours off", s)
 				}
 			}
@@ -450,4 +529,27 @@ func TestAttentionPillDoesNotStretch(t *testing.T) {
 		}
 	}
 	t.Error(".att-item > .pill has no align-self: start")
+}
+
+// A <dialog> is hidden by the browser's own rule only while nothing of the
+// page sets its display: .keys sets flex for the open list, so a rule must
+// hide it again while it is closed, or the list shows after the footer.
+func TestClosedKeysDialogStaysHidden(t *testing.T) {
+	var flex, hidden bool
+	for _, r := range cssRules(dashboardCSS(t)) {
+		for _, s := range r.Sel {
+			if s == ".keys" && r.declStarts("display", "flex") {
+				flex = true
+			}
+			if s == "dialog.keys:not([open])" && r.At == "" && r.declStarts("display", "none") {
+				hidden = true
+			}
+		}
+	}
+	if !flex {
+		t.Fatal("no .keys rule with display: flex: this guard is stale")
+	}
+	if !hidden {
+		t.Error("the closed shortcuts dialog is not hidden: .keys { display: flex } shows it inline")
+	}
 }

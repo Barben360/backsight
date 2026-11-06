@@ -2,11 +2,14 @@
 {{template "head" .}}{{template "top" .}}
 
 {{/* widget: days. Reads .V.days.Tables.Days (Day, Prompts, Recalls, PromptsWithMemory, UsedTurns, Wrong, ContextChars, Sessions, SentOK, SentFailed) and .Page, through dayspage (DaysPage: Head, Note, Rows; DayLine: Day, Sessions, Prompts, Lookups, Got, Used, Wrong, Context, Sent, Failed, FailedClass). */}}
+{{/* widget: days calendar, as on the Overview: .V.days.Tables.Calendar through calendar (CalendarCard) beside the table's own window. */}}
+{{with calendar (index .V "days") (index .V "days").Window .P .HM .Frame.Path .Frame.Window}}{{template "calendarcard" .}}{{end}}
 {{with dayspage .}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Day</th><th class="r">Sessions</th><th class="r">Prompts</th><th class="r">Memory lookups</th><th class="r">Got memory</th><th class="r">Used</th><th class="r">Wrong</th><th class="r">Context added</th><th class="r">Sent</th><th class="r">Send failed</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{if .Day.Href}}<a href="{{.Day.Href}}">{{.Day.Text}}</a>{{else}}{{.Day.Text}}{{end}}</td><td class="r">{{.Sessions}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Lookups}}</td><td class="r">{{.Got}}</td><td class="r">{{.Used}}</td><td class="r">{{.Wrong}}</td><td class="r">{{.Context}}</td><td class="r">{{.Sent}}</td><td class="r">{{if .FailedClass}}<span class="st {{.FailedClass}}">{{.Failed}}</span>{{else}}{{.Failed}}{{end}}</td></tr>
 {{end}}</tbody></table></div>
-{{end}}{{template "card-close" .Head}}{{end}}
+{{end}}<p class="xs muted">Days with nothing recorded are left out of this list; the calendar shows them as dashed squares.</p>
+{{template "card-close" .Head}}{{end}}
 {{template "foot" .}}

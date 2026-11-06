@@ -18,6 +18,7 @@ type PipelinePage struct {
 	Backlog BacklogCard
 	Queue   QueueCard
 	Delay   Card
+	Funnel  FunnelCard
 	Hooks   HooksCard
 	Jobs    JobsCard
 }
@@ -189,6 +190,7 @@ func pipelineOf(d PageData) PipelinePage {
 		}
 	}
 
+	p.Funnel = d.funnelOf(r)
 	p.Hooks = d.hooksOf(hooks)
 
 	h = d.head(jobs)

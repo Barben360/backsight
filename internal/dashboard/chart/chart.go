@@ -20,6 +20,13 @@ const (
 	FocusMax = 100
 )
 
+// HoverMax is the most positions of a line or stacked chart that each get a hover rect with its sentence.
+// Beyond it the plot has none (and no dots on a line: they would overlap into the line): the lines and
+// bars are the same, the figure keeps its name, and the table lists the days. A rect with its sentence
+// costs about 130 to 200 bytes, a point dot 62: on 395 days of five charts they were over half of a page.
+// A variable so a test can ask for the sentences of a long series.
+var HoverMax = 200
+
 const dash = "—"
 
 // Num formats a value for people.
@@ -47,7 +54,11 @@ var Classes = []string{
 	"seg", "seg-fine", "hatch-ln", "val",
 	"f-used", "f-ignored", "f-undeclared", "f-shown", "f-pending", "f-summary", "f-about", "f-session",
 	"f-ok", "f-queued", "f-aside", "f-failed", "f-neutral", "f-seq1", "f-seq2", "f-seq3",
-	"mkp", "mk-pend", "lbl", "sw-dash", "mk", "sr-only",
+	"mkp", "mk-pend", "f-st-ok", "f-st-watch", "f-st-bad", "norun",
+	"hm", "hm-box", "hm-wrap", "hm-months", "hm-w1", "hm-w2", "hm-w3", "hm-w4", "hm-w5", "hm-w6", "hm-dl", "hm-dh", "hm-wk", "hm-c", "hm-tip", "xs",
+	"q0", "q1", "q2", "q3", "q4", "none", "pad", "today", "inwin", "hm-old", "hm-legend", "ramp", "lbl", "sw-dash", "mk", "sr-only",
+	"rel-mk", "cfg-mk", "mk-t", "sw-rel", "sw-cfg", "gap-band", "src-mk", "inc", "muted",
+	"rng", "rng-p50", "ci-ln", "ci-pt", "ci-pool", "zero", "few-t",
 }
 
 // known keeps the tokens of a caller's class list that Classes defines.
@@ -100,6 +111,7 @@ type tableData struct {
 	rows [][]string
 	more string // the command listing every row, shown under a capped table
 	text bool   // every column is text: none is right-aligned
+	foot string // a sentence under the table; "" none
 }
 
 // figure wraps a plot, its legend and its table fallback. Only the plot
@@ -160,6 +172,9 @@ func figureLegend(label string, sz Size, focusable bool, svg string, legend stri
 		b.WriteString(`</tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)
+	if t.foot != "" {
+		b.WriteString(`<p class="tbl-more">` + esc(t.foot) + `</p>`)
+	}
 	if len(t.rows) > MaxTableRows {
 		b.WriteString(`<p class="tbl-more">Showing the latest ` + strconv.Itoa(MaxTableRows) + ` of ` +
 			strconv.Itoa(len(t.rows)) + ` rows.`)

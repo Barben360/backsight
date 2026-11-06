@@ -21,19 +21,25 @@ import (
 
 // The acceptance sweeps read every page route on 13 months of history at
 // low volume: sizes depend on positions and rows, not on volume.
-var acceptanceSpec = indexgen.Spec{Months: 13, TelemetryPerYear: 20_000, JournalPerYear: 3_000, Memories: 500, Seed: 2}
+var acceptanceSpec = indexgen.Spec{Months: 13, TelemetryPerYear: 20_000, JournalPerYear: 3_000, Memories: 500, Seed: 2, Collection: true}
 
 const (
-	sizeCap       = 307_200 // 300 KB
-	longTurns     = 400
-	hotShows      = 600
-	year365Since  = "2025-10-30"
-	year365Until  = "2026-10-30"
+	sizeCap      = 307_200 // 300 KB
+	longTurns    = 400
+	hotShows     = 600
+	year365Since = "2025-10-30"
+	year365Until = "2026-10-30"
+	// The longest custom window the picker takes on the generated clock (30 Oct 2026): from the first day
+	// of the month 12 months back to tomorrow, 395 days.
+	longSince = "2025-10-01"
+	longUntil = "2026-10-31"
+	// A comparison of the history's two versions (the long session's is the newer).
+	compareQuery  = "compare=v0.1.17,v0.1.18"
 	sweepWindow90 = "days=90"
 )
 
 var (
-	charted   = map[string]bool{"overview": true, "quality": true, "cost": true, "bank": true, "pipeline": true, "projects": true, "project": true, "day": true, "memory": true}
+	charted   = map[string]bool{"overview": true, "quality": true, "cost": true, "bank": true, "pipeline": true, "system": true, "projects": true, "project": true, "day": true, "memory": true}
 	devCharts = map[string]bool{"overview": true, "quality": true, "cost": true}
 	// devPages are the pages whose body changes with the developer menu, and one list for the menu alone.
 	devPages = map[string]bool{"overview": true, "quality": true, "cost": true, "bank": true, "pipeline": true, "system": true, "memory": true, "sessions": true}
@@ -46,7 +52,7 @@ type accPage struct {
 	Name string // what the failure message calls it
 	Kind string // the route's Page ("overview", "quality", ..., "memory"), "text" for the text page, "scenario" for a drawn scenario
 	Dev  bool
-	Set  string // "90" (days=90), "365" (since/until), "default" (no window), "all" (the memory with limit=500), "scenario"
+	Set  string // "90" (days=90), "365" (since/until), "long" (the longest custom window, shortcuts on), "compare" (two versions), "default" (no window), "all" (the memory with limit=500), "scenario"
 	Body string
 }
 
@@ -79,8 +85,10 @@ func scenarioPage(t *testing.T, s scenario) (string, error) {
 // allAcceptancePages is every page route served on the 13 months of
 // history, with the longest session and the hottest memory appended: at
 // days=90 and at a 365-day since/until window (each with the developer menu
-// off and on), at the defaults with it off, the hot memory with limit=500,
-// the text page, and the Overview on each scenario. Rendered once.
+// off and on), at the longest custom window the picker takes (with the
+// shortcuts on, the developer menu off and, on the pages it changes, on), at
+// the defaults with it off, the hot memory with limit=500, a comparison of
+// two versions, the text page, and the Overview on each scenario. Rendered once.
 func allAcceptancePages(t *testing.T) []accPage {
 	t.Helper()
 	if raceEnabled {
@@ -96,9 +104,13 @@ func allAcceptancePages(t *testing.T) []accPage {
 		h := dataHarness(t)
 		long := indexgen.AppendLongSession(t, h.dirs.State, longTurns)
 		hot := indexgen.AppendHotMemory(t, h.dirs.State, hotShows)
-		ck := cookieHdr(h.login())
-		get := func(p string, want int) (string, bool) {
-			resp := h.do("GET", p, ck...)
+		ck0 := h.login()
+		ck := cookieHdr(ck0)
+		get := func(p string, want int, hdr ...string) (string, bool) {
+			if len(hdr) == 0 {
+				hdr = ck
+			}
+			resp := h.do("GET", p, hdr...)
 			b := body(t, resp)
 			if resp.StatusCode != want {
 				accFail = append(accFail, fmt.Sprintf("GET %s: %d, want %d", p, resp.StatusCode, want))
@@ -161,6 +173,31 @@ func allAcceptancePages(t *testing.T) []accPage {
 					if b, ok := get(path+"?"+q, 200); ok {
 						accPages = append(accPages, accPage{Name: path + "?" + q, Kind: r.Page, Dev: dev, Set: set.name, Body: b})
 					}
+				}
+			}
+			// Every page at the longest window the picker allows, with the shortcuts on: the size cap's
+			// worst case. The detail pages take the window like the lists.
+			for _, dev := range []bool{false, true} {
+				if dev && !devPages[r.Page] {
+					continue
+				}
+				q := "since=" + longSince + "&until=" + longUntil + "&dev=" + map[bool]string{false: "0", true: "1"}[dev]
+				if b, ok := get(path+"?"+q, 200, withPrefs(ck0, "v1.system.0.0.comfortable.1")...); ok {
+					accPages = append(accPages, accPage{Name: path + "?" + q, Kind: r.Page, Dev: dev, Set: "long", Body: b})
+				}
+			}
+			if r.Page == "day" {
+				// The day the long session ran, on which the version changes: the markers card.
+				d := "/days/" + indexgen.End().AddDate(0, 0, -1).Format("2006-01-02")
+				q := sweepWindow90 + "&dev=0"
+				if b, ok := get(d+"?"+q, 200); ok {
+					accPages = append(accPages, accPage{Name: d + "?" + q, Kind: "day", Set: "markers", Body: b})
+				}
+			}
+			if r.Page == "releases" {
+				q := sweepWindow90 + "&" + compareQuery + "&dev=0"
+				if b, ok := get(path+"?"+q, 200); ok {
+					accPages = append(accPages, accPage{Name: path + "?" + q, Kind: "releases", Set: "compare", Body: b})
 				}
 			}
 			if r.Page == "memory" {
@@ -236,10 +273,11 @@ func pageOf(t *testing.T, kind, set string, dev bool) accPage {
 }
 
 // wantPages is the size of the set: 16 routes at 90 days, dev on for the pages that change with it;
-// the charting pages at 365 days (dev on for three); Overview and System at the defaults; the memory
-// with limit=500; the text page; two failure pages, /prefs and the sign-in page; the scenarios.
+// the charting pages at 365 days (dev on for three); the 16 routes at the longest window, dev on for the
+// pages that change with it; Overview and System at the defaults; the memory with limit=500; a
+// comparison; the text page; two failure pages, /prefs and the sign-in page; the scenarios.
 func wantPages() int {
-	return 16 + len(devPages) + len(charted) + len(devCharts) + len(defaultPages) + 1 + 1 + 2 + 2 + len(scenarios)
+	return 16 + len(devPages) + len(charted) + len(devCharts) + 16 + len(devPages) + len(defaultPages) + 1 + 1 + 1 + 1 + 2 + 2 + len(scenarios)
 }
 
 func TestAcceptancePageSet(t *testing.T) {
@@ -251,8 +289,13 @@ func TestAcceptancePageSet(t *testing.T) {
 	if n := strings.Count(pageOf(t, "memory", "all", false).Body, "<title>"); n < 500 {
 		t.Errorf("the hot memory's page with limit=500 draws %d marks, want 500 shows", n)
 	}
-	if n := strings.Count(pageOf(t, "quality", "365", false).Body, "<title>"); n < 365 {
-		t.Errorf("the quality page over 365 days draws %d marks", n)
+	// A year of days is drawn: a bar for each day of the outcomes chart (the hover sentences stop at
+	// chart.HoverMax positions, the bars do not).
+	q365 := parseHTML(t, pageOf(t, "quality", "365", false).Body)
+	if card := q365.first("section.card[aria-labelledby=w-outcomes]"); card == nil {
+		t.Error("no outcomes card on the quality page over 365 days")
+	} else if n := len(card.find("figure.chart rect.seg")); n < 365 {
+		t.Errorf("the outcomes chart over 365 days draws %d bars", n)
 	}
 }
 
@@ -262,19 +305,23 @@ var scriptEl = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`)
 // mustShow are the ids (heading ids of the cards and tiles) a page shows.
 var mustShow = map[string][]string{
 	"overview": {"w-verdict", "w-attention", "w-lately", "w-glance", "w-recall-hit_rate", "w-used-turn_rate", "w-verdict-wrong_rate",
-		"w-context-per_session", "w-recall-latency", "w-pipeline-flow"},
+		"w-context-per_session", "w-recall-latency", "w-pipeline-flow", "w-helped", "w-calendar"},
 	"quality":  {"w-used-turn_rate", "w-outcomes", "w-reported", "w-recall-hit_rate", "w-recall-empty_reasons", "w-search-rate"},
-	"cost":     {"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens"},
+	"cost":     {"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens", "w-memory-yield"},
 	"bank":     {"w-bank-size", "w-bank-growth", "w-bank-by_project", "w-bank-consolidation", "w-notes-stored", "w-bank-churn", "w-imports-sent", "w-review"},
-	"pipeline": {"w-pipeline-flow", "w-local-backlog", "w-server-queue", "w-server-extraction_delay", "w-hooks-failures", "w-jobs-last_run"},
-	"system":   {"w-server-reach", "w-this-pc", "w-attention", "w-doctor-check"},
-	"releases": {"w-releases"}, "defs": {"w-defs"},
-	"projects": {"w-projects"}, "sessions": {"w-sessions"}, "memories": {"w-memories"}, "days": {"w-days"},
+	"pipeline": {"w-pipeline-flow", "w-local-backlog", "w-server-queue", "w-server-extraction_delay", "w-hooks-failures", "w-jobs-last_run", "w-pipeline-time_to_recall"},
+	"system":   {"w-server-reach", "w-this-pc", "w-attention", "w-doctor-check", "w-doctor-history", "w-secrets-suspects"},
+	"releases": {"w-releases", "w-releases-compare"}, "defs": {"w-defs"},
+	"projects": {"w-projects"}, "sessions": {"w-sessions"}, "memories": {"w-memories"}, "days": {"w-days", "w-calendar"},
 	"project": {"w-recall-hit_rate", "w-used-turn_rate", "w-verdict-wrong_rate", "w-context-per_session", "w-recall-latency", "w-pipeline-flow"},
 	"day":     {"w-recall-hit_rate", "w-used-turn_rate", "w-verdict-wrong_rate", "w-context-per_session", "w-recall-latency", "w-pipeline-flow"},
 	"session": {"w-session-turns"},
-	"memory":  {"w-memory-text", "w-memory-strip", "w-memory-rank", "w-memory-do"},
+	"memory":  {"w-memory-text", "w-memory-strip", "w-memory-rank", "w-memory-do", "w-memory-origin"},
 }
+
+// mustShowIn are the ids a kind's set of pages shows besides its kind's: the day the version changed on holds
+// the markers.
+var mustShowIn = map[string][]string{"day/markers": {"w-markers"}}
 
 // listTables are the pages whose widget is a table.
 var listTables = []string{"projects", "sessions", "memories", "days"}
@@ -282,7 +329,7 @@ var listTables = []string{"projects", "sessions", "memories", "days"}
 var onAttr = regexp.MustCompile(`(?i)<[^>]*[\s/"']on[a-z]+\s*=`)
 
 var (
-	detailsClasses = []string{"menu", "navmenu", "info", "cli", "tabs", "tblfb"}
+	detailsClasses = []string{"menu", "navmenu", "info", "cli", "tabs", "tblfb", "wpick", "summary-text", "never"}
 	popClasses     = []string{"pop", "menu-pop"}
 )
 
@@ -301,7 +348,7 @@ func TestPagesWorkWithoutScripts(t *testing.T) {
 				t.Errorf("a script that is not the copy script file: %.80s", s)
 			}
 		}
-		ids := mustShow[p.Kind]
+		ids := append(slices.Clone(mustShow[p.Kind]), mustShowIn[p.Kind+"/"+p.Set]...)
 		if p.Kind == "scenario" {
 			ids = mustShow["overview"][:4]
 		}
@@ -334,6 +381,23 @@ func TestPagesWorkWithoutScripts(t *testing.T) {
 				t.Errorf("a copy button that shows without a script: %q", b.text())
 			}
 		}
+		// The shortcuts' button and dialog are the script's too: the button hidden, the dialog closed.
+		for _, b := range doc.find("button.keyhint-btn") {
+			if !b.has("hidden") {
+				t.Errorf("a shortcuts button that shows without a script: %q", b.text())
+			}
+		}
+		for _, d := range doc.find("dialog") {
+			if d.has("open") {
+				t.Error("a dialog drawn open: only a script can close it")
+			}
+		}
+		if p.Kind == "overview" || p.Kind == "scenario" {
+			checkSummaryText(t, doc)
+		}
+		if p.Set == "compare" && !strings.Contains(stripped, "Comparing v0.1.17 with v0.1.18") {
+			t.Error("no result line of the comparison without scripts")
+		}
 		// Everything that opens does it without a script: a <details>.
 		for _, class := range detailsClasses {
 			for _, n := range doc.find("." + class) {
@@ -360,6 +424,31 @@ func TestPagesWorkWithoutScripts(t *testing.T) {
 	}
 }
 
+// checkSummaryText is the Overview's Copy summary: the button hidden, its text the one the page prints
+// under "Summary as text", so a reader without a script has the same words.
+func checkSummaryText(t *testing.T, doc *node) {
+	t.Helper()
+	var btns []*node
+	for _, b := range doc.find("button.copy") {
+		if b.has("data-copy") {
+			btns = append(btns, b)
+		}
+	}
+	if len(btns) != 1 || !btns[0].has("hidden") || !strings.HasPrefix(btns[0].attr("aria-label"), "Copy summary") {
+		t.Errorf("%d summary buttons (hidden %v), want one hidden button named Copy summary", len(btns), len(btns) > 0 && btns[0].has("hidden"))
+		return
+	}
+	pre := doc.find("details.summary-text pre code")
+	if len(pre) != 1 {
+		t.Errorf("%d summary texts, want one under Summary as text", len(pre))
+		return
+	}
+	// The parsed text has its white space collapsed: compare the words.
+	if got, want := strings.Join(strings.Fields(btns[0].attr("data-copy")), " "), strings.Join(strings.Fields(pre[0].text()), " "); got == "" || got != want {
+		t.Errorf("Copy summary copies %q, the page prints %q", got, want)
+	}
+}
+
 func TestEveryCopyButtonIsHidden(t *testing.T) {
 	buttons := map[string]int{}
 	eachAcceptancePage(t, func(p accPage) bool { return p.Kind != "scenario" && p.Set != "365" }, func(t *testing.T, p accPage) {
@@ -373,12 +462,18 @@ func TestEveryCopyButtonIsHidden(t *testing.T) {
 				t.Errorf("a copy button without hidden: %q", b.text())
 			}
 		}
+		for _, b := range doc.find("button.keyhint-btn") {
+			buttons["keyhint"]++
+			if !b.has("hidden") {
+				t.Errorf("a shortcuts button without hidden: %q", b.text())
+			}
+		}
 		// A copy button is a button of class copy; the page holds no other way to show one.
 		if strings.Count(p.Body, `class="copy"`) != len(doc.find("button.copy")) {
 			t.Errorf("%d class=copy attributes, %d button.copy", strings.Count(p.Body, `class="copy"`), len(doc.find("button.copy")))
 		}
 	})
-	for _, kind := range []string{"overview", "quality", "cost", "bank", "pipeline", "system", "memory"} {
+	for _, kind := range []string{"overview", "quality", "cost", "bank", "pipeline", "system", "memory", "keyhint"} {
 		if buttons[kind] == 0 {
 			t.Errorf("the %s pages hold no copy button: the check sees nothing", kind)
 		}
@@ -391,7 +486,9 @@ func TestPagesUnderSizeCap(t *testing.T) {
 		n    int
 	}
 	var all []sized
-	eachAcceptancePage(t, func(p accPage) bool { return p.Set == "90" || p.Set == "all" }, func(t *testing.T, p accPage) {
+	eachAcceptancePage(t, func(p accPage) bool {
+		return p.Set == "90" || p.Set == "365" || p.Set == "all" || p.Set == "long" || p.Set == "compare" || p.Set == "markers"
+	}, func(t *testing.T, p accPage) {
 		all = append(all, sized{p.Name, len(p.Body)})
 		if len(p.Body) > sizeCap {
 			t.Errorf("%d bytes, cap %d", len(p.Body), sizeCap)
@@ -402,8 +499,16 @@ func TestPagesUnderSizeCap(t *testing.T) {
 		t.Logf("%7d bytes  %s", s.n, s.name)
 	}
 	// The pages the cap is for are in the set.
-	for _, c := range []struct{ kind, set string }{{"memory", "all"}, {"session", "90"}, {"quality", "90"}} {
+	for _, c := range []struct{ kind, set string }{{"memory", "all"}, {"session", "90"}, {"quality", "90"}, {"overview", "long"}, {"system", "long"}, {"cost", "long"}, {"releases", "compare"}, {"day", "markers"}} {
 		pageOf(t, c.kind, c.set, false)
+	}
+	// The Overview and Days pages hold the 13 months of the calendar whatever their window: a week a column,
+	// seven days each, from the Monday on or before a year and a month back.
+	for _, c := range []struct{ kind, set string }{{"overview", "90"}, {"overview", "long"}, {"days", "90"}, {"days", "long"}} {
+		doc := parseHTML(t, pageOf(t, c.kind, c.set, false).Body)
+		if n := len(doc.find("a.hm-c")); n < 13*28 || n > 14*31+7 {
+			t.Errorf("%s (%s) draws %d calendar days, want the 13 months", c.kind, c.set, n)
+		}
 	}
 }
 
@@ -423,6 +528,27 @@ func TestNoChartOverMaxMarks(t *testing.T) {
 	})
 	if charts == 0 {
 		t.Error("no chart on any page: the check sees nothing")
+	}
+	// The health-check strip has a row for every check and a position for every day: at a year, and at the
+	// longest custom window, it merges days into buckets rather than going over the cap or dropping rows.
+	for _, set := range []string{"365", "long"} {
+		doc := parseHTML(t, pageOf(t, "system", set, false).Body)
+		h := doc.first("#w-doctor-history")
+		for h != nil && h.Name != "section" {
+			h = h.Parent
+		}
+		if h == nil {
+			t.Fatalf("no health-check card on the system page (%s)", set)
+		}
+		figs := h.find("figure.chart")
+		if len(figs) != 1 {
+			t.Fatalf("%d charts in the health-check card (%s), want its strip", len(figs), set)
+		}
+		marks := len(figs[0].find("title"))
+		rows := len(figs[0].find("text.lbl"))
+		if marks == 0 || marks > chart.MaxMarks || rows < 20 || marks < rows*10 {
+			t.Errorf("the health-check strip (%s) draws %d marks on %d rows, want 10 or more a row and at most %d", set, marks, rows, chart.MaxMarks)
+		}
 	}
 }
 
@@ -447,9 +573,15 @@ func termAt(text, term string) bool {
 }
 
 func TestNoInternalTermsOnPages(t *testing.T) {
+	read := map[string]int{} // the new cards the sweep reads
 	eachAcceptancePage(t, func(p accPage) bool {
 		return !p.Dev && p.Kind != "text" && p.Kind != "releases" && p.Kind != "defs" && p.Set != "365"
 	}, func(t *testing.T, p accPage) {
+		for _, id := range newCardIDs {
+			if strings.Contains(p.Body, ` id="`+id+`"`) {
+				read[id]++
+			}
+		}
 		text := strings.ToLower(spoken(html.UnescapeString(p.Body)))
 		for _, term := range internalTerms {
 			if termAt(text, term) {
@@ -458,7 +590,16 @@ func TestNoInternalTermsOnPages(t *testing.T) {
 			}
 		}
 	})
+	for _, id := range newCardIDs {
+		if read[id] == 0 {
+			t.Errorf("no page without developer mode draws %s: the check sees nothing", id)
+		}
+	}
 }
+
+// newCardIDs are the cards added after block 5 that a person reads (not the developer ones, nor the
+// comparison, which sits on the Releases page where the terms are allowed).
+var newCardIDs = []string{"w-helped", "w-calendar", "w-markers", "w-pipeline-time_to_recall", "w-doctor-history", "w-secrets-suspects", "w-memory-yield", "w-memory-origin"}
 
 func TestTermMatchingStartsAtAWord(t *testing.T) {
 	for _, c := range []struct {
@@ -530,17 +671,23 @@ func TestDeveloperMetricsOnlyInDeveloperMode(t *testing.T) {
 			}
 		}
 	}
-	// The dashboard pages draw these developer metrics later; empty this set
-	// when they do. A skipped id must be a developer catalog row.
-	notDrawnYet := map[string]bool{"bank.active_share": true, "shows.concentration": true, "injection.contradicted": true, "boost.set_changed": true}
-	for id := range notDrawnYet {
-		if d, ok := metrics.DefOf(id); !ok || !d.Dev {
-			t.Errorf("%s is in the not-drawn-yet set but is not a developer catalog row", id)
+	// Every developer metric of the catalog is drawn by a developer page.
+	for _, d := range dev {
+		if !shown[d.ID] {
+			t.Errorf("no developer page shows %s", d.ID)
 		}
 	}
-	for _, d := range dev {
-		if !shown[d.ID] && !notDrawnYet[d.ID] {
-			t.Errorf("no developer page shows %s", d.ID)
+	// The developer cards: on the Bank and Quality pages with the menu on, on no page without it, whatever
+	// the window (the longest custom one included).
+	devCards := map[string]string{"w-bank-active_share": "bank", "w-shows-concentration": "bank", "w-injection-contradicted": "quality", "w-boost-set_changed": "quality"}
+	for id, kind := range devCards {
+		if d := pageOf(t, kind, "90", true); !strings.Contains(d.Body, ` id="`+id+`"`) {
+			t.Errorf("the %s page in developer mode lacks %s", kind, id)
+		}
+		for _, set := range []string{"90", "long"} {
+			if p := pageOf(t, kind, set, false); strings.Contains(p.Body, id) {
+				t.Errorf("the %s page (%s) without developer mode mentions %s", kind, set, id)
+			}
 		}
 	}
 	q := pageOf(t, "quality", "90", true)
@@ -619,6 +766,12 @@ func TestEveryClassIsStyled(t *testing.T) {
 				}
 				note(c, "template "+f)
 			}
+		}
+	}
+	// The new cards draw these: the sweep above must have met them, or it checks nothing of the cards.
+	for _, c := range []string{"helped", "hm-c", "hm-legend", "funnel", "markers", "keyhint-btn", "wpick", "summary-text", "never", "keys"} {
+		if _, ok := used[c]; !ok {
+			t.Errorf("no page or template uses the class %q: the check does not see the new cards", c)
 		}
 	}
 	var missing []string

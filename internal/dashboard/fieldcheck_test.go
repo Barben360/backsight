@@ -695,7 +695,7 @@ func TestStatePageFieldsAndRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, reload := range []int{0, 2} {
-		data := fixtureData(t, pageSpec{Name: "overview", File: "overview.html", Views: []string{"overview"}}, true)
+		data := fixtureData(t, pageSpec{Name: "overview", File: "overview.html", Views: []string{"overview", "days"}}, true)
 		data.V, data.Loc, data.Frame.Scope = nil, time.UTC, nil
 		data.Frame.Reload, data.Msg = reload, "A sentence."
 		var buf bytes.Buffer

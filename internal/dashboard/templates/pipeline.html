@@ -1,7 +1,7 @@
 {{/* views: pipeline */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the cards of pipeline (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Backlog adds Rows, Oldest, OldestClass, Why; Queue adds Counts, Rows, Shown, Count, More, None; Hooks adds Rows, WindowHead; Jobs adds Rows). Reads the metrics pipeline.flow, retain.outcomes, local.backlog, server.queue, server.extraction_delay, hooks.failures, jobs.last_run, .V.pipeline.Tables.FailedOperations and .Jobs. */}}
+{{/* widgets: the cards of pipeline (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Backlog adds Rows, Oldest, OldestClass, Why; Queue adds Counts, Rows, Shown, Count, More, None; Hooks adds Rows, WindowHead; Jobs adds Rows). Funnel adds Few, Stages, Hops, Slow, Chart, Whole and Never (Title, Rows: ID, Project, Sent, State; Queue, More, Cmd). Reads the metrics pipeline.flow, retain.outcomes, local.backlog, server.queue, server.extraction_delay, pipeline.time_to_recall, hooks.failures, jobs.last_run, .V.pipeline.Tables.FailedOperations, .NeverExtracted and .Jobs. */}}
 {{with pipepage .}}{{with .Alert}}<div class="state {{.Class}}" role="status"><span class="i {{.Icon}}" aria-hidden="true"></span><span><b>{{.Lead}}</b>{{with .Rest}} {{.}}{{end}}</span></div>
 {{end}}<div class="grid-2">
 {{template "pcard" .Flow}}
@@ -28,6 +28,24 @@
 {{end}}{{template "ctail" .Card}}{{template "card-close" .Head}}{{end}}
 {{template "pcard" .Delay}}
 </div>
+{{with .Funnel}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{with .Few}}<div class="state {{.Class}}"><span class="i {{.Icon}}" aria-hidden="true"></span><span><b>{{.Lead}}</b> {{.Rest}}</span></div>
+{{end}}{{if .Stages}}{{$hops := .Hops}}<div class="funnel">
+{{range $i, $s := .Stages}}<div class="stage"><span class="lab">{{$s.Label}}</span><span class="v">{{$s.Value}}</span><span class="s">{{$s.Note}}</span></div>
+{{if lt $i 3}}{{with index $hops $i}}<div class="hopc{{if .Watch}} is-watch{{end}}"><span class="arr" aria-hidden="true">→</span><span>{{.Name}}</span><b>{{.Value}}</b><span>{{.Note}}</span>{{if .Watch}}<span class="st st-watch">watch</span>{{end}}</div>
+{{end}}{{end}}{{end}}</div>
+{{end}}{{with .Slow}}<div class="state st-watch"><span class="i i-watch" aria-hidden="true"></span><span><b>Slow to become memory:</b> 1 in 20 sessions took over {{.Took}} to be turned into memories (watch over {{.Limit}}). Usually the server's queue or its model. <code>backsight doctor</code> names the fix.</span></div>
+{{end}}{{.Chart}}
+{{with .Whole}}<p class="small sub">Whole way, from the end of a session to a memory of it being recalled: typical <b>{{.Typical}}</b>, slowest 1 in 20 <b>{{.Slowest}}</b>. Not the sum of the steps: each step is timed on its own sessions.</p>
+{{end}}{{with .Never}}<details class="never" open><summary><b>{{.Title}}</b></summary>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Session</th><th>Project</th><th>Sent</th><th>On the server</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td>{{template "projlink" .Project}}</td><td>{{template "reltime" .Sent}}</td><td>{{if .State.Class}}<span class="st {{.State.Class}}">{{.State.Word}}</span>{{else}}{{.State.Word}}{{end}}{{.State.Rest}}</td></tr>
+{{end}}</tbody></table></div>
+<p class="xs muted">A short session often holds nothing worth keeping: “no memory made” is normal. A failed task is on “{{.Queue}}”. {{if .More}}{{.More}} more{{else}}Every one{{end}}: <code>{{.Cmd}}</code>.</p>
+</details>
+{{end}}{{template "card-close" .Head}}{{end}}
 <div class="grid-2">
 {{with .Hooks}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">

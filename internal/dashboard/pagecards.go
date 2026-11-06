@@ -148,7 +148,8 @@ func labelled(v MetricView) []string {
 type QualityPage struct {
 	Used, Outcomes, Hit, Empty, Search Card
 	Reported                           ReportedCard
-	Ranking                            *Card // developer mode
+	Ranking                            *Card       // developer mode
+	Dev                                *QualityDev // developer mode
 }
 
 // ReportedCard is the table of memories reported wrong or out of date.
@@ -237,6 +238,7 @@ func qualityOf(d PageData) QualityPage {
 
 	if d.Frame.Prefs.Dev {
 		q.Ranking = d.rankingCard(r)
+		q.Dev = d.qualityDevOf(r)
 	}
 	return q
 }
@@ -326,6 +328,7 @@ type CostPage struct {
 	Strip                   []Fig
 	Context, Split, Latency Card
 	Extraction              ExtractionCard
+	Yield                   YieldCard
 	PerSession              *Card // developer mode
 }
 
@@ -427,7 +430,9 @@ func costOf(d PageData) CostPage {
 			c.Extraction.Leads = []Lead{ld}
 		}
 		c.Extraction.Extras = extrasOf(tokens, price)
-		c.Extraction.Charts = []PathChart{{HTML: extractionOf(l, d.more(), r.Tables.Extraction)}}
+		from, _ := extraAs[string](tokens.M, "record_from")
+		c.Extraction.Charts = []PathChart{{HTML: extractionChart(l, d.more(), r.Tables.Extraction, tokens.M.Series) +
+			recordBlock(tokens.M.Series, from, false)}}
 		cur, _ := price.M.Extra["currency"].(string)
 		money := func(v float64, ok bool) string {
 			if !ok {
@@ -460,6 +465,8 @@ func costOf(d PageData) CostPage {
 			c.Extraction.Total = line("all tasks", all)
 		}
 	}
+
+	c.Yield = d.yieldOf(r)
 
 	if d.Frame.Prefs.Dev {
 		v := d.view(r, "extraction.per_session")

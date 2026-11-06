@@ -1,10 +1,16 @@
 {{/* views: days */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the page of one day through daypage (DayPage: Tiles, Note, Prev, Next, Sessions; Ref: Text, Full, Href; Sessions: Head, Table, Note). Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow, and .V.days.Tables.Day.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent) and .Page. */}}
+{{/* widgets: the page of one day through daypage (DayPage: Tiles, Note, Prev, Next, Markers, Sessions; Markers: Head, Lines; MarkerLine: Kind, At, Version, Previous, Changes (Key, From, To); Ref: Text, Full, Href; Sessions: Head, Table, Note). Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow, and .V.days.Tables.Day.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent) and .Page. */}}
 {{with daypage .}}{{$pg := .}}{{if or .Prev.Href .Next.Href}}<div class="row day-nav">{{with .Prev.Href}}<a class="btn" href="{{.}}">{{$pg.Prev.Text}}</a>{{end}}{{with .Next.Href}}<a class="btn" href="{{.}}">{{$pg.Next.Text}}</a>{{end}}</div>
 {{end}}{{template "tilegroups" .Tiles}}
-<p class="small muted">{{.Note}}</p>
+{{with .Markers}}{{if .Lines}}{{template "card-open" .Head}}
+<ul class="markers">
+{{range .Lines}}{{if eq .Kind "release"}}<li><i class="sw sw-rel" aria-hidden="true"></i><span><b>New version</b> at {{template "reltime" .At}}: backsight <a href="{{.Version.Href}}">{{.Version.Text}}</a>{{if .Previous}} (was {{.Previous}}){{end}}.</span></li>
+{{else if eq .Kind "config"}}<li><i class="sw sw-cfg" aria-hidden="true"></i><span><b>Settings changed</b> (recorded at {{template "reltime" .At}}): {{range $i, $c := .Changes}}{{if $i}}, {{end}}<code>{{$c.Key}}</code> {{$c.From}} → {{$c.To}}{{end}}.</span></li>
+{{else}}<li><span class="muted">Settings: unchanged.</span></li>
+{{end}}{{end}}</ul>
+{{template "card-close" .Head}}{{end}}{{end}}<p class="small muted">{{.Note}}</p>
 {{with .Sessions}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Table.Rows}}{{template "sessions" .Table}}{{end}}{{template "card-close" .Head}}{{end}}{{end}}
 {{template "foot" .}}

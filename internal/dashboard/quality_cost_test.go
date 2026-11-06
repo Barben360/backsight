@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/dashboard/chart"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -342,7 +343,7 @@ func richCost(r *metrics.Result) {
 
 func TestCostCards(t *testing.T) {
 	n := pageNode(t, "cost", false, func(d *PageData) { richCost(d.V["cost"]) })
-	want := []string{"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens"}
+	want := []string{"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens", "w-memory-yield"}
 	if got := cardIDs(n); !slices.Equal(got, want) {
 		t.Fatalf("cards %v, want %v", got, want)
 	}
@@ -885,6 +886,10 @@ func TestLatencyLimitBelongsToRecall(t *testing.T) {
 }
 
 func TestLongLatencyLinesMergeByMax(t *testing.T) {
+	// The merged positions' sentences are what is read: ask the chart for them past its hover limit.
+	oldHover := chart.HoverMax
+	chart.HoverMax = 1 << 30
+	t.Cleanup(func() { chart.HoverMax = oldHover })
 	var ps []metrics.Point
 	for i := 0; i < 1000; i++ {
 		v := 100.0

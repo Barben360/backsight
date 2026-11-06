@@ -16,10 +16,6 @@ import (
 // observational is what the Releases page says first about its own numbers.
 const observational = "Observational: weeks, projects and memory differ."
 
-// replayCmd is the example the Releases page gives for trying another
-// learned-ranking setting.
-const replayCmd = "backsight feedback replay --set boost_weight=0.15"
-
 // ReleasesPage is the Releases page: the versions that ran, the settings in
 // force and how to replay past recalls under another setting.
 type ReleasesPage struct {
@@ -30,6 +26,8 @@ type ReleasesPage struct {
 	Foot          string
 	Settings      SettingsCard
 	Replay        ReplayCard
+	Compare       CompareCard
+	Used          UsedCard
 }
 
 // ReplayCard points at the command that replays past recalls.
@@ -159,7 +157,7 @@ func releasesOf(d PageData) ReleasesPage {
 	if len(p.Rows) == 0 {
 		p.Note = NoData{Text: "No version recorded a prompt in this window."}
 	} else {
-		p.Foot = "Attributed per event to the binary that recorded it, not per day. Comparing two versions with matched projects comes later."
+		p.Foot = "Attributed per event to the binary that recorded it, not per day."
 	}
 
 	p.Settings = SettingsCard{Head: fixedHead("releases-settings", "Which settings are in effect?", "", "")}
@@ -173,9 +171,11 @@ func releasesOf(d PageData) ReleasesPage {
 	p.Replay = ReplayCard{
 		Head: fixedHead("releases-replay", "What would another setting do?", "", ""),
 		Text: "Replay recorded recalls with another learned-ranking setting, without touching memory or config.toml:",
-		Cmd:  replayCmd,
+		Cmd:  BoostReplayCommand,
 	}
 	p.Replay.Head.Chip = "developer"
+	p.Compare = d.compareOf(r)
+	p.Used = d.usedOf(r)
 	return p
 }
 

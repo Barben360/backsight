@@ -407,6 +407,15 @@ func rankHistOf(l format.Locale, more string, v MetricView) template.HTML {
 // straddles the window's start whole, so there is no dip to drop. A day
 // with no row is not on the axis.
 func extractionOf(l format.Locale, more string, rows []metrics.ExtractionRow) template.HTML {
+	return extractionChart(l, more, rows, nil)
+}
+
+// extractionChart is extractionOf over the days of a series that says where
+// each came from (the server, this PC's record, or neither): every day of the
+// series is on the axis, the days with no record shaded and the place where
+// the source changes marked. A series that says nothing of the sort leaves
+// the chart as extractionOf draws it.
+func extractionChart(l format.Locale, more string, rows []metrics.ExtractionRow, series []metrics.Point) template.HTML {
 	var days, ops []string
 	tokens := map[[2]string]float64{}
 	for _, r := range rows {
@@ -421,6 +430,14 @@ func extractionOf(l format.Locale, more string, rows []metrics.ExtractionRow) te
 	}
 	c := chart.Stack{Label: "Tokens the server's model used, per day, by task", Size: chart.Half, XName: "Day",
 		Fmt: unitFormat("tokens", l), More: more, Empty: "The server's model used no tokens in this window."}
+	if hasSource(series) {
+		days = days[:0]
+		for _, p := range series {
+			days = append(days, pointKey(p))
+		}
+		c.Bands, c.SourceAt = recordOverlay(series)
+		c.Label += ", with the days the server no longer holds"
+	}
 	for _, d := range days {
 		c.X = append(c.X, xName(d))
 	}
@@ -461,6 +478,9 @@ func hasOther(rows []metrics.ExtractionRow) bool {
 func kindsOf(l format.Locale, more string, v MetricView) template.HTML {
 	c := chart.Stack{Label: "Memories added per day, by kind", Size: chart.Half, XName: "Day", X: xsOf(v.M.Series),
 		Fmt: unitFormat(v.Def.Unit, l), More: more, Empty: "No memory was added in this window."}
+	if hasSource(v.M.Series) {
+		c.Bands, c.SourceAt = recordOverlay(v.M.Series)
+	}
 	for _, k := range glanceKinds {
 		s := chart.Series{Name: k.one, Class: k.class}
 		for _, p := range v.M.Series {
@@ -729,4 +749,117 @@ func rankOf(l format.Locale, more string, h map[string]int64) template.HTML {
 		c.Bins = append(c.Bins, chart.Bin{Label: label, N: h[k]})
 	}
 	return c.HTML()
+}
+
+// Days past the server's reach come from this PC's daily record, and a day
+// the upkeep could not reach the server has none.
+
+// Where a day's figure came from, as metrics.Point.Source says.
+const (
+	fromServer = "server"
+	fromRecord = "record"
+	fromNone   = "none"
+)
+
+// hasSource is whether the series says where its days come from: only a
+// window that reaches past the server's days does.
+func hasSource(ps []metrics.Point) bool {
+	return slices.ContainsFunc(ps, func(p metrics.Point) bool { return p.Source != "" })
+}
+
+// recordOverlay is the runs of days with no record (positions of the
+// series) and the position where the server's days begin, 0 when the
+// server's days are all of them.
+func recordOverlay(ps []metrics.Point) (bands []chart.Band, sourceAt int) {
+	from := -1
+	for i, p := range ps {
+		if p.Source == fromNone {
+			if from < 0 {
+				from = i
+			}
+			continue
+		}
+		if from >= 0 {
+			bands, from = append(bands, chart.Band{From: from, To: i - 1}), -1
+		}
+		if p.Source == fromServer && sourceAt == 0 {
+			sourceAt = i
+		}
+	}
+	if from >= 0 {
+		bands = append(bands, chart.Band{From: from, To: len(ps) - 1})
+	}
+	return bands, sourceAt
+}
+
+// dayRuns names runs of days of ps for which keep holds: "Sep 12 to Sep 14",
+// "Sep 20".
+func dayRuns(ps []metrics.Point, keep func(p metrics.Point) bool) []string {
+	var out []string
+	for i := 0; i < len(ps); i++ {
+		if !keep(ps[i]) {
+			continue
+		}
+		j := i
+		for j+1 < len(ps) && keep(ps[j+1]) {
+			j++
+		}
+		if j == i {
+			out = append(out, xName(pointKey(ps[i])))
+		} else {
+			out = append(out, xName(pointKey(ps[i]))+" to "+xName(pointKey(ps[j])))
+		}
+		i = j
+	}
+	return out
+}
+
+// recordBlock is what a chart of days past the server's reach says under
+// itself: the days that do not come from the server (this PC's record, or
+// no record at all), newest first, and a note on the days with no record.
+// recordFrom is the first day the record holds, "" when it holds none; bank
+// says which chart it sits under (the bank's explains the hole, the cost
+// chart points at it). Empty when every day is the server's.
+func recordBlock(ps []metrics.Point, recordFrom string, bank bool) template.HTML {
+	var rows []metrics.Point
+	for i := len(ps) - 1; i >= 0; i-- {
+		if ps[i].Source == fromRecord || ps[i].Source == fromNone {
+			rows = append(rows, ps[i])
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	shown := rows[:min(len(rows), chart.MaxTableRows)]
+	b.WriteString(`<details class="tblfb"><summary>Show the days that do not come from the server</summary><div class="tbl-wrap"><table class="tbl">` +
+		`<caption class="sr-only">Days that do not come from the server</caption><thead><tr><th scope="col">Day</th><th scope="col">Source</th></tr></thead><tbody>`)
+	for _, p := range shown {
+		src := "this PC's record"
+		if p.Source == fromNone {
+			src = "no record (server not reached)"
+		}
+		b.WriteString(`<tr><td>` + template.HTMLEscapeString(xName(pointKey(p))) + `</td><td>` + template.HTMLEscapeString(src) + `</td></tr>`)
+	}
+	b.WriteString(`</tbody></table></div>`)
+	if len(rows) > len(shown) {
+		b.WriteString(`<p class="tbl-more">Showing the latest ` + strconv.Itoa(len(shown)) + ` of ` + strconv.Itoa(len(rows)) + ` days.</p>`)
+	}
+	b.WriteString(`</details>`)
+	if !bank {
+		b.WriteString(`<p class="xs muted">Same source and same hole as “Is memory still growing?” on Bank: both read the daily record this PC keeps for the days the server no longer holds.</p>`)
+		return template.HTML(b.String())
+	}
+	// A day before the record began is no outage; only the days after it are.
+	gaps := dayRuns(ps, func(p metrics.Point) bool {
+		return p.Source == fromNone && recordFrom != "" && pointKey(p) >= recordFrom
+	})
+	if len(gaps) > 0 {
+		b.WriteString(`<p class="xs muted">` + template.HTMLEscapeString(strings.Join(gaps, ", ")) + `: <code>jobs maintain</code> ran but the memory server did not answer, so those days were not recorded. ` +
+			`Nothing is missing from memory itself; only this chart has a hole.</p>`)
+	}
+	if recordFrom != "" && slices.ContainsFunc(ps, func(p metrics.Point) bool { return p.Source == fromNone && pointKey(p) < recordFrom }) {
+		b.WriteString(`<p class="xs muted">Before ` + template.HTMLEscapeString(dayLabel(recordFrom)) + ` this PC had not started its daily record.</p>`)
+	}
+	return template.HTML(b.String())
 }

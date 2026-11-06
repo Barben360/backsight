@@ -22,6 +22,7 @@ type BankPage struct {
 	Notes, Churn  Card
 	Imports       Card
 	Review        ReviewCard
+	Dev           *BankDev // developer mode
 }
 
 // ProjectsCard is the memories of each project, a bar beside each.
@@ -100,7 +101,8 @@ func bankOf(d PageData) BankPage {
 			b.Growth.Leads = []Lead{ld}
 		}
 		b.Growth.Extras = extrasOf(growth)
-		b.Growth.Charts = []PathChart{{HTML: kindsOf(l, d.more(), growth)}}
+		from, _ := extraAs[string](growth.M, "record_from")
+		b.Growth.Charts = []PathChart{{HTML: kindsOf(l, d.more(), growth) + recordBlock(growth.M.Series, from, true)}}
 	}
 
 	// bank.by_project's value is how many projects hold memories.
@@ -178,6 +180,7 @@ func bankOf(d PageData) BankPage {
 	}
 
 	b.Review = d.reviewOf(r)
+	b.Dev = d.bankDevOf(r)
 	return b
 }
 

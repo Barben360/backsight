@@ -62,10 +62,11 @@ func YieldServerNeeds() []string {
 }
 
 // Sample sizes for the figures taken from a distribution: the p50 needs
-// 20, the p95 needs 100 (below, the figure is null).
+// 20, the p95 needs 100 (below, the figure is null). MinForP95 is exported
+// so that the page words the same number.
 const (
 	minForP50 = 20
-	minForP95 = 100
+	MinForP95 = 100
 )
 
 // tagPartial marks an extraction figure whose per-operation split lacks an
@@ -156,7 +157,7 @@ func p50p95(xs []int64) (p50, p95 *float64) {
 		v := Percentile(xs, 50)
 		p50 = &v
 	}
-	if len(xs) >= minForP95 {
+	if len(xs) >= MinForP95 {
 		v := Percentile(xs, 95)
 		p95 = &v
 	}

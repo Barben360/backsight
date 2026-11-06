@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +38,8 @@ func corpus() []string {
 	full.Limits = []Limit{{"limit", 0.9, "thr"}, {"watch", 0.5, "thr-w"}}
 	full.Series = append(full.Series, Series{Name: "Said", Class: "s-coverage", Dashed: true, Y: ys(v...)})
 	full.Series[0].Band = true
+	full.Markers = []Mark2{{X: 5, Kind: "config", Label: "settings changed", Title: "t"}, {X: 9, Kind: "release", Label: "v1", Title: "t"}}
+	full.Bands, full.SourceAt = []Band{{From: 12, To: 14}}, 20
 	for i := range full.Series[0].Y {
 		full.Series[0].Y[i].Num, full.Series[0].Y[i].Den = int64(i%7), 7
 	}
@@ -49,7 +52,7 @@ func corpus() []string {
 		spark("Found per day", 24, 31, 27, 22, 30, 29, 28), spark("L", 1),
 		string(Spark{Label: "L", Fmt: plain, Y: []*float64{nil, p(1), p(2)}}.HTML()),
 	}
-	return append(out, histStripOutputs()...)
+	return append(append(append(out, histStripOutputs()...), calStatusOutputs()...), rangeOutputs()...)
 }
 
 func spark(label string, vs ...float64) string {
@@ -227,8 +230,9 @@ func TestChartEscapesText(t *testing.T) {
 	cc.N = nil
 	for name, out := range map[string]string{
 		"line": keep(string(c.HTML())), "capped table": keep(string(cc.HTML())),
-		"spark": keep(string(Spark{Label: markup, Y: []*float64{p(1)}, Fmt: func(float64) string { return markup }}.HTML())),
-		"empty": keep(string(Line{Empty: markup}.HTML())),
+		"spark":    keep(string(Spark{Label: markup, Y: []*float64{p(1)}, Fmt: func(float64) string { return markup }}.HTML())),
+		"empty":    keep(string(Line{Empty: markup}.HTML())),
+		"calendar": markupCalendar(), "status strip": markupStatus(),
 	} {
 		if !strings.Contains(out, escaped) {
 			t.Errorf("%s: markup not escaped: %s", name, out)
@@ -240,10 +244,38 @@ func TestChartEscapesText(t *testing.T) {
 	if !strings.Contains(string(cc.HTML()), `<code>`+escaped+`</code>`) {
 		t.Error("the more-command is not escaped")
 	}
+	cal, st := markupCalendar(), markupStatus()
+	for _, want := range []string{`aria-label="Fri, Oct 30: 1 ` + escaped + `, of 1"`, `href="` + escaped + `"`,
+		`<span>` + escaped + `:</span>`, `(` + escaped + `)</span>`, `<code>` + escaped + `</code>`} {
+		if !strings.Contains(cal, want) {
+			t.Errorf("calendar lacks %q", want)
+		}
+	}
+	for _, want := range []string{`<title>Oct 1 · ` + escaped + ` · ok</title>`, `>` + escaped + `</text>`, `<td>` + escaped + `</td>`, `<code>` + escaped + `</code>`} {
+		if !strings.Contains(st, want) {
+			t.Errorf("status strip lacks %q", want)
+		}
+	}
 	line := keep(string(c.HTML()))
 	for _, want := range []string{`aria-label="` + escaped + `"`, `<th scope="col">` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
 		if !strings.Contains(line, want) {
 			t.Errorf("line lacks %q", want)
+		}
+	}
+	// markers: label, title and table cell are escaped.
+	c.Markers = []Mark2{{X: 0, Kind: "release", Label: markup, Title: markup}, {X: 1, Kind: "config", Label: markup, Title: markup}}
+	marked := keep(string(c.HTML()))
+	for _, want := range []string{`<text class="mk-t ta-e" x="`, `>` + escaped + `</text>`, `y2="200.0"><title>` + escaped + `</title></line>`, `<td class="r">` + escaped + `</td>`} {
+		if !strings.Contains(marked, want) {
+			t.Errorf("markers lack %q", want)
+		}
+	}
+	if strings.Contains(marked, "<b>") {
+		t.Errorf("raw markup in markers: %s", marked)
+	}
+	for name, out := range map[string]string{"ranges": markupRanges(), "forest": markupForest(), "cohort": markupCohort()} {
+		if !strings.Contains(out, escaped) || strings.Contains(out, "<b>") || strings.Contains(out, `x"'`) {
+			t.Errorf("%s: markup not escaped: %s", name, out)
 		}
 	}
 }
@@ -307,6 +339,7 @@ func many(n int) Line {
 }
 
 func TestLineCapsMarks(t *testing.T) {
+	withHover(t)
 	out := keep(string(many(2000).HTML()))
 	if got := strings.Count(out, "<title>"); got != 500 {
 		t.Errorf("titles = %d, want 500", got)
@@ -685,5 +718,295 @@ func TestSizeClassIsWhitelisted(t *testing.T) {
 	out := string(c.HTML())
 	if strings.Contains(out, "onload") {
 		t.Errorf("unknown size class passed through: %s", out)
+	}
+}
+
+// overlayLine is thirty days of one series, with the markers of the design.
+func overlayLine() Line {
+	x := make([]string, 30)
+	v := make([]*float64, 30)
+	for i := range x {
+		x[i], v[i] = fmt.Sprintf("Oct %d", i+1), p(0.5)
+	}
+	c := usedLine(x, v...)
+	c.Markers = []Mark2{
+		{X: 19, Kind: "config", Label: "settings changed", Title: "Oct 20: settings changed (recall.min_score 0.5 → 0.55)"},
+		{X: 27, Kind: "release", Label: "v0.1.17-m7", Title: "Oct 28: backsight v0.1.17-m7 installed"},
+	}
+	return c
+}
+
+// lineX is the x of position j of thirty on a Half chart: 8 inside the left of
+// the plot, evenly spread to 8 inside its right.
+func lineX(j int) float64 { return 52 + float64(j)*(552-44-16)/29 }
+
+func near(t *testing.T, what string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 0.06 {
+		t.Errorf("%s = %v, want %v", what, got, want)
+	}
+}
+
+func num(t *testing.T, s string) float64 {
+	t.Helper()
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		t.Fatalf("not a number: %q", s)
+	}
+	return v
+}
+
+func TestLineMarkers(t *testing.T) {
+	out := keep(string(overlayLine().HTML()))
+	cfg := regexp.MustCompile(`<line class="cfg-mk" x1="([\d.]+)" x2="([\d.]+)" y1="14.0" y2="200.0"><title>([^<]*)</title></line>`).FindAllStringSubmatch(out, -1)
+	rel := regexp.MustCompile(`<line class="rel-mk" x1="([\d.]+)" x2="([\d.]+)" y1="14.0" y2="200.0"><title>([^<]*)</title></line>`).FindAllStringSubmatch(out, -1)
+	if len(cfg) != 1 || len(rel) != 1 {
+		t.Fatalf("markers: %d settings, %d release: %s", len(cfg), len(rel), out)
+	}
+	near(t, "settings x", num(t, cfg[0][1]), lineX(19))
+	near(t, "release x", num(t, rel[0][1]), lineX(27))
+	if cfg[0][1] != cfg[0][2] || cfg[0][3] != "Oct 20: settings changed (recall.min_score 0.5 → 0.55)" || rel[0][3] != "Oct 28: backsight v0.1.17-m7 installed" {
+		t.Errorf("settings marker: %v, release marker: %v", cfg[0], rel[0])
+	}
+	// the labels: a release's ends at its line, a setting's starts after it;
+	// here they would run into each other (the setting's ends past where the
+	// release's begins), so the release's takes the second row.
+	must(t, out,
+		`<text class="mk-t" x="`+f(lineX(19)+4)+`" y="24">settings changed</text>`,
+		`<text class="mk-t ta-e" x="`+f(lineX(27)-4)+`" y="38">v0.1.17-m7</text>`,
+		`<span><i class="sw sw-rel"></i>new version</span>`, `<span><i class="sw sw-cfg"></i>settings changed</span>`,
+		`<th class="r" scope="col">Marker</th>`,
+		`<tr><td>Oct 20</td><td class="r">50 %</td><td class="r">settings changed</td></tr>`,
+		`<tr><td>Oct 28</td><td class="r">50 %</td><td class="r">v0.1.17-m7</td></tr>`,
+		`<tr><td>Oct 21</td><td class="r">50 %</td><td class="r">—</td></tr>`)
+	if strings.Contains(out, "gap-band") || strings.Contains(out, "src-mk") {
+		t.Errorf("no band or source asked: %s", out)
+	}
+
+	// only the kinds present are in the legend; a marker off the chart or of an unknown kind is dropped.
+	c := overlayLine()
+	c.Markers = []Mark2{{X: 3, Kind: "release", Label: "v1", Title: "t"}, {X: 30, Kind: "release"}, {X: -1, Kind: "config"}, {X: 5, Kind: "other"}}
+	one := string(c.HTML())
+	if strings.Count(one, "rel-mk") != 1 || strings.Contains(one, "cfg-mk") || strings.Contains(one, "sw-cfg") || strings.Count(one, "mk-t") != 1 {
+		t.Errorf("one release marker only: %s", one)
+	}
+	// no marker: no column, no legend entry.
+	plainOut := string(usedLine([]string{"a", "b"}, p(1), p(1)).HTML())
+	if strings.Contains(plainOut, "Marker") || strings.Contains(plainOut, "sw-rel") {
+		t.Errorf("markers appear without any: %s", plainOut)
+	}
+}
+
+func TestGapBandAndSource(t *testing.T) {
+	c := overlayLine()
+	c.Markers = nil
+	c.Bands = []Band{{From: 3, To: 5}}
+	c.SourceAt = 10
+	out := keep(string(c.HTML()))
+	band := regexp.MustCompile(`<rect class="gap-band" x="([\d.]+)" y="24.0" width="([\d.]+)" height="176.0"></rect>`).FindAllStringSubmatch(out, -1)
+	if len(band) != 1 {
+		t.Fatalf("bands: %s", out)
+	}
+	step := lineX(1) - lineX(0)
+	near(t, "band x", num(t, band[0][1]), lineX(3)-step/2)
+	near(t, "band width", num(t, band[0][2]), 3*step)
+	src := regexp.MustCompile(`<line class="src-mk" x1="([\d.]+)" x2="([\d.]+)" y1="24.0" y2="200.0"></line>`).FindAllStringSubmatch(out, -1)
+	if len(src) != 1 {
+		t.Fatalf("source marks: %s", out)
+	}
+	near(t, "source x", num(t, src[0][1]), lineX(10))
+	must(t, out,
+		`>from this PC&#39;s daily record</text>`, `>kept by the server (20 days)</text>`,
+		`>no record</text>`, `no record: the daily upkeep could not reach the server</span>`,
+		`viewBox="0 0 560 250"`)
+	// the source labels need the extra height; a chart without them keeps its own.
+	if !strings.Contains(string(overlayLine().HTML()), `viewBox="0 0 560 230"`) {
+		t.Error("a chart without a source change changed height")
+	}
+	// out-of-range bands are clipped, empty ones dropped, a source off the chart is none.
+	c.Bands = []Band{{From: -4, To: 1}, {From: 28, To: 40}, {From: 9, To: 7}, {From: 40, To: 50}}
+	c.SourceAt = 30
+	got := string(c.HTML())
+	if strings.Count(got, `class="gap-band"`) != 2+1 /* the legend swatch */ || strings.Contains(got, "src-mk") || strings.Contains(got, "kept by the server") {
+		t.Errorf("clipping: %s", got)
+	}
+	// bucketed: 600 positions are 2 per bucket; the band covers whole buckets.
+	big := many(600)
+	big.Bands, big.SourceAt = []Band{{From: 10, To: 13}}, 300
+	bo := string(big.HTML())
+	must(t, bo, `>kept by the server (300 days)</text>`)
+	if strings.Count(bo, `<rect class="gap-band"`) != 2 { // the band and the legend swatch
+		t.Errorf("bucketed band: %d", strings.Count(bo, `<rect class="gap-band"`))
+	}
+}
+
+// withHover lets a test read the sentences of positions past HoverMax: it
+// checks how many positions a chart buckets, not how many it hovers.
+func withHover(t *testing.T) {
+	t.Helper()
+	old := HoverMax
+	HoverMax = 1 << 30
+	t.Cleanup(func() { HoverMax = old })
+}
+
+// TestHoverStopsPastHoverMax: up to HoverMax positions every position has
+// its rect, its sentence and (a line) its dot; one position more and the
+// plot has none of them, while the lines, the bars, the name and the table
+// are the same.
+func TestHoverStopsPastHoverMax(t *testing.T) {
+	mk := func(n int) (line string, stack string) {
+		x, u, g := make([]string, n), make([]float64, n), make([]float64, n)
+		for i := range x {
+			x[i], u[i], g[i] = fmt.Sprintf("d%d", i), 2, 1
+		}
+		l := many(n)
+		return string(l.HTML()), string(outcomes(x, u, g).Bars())
+	}
+	for _, n := range []int{HoverMax, HoverMax + 1} {
+		line, stack := mk(n)
+		hover := n <= HoverMax
+		for name, out := range map[string]string{"line": line, "stack": stack} {
+			if got := strings.Count(out, `class="hit"`); (got == n) != hover || (got != 0) != hover {
+				t.Errorf("%s at %d positions: %d hit rects, want %d", name, n, got, map[bool]int{true: n, false: 0}[hover])
+			}
+			if got := strings.Count(out, "<title>"); (got != 0) != hover {
+				t.Errorf("%s at %d positions: %d titles", name, n, got)
+			}
+			if !strings.Contains(out, `aria-label="`) || !strings.Contains(out, "<table") {
+				t.Errorf("%s at %d positions lost its name or its table", name, n)
+			}
+		}
+		if got := strings.Count(line, `<circle class="pt`); (got != 0) != hover {
+			t.Errorf("line at %d positions: %d dots", n, got)
+		}
+		if got := strings.Count(line, "<polyline"); got == 0 {
+			t.Errorf("line at %d positions: no line", n)
+		}
+		if got := len(segRect.FindAllString(stack, -1)); got != 2*n {
+			t.Errorf("stack at %d positions: %d bars, want %d", n, got, 2*n)
+		}
+	}
+}
+
+// TestFlatStretchesOfALongLineKeepTheirEnds: past HoverMax positions a line
+// drops the points inside a flat stretch (they draw the same line); the ends,
+// the step and what follows a gap stay. Up to HoverMax every point is kept.
+func TestFlatStretchesOfALongLineKeepTheirEnds(t *testing.T) {
+	// 0-4 flat, 5 a step, 6-9 flat, 10 a gap, 11-14 flat, then nothing.
+	vals := func(n int) []*float64 {
+		v := make([]*float64, n)
+		for i := 0; i < 15; i++ {
+			switch {
+			case i < 5, i >= 11:
+				v[i] = p(0.5)
+			case i == 5:
+				v[i] = p(0.25)
+			case i < 10:
+				v[i] = p(0.75)
+			}
+		}
+		return v
+	}
+	line := func(n int) Line {
+		x := make([]string, n)
+		for i := range x {
+			x[i] = fmt.Sprintf("d%d", i)
+		}
+		return usedLine(x, vals(n)...)
+	}
+	runs := func(out string) [][]string {
+		var rs [][]string
+		for _, m := range regexp.MustCompile(`<polyline class="ln s-used" points="([^"]*)"`).FindAllStringSubmatch(out, -1) {
+			rs = append(rs, strings.Fields(m[1]))
+		}
+		return rs
+	}
+	pick := func(run []string, idx ...int) []string {
+		var out []string
+		for _, i := range idx {
+			out = append(out, run[i])
+		}
+		return out
+	}
+	n := HoverMax + 1
+	thin := runs(string(line(n).HTML()))
+	old := HoverMax
+	HoverMax = 1 << 30
+	full := runs(string(line(n).HTML()))
+	HoverMax = old
+	if len(full) != 2 || len(full[0]) != 10 || len(full[1]) != 4 {
+		t.Fatalf("every point drawn: runs %v", full)
+	}
+	if len(thin) != 2 {
+		t.Fatalf("thinned: %d runs, want 2 around the gap: %v", len(thin), thin)
+	}
+	// Run 1 keeps its ends, the last flat point before the step, the step and the first point after it, and
+	// the end of the second flat stretch; run 2 keeps its two ends.
+	if want := pick(full[0], 0, 4, 5, 6, 9); !slices.Equal(thin[0], want) {
+		t.Errorf("first run %v, want %v", thin[0], want)
+	}
+	if want := pick(full[1], 0, 3); !slices.Equal(thin[1], want) {
+		t.Errorf("second run %v, want %v", thin[1], want)
+	}
+	// At HoverMax positions nothing is thinned.
+	for i, r := range runs(string(line(HoverMax).HTML())) {
+		if want := []int{10, 4}[i]; len(r) != want {
+			t.Errorf("run %d at %d positions has %d points, want all %d", i, HoverMax, len(r), want)
+		}
+	}
+}
+
+// Version labels on a short window: close markers must not draw labels over
+// each other, and the one on the first day must stay right of the y axis.
+func TestLineMarkerLabelsStayInsideAndApart(t *testing.T) {
+	x := make([]string, 30)
+	v := make([]*float64, 30)
+	for i := range x {
+		x[i], v[i] = fmt.Sprintf("Oct %d", i+1), p(0.5)
+	}
+	c := usedLine(x, v...)
+	c.Markers = []Mark2{
+		{X: 0, Kind: "release", Label: "0.1.18-m7", Title: "t0"},
+		{X: 2, Kind: "release", Label: "0.1.22-m7", Title: "t2"},
+		{X: 3, Kind: "release", Label: "0.1.23-m7", Title: "t3"},
+		{X: 3, Kind: "config", Label: "settings changed", Title: "t3c"},
+		{X: 29, Kind: "release", Label: "0.1.25-m7", Title: "t29"},
+	}
+	out := string(c.HTML())
+	if n := strings.Count(out, `class="rel-mk"`) + strings.Count(out, `class="cfg-mk"`); n != 5 {
+		t.Fatalf("%d marker lines, want 5 (a dropped label keeps its line): %s", n, out)
+	}
+	type box struct {
+		x0, x1 float64
+		y      string
+		label  string
+	}
+	var boxes []box
+	for _, m := range regexp.MustCompile(`<text class="(mk-t(?: ta-e)?)" x="([\d.]+)" y="(\d+)">([^<]*)</text>`).FindAllStringSubmatch(out, -1) {
+		w := float64(len([]rune(m[4]))) * labelCharW
+		at := num(t, m[2])
+		b := box{at, at + w, m[3], m[4]}
+		if m[1] == "mk-t ta-e" {
+			b.x0, b.x1 = at-w, at
+		}
+		boxes = append(boxes, b)
+	}
+	if len(boxes) < 3 {
+		t.Fatalf("%d marker labels drawn, want at least 3 of 5: %v", len(boxes), boxes)
+	}
+	first := false
+	for i, b := range boxes {
+		if b.x0 < plotL || b.x1 > 552 {
+			t.Errorf("label %q spans %.1f to %.1f, outside the plot (%.0f to 552)", b.label, b.x0, b.x1, plotL)
+		}
+		first = first || b.label == "0.1.18-m7"
+		for _, o := range boxes[i+1:] {
+			if o.y == b.y && b.x0 < o.x1 && o.x0 < b.x1 {
+				t.Errorf("labels %q and %q overlap on row %s", b.label, o.label, b.y)
+			}
+		}
+	}
+	if !first {
+		t.Errorf("the label of the marker on the first day was dropped: %v", boxes)
 	}
 }

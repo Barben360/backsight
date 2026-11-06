@@ -17,7 +17,7 @@ import (
 // executed on, in the order of the page's views header. memory_text runs
 // on the memory page's golden with a synthetic text (fixtureData).
 var pageGoldens = map[string][]string{
-	"overview": {"overview"}, "quality": {"quality"}, "cost": {"cost"}, "bank": {"bank"}, "pipeline": {"pipeline"},
+	"overview": {"overview", "days"}, "quality": {"quality"}, "cost": {"cost"}, "bank": {"bank"}, "pipeline": {"pipeline"},
 	"system": {"system"}, "releases": {"releases"}, "defs": {"defs"}, "projects": {"projects"}, "project": {"project-page"},
 	"sessions": {"sessions"}, "session": {"session-page"}, "memories": {"memories"}, "memory": {"memory-page"},
 	"days": {"days"}, "day": {"day-page"}, "memory_text": {"memory-page"},

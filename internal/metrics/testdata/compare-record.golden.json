@@ -1,0 +1,113 @@
+{
+  "a": "v0.1.16-m7",
+  "b": "v0.1.17-m7",
+  "measure": "used.turn_rate",
+  "reading": "differs",
+  "diff": 0.11462450592885379,
+  "ci": [
+    0.024782633992309205,
+    0.20446637786539837
+  ],
+  "pooled_a": 0.48972332015810277,
+  "pooled_b": 0.6043478260869565,
+  "raw_a": {
+    "num": 187,
+    "den": 326
+  },
+  "raw_b": {
+    "num": 154,
+    "den": 295
+  },
+  "raw_disagrees": true,
+  "strata": [
+    {
+      "project": "backsight",
+      "path": "prompt",
+      "a": {
+        "num": 140,
+        "den": 200,
+        "days": 21
+      },
+      "b": {
+        "num": 46,
+        "den": 60,
+        "days": 9
+      },
+      "weight": 46.15384615384615,
+      "diff": 0.06666666666666676,
+      "ci": [
+        -0.05802148808724701,
+        0.19135482142058052
+      ],
+      "reading": "no_clear_difference",
+      "eligible": true
+    },
+    {
+      "project": "backsight",
+      "path": "search",
+      "a": {
+        "num": 17,
+        "den": 36,
+        "days": 20
+      },
+      "b": {
+        "num": 6,
+        "den": 12,
+        "days": 7
+      },
+      "weight": null,
+      "diff": null,
+      "ci": null,
+      "reading": "too_few",
+      "eligible": false,
+      "why": "units"
+    },
+    {
+      "project": "project-a",
+      "path": "prompt",
+      "a": {
+        "num": 21,
+        "den": 70,
+        "days": 18
+      },
+      "b": {
+        "num": 87,
+        "den": 190,
+        "days": 9
+      },
+      "weight": 51.15384615384615,
+      "diff": 0.15789473684210525,
+      "ci": [
+        0.029024387754110176,
+        0.2867650859301003
+      ],
+      "reading": "differs",
+      "eligible": true
+    },
+    {
+      "project": "project-b",
+      "path": "prompt",
+      "a": {
+        "num": 9,
+        "den": 20,
+        "days": 4
+      },
+      "b": {
+        "num": 15,
+        "den": 33,
+        "days": 8
+      },
+      "weight": null,
+      "diff": null,
+      "ci": null,
+      "reading": "too_few",
+      "eligible": false,
+      "why": "days"
+    }
+  ],
+  "sessions_a": 270,
+  "sessions_b": 250,
+  "too_few": null,
+  "settings_differ": [],
+  "settings_unknown": false
+}

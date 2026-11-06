@@ -51,6 +51,11 @@ func TestRenderBudgets(t *testing.T) {
 	if len(paths) == 0 {
 		t.Fatal("no page route measured")
 	}
+	// The Overview, System and Cost pages at the longest window the picker takes: they draw the most
+	// positions (a year of days, the calendar, the health-check strip). Same limit, logged on their own.
+	for _, p := range []string{"/", "/system", "/cost"} {
+		paths = append(paths, p+"?since="+longSince+"&until="+longUntil)
+	}
 
 	for _, path := range paths {
 		const n = 20

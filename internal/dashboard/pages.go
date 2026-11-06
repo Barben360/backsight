@@ -13,12 +13,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -142,6 +144,7 @@ type PageData struct {
 	P     views.Params               // the page's parameters: its links carry the window and filters
 	CLI   string                     // the command that prints the page's first view
 	State *StateView                 // the state pages' words; nil elsewhere
+	HM    string                     // the Overview's calendar colouring (got, used or sessions); "" the default
 }
 
 // Frame is what every page shows around its content.
@@ -161,6 +164,8 @@ type Frame struct {
 	SessionHead                            bool      // the page head says the session's project, span and sent state, not a window
 	Window                                 string    // windowPhrase of the page's params and window; "" on the text and state pages
 	Catching                               string    // catchingOf the first view's freshness; "" when the history is read
+	Custom                                 *Custom   // the custom window picker; nil on a page without window links
+	CustomMenu                             *Custom   // its copy in the Menu
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -173,6 +178,8 @@ type Choice struct {
 type Prefs struct {
 	Theme        string
 	Dev, Refresh bool
+	Compact      bool // the compact density
+	Keys         bool // keyboard shortcuts on
 }
 
 // navLinks are the navigation, in the order the top partial slices it:
@@ -288,6 +295,9 @@ func prefMenu(path string, p Prefs) []PrefGroup {
 		{Label: "Theme", Choices: theme},
 		{Label: "Developer mode", Choices: flag("dev", "On", p.Dev), Hint: "Adds ranking, learned ranking and release detail."},
 		{Label: "Auto-refresh", Choices: flag("refresh", "Every minute", p.Refresh)},
+		{Label: "Density", Choices: []Choice{link("Comfortable", "density", "comfortable", !p.Compact), link("Compact", "density", "compact", p.Compact)},
+			Hint: "Compact fits more on a screen; touch targets keep their size."},
+		{Label: "Keyboard shortcuts", Choices: flag("keys", "On", p.Keys), Hint: "g then a letter opens a page; press ? to list them all."},
 	}
 }
 
@@ -455,14 +465,53 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// filter must not read as no filter.
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		var p views.Params
+		var redirect, hm string
+		var picked bool // the redirect is the Releases picker's comparison
+		var refused *Custom
 		if err != nil {
 			err = views.Usage("the query string is malformed")
 		} else {
 			q.Del("code")
-			p, err = views.FromValues(first, q)
+			// The custom window's from and to become since and until; only
+			// the pages that offer window links take them.
+			if hasPicker(spec, r) {
+				redirect, refused, err = pickWindow(r.URL.EscapedPath(), q, s.now())
+				q.Del("from")
+				q.Del("to")
+			}
+			// The Releases picker sends two versions and a measure; the view
+			// takes one comparison, so the page redirects to it.
+			if spec.Name == "releases" && err == nil && redirect == "" {
+				redirect = pickVersions(r.URL.EscapedPath(), q)
+				picked = redirect != ""
+			}
+			// The calendar's colouring is the page's own (Overview, Days): no view takes it.
+			if spec.Name == "overview" || spec.Name == "days" {
+				hm = q.Get("hm")
+				q.Del("hm")
+			}
+			if err == nil {
+				p, err = views.FromValues(first, q)
+			}
+			// A comparison the view would refuse (the same version twice) is
+			// refused here, not redirected to.
+			if err == nil && picked {
+				if _, qerr := views.Query(first, p, id, s.now()); qerr != nil {
+					var oe *output.Error
+					if !errors.As(qerr, &oe) || oe.Code != output.Usage { // not a refusal of the request
+						s.failurePage(w, r, title, prefs, qerr)
+						return
+					}
+					err = qerr
+				}
+			}
 		}
 		if err != nil {
 			s.statePage(w, r, http.StatusBadRequest, kindBad, title, prefs, sentence(err.Error()), 0)
+			return
+		}
+		if redirect != "" {
+			http.Redirect(w, r, redirect, http.StatusSeeOther)
 			return
 		}
 		if p.DevSet { // the query beats the preference for this request
@@ -472,6 +521,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		}
 		data := s.pageData(r, title, prefs, started)
 		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
+		data.HM = measureOf(hm).key
 		data.CLI = cliFor(first, id, p)
 		if spec.Name == "session" || spec.Name == "memory" {
 			data.CLI = cliFor(first, id, allTimeParams(p))
@@ -480,22 +530,16 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p.Limit, p.Offset = metrics.MaxLimit, 0
 			data.P = p
 		}
-		for _, v := range spec.Views {
-			res, st, err := s.data.result(r.Context(), v, p, id)
-			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
-				st, err = stateUpdating, nil
-			}
-			if s.notReadyPage(w, r, st, prefs) {
+		outs := s.readViews(r.Context(), spec, p, id)
+		if bad, ok := firstProblem(outs); ok {
+			if s.notReadyPage(w, r, bad.st, prefs) {
 				return
 			}
-			if st == stateBroken && err == nil {
-				err = errNoIndex
-			}
-			if err != nil {
-				s.failurePage(w, r, title, prefs, err)
-				return
-			}
-			data.V[v] = &res
+			s.failurePage(w, r, title, prefs, bad.err)
+			return
+		}
+		for i, v := range spec.Views {
+			data.V[v] = &outs[i].res
 		}
 		head := data.V[first]
 		s.withResult(&data, head)
@@ -519,6 +563,13 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 					data.Frame.Window, data.Frame.SessionHead = "", true
 				}
 			}
+			if data.Frame.Windows != nil {
+				c := newCustom(data.Frame.Path, q, p, head.Window, s.now())
+				if refused != nil {
+					c.From, c.To, c.Err, c.FromBad, c.ToBad = refused.From, refused.To, refused.Err, refused.FromBad, refused.ToBad
+				}
+				data.Frame.Custom, data.Frame.CustomMenu = &c, c.inMenu()
+			}
 		}
 		body, err := renderPage(s.tpl, spec.Name, data)
 		if err != nil {
@@ -531,6 +582,82 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			s.served.Add(1)
 		}
 	}
+}
+
+// viewOut is the answer for one view of a page.
+type viewOut struct {
+	res metrics.Result
+	st  indexState
+	err error
+}
+
+// readViews computes the views of a page. A page that reads several asks for
+// them together, on separate read transactions: its time is that of the
+// slowest, not their sum (the Overview reads the days calendar beside its own
+// numbers). The answers come back in the views' order, the caller judging
+// them in it.
+func (s *Server) readViews(ctx context.Context, spec pageSpec, p views.Params, id string) []viewOut {
+	return readViewsWith(ctx, spec, p, id, s.data.result)
+}
+
+// viewReader reads one view: data.result, or a stand-in in a test.
+type viewReader func(ctx context.Context, view string, p views.Params, id string) (metrics.Result, indexState, error)
+
+// errViewFailed is what a view that panicked reports: the page fails, not
+// the process. The panic's value stays out of it (it may name a path).
+var errViewFailed = errors.New("a view of the page could not be read")
+
+func readViewsWith(ctx context.Context, spec pageSpec, p views.Params, id string, read viewReader) []viewOut {
+	outs := make([]viewOut, len(spec.Views))
+	var wg sync.WaitGroup
+	for i, v := range spec.Views {
+		q := viewParams(spec, v, p)
+		wg.Go(func() {
+			defer func() {
+				if recover() != nil {
+					outs[i] = viewOut{st: stateReady, err: errViewFailed}
+				}
+			}()
+			outs[i].res, outs[i].st, outs[i].err = read(ctx, v, q, id)
+		})
+	}
+	wg.Wait()
+	return outs
+}
+
+// firstProblem judges the answers in the views' order and returns the first
+// that is not a result: bad.st is then a state that has a page of its own
+// (building, updating, updated), or bad.err the failure to tell. So a
+// failure of the first view is told even when the second is still building,
+// and a building first view hides a failure of the second.
+func firstProblem(outs []viewOut) (bad viewOut, ok bool) {
+	for _, o := range outs {
+		if o.st == stateReady && errors.Is(o.err, index.ErrUpdateInProgress) {
+			o.st, o.err = stateUpdating, nil
+		}
+		switch o.st {
+		case stateBuilding, stateUpdating, stateUpdated:
+			return viewOut{st: o.st}, true
+		}
+		if o.st == stateBroken && o.err == nil {
+			o.err = errNoIndex
+		}
+		if o.err != nil {
+			return viewOut{st: o.st, err: o.err}, true
+		}
+	}
+	return viewOut{}, false
+}
+
+// viewParams are the parameters view is asked with on the page spec. The
+// Overview takes only the calendar of the days view, which spans 13 months
+// whatever the window: it asks for a window of one day, so that the view does
+// not also count the window's days, which the page does not show.
+func viewParams(spec pageSpec, view string, p views.Params) views.Params {
+	if spec.Name == "overview" && view == "days" {
+		p.Days, p.DaysSet, p.Since, p.Until = 1, true, "", ""
+	}
+	return p
 }
 
 // renderPage executes the page called name on data into a buffer: the

@@ -278,6 +278,7 @@ type MemoryDetail struct {
 	Rank          template.HTML
 	DoHead        Head
 	Do            []DoLine
+	Origin        *OriginCard // where the memory came from; nil when the view has none
 }
 
 // serverClass colours a memory's state on the server.
@@ -355,6 +356,7 @@ func memoryOf(d PageData) MemoryDetail {
 	if m.Kind != "" && pg.Kind == "" {
 		pg.Kind = "memory of another kind"
 	}
+	pg.Origin = d.originOf(m.Origin)
 	pg.Created = d.rel(r.GeneratedAt, m.Created)
 	if m.ServerState != "" {
 		pg.Server = Word{wordOr(views.ServerStateWords, m.ServerState, "state not recorded"), serverClass[m.ServerState]}

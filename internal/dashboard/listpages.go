@@ -45,6 +45,10 @@ func windowQuery(p views.Params, keys ...string) string {
 			q.Set(k, p.Until)
 		case k == "tz" && p.TZ != "":
 			q.Set(k, p.TZ)
+		case k == "project" && p.Project != "":
+			q.Set(k, p.Project)
+		case k == "path" && p.Path != "":
+			q.Set(k, p.Path)
 		}
 	}
 	if len(q) == 0 {
@@ -52,6 +56,12 @@ func windowQuery(p views.Params, keys ...string) string {
 	}
 	return "?" + q.Encode()
 }
+
+// dayScope is the query a link to a day keeps: the zone, so that the day is
+// read in it, and the project and path the page is filtered by, so that a
+// filtered calendar opens a filtered day. The window is not kept: a day is
+// its own window.
+func dayScope(p views.Params) string { return windowQuery(p, "tz", "project", "path") }
 
 // idLink is an id as the chip shows it: 8 characters, the whole id on hover.
 func idLink(prefix, id string) Ref {
@@ -397,7 +407,7 @@ func daysOf(d PageData) DaysPage {
 	p.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
 	for _, day := range r.Tables.Days {
 		ln := DayLine{
-			Day:      Ref{Text: views.Plain(day.Day, ""), Full: views.Plain(day.Day, ""), Href: pathHref("/days/", day.Day, windowQuery(d.P, "tz"))},
+			Day:      Ref{Text: views.Plain(day.Day, ""), Full: views.Plain(day.Day, ""), Href: pathHref("/days/", day.Day, dayScope(d.P))},
 			Sessions: l.Int(day.Sessions), Prompts: l.Int(day.Prompts), Lookups: l.Int(day.Recalls), Got: l.Int(day.PromptsWithMemory),
 			Used: l.Int(day.UsedTurns), Wrong: l.Int(day.Wrong), Context: l.Size(float64(day.ContextChars), "chars"),
 			Sent: l.Int(day.SentOK), Failed: l.Int(day.SentFailed),
@@ -503,7 +513,61 @@ type DayPage struct {
 	Tiles      []TileGroup
 	Note       string
 	Prev, Next Ref // the days around it; Href "" at the end of the history
+	Markers    MarkersCard
 	Sessions   SessionsCard
+}
+
+// MarkersCard is "Did anything change that day?": the releases and settings
+// changes recorded that day. Lines is empty, and the card left out, on a day
+// with neither.
+type MarkersCard struct {
+	Head  Head
+	Lines []MarkerLine
+}
+
+// MarkerLine is one line of the card: a new version, a settings change, or
+// the sentence that no setting changed on a day with a new version.
+type MarkerLine struct {
+	Kind     string // "release", "config" or "unchanged"
+	At       format.Time
+	Version  Ref // the new version, linked to its row on the Releases page
+	Previous string
+	Changes  []MarkerChange
+}
+
+// MarkerChange is one setting that differs: Key, then its value before and after.
+type MarkerChange struct{ Key, From, To string }
+
+// markersOf is the card of the day's markers.
+func (d PageData) markersOf(ms []metrics.Marker) MarkersCard {
+	c := MarkersCard{Head: fixedHead("markers", "Did anything change that day?", "machine", d.CLI)}
+	value := func(v *float64) string {
+		if v == nil {
+			return "none"
+		}
+		return strconv.FormatFloat(*v, 'f', -1, 64)
+	}
+	var released, changed bool
+	for _, m := range ms {
+		at := m.At.In(zoneOr(d.Loc))
+		line := MarkerLine{Kind: m.Kind, At: format.Time{Text: at.Format("15:04"), Datetime: at.Format(time.RFC3339), Title: when(d.Loc, m.At)}}
+		switch m.Kind {
+		case "release":
+			line.Version, line.Previous, released = Ref{Text: m.Version, Href: d.versionHref(m.Version)}, m.Previous, true
+		case "config":
+			for _, ch := range m.Changes {
+				line.Changes = append(line.Changes, MarkerChange{Key: ch.Key, From: value(ch.From), To: value(ch.To)})
+			}
+			changed = true
+		default:
+			continue
+		}
+		c.Lines = append(c.Lines, line)
+	}
+	if released && !changed {
+		c.Lines = append(c.Lines, MarkerLine{Kind: "unchanged"})
+	}
+	return c
 }
 
 func dayOf(d PageData) DayPage {
@@ -519,7 +583,7 @@ func dayOf(d PageData) DayPage {
 		// The tiles are the day's: their links list that day's sessions.
 		p.Days, p.DaysSet = 0, false
 		p.Since, p.Until = day, at.AddDate(0, 0, 1).Format("2006-01-02")
-		tz := windowQuery(d.P, "tz")
+		tz := dayScope(d.P)
 		pg.Prev = Ref{Text: "← " + at.AddDate(0, 0, -1).Format("Jan 2"), Href: "/days/" + at.AddDate(0, 0, -1).Format("2006-01-02") + tz}
 		today := r.GeneratedAt.In(zoneOr(d.Loc))
 		if at.Before(time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)) {
@@ -527,6 +591,9 @@ func dayOf(d PageData) DayPage {
 		}
 	}
 	pg.Tiles = tilesOf(r, p, d.L, d.Loc, d.Frame.Prefs.Dev)
+	if t != nil {
+		pg.Markers = d.markersOf(t.Markers)
+	}
 	pg.Note = "One day is often too few to judge; the numbers are shown with their counts."
 
 	pg.Sessions = SessionsCard{Head: fixedHead("day-sessions", "Sessions that day", "machine", d.CLI)}

@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -38,14 +39,26 @@ func bodyRows(table *node) (rows []*node, total *node) {
 	return rows, total
 }
 
+// tablesOutsideCalendar are the design tables of main outside the days calendar's own
+// "Show as a table" (the Days page holds both).
+func tablesOutsideCalendar(m *node) []*node {
+	var out []*node
+	for _, c := range m.find("section.card") {
+		if c.attr("aria-labelledby") != "w-calendar" {
+			out = append(out, c.find("div.tbl-wrap table.tbl")...)
+		}
+	}
+	return out
+}
+
 // listTable is the one design table of a page's main.
 func listTable(t *testing.T, n *node) *node {
 	t.Helper()
-	m := mainOf(t, n)
-	if got := len(m.find("div.tbl-wrap table.tbl")); got != 1 {
-		t.Fatalf("%d design tables in main, want 1", got)
+	tables := tablesOutsideCalendar(mainOf(t, n))
+	if len(tables) != 1 {
+		t.Fatalf("%d design tables in main, want 1", len(tables))
 	}
-	return m.first("div.tbl-wrap table.tbl")
+	return tables[0]
 }
 
 func TestListsAreDesignTables(t *testing.T) {
@@ -381,7 +394,7 @@ func TestEmptyListsSayWhy(t *testing.T) {
 		for _, e := range m.find("div.empty") {
 			said = said || strings.Contains(e.text(), c.want)
 		}
-		if !said || len(m.find("div.tbl-wrap")) != 0 && c.page != "project" {
+		if !said || len(tablesOutsideCalendar(m)) != 0 && c.page != "project" {
 			t.Errorf("%s: no %q (or a table anyway): %q", c.page, c.want, m.text())
 		}
 	}
@@ -872,5 +885,223 @@ func TestTileWithoutValuesDrawsNoSpark(t *testing.T) {
 	full := mainOf(t, pageNode(t, "day", false, nil)).find("article.tile svg.spark")
 	if len(full) == 0 {
 		t.Error("a tile with values lost its sparkline")
+	}
+}
+
+// cardIndex is the position of the card headed by id among main's cards, -1 when absent.
+func cardIndex(m *node, id string) int {
+	for i, c := range m.find("section.card") {
+		if c.attr("aria-labelledby") == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestDaysPageCalendar(t *testing.T) {
+	var cal []metrics.CalendarDay
+	n := pageNode(t, "days", false, func(d *PageData) {
+		d.Frame.Path = "/days?days=7"
+		d.P.Days = 7
+		cal = d.V["days"].Tables.Calendar
+		// The ring follows the view's window, not the page's days parameter: Oct 6 to Oct 8.
+		w := d.V["days"].Window
+		w.Since, w.Until = time.Date(2026, 10, 6, 14, 0, 0, 0, w.Since.Location()), time.Date(2026, 10, 8, 14, 0, 0, 0, w.Since.Location())
+		d.V["days"].Window = w
+		d.V["days"].Tables.Days = []metrics.DayRow{{Day: "2026-10-08", Sessions: 4, Prompts: 29}, {Day: "2026-10-07", Sessions: 1, Prompts: 2}}
+	})
+	m := mainOf(t, n)
+	if len(cal) < 90 {
+		t.Fatalf("the fixture holds %d calendar days", len(cal))
+	}
+	if got := len(m.find("a.hm-c")); got != len(cal) {
+		t.Errorf("%d squares, want one per calendar day (%d)", got, len(cal))
+	}
+	if got := len(m.find("a.hm-c.inwin")); got != 3 {
+		t.Errorf("%d days ringed, want 3 (Oct 6 to Oct 8)", got)
+	}
+	if first := m.first("a.hm-c.inwin"); first == nil || !strings.HasPrefix(first.attr("aria-label"), "Tue, Oct 6:") {
+		t.Errorf("first ringed day %v", first)
+	}
+	// The calendar is above the table, and the table keeps the page's days and its note.
+	if c, d := cardIndex(m, "w-calendar"), cardIndex(m, "w-days"); c < 0 || d < 0 || c > d {
+		t.Errorf("calendar card at %d, days card at %d", c, d)
+	}
+	rows, _ := bodyRows(listTable(t, n))
+	if len(rows) != 2 {
+		t.Errorf("%d table rows, want the page's 2", len(rows))
+	}
+	if got := m.first("section.card[aria-labelledby=w-days]").text(); !strings.Contains(got, "Days with nothing recorded are left out of this list; the calendar shows them as dashed squares.") {
+		t.Errorf("the table lacks its note: %q", got)
+	}
+	// The colour choice keeps the page's window and lands on the card.
+	if a := m.first("section.card[aria-labelledby=w-calendar] nav.seg a"); a == nil || a.attr("href") != "/days?days=7&hm=got#w-calendar" {
+		t.Errorf("colour link %v", a)
+	}
+}
+
+func TestDaysPageColourChoice(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	_, b := pageGet(t, h, ck, "/days?hm=sessions")
+	n := parseHTML(t, b)
+	cur := n.find("section.card[aria-labelledby=w-calendar] nav.seg a[aria-current]")
+	if len(cur) != 1 || cur[0].text() != "Sessions" {
+		t.Fatalf("current colouring %v", cur)
+	}
+	if got := len(n.find("a.hm-c")); got < 390 {
+		t.Errorf("%d squares on /days", got)
+	}
+}
+
+func TestDayMarkers(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	at := func(h, m int) time.Time { return time.Date(2026, 10, 5, h, m, 0, 0, time.UTC) }
+	edit := func(loc *time.Location, ms []metrics.Marker) func(d *PageData) {
+		return func(d *PageData) {
+			d.Loc = loc
+			d.V["days"].Tables.Day.Day = "2026-10-05"
+			d.V["days"].Tables.Day.Markers = ms
+		}
+	}
+	markers := func(t *testing.T, ms ...metrics.Marker) *node {
+		return mainOf(t, pageNode(t, "day", false, edit(time.UTC, ms)))
+	}
+	release := metrics.Marker{At: at(14, 2), Kind: "release", Version: "v0.1.17-m7", Previous: "v0.1.16-m7"}
+	config := metrics.Marker{At: at(16, 30), Kind: "config", Changes: []metrics.SettingChange{
+		{Key: "recall.min_score", From: f(0.5), To: f(0.55)}, {Key: "recall.limit", From: nil, To: f(8)}}}
+
+	m := markers(t, release)
+	card := m.first("section.card[aria-labelledby=w-markers]")
+	if card == nil || card.first("h2").text() != "Did anything change that day?" {
+		t.Fatalf("release day: no markers card (%v)", card)
+	}
+	lis := card.find("ul.markers li")
+	if len(lis) != 2 || lis[0].text() != "New version at 14:02: backsight v0.1.17-m7 (was v0.1.16-m7)." || lis[1].text() != "Settings: unchanged." {
+		var got []string
+		for _, li := range lis {
+			got = append(got, li.text())
+		}
+		t.Errorf("release day lines %q", got)
+	}
+	if len(lis) == 0 {
+		t.Fatal("release day: no lines")
+	}
+	if a := lis[0].first("a"); a == nil || !strings.HasPrefix(a.attr("href"), "/releases") || !strings.HasSuffix(a.attr("href"), "#release-v0.1.17-m7") {
+		t.Errorf("the version does not link to its row: %v", a)
+	}
+	if tm := lis[0].first("time"); tm == nil || tm.attr("datetime") != "2026-10-05T14:02:00Z" {
+		t.Errorf("time element %v", tm)
+	}
+
+	m = markers(t, config)
+	lis = m.find("section.card[aria-labelledby=w-markers] ul.markers li")
+	// The keys are <code>, which the reader's text leaves out.
+	want := "Settings changed (recorded at 16:30): 0.5 → 0.55, none → 8."
+	if len(lis) != 1 || lis[0].text() != want {
+		got := ""
+		if len(lis) > 0 {
+			got = lis[0].text()
+		}
+		t.Fatalf("settings day: %d lines, first %q, want %q", len(lis), got, want)
+	}
+
+	if codes := lis[0].find("code"); len(codes) != 2 || codes[0].text() != "recall.min_score" || codes[1].text() != "recall.limit" {
+		t.Errorf("setting keys %v", codes)
+	}
+
+	m = markers(t, release, config) // both: the release line, then the change; no "unchanged"
+	lis = m.find("section.card[aria-labelledby=w-markers] ul.markers li")
+	if len(lis) != 2 || !strings.HasPrefix(lis[0].text(), "New version at 14:02") || !strings.HasPrefix(lis[1].text(), "Settings changed") {
+		t.Errorf("both: %v", lis)
+	}
+
+	if m = markers(t); len(m.find("#w-markers")) != 0 || strings.Contains(m.text(), "Did anything change") {
+		t.Error("a day with no marker has the card")
+	}
+	// The page's zone sets the clock time and the offset of the time element.
+	plus2 := time.FixedZone("CEST", 2*3600)
+	zoned := mainOf(t, pageNode(t, "day", false, edit(plus2, []metrics.Marker{release, config})))
+	zl := zoned.find("section.card[aria-labelledby=w-markers] ul.markers li")
+	if len(zl) != 2 || !strings.HasPrefix(zl[0].text(), "New version at 16:02:") || !strings.HasPrefix(zl[1].text(), "Settings changed (recorded at 18:30)") {
+		t.Fatalf("zoned lines %v", zl)
+	}
+	if tm := zl[0].first("time"); tm == nil || tm.attr("datetime") != "2026-10-05T16:02:00+02:00" {
+		t.Errorf("zoned time element %v", tm)
+	}
+
+	// The note stays under the tiles, after the card.
+	m = markers(t, release)
+	if got := m.first("p.small.muted").text(); got != "One day is often too few to judge; the numbers are shown with their counts." {
+		t.Errorf("note %q", got)
+	}
+	page := pageHTML(t, "day", edit(time.UTC, []metrics.Marker{release}))
+	tiles, card2, note := strings.Index(page, `class="tgroups"`), strings.Index(page, `id="w-markers"`), strings.Index(page, "One day is often too few")
+	if tiles < 0 || card2 < 0 || note < 0 || tiles >= card2 || card2 >= note {
+		t.Errorf("order tiles %d, markers card %d, note %d: want tiles, then the card, then the note", tiles, card2, note)
+	}
+}
+
+func TestDayNeighbours(t *testing.T) {
+	for _, c := range []struct{ day, prev, prevHref, next, nextHref string }{
+		{"2026-09-30", "Sep 29", "/days/2026-09-29", "Oct 1", "/days/2026-10-01"},
+		{"2026-03-01", "Feb 28", "/days/2026-02-28", "Mar 2", "/days/2026-03-02"},
+		{"2026-01-01", "Dec 31", "/days/2025-12-31", "Jan 2", "/days/2026-01-02"},
+	} {
+		n := mainOf(t, pageNode(t, "day", false, func(d *PageData) { d.V["days"].Tables.Day.Day = c.day }))
+		as := n.find("div.day-nav a.btn")
+		if len(as) != 2 {
+			t.Fatalf("%s: %d neighbour links", c.day, len(as))
+		}
+		if as[0].text() != "← "+c.prev || as[1].text() != c.next+" →" {
+			t.Errorf("%s: %q / %q", c.day, as[0].text(), as[1].text())
+		}
+		if as[0].attr("href") != c.prevHref || as[1].attr("href") != c.nextHref {
+			t.Errorf("%s: hrefs %q / %q", c.day, as[0].attr("href"), as[1].attr("href"))
+		}
+	}
+}
+
+// A day opened from a filtered page is filtered the same way: the calendar's
+// squares, the Days list and the Day page's neighbours keep the project (and
+// path) along with the zone.
+func TestDayLinksKeepTheScope(t *testing.T) {
+	const scope = "?path=%2Fsrc&project=p%261&tz=Europe%2FParis"
+	edit := func(d *PageData) { d.P.TZ, d.P.Project, d.P.Path = "Europe/Paris", "p&1", "/src" }
+
+	r := goldenResult(t, "days")
+	card := calendarOf(r, r.Window, views.Params{Days: 7, TZ: "Europe/Paris", Project: "p&1", Path: "/src"}, "got", "/", "last 7 days")
+	squares := parseHTML(t, string(card.Chart)).find("a.hm-c")
+	if len(squares) == 0 {
+		t.Fatal("no day on the calendar")
+	}
+	for _, a := range squares {
+		if h := a.attr("href"); !strings.HasPrefix(h, "/days/") || !strings.HasSuffix(h, scope) {
+			t.Fatalf("calendar day links to %q, want the scope %q kept", h, scope)
+		}
+	}
+
+	table := listTable(t, pageNode(t, "days", false, func(d *PageData) {
+		edit(d)
+		d.V["days"].Tables.Days = []metrics.DayRow{{Day: "2026-10-08", Sessions: 4}}
+	}))
+	rows, _ := bodyRows(table)
+	if len(rows) != 1 {
+		t.Fatalf("%d day rows, want 1", len(rows))
+	}
+	if h := rows[0].find("td")[colOf(t, table, "Day")].first("a").attr("href"); h != "/days/2026-10-08"+scope {
+		t.Errorf("Days list link %q", h)
+	}
+
+	n := pageNode(t, "day", false, func(d *PageData) {
+		edit(d)
+		d.V["days"].Tables.Day.Day = "2026-10-05"
+	})
+	var hrefs []string
+	for _, a := range mainOf(t, n).find("div.day-nav a") {
+		hrefs = append(hrefs, a.attr("href"))
+	}
+	if want := []string{"/days/2026-10-04" + scope, "/days/2026-10-06" + scope}; !slices.Equal(hrefs, want) {
+		t.Errorf("day navigation %q, want %q", hrefs, want)
 	}
 }

@@ -1,10 +1,15 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"math"
 	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -447,8 +452,15 @@ func TestReleasesWithoutVersionsSaySo(t *testing.T) {
 		d.V["releases"].Tables.Releases, d.V["releases"].Tables.Page = nil, nil
 	})
 	doc := parseHTML(t, b)
-	if n := len(doc.find("main .tbl-wrap")); n != 1 { // the settings table only
-		t.Errorf("%d tables, want the settings one alone", n)
+	// the settings table only: the time chart's table sits in its figure
+	var tables int
+	for _, w := range doc.find("main .tbl-wrap") {
+		if !inside(w, "figure") {
+			tables++
+		}
+	}
+	if tables != 1 {
+		t.Errorf("%d tables, want the settings one alone", tables)
 	}
 	if !strings.Contains(visibleText(b), "No version recorded a prompt in this window.") {
 		t.Errorf("no empty sentence: %q", visibleText(b))
@@ -502,12 +514,15 @@ func TestReleasePageSentences(t *testing.T) {
 	b := pageHTML(t, "releases", nil)
 	text := visibleText(b)
 	for _, w := range []string{
-		"Attributed per event to the binary that recorded it, not per day. Comparing two versions with matched projects comes later.",
+		"Attributed per event to the binary that recorded it, not per day.",
 		"Replay recorded recalls with another learned-ranking setting, without touching memory or config.toml:",
 	} {
 		if !strings.Contains(text, w) {
 			t.Errorf("the page lacks %q", w)
 		}
+	}
+	if strings.Contains(text, "comes later") {
+		t.Error("the page still says the comparison comes later")
 	}
 	var cmds []string
 	for _, c := range parseHTML(t, b).find("main div.cmd code") {
@@ -587,5 +602,704 @@ func TestReleaseIDsCannotCollideWithThePage(t *testing.T) {
 	}
 	if got := strings.Count(b, `id="main"`) + strings.Count(b, `id="copy-status"`); got != 2 {
 		t.Errorf("the page's own ids main and copy-status appear %d times, want 2", got)
+	}
+}
+
+// inside says whether n is within an element called name.
+func inside(n *node, name string) bool {
+	for p := n.Parent; p != nil; p = p.Parent {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// versionA and versionB are the versions of the design's fixture of record.
+const versionA, versionB = "v0.1.16-m7", "v0.1.17-m7"
+
+// recordComparison is the engine's answer for the fixture of record (the
+// golden internal/metrics writes: four groups, two compared, one short of
+// turns, one short of days; the pooled difference 0.114625; raw figures that
+// disagree with it), plus the setting that differs, which the engine reads
+// from the config records and the golden does not hold.
+func recordComparison() *metrics.Comparison {
+	raw, err := os.ReadFile(filepath.Join("..", "metrics", "testdata", "compare-record.golden.json"))
+	if err != nil {
+		panic(err)
+	}
+	c := &metrics.Comparison{}
+	if err := json.Unmarshal(raw, c); err != nil {
+		panic(err)
+	}
+	changed := time.Date(2026, 10, 7, 18, 0, 0, 0, parisZone())
+	c.SettingsDiffer = []metrics.SettingDiff{{Key: "recall.min_score", A: fp(0.5), B: fp(0.55), ChangedAt: &changed}}
+	return c
+}
+
+// compareHTML is the Releases page with the comparison c in its view.
+func compareHTML(t *testing.T, c *metrics.Comparison, edit ...func(d *PageData)) string {
+	t.Helper()
+	return pageHTML(t, "releases", func(d *PageData) {
+		d.V["releases"].Tables.Compare = c
+		if c != nil {
+			d.P.Compare = c.A + "," + c.B
+		}
+		for _, e := range edit {
+			e(d)
+		}
+	})
+}
+
+// compareCard is the card of the comparison on a page.
+func compareCard(t *testing.T, page string) *node {
+	t.Helper()
+	for _, s := range parseHTML(t, page).find("main section.card") {
+		if h := s.first("h2"); h != nil && h.text() == "Do two versions differ?" {
+			return s
+		}
+	}
+	t.Fatal("no card Do two versions differ?")
+	return nil
+}
+
+// needFirst is the first element of n matching sel; the test stops without one.
+func needFirst(t *testing.T, n *node, sel string) *node {
+	t.Helper()
+	f := n.first(sel)
+	if f == nil {
+		t.Fatalf("no %s", sel)
+	}
+	return f
+}
+
+// needAll are the elements of n matching sel, at least min of them.
+func needAll(t *testing.T, n *node, sel string, min int) []*node {
+	t.Helper()
+	all := n.find(sel)
+	if len(all) < min {
+		t.Fatalf("%d of %s, want %d", len(all), sel, min)
+	}
+	return all
+}
+
+func lastOf(ns []*node) *node { return ns[len(ns)-1] }
+
+// pillDesc describes a pill for a failure message; n may be nil.
+func pillDesc(n *node) string {
+	if n == nil {
+		return "no pill"
+	}
+	return "pill " + strconv.Quote(n.text()) + " of class " + strconv.Quote(n.attr("class"))
+}
+
+// settingsLine is the "Settings differ" line of the comparison card.
+func settingsLine(t *testing.T, card *node) *node {
+	t.Helper()
+	for _, s := range card.find("div.state") {
+		if strings.HasPrefix(s.text(), "Settings differ:") {
+			return s
+		}
+	}
+	t.Fatal("no settings line")
+	return nil
+}
+
+// notStatus fails when the pill is drawn in a status colour.
+func notStatus(t *testing.T, what string, n *node) {
+	t.Helper()
+	for _, bad := range []string{"st-ok", "st-watch", "st-bad", "st-border", "st-learn"} {
+		if slices.Contains(strings.Fields(n.attr("class")), bad) {
+			t.Errorf("%s is drawn in a status colour: class %q", what, n.attr("class"))
+		}
+	}
+}
+
+func TestComparisonPage(t *testing.T) {
+	c := compareCard(t, compareHTML(t, recordComparison()))
+
+	// the readings first: Observational, the settings, the headline
+	if got := needFirst(t, c, "div.state").text(); got != "Observational, not an experiment. The two versions ran on different weeks, on different work, with different memory. Matching by project and place removes some of that, not all." {
+		t.Errorf("the observational box: %q", got)
+	}
+	var settings *node
+	for _, s := range c.find("div.state") {
+		if strings.HasPrefix(s.text(), "Settings differ:") {
+			settings = s
+		}
+	}
+	if settings == nil {
+		t.Fatal("no settings line")
+	}
+	// A caveat, not a fault: drawn as the page's other caveats are, with the
+	// info mark and no status colour.
+	notStatus(t, "the settings line", settings)
+	if settings.attr("class") != "state st-few" || settings.first("span.i-info") == nil {
+		t.Errorf("settings line is %q with info mark %v, want the caveat style (state st-few, i-info)", settings.attr("class"), settings.first("span.i-info") != nil)
+	}
+	if got := settings.text(); got != "Settings differ: was 0.5 under v0.1.16-m7 and 0.55 under v0.1.17-m7 (changed Oct 7). A difference may come from the setting, not the release." {
+		t.Errorf("settings line: %q", got)
+	}
+	if k := settings.first("code"); k == nil || k.Text != "recall.min_score" {
+		t.Errorf("the setting is not named in <code>")
+	}
+	lead := c.first("div.lead")
+	if lead == nil {
+		t.Fatal("no headline")
+	}
+	if got := needFirst(t, lead, "span.big").text(); got != "+11 pts" {
+		t.Errorf("headline %q", got)
+	}
+	if got := needFirst(t, lead, "span.sub").text(); got != "(+2 to +20) v0.1.17-m7 minus v0.1.16-m7, matched" {
+		t.Errorf("headline detail %q", got)
+	}
+	pill := lead.first("span.pill")
+	if pill == nil || pill.text() != "differs" || !strings.Contains(pill.attr("class"), "st-info") {
+		t.Fatalf("reading: %s", pillDesc(pill))
+	}
+	notStatus(t, "the reading", pill)
+	if got := needAll(t, lead, "div", 3)[2].text(); got != "Unmatched, the raw numbers say the opposite, −5 pts (57 % → 52 %): v0.1.17-m7 ran mostly on project-a (190 of its 295 turns), and v0.1.16-m7 mostly on backsight (236 of 326). Read the matched figure." {
+		t.Errorf("raw line %q", got)
+	}
+	if strings.Contains(c.text(), "No clear difference: the interval includes 0") {
+		t.Error("a difference that differs says there is no clear difference")
+	}
+
+	// the forest: two squares, the diamond, the two groups in words
+	plot := c.first("div.chart-plot svg")
+	if plot == nil {
+		t.Fatal("no forest chart")
+	}
+	if n := len(plot.find("path.ci-pt")); n != 2 {
+		t.Errorf("%d squares, want 2", n)
+	}
+	if n := len(plot.find("path.ci-pool")); n != 1 {
+		t.Errorf("%d diamonds, want 1", n)
+	}
+	var titles []string
+	for _, l := range plot.find("line.ci-ln") {
+		titles = append(titles, needFirst(t, l, "title").text())
+	}
+	wantTitles := []string{
+		"backsight · added to the prompt: +7 pts (−6 to +19), no clear difference",
+		"project-a · added to the prompt: +16 pts (+3 to +29), differs",
+		"Matched, pooled: +11 pts (+2 to +20), differs",
+	}
+	if !slices.Equal(titles, wantTitles) {
+		t.Errorf("forest marks %q, want %q", titles, wantTitles)
+	}
+	var few []string
+	for _, f := range plot.find("text.few-t") {
+		few = append(few, f.text())
+	}
+	if want := []string{"too few: v0.1.17-m7 has 12 turns, 30 needed", "too few: v0.1.16-m7 ran 4 days, 7 needed"}; !slices.Equal(few, want) {
+		t.Errorf("groups too few: %q, want %q", few, want)
+	}
+	if got := lastOf(needAll(t, plot, "text.ta-e", 1)).text(); !strings.Contains(got, "lower in v0.1.17-m7") {
+		t.Errorf("axis note %q", got)
+	}
+
+	// the table: one row a group, then the pooled and the unmatched rows
+	tbl := tableCaptioned(t, c, "Each project and place, and the matched total")
+	if got := needFirst(t, tbl, "thead tr").text(); got != "Project Where memory was shown v0.1.16-m7 v0.1.17-m7 Difference (95 %) Reading" {
+		t.Errorf("table head %q", got)
+	}
+	want := [][]string{
+		{"backsight", "added to the prompt", "70 % (140 of 200 turns, 21 d)", "77 % (46 of 60 turns, 9 d)", "+7 pts (−6 to +19)", "no clear difference"},
+		{"backsight", "Claude's search", "47 % (17 of 36 turns, 20 d)", "too few (6 of 12 turns)", "—", "needs 30 turns in each version"},
+		{"project-a", "added to the prompt", "30 % (21 of 70 turns, 18 d)", "46 % (87 of 190 turns, 9 d)", "+16 pts (+3 to +29)", "differs: higher in v0.1.17-m7"},
+		{"project-b", "added to the prompt", "too few (9 of 20 turns, 4 days)", "45 % (15 of 33 turns, 8 d)", "—", "needs 7 days in each version"},
+		{"Matched, pooled (2 of 4 pairs)", "49 %", "60 %", "+11 pts (+2 to +20)", "differs: higher in v0.1.17-m7"},
+		{"All turns, unmatched", "57 % (187 of 326)", "52 % (154 of 295)", "−5 pts", "not comparable: the mix of projects differs"},
+	}
+	got := rowsOf(tbl)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("table rows\n got %q\nwant %q", got, want)
+	}
+	if tr := needAll(t, tbl, "tbody tr", 6)[4]; tr.attr("class") != "total" {
+		t.Errorf("the pooled row is not the total row: %q", tr.attr("class"))
+	}
+	if got := needFirst(t, c, "p.tbl-more").text(); got != "Pooled rates are each version's rate in the matched pairs, weighted by pair size (the two versions' turns combined as a·b / (a + b): 46 and 51), so the same weights apply to both versions." {
+		t.Errorf("weights note %q", got)
+	}
+	// the cell of a group too few in its days is a neutral pill, not a colour
+	for _, p := range tbl.find("span.st") {
+		notStatus(t, "a too-few cell", p)
+	}
+
+	// without a disagreement there is no raw sentence, and the unmatched row says so
+	agree := recordComparison()
+	agree.RawDisagrees = false
+	card := compareCard(t, compareHTML(t, agree))
+	if strings.Contains(card.text(), "the raw numbers say the opposite") {
+		t.Error("a raw sentence without a disagreement")
+	}
+	rows := rowsOf(tableCaptioned(t, card, "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
+	if last := rows[len(rows)-1]; last[len(last)-1] != "raw figures, not matched" {
+		t.Errorf("unmatched row without a disagreement: %q", last)
+	}
+	// the raw sentence names where each version mostly ran, in its measure's units
+	prompts := recordComparison()
+	prompts.Measure = "recall.hit_rate"
+	if got := needAll(t, compareCard(t, compareHTML(t, prompts)), "div.lead div", 3)[2].text(); !strings.Contains(got, "(190 of its 295 prompts), and v0.1.16-m7 mostly on backsight (236 of 326). Read") {
+		t.Errorf("raw line in prompts: %q", got)
+	}
+	// no project holds half of a version's units: the generic sentence, no project named
+	spread := recordComparison()
+	for i := range spread.Strata {
+		spread.Strata[i].Project = "proj-" + strconv.Itoa(i)
+	}
+	spread.Strata[0].A.Den = 162 // 162 of 326 is just under half
+	line := needAll(t, compareCard(t, compareHTML(t, spread)), "div.lead div", 3)[2].text()
+	if want := "Unmatched, the raw numbers say the opposite, −5 pts (57 % → 52 %): the mix of projects differs between the two versions. Read the matched figure."; line != want {
+		t.Errorf("raw line without a majority:\n got %q\nwant %q", line, want)
+	}
+	// the side that has a majority is not enough: both must
+	oneSide := recordComparison() // B keeps project-a (190 of 295); A is spread over four projects
+	oneSide.Strata[0].A.Den = 100
+	for i, name := range []string{"w", "x", "project-a", "z"} {
+		oneSide.Strata[i].Project = name
+	}
+	if got := needAll(t, compareCard(t, compareHTML(t, oneSide)), "div.lead div", 3)[2].text(); !strings.Contains(got, "the mix of projects differs") {
+		t.Errorf("raw line with one side spread: %q", got)
+	}
+	// no setting differs: no settings line; a measure of verdicts counts verdicts
+	plain := recordComparison()
+	plain.SettingsDiffer = nil
+	if strings.Contains(compareCard(t, compareHTML(t, plain)).text(), "Settings differ") {
+		t.Error("a settings line without a setting that differs")
+	}
+	verdicts := recordComparison()
+	verdicts.Measure = "verdict.wrong_rate"
+	vrows := rowsOf(tableCaptioned(t, compareCard(t, compareHTML(t, verdicts)), "Each project and place, and the matched total"))
+	if len(vrows) != 6 {
+		t.Fatalf("%d verdict rows, want 6", len(vrows))
+	}
+	if vrows[0][2] != "70 % (140 of 200 verdicts, 21 d)" || vrows[5][0] != "All verdicts, unmatched" {
+		t.Errorf("verdict units: %q", vrows)
+	}
+}
+
+func TestComparisonShowsWhatItAsksAndHowToAskIt(t *testing.T) {
+	c := compareCard(t, compareHTML(t, recordComparison(), func(d *PageData) { d.P.Measure = "recall.hit_rate" }))
+	cmd := needFirst(t, c, "details.cli code").Text
+	if cmd != "backsight stats releases --days 30 --compare v0.1.16-m7,v0.1.17-m7 --measure recall.hit_rate" {
+		t.Errorf("command %q", cmd)
+	}
+	if got := needAll(t, c, "p.sub", 1)[0].text(); got != "Comparing v0.1.16-m7 with v0.1.17-m7 on turns where Claude used memory:" {
+		t.Errorf("which comparison: %q", got)
+	}
+	if info := c.first("details.info div.pop"); info == nil || !strings.Contains(info.text(), "Never “better”") {
+		t.Errorf("no explanation of the comparison")
+	}
+}
+
+func TestComparisonPicker(t *testing.T) {
+	h := dataHarness(t)
+	hdr := cookieHdr(h.login())
+	for _, c := range []struct{ query, want string }{
+		{"a=v1&b=v2&measure=recall.hit_rate", "/releases?compare=v1,v2&measure=recall.hit_rate"},
+		{"a=v1&b=v2", "/releases?compare=v1,v2"},
+		// the window travels with the comparison, after it
+		{"days=30&a=v1&b=v2&measure=verdict.wrong_rate&tz=UTC", "/releases?compare=v1,v2&measure=verdict.wrong_rate&days=30&tz=UTC"},
+		// a version is escaped in the address
+		{"a=" + url.QueryEscape(`v1"><b>`) + "&b=v2", "/releases?compare=" + url.QueryEscape(`v1"><b>`) + ",v2"},
+	} {
+		r := h.do("GET", "/releases?"+c.query, hdr...)
+		if r.StatusCode != 303 || r.Header.Get("Location") != c.want {
+			t.Errorf("%s: %d %q, want 303 %q", c.query, r.StatusCode, r.Header.Get("Location"), c.want)
+		}
+	}
+	// the redirect is followed by a page that asks the view
+	r := h.do("GET", "/releases?compare=v1,v2&measure=recall.hit_rate", hdr...)
+	if r.StatusCode != 200 || !strings.Contains(body(t, r), "Comparing v1 with v2 on prompts that got memory:") {
+		t.Errorf("the comparison page: %d", r.StatusCode)
+	}
+	// the same version twice, a missing one or an unknown measure: the view's sentence, 400
+	for _, c := range []struct{ query, want string }{
+		{"a=v1&b=v1", "--compare: A and B are the same version."},
+		{"a=v1&b=", "--compare: two versions, as A,B."},
+		{"a=v1&b=v2&measure=bogus", "--measure: one of used.turn_rate, recall.hit_rate, verdict.wrong_rate."},
+	} {
+		r := h.do("GET", "/releases?"+c.query, hdr...)
+		if r.StatusCode != 400 || r.Header.Get("Location") != "" || !strings.Contains(visibleText(body(t, r)), c.want) {
+			t.Errorf("%s: %d %q, want 400 with %q", c.query, r.StatusCode, r.Header.Get("Location"), c.want)
+		}
+	}
+	// the filters travel through the redirect
+	r = h.do("GET", "/releases?a=v1&b=v2&project=p1", hdr...)
+	if r.StatusCode != 303 || r.Header.Get("Location") != "/releases?compare=v1,v2&project=p1" {
+		t.Errorf("project: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	// a version that never ran in the window is too few, not an error
+	r = h.do("GET", "/releases?a=v9&b=v2", hdr...)
+	if r.StatusCode != 303 || r.Header.Get("Location") != "/releases?compare=v9,v2" {
+		t.Errorf("unknown version: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	r = h.do("GET", "/releases?compare=v9,v2", hdr...)
+	card := compareCard(t, body(t, r))
+	if r.StatusCode != 200 || !strings.Contains(card.text(), "Too few to compare. v9 has run 0 days with 0 turns that said what they used;") {
+		t.Errorf("unknown version page: %d %q", r.StatusCode, card.text())
+	}
+	// the picker is only the Releases page's
+	if r := h.do("GET", "/quality?a=v1&b=v2", hdr...); r.StatusCode != 400 {
+		t.Errorf("/quality takes a: %d", r.StatusCode)
+	}
+}
+
+func TestComparisonPickerLists(t *testing.T) {
+	versions := func(n *node, name string) (values []string, selected string) {
+		for _, o := range n.find("select[name=" + name + "] option") {
+			values = append(values, o.attr("value"))
+			if o.has("selected") {
+				selected = o.attr("value")
+			}
+		}
+		return values, selected
+	}
+	// without a comparison: the window's versions, the newest as B and the one before as A
+	page := pageHTML(t, "releases", func(d *PageData) { d.Frame.Keep = [][2]string{{"days", "30"}, {"tz", "UTC"}} })
+	c := compareCard(t, page)
+	var window []string
+	for _, r := range goldenResult(t, "releases").Tables.Releases {
+		window = append(window, r.Version)
+	}
+	if len(window) < 2 {
+		t.Fatalf("the golden has %d versions", len(window))
+	}
+	if form := c.first("form"); form == nil || form.attr("method") != "get" || form.attr("action") != "/releases" {
+		t.Fatal("the picker is not a GET form to /releases")
+	}
+	if vs, sel := versions(c, "a"); !slices.Equal(vs, window) || sel != window[1] {
+		t.Errorf("A lists %q selecting %q, want %q selecting %q", vs, sel, window, window[1])
+	}
+	if vs, sel := versions(c, "b"); !slices.Equal(vs, window) || sel != window[0] {
+		t.Errorf("B lists %q selecting %q, want %q selecting %q", vs, sel, window, window[0])
+	}
+	if vs, sel := versions(c, "measure"); !slices.Equal(vs, metrics.CompareMeasures) || sel != "used.turn_rate" {
+		t.Errorf("measures %q selecting %q", vs, sel)
+	}
+	var labels []string
+	for _, o := range c.find("select[name=measure] option") {
+		labels = append(labels, o.text())
+	}
+	if want := []string{"Turns where Claude used memory", "Prompts that got memory", "Memories reported wrong or out of date"}; !slices.Equal(labels, want) {
+		t.Errorf("measure labels %q", labels)
+	}
+	var hidden []string
+	for _, in := range c.find("form input[type=hidden]") {
+		hidden = append(hidden, in.attr("name")+"="+in.attr("value"))
+	}
+	if want := []string{"days=30", "tz=UTC"}; !slices.Equal(hidden, want) {
+		t.Errorf("the window is not carried by the picker: %q", hidden)
+	}
+	if !strings.Contains(c.text(), "Pick two versions to see whether they differ.") {
+		t.Errorf("no hint: %q", c.text())
+	}
+	// with a comparison: its versions and measure are the ones selected, even outside the window
+	cmp := recordComparison()
+	cmp.Measure = "verdict.wrong_rate"
+	c = compareCard(t, compareHTML(t, cmp))
+	if vs, sel := versions(c, "a"); sel != versionA || !slices.Contains(vs, versionA) {
+		t.Errorf("A selects %q among %q", sel, vs)
+	}
+	if vs, sel := versions(c, "b"); sel != versionB || !slices.Contains(vs, versionB) {
+		t.Errorf("B selects %q among %q", sel, vs)
+	}
+	if _, sel := versions(c, "measure"); sel != "verdict.wrong_rate" {
+		t.Errorf("measure selects %q", sel)
+	}
+	// one version only: nothing to compare, said so
+	one := pageHTML(t, "releases", func(d *PageData) { d.V["releases"].Tables.Releases = d.V["releases"].Tables.Releases[:1] })
+	if got := compareCard(t, one).text(); !strings.Contains(got, "Two versions need to have run in this window to compare them: pick a longer window.") {
+		t.Errorf("one version: %q", got)
+	}
+}
+
+func TestComparisonTooFewAndNoDifference(t *testing.T) {
+	retry := time.Date(2026, 11, 6, 9, 0, 0, 0, parisZone())
+	few := func(why string, v string, days, units int, retryAfter *time.Time) *metrics.Comparison {
+		c := recordComparison()
+		c.Diff, c.CI, c.PooledA, c.PooledB, c.Reading, c.RawDisagrees = nil, nil, nil, nil, "too_few", false
+		c.TooFew = &metrics.TooFew{Version: v, Days: days, Units: units, Why: why, RetryAfter: retryAfter}
+		return c
+	}
+	// too few by days, with a date to come back
+	c := compareCard(t, compareHTML(t, few("days", "v0.1.18-m7", 3, 11, &retry)))
+	sentence := "Too few to compare. v0.1.18-m7 has run 3 days with 11 turns that said what they used; each version needs 7 days and 30 such turns in at least one shared project and place. Try again around Nov 6."
+	if got := needFirst(t, c, "div.state").text(); got != sentence {
+		t.Errorf("too few:\n got %q\nwant %q", got, sentence)
+	}
+	pill := c.first("div.card-head span.pill")
+	if pill == nil || pill.text() != "too few" {
+		t.Fatalf("reading: %s", pillDesc(pill))
+	}
+	notStatus(t, "the too-few reading", pill)
+	for _, none := range []string{"div.lead", "figure", "table", "span.big"} {
+		if c.first(none) != nil {
+			t.Errorf("a comparison that is too few draws %s", none)
+		}
+	}
+	// by units, nothing to wait for: no date; one day and one turn are singular
+	c = compareCard(t, compareHTML(t, few("units", "v0.1.18-m7", 1, 1, nil)))
+	if got, want := needFirst(t, c, "div.state").text(), "Too few to compare. v0.1.18-m7 has run 1 day with 1 turn that said what it used; each version needs 7 days and 30 such turns in at least one shared project and place."; got != want {
+		t.Errorf("too few by units:\n got %q\nwant %q", got, want)
+	}
+	// the other measures count their own units
+	prompts := few("units", "v0.1.18-m7", 8, 12, nil)
+	prompts.Measure = "recall.hit_rate"
+	if got, want := needFirst(t, compareCard(t, compareHTML(t, prompts)), "div.state").text(), "Too few to compare. v0.1.18-m7 has run 8 days with 12 prompts; each version needs 7 days and 30 such prompts in at least one shared project and place."; got != want {
+		t.Errorf("too few prompts:\n got %q\nwant %q", got, want)
+	}
+	// by sessions: the pooled comparison needs 10 sessions a version
+	sess := few("sessions", versionA, 21, 200, nil)
+	sess.SessionsA = 4
+	if got := needFirst(t, compareCard(t, compareHTML(t, sess)), "div.state").text(); !strings.HasSuffix(got, " Together they need 10 sessions in each version; v0.1.16-m7 has 4.") {
+		t.Errorf("too few sessions: %q", got)
+	}
+
+	// no clear difference: the interval includes 0
+	nd := recordComparison()
+	nd.Reading, nd.Diff, nd.CI, nd.RawDisagrees, nd.SettingsDiffer = "no_clear_difference", fp(0.012), &[2]float64{-0.041, 0.058}, false, nil
+	c = compareCard(t, compareHTML(t, nd))
+	lead := c.first("div.lead")
+	if got := needFirst(t, lead, "span.big").text(); got != "+1 pt" {
+		t.Errorf("headline %q", got)
+	}
+	if got := needFirst(t, lead, "span.sub").text(); got != "(−4 to +6) v0.1.17-m7 minus v0.1.16-m7, matched" {
+		t.Errorf("headline detail %q", got)
+	}
+	pill = lead.first("span.pill")
+	if pill == nil || pill.text() != "no clear difference" || !strings.Contains(pill.attr("class"), "st-info") {
+		t.Fatalf("reading: %s", pillDesc(pill))
+	}
+	notStatus(t, "the no-clear-difference reading", pill)
+	var said []string
+	for _, p := range c.find("p.small") {
+		said = append(said, p.text())
+	}
+	if !slices.Contains(said, "No clear difference: the interval includes 0. That is not proof that they are the same.") {
+		t.Errorf("no sentence about the interval: %q", said)
+	}
+	rows := rowsOf(tableCaptioned(t, c, "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
+	if got := rows[4][4]; got != "no clear difference" {
+		t.Errorf("pooled reading %q", got)
+	}
+	// a clear difference downward says lower, never worse
+	down := recordComparison()
+	down.Diff, down.CI = fp(-0.1), &[2]float64{-0.15, -0.05}
+	rows = rowsOf(tableCaptioned(t, compareCard(t, compareHTML(t, down)), "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
+	if got := rows[4][4]; got != "differs: lower in v0.1.17-m7" {
+		t.Errorf("pooled reading downward %q", got)
+	}
+	// the settings of a version are not known
+	unk := recordComparison()
+	unk.SettingsDiffer, unk.SettingsUnknown = nil, true
+	if got := compareCard(t, compareHTML(t, unk)).text(); !strings.Contains(got, "Settings of a version are not known: nothing was recorded before its first turn.") {
+		t.Errorf("unknown settings: %q", got)
+	}
+	// two settings, one new: each is named
+	two := recordComparison()
+	two.SettingsDiffer = append(two.SettingsDiffer, metrics.SettingDiff{Key: "recall.prompt_hits", A: nil, B: fp(3)})
+	var codes []string
+	for _, k := range settingsLine(t, compareCard(t, compareHTML(t, two))).find("code") {
+		codes = append(codes, k.Text)
+	}
+	if !slices.Equal(codes, []string{"recall.min_score", "recall.prompt_hits"}) {
+		t.Errorf("settings named %q", codes)
+	}
+}
+
+func TestComparisonEscapesVersions(t *testing.T) {
+	a, b, project := `v1"><b>`, `v2'<i>&amp;`, `p"><u>`
+	c := recordComparison()
+	c.A, c.B = a, b
+	c.Strata[0].Project = project
+	c.SettingsDiffer[0].Key = `k"><s>`
+	page := compareHTML(t, c, func(d *PageData) {
+		rel := d.V["releases"].Tables.Releases
+		rel[0].Version = b
+		d.V["releases"].Tables.Markers = []metrics.Marker{{At: d.V["releases"].Window.Since.Add(36 * time.Hour), Kind: "release", Version: b, Previous: a}}
+	})
+	for _, raw := range []string{a, project, `k"><s>`, `v2'<i>`} {
+		if strings.Contains(page, raw) {
+			t.Errorf("the page holds %q unescaped", raw)
+		}
+	}
+	// no element came of a name: the page has as many <b>, <i>, <u> and <s> as with plain names
+	plain := recordComparison()
+	base := compareHTML(t, plain, func(d *PageData) {
+		d.V["releases"].Tables.Markers = []metrics.Marker{{At: d.V["releases"].Window.Since.Add(36 * time.Hour), Kind: "release", Version: "v2", Previous: "v1"}}
+	})
+	for _, tag := range []string{"<b>", "<i>", "<u>", "<s>"} {
+		if got, want := strings.Count(page, tag), strings.Count(base, tag); got != want {
+			t.Errorf("%d %s in the page, %d with plain names", got, tag, want)
+		}
+	}
+	card := compareCard(t, page)
+	for _, name := range []string{"a", "b"} {
+		var vals []string
+		for _, o := range card.find("select[name=" + name + "] option") {
+			vals = append(vals, o.attr("value"))
+			if o.attr("value") != o.text() {
+				t.Errorf("option %q reads %q", o.attr("value"), o.text())
+			}
+		}
+		if !slices.Contains(vals, a) || !slices.Contains(vals, b) {
+			t.Errorf("select %s lacks the versions: %q", name, vals)
+		}
+	}
+	if got := needFirst(t, card, "div.lead span.sub").text(); got != "(+2 to +20) "+b+" minus "+a+", matched" {
+		t.Errorf("headline detail %q", got)
+	}
+	if got := settingsLine(t, card).text(); !strings.Contains(got, "under "+a+" and 0.55 under "+b) {
+		t.Errorf("settings line %q", got)
+	}
+	if got := needAll(t, card, "div.lead div", 3)[2].text(); !strings.Contains(got, b+" ran mostly on project-a (190 of its 295 turns), and "+a+" mostly on "+project+" (200 of 326).") {
+		t.Errorf("raw line %q", got)
+	}
+	var svgText []string
+	for _, n := range card.find("div.chart-plot svg text") {
+		svgText = append(svgText, n.text())
+	}
+	if !slices.Contains(svgText, "← lower in "+b) || !slices.Contains(svgText, project+" · added to the prompt") {
+		t.Errorf("chart texts %q", svgText)
+	}
+	for _, l := range card.find("div.chart-plot svg line.ci-ln") {
+		if title := needFirst(t, l, "title").text(); strings.HasPrefix(title, project) && !strings.Contains(title, "differs") && !strings.Contains(title, "no clear") {
+			t.Errorf("mark title %q", title)
+		}
+	}
+	if svg := card.first("div.chart-plot svg"); !strings.HasPrefix(svg.attr("aria-label"), "Difference in turns where Claude used memory, "+b+" minus "+a) {
+		t.Errorf("chart label %q", svg.attr("aria-label"))
+	}
+	rows := rowsOf(tableCaptioned(t, card, "Each project and place, and the matched total"))
+	if len(rows) != 6 {
+		t.Fatalf("%d rows, want 6", len(rows))
+	}
+	if rows[0][0] != project || rows[2][5] != "differs: higher in "+b {
+		t.Errorf("table rows %q", rows)
+	}
+	// the time chart: the marker's label and sentence
+	used := usedCardOf(t, page)
+	var marks []string
+	for _, m := range used.find("svg line.rel-mk title") {
+		marks = append(marks, m.text())
+	}
+	if len(marks) != 1 || !strings.Contains(marks[0], "new version "+b+" (was "+a+")") {
+		t.Errorf("release marker %q", marks)
+	}
+}
+
+// usedCardOf is the time chart's card on a page.
+func usedCardOf(t *testing.T, page string) *node {
+	t.Helper()
+	for _, s := range parseHTML(t, page).find("main section.card") {
+		if h := s.first("h2"); h != nil && h.text() == "When did Claude use memory?" {
+			return s
+		}
+	}
+	t.Fatal("no card When did Claude use memory?")
+	return nil
+}
+
+func TestReleasesMarkersChart(t *testing.T) {
+	g := goldenResult(t, "releases")
+	var days []string
+	for _, p := range g.Metrics["used.turn_rate"].Series {
+		days = append(days, p.Day)
+	}
+	oct7, oct8 := slices.Index(days, "2026-10-07"), slices.Index(days, "2026-10-08")
+	if oct7 < 0 || oct8 != oct7+1 || len(g.Tables.Markers) != 1 || g.Tables.Markers[0].Version != "v0.1.18" {
+		t.Fatalf("the golden changed: days %q, markers %+v", days, g.Tables.Markers)
+	}
+	two := func(d *PageData) {
+		r := d.V["releases"]
+		r.Tables.Markers = append([]metrics.Marker{{
+			At: time.Date(2026, 10, 7, 18, 0, 0, 0, parisZone()), Kind: "config",
+			Changes: []metrics.SettingChange{{Key: "recall.min_score", From: fp(0.5), To: fp(0.6)}},
+		}}, r.Tables.Markers...)
+		// one outside the days drawn is dropped, and with it nothing else
+		r.Tables.Markers = append(r.Tables.Markers, metrics.Marker{At: time.Date(2026, 8, 1, 9, 0, 0, 0, parisZone()), Kind: "release", Version: "v0.0.1"})
+	}
+	card := usedCardOf(t, pageHTML(t, "releases", two))
+	if card.first("div.card-head span.chip") == nil || lastOf(card.find("div.card-head span.chip")[:1]).text() != "this PC" {
+		t.Errorf("the chart does not say it is this PC's")
+	}
+	var rel, cfg []string
+	for _, m := range card.find("svg line.rel-mk title") {
+		rel = append(rel, m.text())
+	}
+	for _, m := range card.find("svg line.cfg-mk title") {
+		cfg = append(cfg, m.text())
+	}
+	if want := []string{"Oct 8: new version v0.1.18 (was v0.1.17)"}; !slices.Equal(rel, want) {
+		t.Errorf("release markers %q, want %q", rel, want)
+	}
+	if want := []string{"Oct 7: settings changed, recorded at 18:00 (recall.min_score 0.5 → 0.6)"}; !slices.Equal(cfg, want) {
+		t.Errorf("settings markers %q, want %q", cfg, want)
+	}
+	// each marker stands at its own day: the table's Marker column says which
+	tbl := card.first("details.tblfb table")
+	if tbl == nil {
+		t.Fatal("no table behind the chart")
+	}
+	head := tbl.first("thead tr").find("th")
+	if head[len(head)-1].text() != "Marker" {
+		t.Fatalf("table head %q", needFirst(t, tbl, "thead tr").text())
+	}
+	rows := rowsOf(tbl)
+	if len(rows) != len(days) {
+		t.Fatalf("%d rows for %d days", len(rows), len(days))
+	}
+	for i, r := range rows {
+		want := "—"
+		switch i {
+		case oct7:
+			want = "settings changed"
+		case oct8:
+			want = "v0.1.18"
+		}
+		if got := r[len(r)-1]; got != want {
+			t.Errorf("%s: marker %q, want %q", r[0], got, want)
+		}
+	}
+	if !strings.Contains(needFirst(t, card, "div.legend").text(), "new version") || !strings.Contains(needFirst(t, card, "div.legend").text(), "settings changed") {
+		t.Errorf("legend %q", needFirst(t, card, "div.legend").text())
+	}
+	// the line is the rate of used turns, with the faint bars of the turns
+	var valued int
+	for _, p := range g.Metrics["used.turn_rate"].Series {
+		if p.Value != nil {
+			valued++
+		}
+	}
+	if valued == 0 {
+		t.Fatal("the golden has no day with a rate")
+	}
+	if n := len(card.find("svg circle.pt.s-used")); n != valued {
+		t.Errorf("%d points drawn for %d days with a rate", n, valued)
+	}
+	if n := len(card.find("svg rect.nb")); n != len(days) {
+		t.Errorf("%d faint bars for %d days", n, len(days))
+	}
+	// without any marker, none is drawn and the column is gone
+	bare := usedCardOf(t, pageHTML(t, "releases", func(d *PageData) { d.V["releases"].Tables.Markers = nil }))
+	if len(bare.find("svg line.rel-mk"))+len(bare.find("svg line.cfg-mk")) != 0 || strings.Contains(bare.text(), "Marker") {
+		t.Errorf("markers without any")
+	}
+	// no used turns in the view: a sentence, not an empty chart
+	none := usedCardOf(t, pageHTML(t, "releases", func(d *PageData) { delete(d.V["releases"].Metrics, "used.turn_rate") }))
+	if !strings.Contains(none.text(), "No days to draw in this window.") || none.first("svg polyline") != nil {
+		t.Errorf("no series: %q", none.text())
 	}
 }
