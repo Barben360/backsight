@@ -12,14 +12,17 @@ var uriEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 // which network and synced folders do not give, so they get the rollback
 // journal. The writer takes the write lock at BEGIN; the reader never does.
 func dsn(path string, fs FSInfo, readOnly bool) string {
-	journal := "WAL"
+	journal, sync := "WAL", "NORMAL"
 	if fs.Kind != FSLocal {
-		journal = "DELETE"
+		// The rollback journal with NORMAL can lose the file on a power
+		// cut; FULL syncs at each commit. Slower, on a folder where the
+		// index is written rarely.
+		journal, sync = "DELETE", "FULL"
 	}
 	q := "_pragma=journal_mode(" + journal + ")" +
 		"&_pragma=busy_timeout(" + busyMS() + ")" +
 		"&_pragma=foreign_keys(on)" +
-		"&_pragma=synchronous(NORMAL)" +
+		"&_pragma=synchronous(" + sync + ")" +
 		"&_pragma=journal_size_limit(67108864)"
 	if readOnly {
 		q += "&mode=ro&_txlock=deferred"

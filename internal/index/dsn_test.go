@@ -115,3 +115,25 @@ func TestWriterCheckpointPolicy(t *testing.T) {
 		t.Errorf("reader: wal_autocheckpoint %d, cache_size %d; want SQLite's 1000, -2000", ckpt, cache)
 	}
 }
+
+// TestSynchronousFollowsTheFolder: NORMAL is safe only with the write-ahead
+// log on a local disk (a commit is synced by the next checkpoint). Off it,
+// the rollback journal with NORMAL can lose or corrupt the file on a power
+// cut, so a network or synced folder gets FULL, for the writer and the
+// reader alike.
+func TestSynchronousFollowsTheFolder(t *testing.T) {
+	for _, tc := range []struct {
+		fs   FSInfo
+		want string
+	}{
+		{FSInfo{Kind: FSLocal}, "synchronous(NORMAL)"},
+		{FSInfo{FSNetwork, "nfs"}, "synchronous(FULL)"},
+		{FSInfo{FSSynced, "dropbox"}, "synchronous(FULL)"},
+	} {
+		for _, ro := range []bool{false, true} {
+			if got := dsn("/p/m.db", tc.fs, ro); !strings.Contains(got, "_pragma="+tc.want) {
+				t.Errorf("%+v readOnly=%v: %s lacks %s", tc.fs, ro, got, tc.want)
+			}
+		}
+	}
+}
