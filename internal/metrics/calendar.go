@@ -121,11 +121,10 @@ t AS (
             AND COALESCE(s.path, '') <> 'briefing' AND COALESCE(s.agent, '') = '') AS first
   FROM u),
 f AS (
-  SELECT t.first AS first, st.outcome AS outcome,
-         ROW_NUMBER() OVER (PARTITION BY t.session, t.turn, st.agent ORDER BY st.source_file DESC, st."offset" DESC) AS rn
-  FROM t JOIN stops st ON st.session = t.session AND st.turn = t.turn
-  WHERE t.first >= ? AND t.first < ? AND COALESCE(st.agent, '') = '' AND `+sessionProject("t")+`)
-SELECT `+day+`, COUNT(*) FROM f WHERE rn = 1 AND outcome = 'declared' GROUP BY 1`,
+  SELECT t.first AS first, `+finalMainOutcome("t")+` AS outcome
+  FROM t
+  WHERE t.first >= ? AND t.first < ? AND `+sessionProject("t")+`)
+SELECT `+day+`, COUNT(*) FROM f WHERE outcome = 'declared' GROUP BY 1`,
 		since, until, e.q.Project, e.q.Project)
 	if err != nil {
 		return nil, err

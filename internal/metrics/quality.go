@@ -126,6 +126,17 @@ func quality(e env, w Window) (map[string]Observation, map[string]Metric, error)
 	return obs, met, nil
 }
 
+// finalMainOutcome is the SQL expression of the outcome of the final
+// main-agent stop of the turn of alias a (columns session, turn), NULL with
+// no stop: turn_final_stop's row (latest by journal order, a last blocked
+// reading undeclared) read through stops_session_turn for that one turn,
+// where the view ranks every stop of the index.
+func finalMainOutcome(a string) string {
+	return `(SELECT CASE s.outcome WHEN 'blocked' THEN 'undeclared' ELSE s.outcome END FROM stops s
+   WHERE s.session = ` + a + `.session AND s.turn = ` + a + `.turn AND COALESCE(s.agent, '') = ''
+   ORDER BY s.source_file DESC, s."offset" DESC LIMIT 1)`
+}
+
 // turnAcc counts the turns that showed memory, of the window or of one of
 // its buckets.
 type turnAcc struct {
@@ -155,9 +166,9 @@ t AS (
   FROM shows s JOIN cand ON cand.session = s.session AND cand.turn = s.turn AND cand.agent = COALESCE(s.agent, '')
   WHERE COALESCE(s.path, '') <> 'briefing'
   GROUP BY s.session, s.turn, cand.agent)
-SELECT t.agent, t.first, t.last, t.mems, t.credited, f.outcome,
+SELECT t.agent, t.first, t.last, t.mems, t.credited, `+finalMainOutcome("t")+`,
        EXISTS (SELECT 1 FROM credits c WHERE c.session = t.session AND c.turn = t.turn AND c.verdict = 'used')
-FROM t LEFT JOIN turn_final_stop f ON f.session = t.session AND f.turn = t.turn AND COALESCE(f.agent, '') = ''
+FROM t
 WHERE t.first >= ? AND t.first < ? AND `+sessionProject("t")+` AND `+sessionVersion("t"),
 		since, until, since, until, e.q.Project, e.q.Project, e.q.version, e.q.version)
 	if err != nil {
