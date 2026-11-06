@@ -10,13 +10,15 @@ var uriEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 
 // dsn is the connection string for the index file. WAL needs shared memory,
 // which network and synced folders do not give, so they get the rollback
-// journal. The writer takes the write lock at BEGIN; the reader never does.
-func dsn(path string, fs FSInfo, readOnly bool) string {
+// journal (wal false), as does a local folder that failed the WAL probe
+// (useWAL). The rollback journal with synchronous=NORMAL can lose the file
+// on a power cut: it gets FULL, which syncs at each commit (slower, on a
+// file written in batches); NORMAL is for WAL, where the next checkpoint
+// syncs the commits. The writer takes the write lock at BEGIN; the reader
+// never does.
+func dsn(path string, wal, readOnly bool) string {
 	journal, sync := "WAL", "NORMAL"
-	if fs.Kind != FSLocal {
-		// The rollback journal with NORMAL can lose the file on a power
-		// cut; FULL syncs at each commit. Slower, on a folder where the
-		// index is written rarely.
+	if !wal {
 		journal, sync = "DELETE", "FULL"
 	}
 	q := "_pragma=journal_mode(" + journal + ")" +
