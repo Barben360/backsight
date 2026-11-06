@@ -76,6 +76,39 @@
         out('opened=' + opened + ';closed=' + !d.open + ';focus=' + desc(document.activeElement) + ';before=' + desc(before));
       }, 100);
     },
+    closed: function () {
+      var d = q('dialog.keys');
+      var before = getComputedStyle(d).display;
+      key('?', { shiftKey: true });
+      out('closed=' + before + ';open=' + getComputedStyle(d).display);
+    },
+    modal: function () {
+      var d = q('dialog.keys');
+      var before = q('a.refresh-t');
+      before.focus();
+      key('?', { shiftKey: true });
+      var btn = document.activeElement;
+      // Under the modal: ? again must not move the return point; /, g q
+      // and r must do nothing.
+      key('?', { shiftKey: true }, btn);
+      key('/', {}, btn);
+      key('g', {}, btn);
+      key('q', {}, btn);
+      key('r', {}, btn);
+      var proj = q('details.proj').open;
+      key('Escape', {}, btn);
+      setTimeout(function () {
+        out('proj=' + proj + ';closed=' + !d.open + ';focus=' + desc(document.activeElement));
+      }, 300);
+    },
+    copyid: function () {
+      clip(function () { return Promise.reject(new Error('refused')); });
+      var btn = q('button.copy[data-copy]');
+      btn.click();
+      setTimeout(function () {
+        out('label=' + btn.textContent.trim() + ';sel=' + window.getSelection().toString().length);
+      }, 300);
+    },
     nodialog: function () {
       key('?', { shiftKey: true });
       out('dialog=' + !!q('dialog') + ';button=' + !!q('button.keyhint-btn'));

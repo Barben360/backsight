@@ -10,6 +10,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -98,6 +99,12 @@ var resultRE = regexp.MustCompile(`data-result="([^"]*)"`)
 // log and body[data-result] of the dumped DOM ("" when it has none).
 func (d *domHarness) run(t *testing.T, chrome, scenario string) ([]string, string) {
 	t.Helper()
+	return d.runAt(t, chrome, "/?days=14", scenario)
+}
+
+// runAt is run on another page (path and query).
+func (d *domHarness) runAt(t *testing.T, chrome, path, scenario string) ([]string, string) {
+	t.Helper()
 	d.mu.Lock()
 	d.log = nil
 	d.mu.Unlock()
@@ -105,7 +112,7 @@ func (d *domHarness) run(t *testing.T, chrome, scenario string) ([]string, strin
 	if os.Getuid() == 0 {
 		args = append(args, "--no-sandbox")
 	}
-	args = append(args, "--virtual-time-budget=5000", "--dump-dom", "http://"+d.h.host()+"/?days=14#s="+scenario)
+	args = append(args, "--virtual-time-budget=5000", "--dump-dom", "http://"+d.h.host()+path+"#s="+scenario)
 	cmd := exec.Command(chrome, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -258,6 +265,64 @@ func TestScriptBehaviourInChrome(t *testing.T) {
 			t.Fatalf("the page's summary text:\n%s", text)
 		}
 		if want := "text=" + html.UnescapeString(text) + ";open=false;label=Copied"; res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+	})
+	t.Run("the closed list is not displayed until ?", func(t *testing.T) {
+		_, res := d.run(t, chrome, "closed")
+		if want := "closed=none;open=flex"; res != want {
+			t.Errorf("data-result %q, want %q (computed display before and after ?)", res, want)
+		}
+	})
+	t.Run("g carries the window and scope, not the page's own keys", func(t *testing.T) {
+		const from = "/?days=14&project=proj-3&hm=used"
+		log, _ := d.runAt(t, chrome, from, "gq")
+		if i, j := indexOf(log, "GET "+from), indexOf(log, "GET /quality?days=14&project=proj-3"); i != 0 || j <= i {
+			t.Errorf("request log %q: want GET %s, then GET /quality?days=14&project=proj-3", log, from)
+		}
+		for _, l := range log {
+			if strings.Contains(l, "hm=") && strings.HasPrefix(l, "GET /quality") {
+				t.Errorf("the page's colour choice followed the chord: %q", l)
+			}
+		}
+		// The two targets: the carried one is served, the old one was refused.
+		if r := d.h.do("GET", "/quality?days=14&project=proj-3"); r.StatusCode != 200 {
+			t.Errorf("GET /quality?days=14&project=proj-3: status %d", r.StatusCode)
+		}
+		if r := d.h.do("GET", "/quality?days=14&project=proj-3&hm=used"); r.StatusCode != 400 {
+			t.Errorf("GET /quality with hm: status %d, want 400 (the fixture of this guard)", r.StatusCode)
+		}
+	})
+	t.Run("the open list is modal to the shortcuts", func(t *testing.T) {
+		log, res := d.run(t, chrome, "modal")
+		want := "proj=false;closed=true;focus=a.btn+btn-quiet+refresh-t"
+		if res != want {
+			t.Errorf("data-result %q, want %q", res, want)
+		}
+		n := 0
+		for _, l := range log {
+			if l == page {
+				n++
+			}
+			if strings.HasPrefix(l, "GET /quality") {
+				t.Errorf("g q under the dialog navigated: %q", log)
+			}
+		}
+		if n != 1 {
+			t.Errorf("%d requests of %s in %q, want 1 (r reloaded under the dialog)", n, page, log)
+		}
+	})
+	t.Run("Copy id without a command box says it could not copy", func(t *testing.T) {
+		rows := apiPath(t, d.h, "/api/v1/memories").Tables.Memories
+		if len(rows) == 0 {
+			t.Fatal("no memory in the fixture")
+		}
+		path := "/memories/" + url.PathEscape(rows[0].ID)
+		if r := d.h.do("GET", path); r.StatusCode != 200 {
+			t.Fatalf("GET %s: status %d", path, r.StatusCode)
+		}
+		_, res := d.runAt(t, chrome, path, "copyid")
+		if want := "label=Couldn't copy;sel=0"; res != want {
 			t.Errorf("data-result %q, want %q", res, want)
 		}
 	})

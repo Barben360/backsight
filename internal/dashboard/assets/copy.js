@@ -54,9 +54,11 @@ document.addEventListener('DOMContentLoaded', function () {
           show(button, "Couldn't copy: the text is shown below");
           return;
         }
-        if (code) {
-          select(code);
+        if (!code) {
+          show(button, "Couldn't copy");
+          return;
         }
+        select(code);
         show(button, 'Selected: press Ctrl+C');
       };
       if (!navigator.clipboard) {
@@ -74,7 +76,22 @@ document.addEventListener('DOMContentLoaded', function () {
   var dlg = doc.querySelector('dialog.keys');
   var pages = { o: '/', q: '/quality', c: '/cost', b: '/bank', p: '/pipeline', s: '/system' };
   var gAt = 0; // when g was pressed
+  var keep = ['days', 'since', 'until', 'tz', 'project', 'dev']; // the window and scope every page takes
   var opener = null;
+
+  // The query a chord carries: the window and scope only, since the other
+  // keys (colour, sort, offset...) belong to the page it leaves.
+  function scope() {
+    var from = new URLSearchParams(location.search);
+    var to = new URLSearchParams();
+    keep.forEach(function (n) {
+      if (from.has(n)) {
+        to.set(n, from.get(n));
+      }
+    });
+    var s = to.toString();
+    return s ? '?' + s : '';
+  }
 
   function openKeys() {
     opener = doc.activeElement;
@@ -153,6 +170,9 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       return;
     }
+    if (dlg && dlg.open) {
+      return;
+    }
     if (/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || t.isContentEditable) {
       return;
     }
@@ -161,7 +181,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (k === 'g') {
       gAt = Date.now();
     } else if (after && pages[k]) {
-      location.assign(pages[k] + location.search);
+      location.assign(pages[k] + scope());
     } else if (k === '/') {
       var proj = doc.querySelector('details.proj');
       var input = proj && proj.querySelector('input[name=project]');
