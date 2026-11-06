@@ -311,6 +311,20 @@ func TestEmptyReasonsHint(t *testing.T) {
 	if !strings.Contains(c.text(), "could not be searched") {
 		t.Errorf("no advice for failed recalls: %q", c.text())
 	}
+	// The positional colour slice lines up with emptyOrder: each reason
+	// keeps its own colour, the failed search the "failed" one.
+	var legend, swatches []string
+	for _, s := range c.find("figure.chart .legend span") {
+		legend = append(legend, s.text())
+	}
+	for _, i := range c.find("figure.chart .legend i") {
+		swatches = append(swatches, i.attr("class"))
+	}
+	wantLegend := []string{"the search failed", "no candidates", "below the cut-off", "all already seen", "cut short by the size limit", "reason not recorded"}
+	wantSwatches := []string{"sw f-failed", "sw f-seq1", "sw f-seq2", "sw f-seq3", "sw f-aside", "sw f-neutral"}
+	if !slices.Equal(legend, wantLegend) || !slices.Equal(swatches, wantSwatches) {
+		t.Errorf("legend %v with swatches %v, want %v with %v", legend, swatches, wantLegend, wantSwatches)
+	}
 }
 
 // rich cost data: a histogram, a split, latencies and a day of extraction.

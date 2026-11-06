@@ -78,7 +78,7 @@
           "ci": "none",
           "scope": "machine",
           "source": "telemetry",
-          "action": "Tells which fix applies: thin memory, cut-offs that are too strict, or memories already shown this session.",
+          "action": "Tells which fix applies: thin memory, cut-offs that are too strict, memories already shown this session, or a memory server that is failing (run backsight doctor).",
           "command": "backsight stats quality",
           "dev": false,
           "family": "reach",

@@ -44,13 +44,18 @@ func TestPromptEmptyReasons(t *testing.T) {
 		extra  string
 		seen   []string
 		status int64 // the recall endpoint's failure status, when it fails
-		want   string
+		// failTag: only the scope asking for this tag fails; the other answers.
+		failTag string
+		want    string
 	}{
 		"no_candidates": {answer: "[]", want: "no_candidates"},
 		"below_floor":   {answer: hits(0.1), want: "below_floor"},
 		"all_seen":      {answer: hits(0.9), seen: []string{"m1"}, want: "all_seen"},
 		"capped":        {answer: hits(0.9), extra: "[recall]\nprompt_chars = 20", want: "capped"},
 		"error":         {answer: "[]", status: 500, want: "error"},
+		// One scope down is not an outage: the other's answer speaks.
+		"one scope down, none found":  {answer: "[]", failTag: "project:billing", want: "no_candidates"},
+		"one scope down, below_floor": {answer: hits(0.1), failTag: "project:billing", want: "below_floor"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -62,6 +67,7 @@ func TestPromptEmptyReasons(t *testing.T) {
 				_ = sessions(home).Update("s1", func(st *session.State) error { st.Seen = c.seen; return nil })
 			}
 			recallAnswer = c.answer
+			recallFailTag = c.failTag
 			if c.status != 0 {
 				recallStatus.Store(c.status)
 				t.Cleanup(func() { recallStatus.Store(0) })
