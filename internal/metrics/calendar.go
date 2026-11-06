@@ -76,6 +76,11 @@ GROUP BY 1`,
 			out[i].UsedTurns = n
 		}
 	}
+	if e.merging() {
+		if err := calendarOthers(e, start, end, out); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 

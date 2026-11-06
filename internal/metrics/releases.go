@@ -130,6 +130,9 @@ WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '' AND `+projectCla
 		r.BankSize = bankSizeAt(e, a.last)
 		out = append(out, r)
 	}
+	if e.merging() {
+		return releaseOthers(e, w, out)
+	}
 	return out, nil
 }
 

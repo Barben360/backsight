@@ -60,6 +60,9 @@ type others struct {
 	// the hour (other PCs send days, not hours).
 	byBucket     []machines.Figures
 	flowByBucket []machines.Pair
+	// rowsByBucket counts the days summed into each bucket (the calendar
+	// marks a date recorded when the other side sent one, even all zeros).
+	rowsByBucket []int
 	// pcs is how many counted other PCs have a day in the window; 0 means
 	// nothing is added and a merged run is this PC's own.
 	pcs int
@@ -110,6 +113,7 @@ func readOthers(e env, w Window, version string) (others, error) {
 		buckets = w.Buckets()
 		o.byBucket = make([]machines.Figures, len(buckets))
 		o.flowByBucket = make([]machines.Pair, len(buckets))
+		o.rowsByBucket = make([]int, len(buckets))
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT d.machine, d.noon, d.prompts, d.hit_n, d.hit_d, d.used_n, d.used_d, d.cov_n, d.cov_d, d.wrong_n, d.wrong_d,
@@ -154,6 +158,7 @@ WHERE d.version = ? AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`,
 			if i := bucketIndex(buckets, at.In(w.Loc)); i >= 0 {
 				addFigures(&o.byBucket[i], f)
 				o.flowByBucket[i] = addPair(o.flowByBucket[i], flow)
+				o.rowsByBucket[i]++
 			}
 		}
 	}
@@ -677,4 +682,110 @@ SELECT COUNT(*) FROM pc_days WHERE machine = ? AND version = '' AND prompts > 0 
 		p.FetchedAt = &t
 	}
 	return p, len(others) > 0, nil
+}
+
+// calendarOthers adds the other PCs' prompts, prompts with memory and used
+// turns (M6) to the calendar rows, each day on the local date that holds its
+// noon (the daily buckets of [start, end) in the view's zone): prompts +=
+// prompts, prompts_with_memory += hit_n, used_turns += used_n. A row either
+// side has data for is recorded; sessions stay this PC's.
+func calendarOthers(e env, start, end time.Time, rows []CalendarDay) error {
+	w := e.q.Window.span(start, end)
+	o, err := othersAt(e, w, "")
+	if err != nil || o.pcs == 0 {
+		return err
+	}
+	rowOf := make(map[string]int, len(rows))
+	for i, r := range rows {
+		rowOf[r.Day] = i
+	}
+	for i, b := range w.Buckets() {
+		if o.rowsByBucket[i] == 0 {
+			continue
+		}
+		f := o.byBucket[i]
+		j, ok := rowOf[b.Key]
+		if !ok {
+			continue
+		}
+		rows[j].Prompts += f.Prompts
+		rows[j].PromptsWithMemory += f.Hit[0]
+		rows[j].UsedTurns += f.Used[0]
+		rows[j].Recorded = true
+	}
+	return nil
+}
+
+// releaseOthers adds the other PCs' version rows (M7) to this PC's release
+// rows: the union of the window's versions, n += their prompts, first and
+// last widened to their days' noons. A version only they ran has no project
+// shares ({}), no prompts per day and no bank size; its flagship metrics are
+// the merged run on that version's rows (flagship). Read through othersAt,
+// once per (window, version).
+func releaseOthers(e env, w Window, rows []ReleaseRow) ([]ReleaseRow, error) {
+	span, err := otherVersions(e, w)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range span {
+		o, err := othersAt(e, w, v.version)
+		if err != nil {
+			return nil, err
+		}
+		if o.pcs == 0 {
+			continue
+		}
+		first, last := v.first.In(w.Loc), v.last.In(w.Loc)
+		i := slices.IndexFunc(rows, func(r ReleaseRow) bool { return r.Version == v.version })
+		if i < 0 {
+			fl, err := flagship(e, w, v.version)
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, ReleaseRow{Version: v.version, First: first, Last: last, N: o.total.Prompts,
+				Flagship: fl, ProjectShares: map[string]float64{}})
+			continue
+		}
+		r := &rows[i]
+		r.N += o.total.Prompts
+		if first.Before(r.First) {
+			r.First = first
+		}
+		if last.After(r.Last) {
+			r.Last = last
+		}
+	}
+	return rows, nil
+}
+
+// otherVersion is a binary version the counted other PCs ran in a window,
+// with the earliest and latest noons of their days of it.
+type otherVersion struct {
+	version     string
+	first, last time.Time
+}
+
+func otherVersions(e env, w Window) ([]otherVersion, error) {
+	rows, err := e.tx.QueryContext(e.ctx, `
+SELECT d.version, MIN(d.noon), MAX(d.noon)
+FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
+WHERE d.version <> '' AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?
+GROUP BY d.version ORDER BY d.version`,
+		w.Since.UnixMilli(), w.Until.UnixMilli(),
+		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []otherVersion
+	for rows.Next() {
+		var v otherVersion
+		var lo, hi int64
+		if err := rows.Scan(&v.version, &lo, &hi); err != nil {
+			return nil, err
+		}
+		v.first, v.last = time.UnixMilli(lo), time.UnixMilli(hi)
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

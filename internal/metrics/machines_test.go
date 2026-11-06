@@ -1282,3 +1282,164 @@ func TestByPCRowFollowsTheProjectFilter(t *testing.T) {
 		}
 	}
 }
+
+func calendarOf(r Result) map[string]CalendarDay {
+	out := map[string]CalendarDay{}
+	for _, d := range r.Tables.Calendar {
+		out[d.Day] = d
+	}
+	return out
+}
+
+// This PC, Paris: 3 typed prompts on 2026-10-29 (10:00, 09:00, 08:00), the
+// first injecting, in 3 sessions. The other PC: 2026-10-20 (a date this PC
+// has nothing on) 5 prompts, hit 2, used 1; 2026-10-29 4 prompts, hit 1,
+// used 1. Added by the noon's local date: 10-20 = 5/2/1 with no session and
+// recorded; 10-29 = 3+4 = 7 prompts, 1+1 = 2 with memory, used 0+1 = 1,
+// sessions 3 (this PC's).
+func TestCalendarAddsOtherPCs(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "c", fxNow.Add(-26*time.Hour), 3, injecting(1)) // 10:00, 09:00, 08:00 on 10-29
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-20", f: machines.Figures{Prompts: 5, Hit: machines.Pair{2, 5}, Used: machines.Pair{1, 3}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 4, Hit: machines.Pair{1, 4}, Used: machines.Pair{1, 2}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", version: "0.1.2", f: machines.Figures{Prompts: 99, Hit: machines.Pair{99, 99}}},
+	)
+	this := calendarOf(x.runAs("days", x.query(7)))
+	if d := this["2026-10-29"]; d.Prompts != 3 || d.PromptsWithMemory != 1 || d.Sessions != 3 {
+		t.Fatalf("this PC alone: %+v", d)
+	}
+	if d := this["2026-10-20"]; d.Recorded || d.Prompts != 0 {
+		t.Fatalf("this PC alone on 10-20: %+v", d)
+	}
+
+	q := x.allQuery()
+	r := x.runAs("days", q)
+	all := calendarOf(r)
+	if d := all["2026-10-20"]; d != (CalendarDay{Day: "2026-10-20", Prompts: 5, PromptsWithMemory: 2, UsedTurns: 1, Recorded: true}) {
+		t.Errorf("10-20 = %+v, want 5 prompts, 2 with memory, 1 used, no session, recorded", d)
+	}
+	if d := all["2026-10-29"]; d != (CalendarDay{Day: "2026-10-29", Prompts: 7, PromptsWithMemory: 2, UsedTurns: 1, Sessions: 3, Recorded: true}) {
+		t.Errorf("10-29 = %+v, want 7, 2, 1, 3 sessions, recorded", d)
+	}
+	if d := all["2026-10-19"]; d.Recorded || d.Prompts != 0 {
+		t.Errorf("10-19 = %+v, want untouched", d)
+	}
+	// tables.days stays this PC's
+	if !reflect.DeepEqual(r.Tables.Days, x.runAs("days", x.query(7)).Tables.Days) {
+		t.Errorf("tables.days changed by all")
+	}
+}
+
+// In Kiritimati (UTC+14) the noon of UTC day 10-20 is 02:00 on 10-21: the
+// other PC's figures land on the local date 10-21, none on 10-20.
+func TestCalendarPlacesOthersByLocalNoon(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-20", f: machines.Figures{Prompts: 5, Hit: machines.Pair{2, 5}}})
+	loc, err := time.LoadLocation("Pacific/Kiritimati")
+	if err != nil {
+		t.Skip(err)
+	}
+	w, err := NewWindow(x.now, 7, time.Time{}, time.Time{}, loc, "Pacific/Kiritimati")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := calendarOf(x.runAs("days", Query{Window: w, Machines: "all"}))
+	if d := all["2026-10-21"]; d.Prompts != 5 || !d.Recorded {
+		t.Errorf("10-21 = %+v, want the 5 prompts", d)
+	}
+	if d := all["2026-10-20"]; d.Prompts != 0 || d.Recorded {
+		t.Errorf("10-20 = %+v, want nothing", d)
+	}
+}
+
+// The day page of 2026-10-20 (Paris, 24 h) merges its tiles. This PC: 4
+// prompts (11:00..08:00) of which 2 injected = hit 2/4. The other PC's day:
+// hit 3/6, used 1/2, wrong 0/1, flow 2/2. Merged hit 5/10, used 1/2 (this PC
+// has no declared turn), wrong 0/1, flow 2/2; the hourly series stay this
+// PC's.
+func TestDayPageMergesItsTiles(t *testing.T) {
+	x := newFx(t, fxNow)
+	day := time.Date(2026, 10, 20, 12, 0, 0, 0, fxParis)
+	x.prompts("alpha", "d", day, 4, injecting(2))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-20", f: machines.Figures{Prompts: 6, Hit: machines.Pair{3, 6}, Used: machines.Pair{1, 2},
+			Wrong: machines.Pair{0, 1}}, flow: machines.Pair{2, 2}},
+		pcRow{machine: pcOther1, day: "2026-10-21", f: machines.Figures{Prompts: 50, Hit: machines.Pair{50, 50}}, flow: machines.Pair{9, 9}},
+	)
+	q := x.allQuery()
+	q.ID = "2026-10-20"
+	m := x.runAs("days", q).Metrics
+	isNum(t, "hit", m["recall.hit_rate"], 5, 10)
+	isNum(t, "used", m["used.turn_rate"], 1, 2)
+	isNum(t, "wrong", m["verdict.wrong_rate"], 0, 1)
+	isNum(t, "flow", m["pipeline.flow"], 2, 2)
+	if !slices.Contains(m["recall.hit_rate"].Tags, tagSeriesThisPC) || len(m["recall.hit_rate"].Series) != 24 {
+		t.Errorf("hit series %d points, tags %v, want 24 hourly points and series_this_pc", len(m["recall.hit_rate"].Series), m["recall.hit_rate"].Tags)
+	}
+	q.Machines = "this"
+	isNum(t, "this hit", x.runAs("days", q).Metrics["recall.hit_rate"], 2, 4)
+}
+
+// This PC ran v1 (4 prompts, 1 injected, 08:00-11:00 on 10-27) and v2 (2
+// prompts, both injected, 11:00 and 10:00 on 10-29). The other PC ran v2 on
+// 10-28 (10 prompts, hit 3/10) and 10-29 (5 prompts, hit 1/5), and v3 on
+// 10-28 (7 prompts, hit 2/7); its noons are 13:00 Paris. v2: n 2+10+5 = 17,
+// hit 2+3+1 / 2+10+5 = 6/17, first 10-28 13:00 (this PC's 10-29 10:00 is
+// later), last 10-29 13:00 (after this PC's 11:00). v3: n 7, hit 2/7, only
+// the other PC: first = last = 10-28 13:00, shares {}, 0 per day, no bank.
+// v1 is this PC's alone.
+func TestReleasesUnionOfVersions(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.1"
+	x.prompts("alpha", "a", fxNow.Add(-72*time.Hour), 4, injecting(1))
+	x.binary = "0.1.2"
+	x.prompts("alpha", "b", fxNow.Add(-24*time.Hour), 2, injecting(2))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-28", version: "0.1.2", f: machines.Figures{Prompts: 10, Hit: machines.Pair{3, 10}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", version: "0.1.2", f: machines.Figures{Prompts: 5, Hit: machines.Pair{1, 5}}},
+		pcRow{machine: pcOther1, day: "2026-10-28", version: "0.1.3", f: machines.Figures{Prompts: 7, Hit: machines.Pair{2, 7}}},
+		pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 17, Hit: machines.Pair{5, 17}}},
+		pcRow{machine: pcOther1, day: "2026-09-01", version: "0.1.9", f: machines.Figures{Prompts: 40}}, // out of the window
+	)
+	this := releaseByVersion(x.runAs("releases", x.query(7)))
+	if len(this) != 2 {
+		t.Fatalf("this PC alone: %d versions, want 2", len(this))
+	}
+	r := x.runAs("releases", x.allQuery())
+	by := releaseByVersion(r)
+	if len(by) != 3 || len(r.Tables.Releases) != 3 {
+		t.Fatalf("%d versions (%d rows), want 0.1.1, 0.1.2, 0.1.3", len(by), len(r.Tables.Releases))
+	}
+	if v := by["0.1.1"]; v.N != 4 || den(v.Flagship["recall.hit_rate"]) != 4 || !v.First.Equal(this["0.1.1"].First) {
+		t.Errorf("0.1.1 = n %d den %d, want this PC's 4/4", v.N, den(v.Flagship["recall.hit_rate"]))
+	}
+	v2 := by["0.1.2"]
+	if v2.N != 17 || num(v2.Flagship["recall.hit_rate"]) != 6 || den(v2.Flagship["recall.hit_rate"]) != 17 {
+		t.Errorf("0.1.2 n %d hit %v/%v, want 17 and 6/17", v2.N, num(v2.Flagship["recall.hit_rate"]), den(v2.Flagship["recall.hit_rate"]))
+	}
+	if want := time.Date(2026, 10, 28, 13, 0, 0, 0, fxParis); !v2.First.Equal(want) {
+		t.Errorf("0.1.2 first %v, want %v", v2.First, want)
+	}
+	if want := time.Date(2026, 10, 29, 13, 0, 0, 0, fxParis); !v2.Last.Equal(want) {
+		t.Errorf("0.1.2 last %v, want %v", v2.Last, want)
+	}
+	if !reflect.DeepEqual(v2.ProjectShares, this["0.1.2"].ProjectShares) || v2.PromptsPerDay != this["0.1.2"].PromptsPerDay {
+		t.Errorf("0.1.2 shares %v, per day %v: want this PC's %v, %v", v2.ProjectShares, v2.PromptsPerDay, this["0.1.2"].ProjectShares, this["0.1.2"].PromptsPerDay)
+	}
+	v3 := by["0.1.3"]
+	noon := time.Date(2026, 10, 28, 13, 0, 0, 0, fxParis)
+	if v3.N != 7 || num(v3.Flagship["recall.hit_rate"]) != 2 || den(v3.Flagship["recall.hit_rate"]) != 7 || !v3.First.Equal(noon) || !v3.Last.Equal(noon) {
+		t.Errorf("0.1.3 = n %d hit %v/%v first %v last %v", v3.N, num(v3.Flagship["recall.hit_rate"]), den(v3.Flagship["recall.hit_rate"]), v3.First, v3.Last)
+	}
+	if v3.ProjectShares == nil || len(v3.ProjectShares) != 0 || v3.PromptsPerDay != 0 || v3.BankSize != nil {
+		t.Errorf("0.1.3 shares %#v per day %v bank %v, want {}, 0, null", v3.ProjectShares, v3.PromptsPerDay, v3.BankSize)
+	}
+	if !reflect.DeepEqual(r.Tables.Markers, x.runAs("releases", x.query(7)).Tables.Markers) {
+		t.Errorf("markers changed by all")
+	}
+}
