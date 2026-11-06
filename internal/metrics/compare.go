@@ -9,16 +9,17 @@ import (
 	"time"
 )
 
-// Gates of a comparison (R23): a stratum needs this many distinct active
+// Gates of a comparison (R23), exported so that the page words the same
+// numbers: a stratum needs this many distinct active
 // days and units in each version; a stratum needs sessions on both sides
 // to have a clustered interval, the pooled comparison this many per
 // version.
 const (
-	compareMinDays     = 7
-	compareMinUnits    = 30
-	compareMinSessions = 2
-	comparePooledG     = 10
-	retryDays          = 6
+	CompareMinDays        = 7
+	CompareMinUnits       = 30
+	CompareMinSessions    = 2
+	ComparePooledSessions = 10
+	retryDays             = 6
 )
 
 // CompareMeasures are the measures --compare reads, the default first.
@@ -155,14 +156,14 @@ type stratum struct {
 }
 
 // compareOf is the comparison of the units of versions a and b: strata
-// (project, path), each eligible when both versions have compareMinDays
-// distinct active days (in loc) and compareMinUnits units in it and
-// compareMinSessions sessions; weights w = nA nB / (nA + nB); pooled
+// (project, path), each eligible when both versions have CompareMinDays
+// distinct active days (in loc) and CompareMinUnits units in it and
+// CompareMinSessions sessions; weights w = nA nB / (nA + nB); pooled
 // difference D = sum(w d) / sum(w); the variance of D clusters the units
 // by session (a session's units are summed over the strata, G/(G-1)
 // corrected); the interval is D +- 1.96 SE, [D, D] when the variance is
 // zero. The comparison is shown when a stratum is eligible and each
-// version has comparePooledG sessions in the eligible strata; otherwise
+// version has ComparePooledSessions sessions in the eligible strata; otherwise
 // it is too_few.
 func compareOf(units []cmpUnit, a, b, measure string, loc *time.Location) Comparison {
 	c := Comparison{A: a, B: b, Measure: measure, Strata: []StratumRow{}, SettingsDiffer: []SettingDiff{}}
@@ -244,7 +245,7 @@ func compareOf(units []cmpUnit, a, b, measure string, loc *time.Location) Compar
 	}
 	c.SessionsA, c.SessionsB = len(sessions[0]), len(sessions[1])
 
-	if len(eligible) > 0 && c.SessionsA >= comparePooledG && c.SessionsB >= comparePooledG {
+	if len(eligible) > 0 && c.SessionsA >= ComparePooledSessions && c.SessionsB >= ComparePooledSessions {
 		d, variance := pooled(eligible)
 		var pa, pb, wsum float64
 		for _, s := range eligible {
@@ -281,17 +282,17 @@ func sign(f float64) int {
 // when it is eligible.
 func (s *stratum) gate() string {
 	for _, sd := range s.v {
-		if len(sd.days) < compareMinDays {
+		if len(sd.days) < CompareMinDays {
 			return "days"
 		}
 	}
 	for _, sd := range s.v {
-		if sd.n() < compareMinUnits {
+		if sd.n() < CompareMinUnits {
 			return "units"
 		}
 	}
 	for _, sd := range s.v {
-		if len(sd.sess) < compareMinSessions {
+		if len(sd.sess) < CompareMinSessions {
 			return "sessions"
 		}
 	}

@@ -26,15 +26,6 @@ const (
 	compareMixDiffers    = "not comparable: the mix of projects differs"
 )
 
-// The gates the comparison applies to a group: the numbers its sentences
-// name (the view decides; these only word it).
-const (
-	compareMinDays     = 7
-	compareMinUnits    = 30
-	compareMinSessions = 2
-	comparePooled      = 10 // sessions per version for the pooled comparison
-)
-
 // unitWords name a measure's units.
 type unitWords struct{ one, many, said1, saidN string }
 
@@ -257,9 +248,9 @@ func (d PageData) compareOf(r *metrics.Result) CompareCard {
 		} else {
 			row.Diff, row.Muted = dash, true
 			row.Reading = map[string]string{
-				"days":     "needs " + strconv.Itoa(compareMinDays) + " days in each version",
-				"units":    "needs " + strconv.Itoa(compareMinUnits) + " " + unit.many + " in each version",
-				"sessions": "needs " + strconv.Itoa(compareMinSessions) + " sessions in each version",
+				"days":     "needs " + strconv.Itoa(metrics.CompareMinDays) + " days in each version",
+				"units":    "needs " + strconv.Itoa(metrics.CompareMinUnits) + " " + unit.many + " in each version",
+				"sessions": "needs " + strconv.Itoa(metrics.CompareMinSessions) + " sessions in each version",
 			}[s.Why]
 			if row.Reading == "" {
 				row.Reading = dash
@@ -358,7 +349,7 @@ func readingOf(reading string, ci [2]float64, b string) (word string, strong boo
 // group failed is "too few", with the counts that show it.
 func (d PageData) sideCell(x metrics.StratumSide, why, unit string) CompareCell {
 	l := d.L
-	few := why == "days" && x.Days < compareMinDays || why == "units" && x.Den < compareMinUnits
+	few := why == "days" && x.Days < metrics.CompareMinDays || why == "units" && x.Den < metrics.CompareMinUnits
 	counts := l.Int(x.Num) + " of " + l.Int(x.Den) + " " + unit
 	switch {
 	case few && why == "days": // the days are the reason: say them whole
@@ -382,15 +373,15 @@ func (d PageData) fewGroupText(s metrics.StratumRow, c *metrics.Comparison, unit
 		if s.B.Days < s.A.Days {
 			v, x = c.B, s.B
 		}
-		return "too few: " + v + " ran " + views.CountOf(int64(x.Days), "day", "days") + ", " + strconv.Itoa(compareMinDays) + " needed"
+		return "too few: " + v + " ran " + views.CountOf(int64(x.Days), "day", "days") + ", " + strconv.Itoa(metrics.CompareMinDays) + " needed"
 	case "units":
 		v, x := c.A, s.A
 		if s.B.Den < s.A.Den {
 			v, x = c.B, s.B
 		}
-		return "too few: " + v + " has " + views.CountOf(x.Den, unitOne(unit), unit) + ", " + strconv.Itoa(compareMinUnits) + " needed"
+		return "too few: " + v + " has " + views.CountOf(x.Den, unitOne(unit), unit) + ", " + strconv.Itoa(metrics.CompareMinUnits) + " needed"
 	case "sessions":
-		return "too few: each version needs " + strconv.Itoa(compareMinSessions) + " sessions"
+		return "too few: each version needs " + strconv.Itoa(metrics.CompareMinSessions) + " sessions"
 	}
 	return "too few"
 }
@@ -412,14 +403,14 @@ func (d PageData) tooFewText(r *metrics.Result, c metrics.Comparison, unit unitW
 		return "Too few to compare."
 	}
 	s := "Too few to compare. " + t.Version + " has run " + views.CountOf(int64(t.Days), "day", "days") + " with " +
-		views.CountOf(int64(t.Units), unit.said1, unit.saidN) + "; each version needs " + strconv.Itoa(compareMinDays) + " days and " +
-		strconv.Itoa(compareMinUnits) + " such " + unit.many + " in at least one shared project and place."
+		views.CountOf(int64(t.Units), unit.said1, unit.saidN) + "; each version needs " + strconv.Itoa(metrics.CompareMinDays) + " days and " +
+		strconv.Itoa(metrics.CompareMinUnits) + " such " + unit.many + " in at least one shared project and place."
 	if t.Why == "sessions" {
 		sessions := c.SessionsB
 		if t.Version == c.A {
 			sessions = c.SessionsA
 		}
-		s += " Together they need " + strconv.Itoa(comparePooled) + " sessions in each version; " + t.Version + " has " + strconv.Itoa(sessions) + "."
+		s += " Together they need " + strconv.Itoa(metrics.ComparePooledSessions) + " sessions in each version; " + t.Version + " has " + strconv.Itoa(sessions) + "."
 	}
 	if t.RetryAfter != nil {
 		s += " Try again around " + dayText(*t.RetryAfter, r.GeneratedAt, d.Loc) + "."

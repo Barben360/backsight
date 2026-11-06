@@ -63,9 +63,8 @@ type NeverRow struct {
 type NeverState struct{ Word, Class, Rest string }
 
 const (
-	funnelP95Min = 100 // sessions a hop needs before its slowest 1 in 20 is told; mirrors metrics.minForP95
-	neverShown   = 10  // rows of the never-extracted table
-	neverCmd     = "backsight stats sessions --has never_extracted"
+	neverShown = 10 // rows of the never-extracted table
+	neverCmd   = "backsight stats sessions --has never_extracted"
 )
 
 // funnelHops are the hops between the stages: the key of the hop in the
@@ -161,7 +160,7 @@ func (d PageData) funnelOf(r *metrics.Result) FunnelCard {
 				x.Note += ", " + l.Int(need) + " needed"
 			}
 		case hop.P95 == nil:
-			x.Value, x.Note = dur(hop.P50), "1 in 20: "+l.Int(funnelP95Min)+" needed"
+			x.Value, x.Note = dur(hop.P50), "1 in 20: "+l.Int(metrics.MinForP95)+" needed"
 		default:
 			x.Value, x.Note = dur(hop.P50), "1 in 20: "+dur(hop.P95)
 		}
