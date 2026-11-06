@@ -156,6 +156,11 @@ func Cost(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Metrics = m
+		if e.merging() {
+			if r.Tables.ByPC, err = byPC(e, e.q.Window, m); err != nil {
+				return err
+			}
+		}
 		r.Tables.Extraction, err = extractionRows(e, e.q.Window)
 		return err
 	})

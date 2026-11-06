@@ -644,9 +644,13 @@ func summary(m map[string]Metric) Summary {
 	if n := m["used.turn_rate"].Num; n != nil {
 		s.TurnsWithMemoryUsed = *n
 	}
-	for _, p := range m["context.per_session"].Series {
-		for _, c := range p.Parts {
-			s.ContextChars += c
+	if n := m["context.per_session"].Num; n != nil { // all PCs: their total
+		s.ContextChars = *n
+	} else {
+		for _, p := range m["context.per_session"].Series {
+			for _, c := range p.Parts {
+				s.ContextChars += c
+			}
 		}
 	}
 	s.TokensApprox = int64(math.Round(float64(s.ContextChars) / 4))

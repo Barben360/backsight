@@ -4,8 +4,10 @@ import (
 	"slices"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 )
 
 // TestEveryExtraKeyIsDeclared: over the default 7 days, --days 100, --dev,
@@ -16,6 +18,9 @@ import (
 // the extraction metrics count failed_operations.
 func TestEveryExtraKeyIsDeclared(t *testing.T) {
 	x := fullFx(t)
+	// One other PC with a day in the window, for the keys only all PCs add.
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 5, Context: machines.Pair{500, 5}, Latency: [9]int64{4: 5}}})
 	seen := map[string]map[string]bool{}
 	for _, c := range []struct {
 		name string
@@ -24,6 +29,7 @@ func TestEveryExtraKeyIsDeclared(t *testing.T) {
 		{"7 days", x.query(7)},
 		{"100 days", x.query(100)},
 		{"dev", func() Query { q := x.query(7); q.Dev = true; return q }()},
+		{"all PCs", func() Query { q := x.query(7); q.Machines = "all"; return q }()},
 		{"path search", func() Query { q := x.query(7); q.Path = "search"; return q }()},
 		{"project alpha", func() Query { q := x.query(7); q.Project = "alpha"; return q }()},
 	} {

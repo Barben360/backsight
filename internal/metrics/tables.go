@@ -37,7 +37,25 @@ type Tables struct {
 	Settings         map[string]float64  `json:"settings,omitzero"`
 	Compare          *Comparison         `json:"compare,omitzero"`
 	Defs             []DefRow            `json:"defs,omitzero"`
+	ByPC             []ByPCRow           `json:"by_pc,omitzero"`
 	Note             string              `json:"note,omitzero"`
+}
+
+// ByPCRow is one counted PC on the cost view with all PCs (M8): this PC's
+// speed is its exact p95 and p50, another PC's the range of its buckets in
+// the window.
+type ByPCRow struct {
+	Machine    string     `json:"machine"`
+	This       bool       `json:"this"`
+	OS         string     `json:"os"`
+	Prompts    int64      `json:"prompts"`
+	P95        *float64   `json:"p95"`
+	P50        *float64   `json:"p50"`
+	P95RangeMS *[2]*int64 `json:"p95_range_ms"`
+	P50RangeMS *[2]*int64 `json:"p50_range_ms"`
+	Until      *string    `json:"until"`
+	Stale      bool       `json:"stale"`
+	Active     bool       `json:"active"`
 }
 
 // Page is a browse view's paging.

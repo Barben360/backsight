@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -876,6 +877,356 @@ func TestMergeLeavesThisPCsRunAlone(t *testing.T) {
 	err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
 		e.view = "quality"
 		fam := families.byID["recall.hit_rate"]
+		snap := func(e env) string {
+			obs, met, err := e.runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal([]any{obs, met})
+			return string(b)
+		}
+		before := snap(e.this())
+		merged := snap(e)
+		if after := snap(e.this()); after != before {
+			t.Errorf("this PC's run changed:\nbefore %s\nafter  %s", before, after)
+		}
+		if merged == before {
+			t.Error("the merged run equals this PC's")
+		}
+		if snap(e) != merged {
+			t.Error("the merged run changed on a second read")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// latDay is an other PC's day with the latency counts lat (and prompts
+// typed).
+func latRow(machine, day string, prompts int64, lat [9]int64) pcRow {
+	return pcRow{machine: machine, day: day, f: machines.Figures{Prompts: prompts, Latency: lat}}
+}
+
+func edgeRange(t *testing.T, m Metric, key string) [2]*int64 {
+	t.Helper()
+	r, ok := m.Extra[key].(*[2]*int64)
+	if !ok || r == nil {
+		t.Fatalf("extra.%s = %#v, want a range", key, m.Extra[key])
+	}
+	return *r
+}
+
+func wantRange(t *testing.T, got [2]*int64, lo int64, hi *int64) {
+	t.Helper()
+	if got[0] == nil || *got[0] != lo || (hi == nil) != (got[1] == nil) || (hi != nil && *got[1] != *hi) {
+		t.Errorf("range %v, want [%d, %v]", got, lo, hi)
+	}
+}
+
+// This PC: 3 sessions of one 3 000-character prompt = 9 000 characters,
+// below 100 sessions so its p95 is null. The other PC: 21 000 characters
+// over 7 sessions. Average = (9 000 + 21 000) / (3 + 7) = 3 000, num
+// 30 000, den 10; tokens 30 000 / 4 = 7 500.
+func TestMergedContextIsTheAverage(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "c", fxNow, 3, func(i int, p *telemetry.Prompt) { p.Chars = 3000 })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-28")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 7, Context: machines.Pair{21000, 7}}})
+
+	m := x.mergedOf("cost", x.query(7))["context.per_session"]
+	if m.Value == nil || !close4(*m.Value, 3000) {
+		t.Fatalf("value %v, want 3000", m.Value)
+	}
+	if m.Num == nil || *m.Num != 30000 || m.Den == nil || *m.Den != 10 {
+		t.Errorf("num/den %v/%v, want 30000/10", num0(m.Num), num0(m.Den))
+	}
+	if p95, _ := m.Extra["p95"].(*float64); p95 != nil {
+		t.Errorf("extra.p95 %v, want this PC's null", *p95)
+	}
+	if avg, _ := m.Extra["average"].(*float64); avg == nil || !close4(*avg, 3000) {
+		t.Errorf("extra.average %v, want 3000", m.Extra["average"])
+	}
+	if m.Status != StatusTooFew {
+		t.Errorf("status %s, want this PC's too_few", m.Status)
+	}
+	for _, tag := range []string{tagAverage, tagStatusThisPC} {
+		if !slices.Contains(m.Tags, tag) {
+			t.Errorf("tags %v lack %s", m.Tags, tag)
+		}
+	}
+	if h, _ := m.Extra["histogram"].([]histBucket); len(h) == 0 || h[3].N != 3 {
+		t.Errorf("histogram %v, want this PC's (3 sessions in 3 000-3 999)", m.Extra["histogram"])
+	}
+
+	s := x.runAs("overview", x.allQuery()).Summary
+	if s.ContextChars != 30000 || s.TokensApprox != 7500 {
+		t.Errorf("all PCs summary %d chars %d tokens, want 30000 and 7500", s.ContextChars, s.TokensApprox)
+	}
+	s = x.runAs("overview", x.query(7)).Summary
+	if s.ContextChars != 9000 || s.TokensApprox != 2250 {
+		t.Errorf("this PC summary %d chars %d tokens, want 9000 and 2250", s.ContextChars, s.TokensApprox)
+	}
+	this := x.runAs("cost", x.query(7)).Metrics["context.per_session"]
+	if this.Num != nil || slices.Contains(this.Tags, tagAverage) || this.Extra["average"] != nil {
+		t.Errorf("this PC's metric carries the merge: %+v", this)
+	}
+}
+
+// Other PC day 1 (Oct 20, before the 7 days) 6 000 chars in 1 session, day 2
+// (Oct 27) 6 000 in 0: the window holds day 2 only, so (9 000 + 6 000) / 3 =
+// 5 000, the bias R7 names.
+func TestContextAverageWithASpanningSession(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "c", fxNow, 3, func(i int, p *telemetry.Prompt) { p.Chars = 3000 })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-27")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-20", f: machines.Figures{Prompts: 1, Context: machines.Pair{6000, 1}}},
+		pcRow{machine: pcOther1, day: "2026-10-27", f: machines.Figures{Prompts: 1, Context: machines.Pair{6000, 0}}})
+	m := x.mergedOf("cost", x.query(7))["context.per_session"]
+	if m.Value == nil || !close4(*m.Value, 5000) || num0(m.Num) != 15000 || num0(m.Den) != 3 {
+		t.Errorf("value %v num/den %d/%d, want 5000 and 15000/3", m.Value, num0(m.Num), num0(m.Den))
+	}
+}
+
+// This PC: 50 prompts of 800 ms (bucket 4, (500, 1000]) and 10 of 1 800 ms
+// (bucket 5, (1000, 2000]) = [0,0,0,0,50,10,0,0,0]. The other PC
+// [0,0,0,0,30,8,2,0,0]. Merged [0,0,0,0,80,18,2,0,0], n 100: rank 95 is the
+// 95th, 80 < 95 <= 98 so bucket 5; rank 50 is in bucket 4.
+func TestMergedLatencyFromBuckets(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "l", fxNow, 60, func(i int, p *telemetry.Prompt) {
+		p.MS = 800
+		if i >= 50 {
+			p.MS = 1800
+		}
+	})
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-28")
+	x.pcRows(latRow(pcOther1, "2026-10-28", 40, [9]int64{0, 0, 0, 0, 30, 8, 2, 0, 0}))
+
+	m := x.mergedOf("cost", x.query(7))["recall.latency"]
+	if m.Value == nil || *m.Value != 2000 || num0(m.Den) != 100 {
+		t.Fatalf("value %v den %d, want 2000 and 100", m.Value, num0(m.Den))
+	}
+	two, one := int64(2000), int64(1000)
+	wantRange(t, edgeRange(t, m, "range_ms"), 1000, &two)
+	wantRange(t, edgeRange(t, m, "p50_range_ms"), 500, &one)
+	if b, _ := m.Extra["buckets"].([9]int64); b != [9]int64{0, 0, 0, 0, 80, 18, 2, 0, 0} {
+		t.Errorf("buckets %v", m.Extra["buckets"])
+	}
+	if p95, _ := m.Extra["p95"].(*float64); p95 != nil { // 60 samples: below 100
+		t.Errorf("extra.p95 %v, want this PC's null (60 samples)", *p95)
+	}
+	if p50, _ := m.Extra["p50"].(*float64); p50 == nil || *p50 != 800 {
+		t.Errorf("extra.p50 %v, want this PC's exact 800", m.Extra["p50"])
+	}
+	if !slices.Contains(m.Tags, tagApproximate) || m.Status != StatusOK {
+		t.Errorf("status %s tags %v, want ok and approximate", m.Status, m.Tags)
+	}
+	this := x.runAs("cost", x.query(7)).Metrics["recall.latency"]
+	if this.Extra["range_ms"] != nil || slices.Contains(this.Tags, tagApproximate) {
+		t.Errorf("this PC's latency carries the merge: %+v", this)
+	}
+}
+
+// The other PC alone fills the buckets (this PC has no prompt): 100 samples
+// in bucket 6 (2000, 2500] -> p95 edge 2500, not above 2500: watch; bucket 7
+// (2500, 5000] -> bad; the open bucket -> bad with [5000, null] and value
+// 5000; 99 samples -> too few. A this-PC sample of exactly 2000 ms lands in
+// (1000, 2000].
+func TestLatencyStatusIsExactAtTheEdges(t *testing.T) {
+	five, twoFive := int64(5000), int64(2500)
+	for _, c := range []struct {
+		name   string
+		lat    [9]int64
+		status Status
+		value  float64
+		lo     int64
+		hi     *int64
+	}{
+		{"2000-2500 watches", [9]int64{6: 100}, StatusWatch, 2500, 2000, &twoFive},
+		{"2500-5000 is bad", [9]int64{7: 100}, StatusBad, 5000, 2500, &five},
+		{"open is bad", [9]int64{8: 100}, StatusBad, 5000, 5000, nil},
+		{"1000-2000 is ok", [9]int64{5: 100}, StatusOK, 2000, 1000, ptr(int64(2000))},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFx(t, fxNow)
+			x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+			x.pcRows(latRow(pcOther1, "2026-10-28", 100, c.lat))
+			m := x.mergedOf("cost", x.query(7))["recall.latency"]
+			if m.Status != c.status || m.Value == nil || *m.Value != c.value {
+				t.Fatalf("status %s value %v, want %s %v", m.Status, m.Value, c.status, c.value)
+			}
+			wantRange(t, edgeRange(t, m, "range_ms"), c.lo, c.hi)
+		})
+	}
+	t.Run("99 samples are too few", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+		x.pcRows(latRow(pcOther1, "2026-10-28", 99, [9]int64{7: 99}))
+		m := x.mergedOf("cost", x.query(7))["recall.latency"]
+		if m.Status != StatusTooFew || m.Value != nil {
+			t.Errorf("status %s value %v, want too_few and null", m.Status, m.Value)
+		}
+	})
+	t.Run("a sample of exactly 2000 ms is in (1000, 2000]", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.prompts("alpha", "e", fxNow, 100, func(i int, p *telemetry.Prompt) { p.MS = 2000 })
+		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+		x.pcRows(latRow(pcOther1, "2026-10-28", 1, [9]int64{}))
+		m := x.mergedOf("cost", x.query(7))["recall.latency"]
+		if b, _ := m.Extra["buckets"].([9]int64); b != [9]int64{5: 100} || m.Status != StatusOK || *m.Value != 2000 {
+			t.Errorf("buckets %v status %s value %v, want [0,0,0,0,0,100,0,0,0] ok 2000", m.Extra["buckets"], m.Status, m.Value)
+		}
+	})
+	t.Run("2001 ms is in (2000, 2500]", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.prompts("alpha", "e", fxNow, 100, func(i int, p *telemetry.Prompt) { p.MS = 2001 })
+		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+		x.pcRows(latRow(pcOther1, "2026-10-28", 1, [9]int64{}))
+		m := x.mergedOf("cost", x.query(7))["recall.latency"]
+		if m.Status != StatusWatch || *m.Value != 2500 {
+			t.Errorf("status %s value %v, want watch 2500", m.Status, m.Value)
+		}
+	})
+}
+
+// Oct 29: this PC 800 and 1 800 ms (buckets 4 and 5), the other PC one in
+// bucket 6: merged [0,0,0,0,1,1,1,0,0], n 3, rank ceil(2.85) = 3 -> bucket 6
+// (2000, 2500]; this PC's exact p95 of the day is 1 800 (rank 2 of 2).
+// Oct 27: the other PC alone, 2 in the open bucket: n 2, lo 5000, no hi.
+// Oct 28: no sample on any PC.
+func TestMergedLatencySeries(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "s", fxNow.Add(-24*time.Hour), 2, func(i int, p *telemetry.Prompt) { p.MS = 800 + 1000*i })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcRows(latRow(pcOther1, "2026-10-29", 1, [9]int64{6: 1}), latRow(pcOther1, "2026-10-27", 2, [9]int64{8: 2}))
+	m := x.mergedOf("cost", x.query(7))["recall.latency"]
+	byDay := map[string]Point{}
+	for _, p := range m.Series {
+		byDay[p.Day] = p
+	}
+	p := byDay["2026-10-29"]
+	if num0(p.N) != 3 || p.Lo == nil || *p.Lo != 2000 || p.Hi == nil || *p.Hi != 2500 || p.ThisP95 == nil || *p.ThisP95 != 1800 {
+		t.Errorf("Oct 29 = %+v, want n 3, (2000, 2500], this_p95 1800", p)
+	}
+	if p.P50 != nil || p.P95 != nil {
+		t.Errorf("Oct 29 keeps p50/p95: %+v", p)
+	}
+	p = byDay["2026-10-27"]
+	if num0(p.N) != 2 || p.Lo == nil || *p.Lo != 5000 || p.Hi != nil || p.ThisP95 != nil {
+		t.Errorf("Oct 27 = %+v, want n 2, lo 5000, no hi, no this_p95", p)
+	}
+	p = byDay["2026-10-28"]
+	if num0(p.N) != 0 || p.Lo != nil || p.Hi != nil {
+		t.Errorf("Oct 28 = %+v, want n 0 and no lo/hi", p)
+	}
+	raw, _ := json.Marshal(byDay["2026-10-29"])
+	var keys map[string]any
+	_ = json.Unmarshal(raw, &keys)
+	for _, k := range []string{"p50", "p95"} {
+		if _, ok := keys[k]; ok {
+			t.Errorf("point JSON has %q: %s", k, raw)
+		}
+	}
+	for _, k := range []string{"lo", "hi", "this_p95"} {
+		if _, ok := keys[k]; !ok {
+			t.Errorf("point JSON lacks %q: %s", k, raw)
+		}
+	}
+}
+
+// This PC alone: 100 prompts, 95 of 3 000 ms and 5 of 1 000 ms -> p95 3 000
+// (bad); the last 24 h hold 30 prompts of 1 000 ms -> recovered, read watch
+// "improving". Merged with an idle PC (a day with only an empty latency) the
+// observation has no Recent, so it reads bad, no improving tag.
+func TestMergedLatencySkipsRecovery(t *testing.T) {
+	x := newFx(t, fxNow)
+	// 30 newest (inside the last 24 h): 1 000 ms; the 70 older: 3 000 ms
+	// except 5 of 1 000 ms, so 35 of 100 at 1 000 and 65 at 3 000: the 95th
+	// of 100 is 3 000.
+	x.prompts("alpha", "r", fxNow, 100, func(i int, p *telemetry.Prompt) {
+		p.MS = 3000
+		if i < 30 || (i >= 30 && i < 35) {
+			p.MS = 1000
+		}
+	})
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(latRow(pcOther1, "2026-10-28", 1, [9]int64{}))
+	this := x.runAs("cost", x.query(7)).Metrics["recall.latency"]
+	if this.Status != StatusWatch || !slices.Contains(this.Tags, TagImproving) {
+		t.Fatalf("this PC: status %s tags %v, want watch improving", this.Status, this.Tags)
+	}
+	m := x.mergedOf("cost", x.query(7))["recall.latency"]
+	if m.Status != StatusBad || slices.Contains(m.Tags, TagImproving) {
+		t.Errorf("merged: status %s tags %v, want bad without improving", m.Status, m.Tags)
+	}
+}
+
+// Cost view on all PCs. This PC: 100 prompts of 800 ms (p50 = p95 = 800).
+// bbbbbbbb: 100 prompts [0,0,0,0,60,38,2,0,0] -> rank 95 in bucket 5
+// (1000, 2000], rank 50 in bucket 4 (500, 1000]. cccccccc: counted, no day in
+// the window. dddddddd: stale, 5 prompts in bucket 2: below 20 samples, so
+// no range.
+func TestByPCRows(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "b", fxNow, 100, func(i int, p *telemetry.Prompt) { p.MS = 800 })
+	d := "dddddddd-0000-4000-8000-000000000004"
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcDoc(pcOther2, "2026-09-12", fxNow.Add(-time.Hour), "2026-10-20")
+	x.pcDoc(d, "2026-09-15", fxNow.Add(-72*time.Hour), "2026-10-27")
+	x.pcRows(latRow(pcOther1, "2026-10-29", 100, [9]int64{4: 60, 5: 38, 6: 2}), latRow(d, "2026-10-27", 5, [9]int64{2: 5}))
+
+	rows := x.runAs("cost", x.allQuery()).Tables.ByPC
+	if len(rows) != 4 {
+		t.Fatalf("rows %+v, want 4", rows)
+	}
+	t0 := rows[0]
+	if !t0.This || t0.Machine != "aaaaaaaa" || t0.Prompts != 100 || !t0.Active || t0.P95 == nil || *t0.P95 != 800 || t0.P50 == nil || *t0.P50 != 800 ||
+		t0.P95RangeMS != nil || t0.P50RangeMS != nil || t0.Stale || t0.Until != nil {
+		t.Errorf("this PC row %+v", t0)
+	}
+	one, two := int64(1000), int64(2000)
+	o1 := rows[1]
+	if o1.This || o1.Machine != "bbbbbbbb" || o1.Prompts != 100 || !o1.Active || o1.P95 != nil || o1.P50 != nil || o1.Stale || o1.Until == nil || *o1.Until != "2026-10-29" {
+		t.Errorf("bbbbbbbb row %+v", o1)
+	}
+	if o1.P95RangeMS == nil || o1.P50RangeMS == nil {
+		t.Fatalf("bbbbbbbb ranges %v %v", o1.P95RangeMS, o1.P50RangeMS)
+	}
+	wantRange(t, *o1.P95RangeMS, 1000, &two)
+	wantRange(t, *o1.P50RangeMS, 500, &one)
+	if o2 := rows[2]; o2.Machine != "cccccccc" || o2.Active || o2.Prompts != 0 || o2.P95RangeMS != nil || o2.Stale {
+		t.Errorf("cccccccc row %+v, want idle", o2)
+	}
+	if o3 := rows[3]; o3.Machine != "dddddddd" || !o3.Stale || !o3.Active || o3.Prompts != 5 || o3.P95RangeMS != nil || o3.Until == nil || *o3.Until != "2026-10-27" {
+		t.Errorf("dddddddd row %+v, want stale and active with until", o3)
+	}
+
+	if r := x.runAs("cost", x.query(7)); r.Tables.ByPC != nil {
+		t.Errorf("this PC: by_pc %+v, want absent", r.Tables.ByPC)
+	}
+	if r := x.runAs("quality", x.allQuery()); r.Tables.ByPC != nil {
+		t.Errorf("quality view: by_pc %+v, want absent", r.Tables.ByPC)
+	}
+	raw, _ := json.Marshal(x.runAs("cost", x.query(7)).Tables)
+	if strings.Contains(string(raw), "by_pc") {
+		t.Errorf("this PC's tables JSON has by_pc: %s", raw)
+	}
+}
+
+// The merged cost run never writes the memo's maps: this PC's run is the
+// same before and after, the merged one differs and is stable.
+func TestMergeCostLeavesThisPCsRunAlone(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "m", fxNow, 100, func(i int, p *telemetry.Prompt) { p.MS, p.Chars = 800, 100 })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 5, Context: machines.Pair{500, 5}, Latency: [9]int64{8: 5}}})
+	q := x.allQuery()
+	err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
+		e.view = "cost"
+		fam := families.byID["recall.latency"]
 		snap := func(e env) string {
 			obs, met, err := e.runIDs(fam, q.Window, nil)
 			if err != nil {

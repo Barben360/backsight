@@ -63,6 +63,8 @@ type others struct {
 	// pcs is how many counted other PCs have a day in the window; 0 means
 	// nothing is added and a merged run is this PC's own.
 	pcs int
+	// byMachine is the same sums per PC (By PC, M8).
+	byMachine map[string]machines.Figures
 }
 
 type othersKey struct {
@@ -122,6 +124,7 @@ WHERE d.version = ? AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`,
 	}
 	defer func() { _ = rows.Close() }()
 	seen := map[string]bool{}
+	o.byMachine = map[string]machines.Figures{}
 	for rows.Next() {
 		var machine string
 		var noon int64
@@ -143,6 +146,9 @@ WHERE d.version = ? AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`,
 		flow := machines.Pair{v[11], v[12]}
 		seen[machine] = true
 		addFigures(&o.total, f)
+		pc := o.byMachine[machine]
+		addFigures(&pc, f)
+		o.byMachine[machine] = pc
 		o.flow = addPair(o.flow, flow)
 		if buckets != nil {
 			if i := bucketIndex(buckets, at.In(w.Loc)); i >= 0 {
@@ -180,7 +186,9 @@ func addFigures(a *machines.Figures, b machines.Figures) {
 const (
 	tagOthersNotFiltered = "others_not_filtered" // a project filter: the other PCs' whole figures are added
 	tagSeriesThisPC      = "series_this_pc"      // a window drawn by the hour: the series stay this PC's
-	tagStatusThisPC      = "status_this_pc"      // pipeline.flow: the status stays this PC's
+	tagStatusThisPC      = "status_this_pc"      // pipeline.flow, context.per_session: the status stays this PC's
+	tagAverage           = "average"             // context.per_session: total characters over total sessions
+	tagApproximate       = "approximate"         // recall.latency: a range from merged buckets
 )
 
 // mergeFunc returns, for the ids of its family that merge, a merged copy of
@@ -188,9 +196,8 @@ const (
 // memo's) and returns them as they are when nothing is added.
 type mergeFunc func(e env, w Window, o others, obs map[string]Observation, met map[string]Metric) (map[string]Observation, map[string]Metric)
 
-// mergers are the families whose runs merge, by name. context and latency
-// (family cost) join in Task 9.
-var mergers = map[string]mergeFunc{"reach": mergeRates, "quality": mergeRates, "pipeline": mergeFlow}
+// mergers are the families whose runs merge, by name.
+var mergers = map[string]mergeFunc{"reach": mergeRates, "quality": mergeRates, "pipeline": mergeFlow, "cost": mergeCost}
 
 // rates are the four ratio metrics M2 merges and the pair of a day's
 // figures each adds.
@@ -311,6 +318,243 @@ func mergePair(e env, w Window, to Observation, tm Metric, tot machines.Pair, bu
 	}
 	mm.Series = series
 	return mo, mm, true
+}
+
+// mergeCost merges the cost family's two figures that merge: context per
+// session (M4) and recall latency (M5). The others stay this PC's.
+func mergeCost(e env, w Window, o others, obs map[string]Observation, met map[string]Metric) (map[string]Observation, map[string]Metric) {
+	if o.pcs == 0 {
+		return obs, met
+	}
+	obs2, met2 := maps.Clone(obs), maps.Clone(met)
+	if to, ok := obs["context.per_session"]; ok {
+		if mo, mm, ok := mergeContext(e, o, to, met["context.per_session"]); ok {
+			obs2["context.per_session"], met2["context.per_session"] = mo, mm
+		}
+	}
+	if to, ok := obs["recall.latency"]; ok {
+		if mo, mm, ok := mergeLatency(e, w, o, to, met["recall.latency"]); ok {
+			obs2["recall.latency"], met2["recall.latency"] = mo, mm
+		}
+	}
+	return obs2, met2
+}
+
+// mergeContext is M4: the value is the total characters over the total
+// sessions of the PCs (num and den). The observation stays this PC's (its
+// p95 and watch line) so the status is this PC's; the series, histogram and
+// percentiles too. A session of another PC that began before the window adds
+// its characters but not its count (R7).
+func mergeContext(e env, o others, to Observation, tm Metric) (Observation, Metric, bool) {
+	chars, sessions := o.total.Context[0], o.total.Context[1]
+	if to.Absent && chars == 0 && sessions == 0 {
+		return to, tm, false
+	}
+	mo := to
+	if !to.Absent {
+		chars, sessions = chars+tm.chars, sessions+to.Den
+	}
+	mo.Absent, mo.Reason = false, ""
+	mm := tm
+	mm.Num, mm.Den, mm.Value = i64(chars), i64(sessions), ratio(chars, sessions)
+	mm.Extra = maps.Clone(tm.Extra)
+	if mm.Extra == nil {
+		mm.Extra = map[string]any{}
+	}
+	mm.Extra["average"] = ratio(chars, sessions)
+	mm.Tags = append(slices.Clone(tm.Tags), tagStatusThisPC, tagAverage)
+	if e.q.Project != "" {
+		mm.Tags = append(mm.Tags, tagOthersNotFiltered)
+	}
+	return mo, mm, true
+}
+
+// edgeOf is the upper edge of a latency bucket as the status engine reads
+// it: the bucket's own edge, 5001 for the open one (so that strictly above
+// 5000 is bad whatever the thresholds).
+func edgeOf(bucket int) float64 {
+	if _, hi := machines.Range(bucket); hi != nil {
+		return float64(*hi)
+	}
+	return float64(machines.Edges[len(machines.Edges)-1] + 1)
+}
+
+// rangeOf is the (lo, hi] of a latency bucket in milliseconds, hi null for
+// the open one.
+func rangeOf(bucket int) *[2]*int64 {
+	lo, hi := machines.Range(bucket)
+	return &[2]*int64{&lo, hi}
+}
+
+// bucketRanges are the typical (p50) and slowest-1-in-20 (p95) ranges of
+// the counts b, each null below the samples it needs (as p50p95).
+func bucketRanges(b [9]int64) (p50, p95 *[2]*int64) {
+	var n int64
+	for _, c := range b {
+		n += c
+	}
+	if n >= minForP50 {
+		if i, ok := machines.Rank(b, 50); ok {
+			p50 = rangeOf(i)
+		}
+	}
+	if n >= MinForP95 {
+		if i, ok := machines.Rank(b, 95); ok {
+			p95 = rangeOf(i)
+		}
+	}
+	return p50, p95
+}
+
+// mergeLatency is M5: the PCs' samples counted by bucket, the p95 and p50
+// read by nearest rank, the value the p95 bucket's upper edge. The
+// observation carries that edge (5001 for the open bucket) and no Recent, so
+// the status engine gives the exact word at the limits and skips the 24 h
+// recovery rule.
+func mergeLatency(e env, w Window, o others, to Observation, tm Metric) (Observation, Metric, bool) {
+	var b [9]int64
+	if !to.Absent {
+		b = tm.buckets
+	}
+	var n int64
+	for i := range b {
+		b[i] += o.total.Latency[i]
+		n += b[i]
+	}
+	if n == 0 {
+		return to, tm, false
+	}
+	mo := to
+	mo.Absent, mo.Reason, mo.Den, mo.P95, mo.Recent, mo.RecentN = false, "", n, nil, nil, 0
+	mm := tm
+	mm.Den, mm.Value = i64(n), nil
+	mm.Extra = maps.Clone(tm.Extra)
+	if mm.Extra == nil {
+		mm.Extra = map[string]any{}
+	}
+	p50r, p95r := bucketRanges(b)
+	if i, ok := machines.Rank(b, 95); ok && p95r != nil {
+		edge := edgeOf(i)
+		mo.P95 = &edge
+		v := float64(min(int64(edge), machines.Edges[len(machines.Edges)-1]))
+		mm.Value = &v
+	}
+	mm.Extra["range_ms"], mm.Extra["p50_range_ms"], mm.Extra["buckets"] = p95r, p50r, b
+	mm.Tags = append(slices.Clone(tm.Tags), tagApproximate)
+	if e.q.Project != "" {
+		mm.Tags = append(mm.Tags, tagOthersNotFiltered)
+	}
+	if w.Length() <= hourlyMax {
+		mm.Tags = append(mm.Tags, tagSeriesThisPC)
+		return mo, mm, true
+	}
+	buckets := w.Buckets()
+	series := make([]Point, len(buckets))
+	for i, bk := range buckets {
+		p := pointOf(w, bk.Key)
+		if i < len(tm.Series) {
+			p = tm.Series[i]
+		}
+		day := p.buckets
+		for j := range day {
+			day[j] += o.byBucket[i].Latency[j]
+		}
+		var dn int64
+		for _, c := range day {
+			dn += c
+		}
+		p.N, p.ThisP95, p.P50, p.P95, p.Lo, p.Hi = i64(dn), p.P95, nil, nil, nil, nil
+		if r, ok := machines.Rank(day, 95); ok {
+			lo, hi := machines.Range(r)
+			l := float64(lo)
+			p.Lo = &l
+			if hi != nil {
+				h := float64(*hi)
+				p.Hi = &h
+			}
+		}
+		series[i] = p
+	}
+	mm.Series = series
+	return mo, mm, true
+}
+
+// byPC is the By PC table (M8) of the cost view on all PCs: this PC first
+// with its exact p95 and p50 (m is the view's metrics, whose extra keeps
+// them), then the other counted PCs by first seen with the ranges of their
+// buckets in the window.
+func byPC(e env, w Window, m map[string]Metric) ([]ByPCRow, error) {
+	o, err := othersAt(e, w, e.q.version)
+	if err != nil {
+		return nil, err
+	}
+	type pc struct {
+		machine, os string
+		at          int64
+		until       sql.NullString
+	}
+	rows, err := e.tx.QueryContext(e.ctx, `
+SELECT machine, COALESCE(os, ''), at, until_day FROM pc_docs
+WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
+		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	var pcs []pc
+	for rows.Next() {
+		var p pc
+		if err := rows.Scan(&p.machine, &p.os, &p.at, &p.until); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		pcs = append(pcs, p)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var self SelfPC
+	if e.src.Self != nil {
+		self = e.src.Self()
+	}
+	var ids []string
+	thisCounts := !e.src.Config.ServerOnly()
+	if thisCounts && self.Machine != "" {
+		ids = append(ids, self.Machine)
+	}
+	for _, p := range pcs {
+		ids = append(ids, p.machine)
+	}
+	var out []ByPCRow
+	if thisCounts {
+		row := ByPCRow{This: true, OS: self.OS}
+		if self.Machine != "" {
+			row.Machine = short(self.Machine, ids)
+		}
+		if err := e.tx.QueryRowContext(e.ctx, `
+SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine') AND `+versionClause,
+			w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.version, e.q.version).Scan(&row.Prompts); err != nil {
+			return nil, err
+		}
+		row.Active = row.Prompts > 0
+		row.P95, _ = m["recall.latency"].Extra["p95"].(*float64)
+		row.P50, _ = m["recall.latency"].Extra["p50"].(*float64)
+		out = append(out, row)
+	}
+	for _, p := range pcs {
+		f := o.byMachine[p.machine]
+		row := ByPCRow{Machine: short(p.machine, ids), OS: p.os, Prompts: f.Prompts, Active: f.Prompts > 0,
+			Stale: time.UnixMilli(p.at).Before(e.now.Add(-machines.StaleAfter))}
+		row.P50RangeMS, row.P95RangeMS = bucketRanges(f.Latency)
+		if p.until.Valid && p.until.String != "" {
+			u := p.until.String
+			row.Until = &u
+		}
+		out = append(out, row)
+	}
+	return out, nil
 }
 
 // short is the label of machine id: its first 8 characters, or 13 when

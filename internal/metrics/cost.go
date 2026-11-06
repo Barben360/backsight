@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/retain"
 )
 
@@ -236,7 +237,11 @@ WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND `+projectClause+` A
 	}
 	n := int64(len(totals))
 	p50, p95 := p50p95(totals)
-	m := Metric{Den: i64(n), Value: p95,
+	var chars int64
+	for _, c := range totals {
+		chars += c
+	}
+	m := Metric{Den: i64(n), Value: p95, chars: chars,
 		Extra: map[string]any{"p50": p50, "p95": p95, "tokens_p50": tokensOf(p50), "tokens_p95": tokensOf(p95), "histogram": hist}}
 	for i, b := range buckets {
 		p := pointOf(w, b.Key)
@@ -301,6 +306,14 @@ func costSamples(e env, w Window, query string) (samples, []Bucket, error) {
 	return s, buckets, rows.Err()
 }
 
+// bucketsOf counts the samples (milliseconds) by latency bucket.
+func bucketsOf(ms []int64) (b [9]int64) {
+	for _, v := range ms {
+		b[machines.Bucket(v)]++
+	}
+	return b
+}
+
 // latency fills a latency metric from the (ts, ms) rows of query: the
 // value is the p95 from 100 samples; the series has a point per day with
 // its own p50, p95 and n whatever n.
@@ -312,9 +325,11 @@ func latency(e env, w Window, id, query string, obs map[string]Observation, met 
 	p50, p95 := p50p95(xs.all)
 	n := int64(len(xs.all))
 	m := Metric{Den: i64(n), Value: p95, Extra: map[string]any{"p50": p50, "p95": p95}}
+	m.buckets = bucketsOf(xs.all)
 	for i, b := range buckets {
 		p := pointOf(w, b.Key)
 		p.N = i64(int64(len(xs.byDay[i])))
+		p.buckets = bucketsOf(xs.byDay[i])
 		if len(xs.byDay[i]) > 0 {
 			a, c := Percentile(xs.byDay[i], 50), Percentile(xs.byDay[i], 95)
 			p.P50, p.P95 = &a, &c
