@@ -230,6 +230,31 @@ func TestTimeToRecallEdgeSessions(t *testing.T) {
 	}
 }
 
+// TestTimeToRecallUnderAProjectKeepsTheSessionsLastTurn: a session that ran
+// in two projects is chosen by the project, but its last turn (T0) is its
+// last prompt of any project: a send between its two prompts is not a send
+// after the session's end, filtered or not.
+func TestTimeToRecallUnderAProjectKeepsTheSessionsLastTurn(t *testing.T) {
+	day := func(d, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, fxParis) }
+	x := newFx(t, fxNow)
+	x.tel(day(26, 10, 0), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "multi", "alpha")
+	x.tel(day(26, 12, 0), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "multi", "beta")
+	x.rcSend(day(26, 11, 0), "multi") // before the session's last prompt
+	x.tel(day(27, 10, 0), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "only-beta", "beta")
+	for _, project := range []string{"", "alpha"} {
+		q := x.query(7)
+		q.Project = project
+		f := funnelOf(t, ttr(x, q))
+		want := int64(2)
+		if project != "" {
+			want = 1 // only-beta is no session of alpha
+		}
+		if f["ended"] != want || f["sent"] != 0 {
+			t.Errorf("project %q: ended %d sent %d, want ended %d sent 0", project, f["ended"], f["sent"], want)
+		}
+	}
+}
+
 // manyExtracted writes n sessions, session i sent a minute after its last
 // prompt and extracted i minutes after the send.
 func manyExtracted(x *fx, n int) {

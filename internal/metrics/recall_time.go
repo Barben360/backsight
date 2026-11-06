@@ -123,10 +123,12 @@ func loadRecall(e env, w Window) (*recallRun, error) {
 	run := &recallRun{}
 	bySession := map[string]*recallSession{}
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT session, MAX(ts), COALESCE(project, '') FROM tel_prompt
-WHERE ts >= ? AND COALESCE(session, '') <> '' AND `+projectClause+`
-GROUP BY session HAVING MAX(ts) < ? AND MAX(ts) <= ?`, // the prompts from the window's start: a session's last one is among them
-		w.Since.UnixMilli(), e.q.Project, e.q.Project, w.Until.UnixMilli(), e.now.Add(-sessionEnded).UnixMilli())
+SELECT session, MAX(ts), CASE WHEN ? = '' THEN COALESCE(project, '') ELSE ? END FROM tel_prompt
+WHERE ts >= ? AND COALESCE(session, '') <> ''
+GROUP BY session HAVING MAX(ts) < ? AND MAX(ts) <= ? AND (? = '' OR COUNT(CASE WHEN project = ? THEN 1 END) > 0)`,
+		// the prompts from the window's start: a session's last one is among
+		// them, of any project; the project only picks the sessions that ran in it
+		e.q.Project, e.q.Project, w.Since.UnixMilli(), w.Until.UnixMilli(), e.now.Add(-sessionEnded).UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {
 		return nil, err
 	}
