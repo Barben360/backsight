@@ -187,7 +187,7 @@ func TestUpdateApplyIndexWarningSaysWhyInFixedWords(t *testing.T) {
 		!strings.Contains(out, "failed   index: the index is in use\n") {
 		t.Errorf("text:\n%s", out)
 	}
-	if strings.Contains(out+errOut, "close the dashboard") {
+	if strings.Contains(out+errOut, "run backsight stats index rebuild again") {
 		t.Errorf("the child's sentence relayed:\n%s%s", out, errOut)
 	}
 }
@@ -423,6 +423,7 @@ func TestIndexMigrateReason(t *testing.T) {
 	}{
 		{envOf(index.ErrUpdateInProgress), "an update is in progress"},
 		{envOf(index.ErrInUse), "the index is in use"},
+		{&childError{code: output.Blocked, env: &output.Error{Code: output.Blocked, Message: legacyIndexInUse}, msg: legacyIndexInUse}, "the index is in use"}, // an older binary's sentence
 		{envOf(index.ErrDiskFull), "the disk is full"},
 		{envOf(index.ErrUnreadable), "the index is unreadable"},
 		{envOf(&fs.PathError{Op: "open", Path: "/x", Err: fs.ErrPermission}), "a disk error"},

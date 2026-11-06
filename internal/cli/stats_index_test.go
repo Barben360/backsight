@@ -559,7 +559,7 @@ func TestStatsIndexRebuildRefusesAnIndexInUse(t *testing.T) {
 	main := filepath.Join(d.IndexDir(), "metrics.db")
 	was, _ := os.ReadFile(main)
 	code, out, errOut := run(t, "stats", "index", "rebuild", "--yes")
-	if code != output.Blocked || !strings.Contains(errOut, "close the dashboard and run backsight stats index rebuild again; the old index is kept") {
+	if code != output.Blocked || !strings.Contains(errOut, "run backsight stats index rebuild again in a minute; the old index is kept") {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 	if now, _ := os.ReadFile(main); string(now) != string(was) {

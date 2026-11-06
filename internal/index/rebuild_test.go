@@ -175,7 +175,7 @@ func TestRebuildRenameFailureKeepsTheOldIndex(t *testing.T) {
 	renameFile = func(string, string) error { return errors.New("injected rename failure") }
 	t.Cleanup(func() { renameFile = prev })
 	_, err := r.rebuild(RebuildOptions{Yes: true})
-	if !errors.Is(err, ErrInUse) || err.Error() != "the metrics index is in use: close the dashboard and run backsight stats index rebuild again; the old index is kept" {
+	if !errors.Is(err, ErrInUse) || err.Error() != "the metrics index is in use by another backsight process (the dashboard, a jobs tick or a command): run backsight stats index rebuild again in a minute; the old index is kept" {
 		t.Fatalf("want ErrInUse, got %v", err)
 	}
 	after := r.indexDir()
@@ -457,5 +457,26 @@ func TestRebuildSucceedsWhenItsStatusCannotBeWritten(t *testing.T) {
 	res, err = Rebuild(context.Background(), r.opts(), RebuildOptions{Plan: true})
 	if err != nil || res.StopNotCleared {
 		t.Errorf("plan %+v %v", res, err)
+	}
+}
+
+// TestRebuildPrunesWhatMaintainWould: a journal line older than the
+// retention does not come back with a rebuild, whatever the daily
+// maintain would have done next.
+func TestRebuildPrunesWhatMaintainWould(t *testing.T) {
+	r := newRecEnv(t)
+	old := tline("prompt", "2024-08-15T12:00:00.000Z", map[string]any{"decision": "skip", "n": 99, "project": ""})
+	writeFile(t, filepath.Join(r.d.TelemetryDir(), "events-2024-08.jsonl"), old)
+	if _, err := r.rebuild(RebuildOptions{Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	ix := mustOpen(t, r.opts())
+	defer mustClose(t, ix)
+	var total, ancient int
+	if err := ix.sh.r.QueryRow(`SELECT count(*), count(CASE WHEN n = 99 THEN 1 END) FROM tel_prompt`).Scan(&total, &ancient); err != nil {
+		t.Fatal(err)
+	}
+	if ancient != 0 || total != 6 {
+		t.Errorf("%d rows, %d of them past the retention; want 6 and 0", total, ancient)
 	}
 }
