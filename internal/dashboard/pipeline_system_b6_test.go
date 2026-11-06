@@ -257,6 +257,39 @@ func TestFunnelStates(t *testing.T) {
 		}
 	})
 
+	t.Run("too few by status alone", func(t *testing.T) {
+		in := funnelNormal
+		in.status = metrics.StatusTooFew // the typical times are all there
+		c := funnelNode(t, in, nil)
+		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "too few" {
+			t.Errorf("pill %v", p)
+		}
+		if st := c.find("div.state"); len(st) != 1 || !strings.HasPrefix(st[0].text(), "Too few to time yet:") {
+			t.Errorf("state %v", texts(st))
+		}
+		if len(c.find("div.chart-plot")) != 0 {
+			t.Error("times drawn under a too few status")
+		}
+	})
+	t.Run("too few by the missing typical time alone", func(t *testing.T) {
+		in := funnelFew
+		in.status = metrics.StatusOK // the status says ok; fewer than 20 were recalled
+		c := funnelNode(t, in, nil)
+		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "too few" || !strings.Contains(p.attr("class"), "st-few") {
+			t.Errorf("pill %v: the sentence and the word must agree", p)
+		}
+		if st := c.find("div.state"); len(st) != 1 || !strings.HasPrefix(st[0].text(), "Too few to time yet:") {
+			t.Errorf("state %v", texts(st))
+		}
+	})
+	t.Run("a watch outranks too few", func(t *testing.T) {
+		in := funnelFew
+		in.status = metrics.StatusWatch
+		c := funnelNode(t, in, nil)
+		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "watch" {
+			t.Errorf("pill %v", p)
+		}
+	})
 	t.Run("one session", func(t *testing.T) {
 		in := funnelFew
 		in.f = map[string]int64{"ended": 2, "sent": 2, "extracted": 1, "recalled": 1, "not_recalled": 0, "never": 1}

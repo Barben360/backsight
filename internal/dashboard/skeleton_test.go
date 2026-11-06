@@ -447,9 +447,6 @@ var raw = []string{"outdated", "batch_retain", "maintain", "partial", "warn", "d
 
 var popovers = regexp.MustCompile(`(?s)<details class="info">.*?</details>`)
 
-// funnelCard is the time-to-recall card, whose step names are plain English.
-var funnelCard = regexp.MustCompile(`(?s)<section class="card" aria-labelledby="w-pipeline-time_to_recall">.*?</section>`)
-
 func hasWord(text, w string) bool {
 	return regexp.MustCompile(`(^|[^A-Za-z_-])` + regexp.QuoteMeta(w) + `($|[^A-Za-z_-])`).MatchString(text)
 }
@@ -639,12 +636,21 @@ func TestSkipReasonsAndHookKindsAreWordsOnPages(t *testing.T) {
 		},
 		"pipeline": func(d *PageData) {
 			set(d.V["pipeline"], "hooks.failures", map[string]any{"by_kind": kinds, "last_24h": kinds})
+			// The never-extracted table is read too: its states are words, never stored names.
+			r := d.V["pipeline"]
+			r.Tables.NeverExtracted = []metrics.NeverExtractedRow{
+				{Session: "9e04c2b7a1f34d5e", Project: "project-a", Sent: r.GeneratedAt.Add(-48 * time.Hour), State: "failed", Retries: 2},
+				{Session: "c1d8e5a0b2f94c61", Project: "backsight", Sent: r.GeneratedAt.Add(-72 * time.Hour), State: "no_memory"},
+				{Session: "60fa21d9c7e84b35", Project: "project-c", Sent: r.GeneratedAt.Add(-96 * time.Hour), State: "none"}}
 		},
 	} {
 		b := render(t, page, edit)
 		text := visibleText(b)
-		if page == "pipeline" { // its popover says "an error exit": the catalog's prose for hooks.failures; its funnel names "first memory recalled"
-			text = visibleText(funnelCard.ReplaceAllString(popovers.ReplaceAllString(b, ""), ""))
+		if page == "pipeline" { // its popover says "an error exit": the catalog's prose for hooks.failures; its funnel's hop is named "first memory recalled" (plain English, not the skip reason)
+			text = strings.ReplaceAll(visibleText(popovers.ReplaceAllString(b, "")), "first memory recalled", "")
+		}
+		if page == "pipeline" && !strings.Contains(text, "finished, no memory made") {
+			t.Errorf("pipeline: the never-extracted table is not in the guarded text")
 		}
 		if !strings.Contains(text, "skipped") && page != "pipeline" || !strings.Contains(text, "in the last 24 h") && page == "pipeline" {
 			if page == "overview" {

@@ -63,7 +63,7 @@ type NeverRow struct {
 type NeverState struct{ Word, Class, Rest string }
 
 const (
-	funnelP95Min = 100 // sessions a hop needs before its slowest 1 in 20 is told
+	funnelP95Min = 100 // sessions a hop needs before its slowest 1 in 20 is told; mirrors metrics.minForP95
 	neverShown   = 10  // rows of the never-extracted table
 	neverCmd     = "backsight stats sessions --has never_extracted"
 )
@@ -95,14 +95,20 @@ func (d PageData) funnelOf(r *metrics.Result) FunnelCard {
 		hops[x.Name] = x
 	}
 	whole := hops["whole_way"]
-	few := whole.P50 == nil // fewer than the smallest number recalled
+	// Too few: the metric says so, or fewer sessions were recalled than the
+	// whole way needs (no typical time). Either way the card tells it and its
+	// pill agrees; a watch is the one status that outranks it.
+	few := v.M.Status == metrics.StatusTooFew || whole.P50 == nil
 	need := int64(v.Def.MinN)
 	dur := func(p *float64) string { return chart.Span(*p) }
+	watch := v.M.Status == metrics.StatusWatch
 
 	c.Head.Pill = word(v)
+	if few && !watch {
+		c.Head.Pill = Word{"too few", "st-few"}
+	}
 	based := l.Int(f["recalled"]) + " sessions recalled in the window; each step on the sessions that reached it"
 	if few {
-		c.Head.Pill = Word{"too few", "st-few"}
 		based = format.Count(l, f["recalled"], "session", "sessions") + " recalled (" + l.Int(need) + " needed)"
 	}
 	c.Head.Info.What = "For each session sent in the window: from its last turn to its send, to the server turning it into memories, to the first time one of those memories was shown."
@@ -143,7 +149,6 @@ func (d PageData) funnelOf(r *metrics.Result) FunnelCard {
 		{"A memory from it recalled", l.Int(f["recalled"]), or(count(f["not_recalled"], "not recalled yet"), "all recalled")},
 	}
 
-	watch := v.M.Status == metrics.StatusWatch
 	for i, hp := range funnelHops {
 		hop := hops[hp.key]
 		x := FunnelHop{Name: hp.name, Watch: watch && i == 1}
