@@ -117,6 +117,17 @@ func TestConfigMarkers(t *testing.T) {
 	}
 }
 
+// TestConfigMarkersNeedANumericChange: a changed file whose numbers are the
+// same (a text setting moved) is no marker: it would name no change.
+func TestConfigMarkersNeedANumericChange(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.configAt(mk(28, 9, 0), "a", map[string]float64{"recall.min_score": 0.5})
+	x.configAt(mk(29, 9, 0), "b", map[string]float64{"recall.min_score": 0.5})
+	if m := x.run("releases", x.query(5)).Tables.Markers; len(m) != 0 {
+		t.Errorf("markers = %+v, want none", m)
+	}
+}
+
 // TestDayPageMarkers: the day page lists only that local day's markers,
 // both kinds in time order; the day before the switch has none.
 func TestDayPageMarkers(t *testing.T) {

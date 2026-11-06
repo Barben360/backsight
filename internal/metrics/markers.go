@@ -171,6 +171,9 @@ ORDER BY ts, source_file, "offset"`, w.Until.UnixMilli(), w.Since.UnixMilli())
 			}
 			changes = append(changes, c)
 		}
+		if len(changes) == 0 { // the file changed, no number did: nothing to name
+			continue
+		}
 		out = append(out, Marker{At: time.UnixMilli(r.ts).In(viewLocOf(w)), Kind: "config", Changes: changes})
 	}
 	return out, nil
