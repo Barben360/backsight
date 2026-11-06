@@ -768,10 +768,12 @@ func TestLineMarkers(t *testing.T) {
 	if cfg[0][1] != cfg[0][2] || cfg[0][3] != "Oct 20: settings changed (recall.min_score 0.5 → 0.55)" || rel[0][3] != "Oct 28: backsight v0.1.17-m7 installed" {
 		t.Errorf("settings marker: %v, release marker: %v", cfg[0], rel[0])
 	}
-	// the labels: a release's ends at its line, a setting's starts after it.
+	// the labels: a release's ends at its line, a setting's starts after it;
+	// here they would run into each other (the setting's ends past where the
+	// release's begins), so the release's takes the second row.
 	must(t, out,
 		`<text class="mk-t" x="`+f(lineX(19)+4)+`" y="24">settings changed</text>`,
-		`<text class="mk-t ta-e" x="`+f(lineX(27)-4)+`" y="24">v0.1.17-m7</text>`,
+		`<text class="mk-t ta-e" x="`+f(lineX(27)-4)+`" y="38">v0.1.17-m7</text>`,
 		`<span><i class="sw sw-rel"></i>new version</span>`, `<span><i class="sw sw-cfg"></i>settings changed</span>`,
 		`<th class="r" scope="col">Marker</th>`,
 		`<tr><td>Oct 20</td><td class="r">50 %</td><td class="r">settings changed</td></tr>`,
@@ -951,5 +953,60 @@ func TestFlatStretchesOfALongLineKeepTheirEnds(t *testing.T) {
 		if want := []int{10, 4}[i]; len(r) != want {
 			t.Errorf("run %d at %d positions has %d points, want all %d", i, HoverMax, len(r), want)
 		}
+	}
+}
+
+// Version labels on a short window: close markers must not draw labels over
+// each other, and the one on the first day must stay right of the y axis.
+func TestLineMarkerLabelsStayInsideAndApart(t *testing.T) {
+	x := make([]string, 30)
+	v := make([]*float64, 30)
+	for i := range x {
+		x[i], v[i] = fmt.Sprintf("Oct %d", i+1), p(0.5)
+	}
+	c := usedLine(x, v...)
+	c.Markers = []Mark2{
+		{X: 0, Kind: "release", Label: "0.1.18-m7", Title: "t0"},
+		{X: 2, Kind: "release", Label: "0.1.22-m7", Title: "t2"},
+		{X: 3, Kind: "release", Label: "0.1.23-m7", Title: "t3"},
+		{X: 3, Kind: "config", Label: "settings changed", Title: "t3c"},
+		{X: 29, Kind: "release", Label: "0.1.25-m7", Title: "t29"},
+	}
+	out := string(c.HTML())
+	if n := strings.Count(out, `class="rel-mk"`) + strings.Count(out, `class="cfg-mk"`); n != 5 {
+		t.Fatalf("%d marker lines, want 5 (a dropped label keeps its line): %s", n, out)
+	}
+	type box struct {
+		x0, x1 float64
+		y      string
+		label  string
+	}
+	var boxes []box
+	for _, m := range regexp.MustCompile(`<text class="(mk-t(?: ta-e)?)" x="([\d.]+)" y="(\d+)">([^<]*)</text>`).FindAllStringSubmatch(out, -1) {
+		w := float64(len([]rune(m[4]))) * labelCharW
+		at := num(t, m[2])
+		b := box{at, at + w, m[3], m[4]}
+		if m[1] == "mk-t ta-e" {
+			b.x0, b.x1 = at-w, at
+		}
+		boxes = append(boxes, b)
+	}
+	if len(boxes) < 3 {
+		t.Fatalf("%d marker labels drawn, want at least 3 of 5: %v", len(boxes), boxes)
+	}
+	first := false
+	for i, b := range boxes {
+		if b.x0 < plotL || b.x1 > 552 {
+			t.Errorf("label %q spans %.1f to %.1f, outside the plot (%.0f to 552)", b.label, b.x0, b.x1, plotL)
+		}
+		first = first || b.label == "0.1.18-m7"
+		for _, o := range boxes[i+1:] {
+			if o.y == b.y && b.x0 < o.x1 && o.x0 < b.x1 {
+				t.Errorf("labels %q and %q overlap on row %s", b.label, o.label, b.y)
+			}
+		}
+	}
+	if !first {
+		t.Errorf("the label of the marker on the first day was dropped: %v", boxes)
 	}
 }

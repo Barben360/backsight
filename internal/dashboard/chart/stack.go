@@ -101,7 +101,7 @@ func (c Stack) frame(d stackData, top float64, centre func(j int) float64, hit f
 		b.WriteString(`<text class="ta-e" x="38" y="` + f(gy+4) + `">` + esc(c.Fmt.format(top/4*float64(g))) + `</text>`)
 	}
 	ov := newOverlay(c.Markers, c.Bands, c.SourceAt, len(c.X))
-	ov.draw(&b, centre, hit)
+	ov.draw(&b, left, right, centre, hit)
 	draw(&b)
 	b.WriteString(`<line class="bl" x1="` + f(left) + `" x2="` + f(right) + `" y1="` + f(plotBase) + `" y2="` + f(plotBase) + `"></line>`)
 	m := len(d.xs)
