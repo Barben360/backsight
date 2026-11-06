@@ -22,7 +22,8 @@ import (
 // TelemetryPerYear and JournalPerYear lines a year, and a ledger of
 // Memories ids. Collection adds the local collection's month files
 // (internal/metricsfile's families) over the same months, as a daily
-// jobs maintain writes them.
+// jobs maintain writes them. OtherPCs, when above 0, adds the
+// metrics/machines.json of that many other PCs (WriteMachines).
 type Spec struct {
 	Months           int
 	TelemetryPerYear int
@@ -30,6 +31,7 @@ type Spec struct {
 	Memories         int
 	Seed             uint64
 	Collection       bool
+	OtherPCs         int
 }
 
 // Budget is the volume the budgets are measured on: 13 months, above a
@@ -225,6 +227,9 @@ func Generate(t testing.TB, stateDir string, s Spec) {
 	}
 	if s.Collection {
 		writeCollection(t, d, s, end)
+	}
+	if s.OtherPCs > 0 {
+		WriteMachines(t, d.MetricsDir(), s)
 	}
 	mems := map[string]any{}
 	for i := 0; i < s.Memories; i++ {

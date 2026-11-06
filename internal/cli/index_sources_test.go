@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
@@ -140,7 +142,7 @@ func TestIndexOptions(t *testing.T) {
 	d := paths.Dirs{State: "/s"}
 	var buf bytes.Buffer
 	o := indexOptions(d, "/h", &buf)
-	if o.Dirs != d || o.Home != "/h" || o.Progress != &buf || o.LocalStatus == nil {
+	if o.Dirs != d || o.Home != "/h" || o.Progress != &buf || o.LocalStatus == nil || o.Machines == nil || o.MachinesOff == nil {
 		t.Errorf("%+v", o)
 	}
 }
@@ -181,5 +183,87 @@ func TestLocalStatusCountsQuarantinedSessions(t *testing.T) {
 	}
 	if ls.Quarantined != 3 {
 		t.Errorf("Quarantined = %d, want 3 (1 note + 2 sessions)", ls.Quarantined)
+	}
+}
+
+// TestSharingOffEmptiesTheRows: the other PCs' rows are in the index only
+// while feedback.enabled and share_ledger are on; the cache file stays on
+// disk, and the rows return when sharing does.
+func TestSharingOffEmptiesTheRows(t *testing.T) {
+	root := t.TempDir()
+	d := paths.Dirs{State: filepath.Join(root, "state"), Config: filepath.Join(root, "config"), Data: filepath.Join(root, "data")}
+	home := t.TempDir()
+	setSharing := func(enabled, share bool) {
+		t.Helper()
+		toml := fmt.Sprintf("[feedback]\nenabled = %v\nshare_ledger = %v\n", enabled, share)
+		if err := os.MkdirAll(d.Config, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(d.ConfigFile(), []byte(toml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSharing(true, true)
+
+	now := time.Now().UTC()
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	const other = "3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6"
+	doc := machines.Doc{Machine: other, At: now.Add(-time.Hour).Truncate(time.Second), OS: "linux", FirstSeen: "2026-09-02",
+		BinaryVersion: "v0.1.30-m7", Until: yesterday,
+		Days: []machines.Day{{Day: yesterday, Figures: machines.Figures{Prompts: 4, Hit: machines.Pair{1, 2}}, Flow: machines.Pair{1, 1}}}}
+	raw, err := doc.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(d.MetricsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := machines.SaveCache(d.MetricsDir(), machines.Cache{FetchedAt: now,
+		Docs: []machines.CachedDoc{{Name: machines.DocPrefix + other, Raw: raw}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err := index.Open(context.Background(), indexOptions(d, home, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ix.Close() }()
+	rows := func() (docs, days int) {
+		t.Helper()
+		err := ix.ReadTx(context.Background(), func(tx *sql.Tx) error {
+			if err := tx.QueryRow(`SELECT count(*) FROM pc_docs`).Scan(&docs); err != nil {
+				return err
+			}
+			return tx.QueryRow(`SELECT count(*) FROM pc_days`).Scan(&days)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return docs, days
+	}
+	catchUp := func() {
+		t.Helper()
+		if _, err := ix.CatchUp(context.Background(), time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catchUp()
+	if d, n := rows(); d != 1 || n != 1 {
+		t.Fatalf("sharing on: %d documents, %d days, want 1 and 1", d, n)
+	}
+	for name, on := range map[string][2]bool{"share_ledger off": {true, false}, "feedback off": {false, true}} {
+		setSharing(on[0], on[1])
+		catchUp()
+		if d, n := rows(); d != 0 || n != 0 {
+			t.Errorf("%s: %d documents, %d days remain", name, d, n)
+		}
+		if _, err := os.Stat(machines.CacheFile(d.MetricsDir())); err != nil {
+			t.Errorf("%s: the cache file must stay: %v", name, err)
+		}
+		setSharing(true, true)
+		catchUp()
+		if d, n := rows(); d != 1 || n != 1 {
+			t.Errorf("%s, then on again: %d documents, %d days, want 1 and 1", name, d, n)
+		}
 	}
 }

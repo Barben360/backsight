@@ -21,6 +21,8 @@ const (
 	// The ledger reader or the local status failed (offset 0).
 	errLedgerUnreadable      = "ledger_unreadable"
 	errLocalStatusUnreadable = "local_status_unreadable"
+	// The other PCs' cache did not load (offset 0).
+	errMachinesUnreadable = "machines_unreadable"
 )
 
 // row is one row to insert.
