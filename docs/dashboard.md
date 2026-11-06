@@ -70,7 +70,7 @@ These cards come from the daily upkeep's record (see the notes of v0.1.28-m7 in 
 **Overview**
 - **Which memories helped most?** The 3 memories Claude said it used most in the window, each with its project, its kind and how often it was used and shown. A name opens the memory's page.
 - **Which days did memory help?** A calendar of the last 13 months, a column per week. Colour by picks what the squares show: Prompts that got memory, Turns where Claude used memory or Sessions. A dashed square is a day with nothing recorded; the window's days and today are outlined. Show as a table lists the same days as text, and a day opens its page. It does not follow the window: it always covers 13 months, for the project you filtered by.
-- **Copy summary** copies the page's numbers as plain text, 72 characters wide at most, in English whatever your browser's language, ready to paste into an issue or a chat. The same text is in the Summary as text disclosure at the foot of the page, which works without scripts. It holds counts, rates, statuses and commands: no memory text, no session or memory id. The memory server's address shows only when it is on this PC; any other is written "a remote server".
+- **Copy summary** copies the page's numbers as plain text, 72 characters wide at most, in English whatever your browser's language, ready to paste into an issue or a chat. The same text is in the Summary as text disclosure at the foot of the page, which works without scripts. It holds counts, rates, statuses and commands, the project name when you filtered by one, the window's dates, and the backsight version and the time it was written: no memory text, no session or memory id. The memory server's address shows only when it is on this PC (any loopback address, `::1` included); any other is written "a remote server".
 - **Flowing tile.** Its subline gains the typical time from a session's last turn to its first memory recalled, when there are enough sessions to say.
 
 **Days and one day**
@@ -110,7 +110,7 @@ Off by default; turn them on in Preferences. Then `g` followed by a letter withi
 | `?` | This list |
 | `Esc` | Close this list or an open menu |
 
-Keys do nothing while you type in a field or with Ctrl, Alt or Meta held. On the calendar, the arrow keys move from day to day and Enter opens the day. They need scripts; everything they do is also a link or a button.
+Keys do nothing while you type in a field or with Ctrl, Alt or Meta held. On the calendar, the up and down arrows move one day, the left and right arrows one week, Home and End go to the first and last day, and Enter opens the day; these calendar keys work even with shortcuts off. All of them need scripts; everything they do is also a link or a button.
 
 ## Privacy
 
