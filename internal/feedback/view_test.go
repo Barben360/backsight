@@ -203,3 +203,25 @@ func TestRetirementsCountTheSessionsRetiredIDs(t *testing.T) {
 		t.Errorf("s3: %d", n)
 	}
 }
+
+// A turn with a credit (any verdict, confirmed included) and a none is
+// the credits' turn: it never counts as a none.
+func TestCheckTurnCreditBeatsNone(t *testing.T) {
+	for _, v := range []string{"used", "confirmed", "wrong", "outdated"} {
+		for _, noneFirst := range []bool{true, false} {
+			events := []Event{{Kind: "credit", Session: "s", Turn: "t", Verdict: v, IDs: []string{"m1"}}}
+			none := Event{Kind: "credit", Session: "s", Turn: "t", Verdict: "none"}
+			if noneFirst {
+				events = append([]Event{none}, events...)
+			} else {
+				events = append(events, none)
+			}
+			if c := CheckTurn(events, "s", "t", "", false); !c.Declared || c.None {
+				t.Errorf("%s, none first %v: %+v, want declared and not none", v, noneFirst, c)
+			}
+		}
+	}
+	if c := CheckTurn([]Event{{Kind: "credit", Session: "s", Turn: "t", Verdict: "none"}}, "s", "t", "", false); !c.None {
+		t.Errorf("a lone none: %+v", c)
+	}
+}

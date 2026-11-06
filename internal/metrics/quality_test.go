@@ -952,3 +952,37 @@ func TestCalendarUsedTurnsFollowTheFinalMainStop(t *testing.T) {
 		t.Errorf("calendar used turns = %d, want 1 (the turn whose last main stop declares)", used)
 	}
 }
+
+// A confirmed credit says the memory was right: it counts among the
+// verdicts wrong_rate divides by (1 wrong of 1 used + 2 confirmed + 1
+// wrong = 1/4), apart in its extras, and is no use for used.turn_rate.
+func TestWrongRateCountsConfirmedAsRight(t *testing.T) {
+	x := newFx(t, fxNow)
+	for i, v := range []string{"used", "confirmed", "confirmed", "wrong"} {
+		x.declaredTurn(hoursAgo(i+1), fmt.Sprintf("c-%d", i), "declared", v, fmt.Sprintf("m%d", i))
+	}
+	m := qualityOf(x, x.query(7))
+	w := m["verdict.wrong_rate"]
+	if num(w) != 1 || den(w) != 4 {
+		t.Errorf("verdict.wrong_rate = %d/%d, want 1/4", num(w), den(w))
+	}
+	if w.Extra["confirmed"] != int64(2) || w.Extra["used"] != int64(1) {
+		t.Errorf("extras %v, want confirmed 2 and used 1 apart", w.Extra)
+	}
+	if u := m["used.turn_rate"]; num(u) != 1 || den(u) != 4 {
+		t.Errorf("used.turn_rate = %d/%d, want 1/4: a confirmed turn used nothing", num(u), den(u))
+	}
+}
+
+// A turn that declared a used credit and a none counts as used, never as
+// declared without use, whichever came first.
+func TestUsedTurnRateCreditBeatsNone(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.declaredTurn(hoursAgo(1), "a", "declared", "used", "m1")
+	x.credit(hoursAgo(1).Add(10*time.Second), "a", "", "alpha", "none")
+	x.declaredTurn(hoursAgo(2), "b", "declared", "none", "m2")
+	m := qualityOf(x, x.query(7))
+	if u := m["used.turn_rate"]; num(u) != 1 || den(u) != 2 {
+		t.Errorf("used.turn_rate = %d/%d, want 1/2", num(u), den(u))
+	}
+}

@@ -698,7 +698,7 @@ func TestCreditNoneNeedsNoIDs(t *testing.T) {
 			t.Errorf("%s without a correction: %v %s", v, isErr, out)
 		}
 	}
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used", "none", "wrong" or "outdated"`) {
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used", "confirmed", "none", "wrong" or "outdated"`) {
 		t.Errorf("unknown verdict: %v %s", isErr, out)
 	}
 }

@@ -99,7 +99,7 @@ func TestTurnRail(t *testing.T) {
 		if len(chips) == 0 {
 			t.Fatalf("%s: no memory chip on the rail", name)
 		}
-		word := map[string]string{"golden": "pending", "outcomes": "used by Claude"}[name]
+		word := map[string]string{"golden": "pending", "outcomes": "used or confirmed"}[name]
 		for _, a := range chips {
 			id := strings.TrimPrefix(a.attr("href"), "/memories/")
 			if id == a.attr("href") || id == "" {
@@ -122,7 +122,7 @@ func TestTurnChipsTellTheOutcomeInWords(t *testing.T) {
 	one := ptrI(1)
 	var shows []metrics.ShowChip
 	cases := []struct{ outcome, word, class string }{
-		{"credit", "used by Claude", "used"}, {"confident_miss", "shown, then ignored", "ignored"},
+		{"credit", "used or confirmed", "used"}, {"confident_miss", "shown, then ignored", "ignored"},
 		{"unknown", "not declared", ""}, {"shown", "shown only", ""}, {"pending", "pending", ""},
 	}
 	for i, c := range cases {
@@ -670,7 +670,7 @@ func TestStripOfMemoryPage(t *testing.T) {
 	}
 	want := []string{
 		"Oct 16 · before a question · shown, then ignored · rank 3 (without the learned ranking: 2) · session a41c09e2",
-		"Oct 15 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session a41c09e2",
+		"Oct 15 · added to the prompt · used or confirmed · rank 1 (without the learned ranking: 2) · session a41c09e2",
 	}
 	// The marks are drawn row by row: the prompt row first.
 	if len(titles) != 2 || titles[0] != want[1] || titles[1] != want[0] {

@@ -145,8 +145,8 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 			}
 		case "credit":
 			declared[e.Session+"|"+e.Turn+"|"+e.Agent] = true
-			if e.Verdict != "used" {
-				continue
+			if e.Verdict != "used" && e.Verdict != "confirmed" {
+				continue // confirmed credits like used: the session checked the memory
 			}
 			for _, id := range e.IDs {
 				if !attach(byID[e.Session+"|"+id]) && e.TS.After(lastSettle) {

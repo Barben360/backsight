@@ -95,7 +95,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight stats quality", Drill: "backsight stats sessions --has used",
 		Extra:      []string{"worst_case", "pending", "check_skipped", "subagent_turns"},
 		Question:   "When memory was shown, did Claude use it?",
-		Definition: "Main-agent turns that showed memory and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
+		Definition: "Main-agent turns that showed memory and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only confirmed, wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
 		Action:     "Recall is noisy. Tighten the recall cut-offs and review the memories that are never used.",
 	},
 	{
@@ -120,7 +120,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "daily", Command: "backsight stats quality --dev",
 		Extra:      []string{"unknown", "shown", "forgotten", "pending", "path"},
 		Question:   "When memory is sure of itself, is it right?",
-		Definition: "Settled shows credited as used, out of shows credited or confidently missed, for the prompt path by default. Shows with an unknown outcome, shows of memories forgotten since, and shows still pending are reported beside it.",
+		Definition: "Settled shows credited as used or confirmed, out of shows credited or confidently missed, for the prompt path by default. Shows with an unknown outcome, shows of memories forgotten since, and shows still pending are reported beside it.",
 		Action:     "Confident rankings that go unused mean the ranking over-trusts some memories.",
 	},
 	{
@@ -150,9 +150,9 @@ var Catalog = withDrills([]Def{
 		ID: "verdict.wrong_rate", Label: "Memories reported wrong or out of date", Unit: "ratio", Direction: "down", MinN: 20,
 		Absolute: Threshold{Watch: f(0.05), Bad: f(0.15), On: "lo"}, CI: "wilson_approx", Scope: "machine", Source: "journal", Family: "quality", Series: "daily",
 		Command: "backsight memory stale", Drill: "backsight stats sessions --has wrong",
-		Extra:      []string{"wrong", "outdated", "used"},
+		Extra:      []string{"wrong", "outdated", "used", "confirmed"},
 		Question:   "How many memories that Claude relied on were wrong?",
-		Definition: "Wrong and out-of-date verdicts, out of used, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
+		Definition: "Wrong and out-of-date verdicts, out of used, confirmed, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
 		Action:     "Stale facts are in memory. Go through the reported list and forget or fix them.",
 	},
 	{

@@ -51,7 +51,7 @@ type storeArgs struct {
 
 type creditArgs struct {
 	IDs        []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
-	Verdict    string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; none: no memory shown informed it; wrong: this session shows them false; outdated: they were true but no longer are"`
+	Verdict    string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; confirmed: these memories match what this session established independently (the user's words, a file, a command output), they did not inform the answer; none: no memory shown informed it; wrong: this session shows them false; outdated: they were true but no longer are"`
 	Correction string   `json:"correction,omitempty" jsonschema:"with wrong or outdated: the right fact, 1-3 sentences, as for memory_store"`
 	Evidence   string   `json:"evidence,omitempty" jsonschema:"with wrong or outdated: what in this session shows it (the user's words, a file, a command output), at most 300 characters"`
 }
@@ -349,7 +349,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 					verdict = "used"
 				}
 				text, err := deps.credit(ctx, key, verdict, a)
-				if !slices.Contains([]string{"used", "none", "wrong", "outdated"}, verdict) {
+				if !slices.Contains([]string{"used", "confirmed", "none", "wrong", "outdated"}, verdict) {
 					verdict = "invalid" // telemetry holds enums, never what the agent typed
 				}
 				// A Sources: answer reports nothing yet: the call naming the
@@ -369,13 +369,14 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 // memory_credit's accepted answers start with these: the PostToolUse hook
 // journals a credit only behind one of them.
 const (
-	creditUsedPrefix = "Credited."
-	creditNonePrefix = "Noted:"
-	maxCreditIDs     = 10
-	maxEvidence      = 300 // characters
+	creditUsedPrefix      = "Credited."
+	creditNonePrefix      = "Noted:"
+	creditConfirmedPrefix = "Confirmed."
+	maxCreditIDs          = 10
+	maxEvidence           = 300 // characters
 )
 
-// credit is memory_credit's answer: for used, the line to print, once
+// credit is memory_credit's answer: for used and confirmed, the line to print, once
 // every id resolves to one shown in this session (all or nothing); for
 // none, a note; for wrong and outdated, the correction stored and the
 // memories retired (correct). It journals no credit: the PostToolUse hook
@@ -383,9 +384,17 @@ const (
 func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a creditArgs) (string, error) {
 	refs := a.IDs
 	switch verdict {
-	case "used":
+	case "used", "confirmed":
 		if len(refs) == 0 || len(refs) > maxCreditIDs {
 			return "", errors.New("ids: give 1 to 10 ids of memories shown in this session, or verdict none")
+		}
+		if verdict == "confirmed" {
+			if strings.TrimSpace(a.Correction) != "" {
+				return "", errors.New("correction: a confirmed memory needs none; to correct a memory use verdict wrong or outdated")
+			}
+			if strings.TrimSpace(a.Evidence) != "" {
+				return "", errors.New("evidence: only with wrong or outdated; drop it")
+			}
 		}
 	case "none":
 		if len(refs) > 0 {
@@ -402,7 +411,7 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 			return "", fmt.Errorf("evidence: give what in this session shows it, 1 to %d characters (the user's words, a file, a command output)", maxEvidence)
 		}
 	default:
-		return "", errors.New(`verdict: "used", "none", "wrong" or "outdated"`)
+		return "", errors.New(`verdict: "used", "confirmed", "none", "wrong" or "outdated"`)
 	}
 	live, found := d.live()
 	if !paired(found) {
@@ -443,10 +452,14 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 		groups[p] = append(groups[p], shortID(id))
 	}
 	lines := make([]string, 0, len(order))
-	for _, p := range order {
-		lines = append(lines, instructions.CreditLine(p, groups[p]))
+	prefix, build := creditUsedPrefix, instructions.CreditLine
+	if verdict == "confirmed" {
+		prefix, build = creditConfirmedPrefix, instructions.ConfirmedLine
 	}
-	return creditUsedPrefix + " " + printLines(lines) + "\n" + strings.Join(lines, "\n"), nil
+	for _, p := range order {
+		lines = append(lines, build(p, groups[p]))
+	}
+	return prefix + " " + printLines(lines) + "\n" + strings.Join(lines, "\n"), nil
 }
 
 // shownProjects is the project of each memory shown: the one its latest

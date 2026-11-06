@@ -58,7 +58,7 @@ var (
 	feedbackReasons = []string{"journal_read", "journal_write", "turn_pointer", "settle", "shared_combine"}
 	storeResults    = []string{"saved", "updated", "refused"}
 	dashActions     = []string{"start", "stop"}
-	verdicts        = []string{"used", "none", "wrong", "outdated", "invalid"}
+	verdicts        = []string{"used", "confirmed", "none", "wrong", "outdated", "invalid"}
 	checkOutcomes   = []string{"declared", "blocked", "undeclared", "check_skipped"}
 	retireActions   = []string{"retired", "partly", "hidden", "sources"}
 	replyKinds      = []string{"exact", "free", "empty"}

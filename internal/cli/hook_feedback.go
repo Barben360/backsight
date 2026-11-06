@@ -369,6 +369,8 @@ func (h *hookEnv) journalCredit(text string) {
 	switch {
 	case strings.HasPrefix(text, creditUsedPrefix):
 		verdict = "used"
+	case strings.HasPrefix(text, creditConfirmedPrefix):
+		verdict = "confirmed"
 	case strings.HasPrefix(text, creditNonePrefix):
 		verdict = "none"
 	case strings.HasPrefix(text, creditRetiredPrefix), strings.HasPrefix(text, creditPartlyPrefix), strings.HasPrefix(text, creditHiddenPrefix):

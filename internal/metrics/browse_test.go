@@ -454,6 +454,7 @@ func TestTurnRail(t *testing.T) {
 	x.shows(t1.Add(2*time.Second), s, "t1", "sub", "alpha", "prompt", "", "m-sub") // a subagent's show
 	x.credit(t1.Add(30*time.Second), s, "", "alpha", "used", "m-a")
 	x.credit(t1.Add(31*time.Second), s, "", "alpha", "wrong", "m-b")
+	x.credit(t1.Add(32*time.Second), s, "", "alpha", "none")                 // a none beside credits: the credits stand, the rail never says none
 	x.credit(t1.Add(32*time.Second), s, "", "alpha", "used", "m-a")          // a verdict is listed once
 	x.credit(t1.Add(33*time.Second), s, "sub", "alpha", "outdated", "m-sub") // a subagent's credit
 	x.stop(t1.Add(time.Minute), s, "", "declared")

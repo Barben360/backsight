@@ -136,9 +136,9 @@ func TestStripCapsMarks(t *testing.T) {
 	var four, one []string
 	for _, m := range d {
 		switch m[4] {
-		case "Sep 14 · 4 shows: 3 used by Claude, 1 shown, then ignored":
+		case "Sep 14 · 4 shows: 3 used or confirmed, 1 shown, then ignored":
 			four = m
-		case "Sep 14 · 1 show: 1 used by Claude":
+		case "Sep 14 · 1 show: 1 used or confirmed":
 			one = m
 		}
 	}
@@ -165,7 +165,7 @@ func TestStripBucketTiesAndRange(t *testing.T) {
 	}
 	g := c.bucket(c.Marks, 0)
 	// one each: the tie goes to used, then ignored, then shown.
-	if g.shape != "used" || g.text != "Sep 14–Sep 15 · 3 shows: 1 used by Claude, 1 shown, then ignored, 1 shown only" {
+	if g.shape != "used" || g.text != "Sep 14–Sep 15 · 3 shows: 1 used or confirmed, 1 shown, then ignored, 1 shown only" {
 		t.Errorf("%+v", g)
 	}
 	if g := c.bucket([]Mark{{0, t0, "pending", "p"}, {0, t0, "undeclared", "u"}}, 0); g.shape != "undeclared" {

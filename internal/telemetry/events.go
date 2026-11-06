@@ -82,7 +82,7 @@ type Tool struct {
 // Credit is one memory_credit call: its verdict, how many ids it named
 // and whether it was accepted.
 type Credit struct {
-	Verdict string `json:"verdict"` // used | none | wrong | outdated | invalid
+	Verdict string `json:"verdict"` // used | confirmed | none | wrong | outdated | invalid
 	IDs     int    `json:"ids_n"`
 	OK      bool   `json:"ok"`
 }

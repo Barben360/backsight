@@ -413,7 +413,8 @@ WHERE session = ? AND n IS NOT NULL AND COALESCE(subagent, 0) = 0 AND (`+strings
 }
 
 // railCredits are the main agent's credit verdicts by turn, each verdict
-// once, in the order first given.
+// once, in the order first given. A none beside another verdict is left
+// out: the credits stand.
 func railCredits(e env, session string) (map[string][]string, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT COALESCE(turn, ''), verdict FROM credits
@@ -431,6 +432,11 @@ ORDER BY ts, source_file, "offset", pos`, session)
 		}
 		if !slices.Contains(out[turn], verdict) {
 			out[turn] = append(out[turn], verdict)
+		}
+	}
+	for turn, vs := range out {
+		if len(vs) > 1 {
+			out[turn] = slices.DeleteFunc(vs, func(v string) bool { return v == "none" })
 		}
 	}
 	return out, rows.Err()

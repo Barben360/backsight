@@ -571,3 +571,21 @@ func TestStatsShowsAHeldServer(t *testing.T) {
 		t.Errorf("json server: %v", s)
 	}
 }
+
+// Confirmed credits are counted apart from used ones, on the Credits line
+// (shown only once there is one) and in the JSON verdicts.
+func TestStatsCountsConfirmedApartFromUsed(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	tw := telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"})
+	for _, c := range []telemetry.Credit{{Verdict: "used", IDs: 1, OK: true}, {Verdict: "confirmed", IDs: 2, OK: true}, {Verdict: "confirmed", IDs: 1, OK: true}} {
+		tw.Emit(c)
+	}
+	_, out, _ := run(t, "stats", "1")
+	if want := "; used 1, confirmed 2, none 0, wrong 0, outdated 0, refused 0\n"; !strings.Contains(out, want) {
+		t.Errorf("lacks %q:\n%s", want, out)
+	}
+	if code, out, _ := run(t, "stats", "1", "--json"); code != output.OK || !strings.Contains(out, `"confirmed": 2`) || !strings.Contains(out, `"used": 1`) {
+		t.Errorf("json: %d\n%s", code, out)
+	}
+}

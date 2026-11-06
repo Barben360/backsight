@@ -696,3 +696,39 @@ func TestSettleOffsetAcrossAMonthChange(t *testing.T) {
 		t.Errorf("current m1 %+v %v, want the retirement", l.Memories["m1"], err)
 	}
 }
+
+// A top-ranked show credited confirmed settles as a credit, not a
+// confident miss: the session established the fact on its own.
+func TestConfirmedCreditSettlesAsACredit(t *testing.T) {
+	events := []Event{
+		evTurn("s1", "p1", 0),
+		evShows("s1", "p1", "", "prompt", 1, Item{ID: "m1", Rank: 1}),
+		evCredit("s1", "p1", "", "confirmed", 2, "m1"),
+		evTurn("s1", "p2", 10),
+	}
+	got, late := Decide(events, testParams, at(120))
+	if o := outcomes(got); len(got) != 1 || o[key("s1", "p1", 1, "m1")] != "credit" || late != 0 {
+		t.Errorf("got %+v late %d, want one credit", got, late)
+	}
+}
+
+// Confirmed and used move the boost alike: the same number of credits of
+// either verdict leaves the same ledger.
+func TestConfirmedCreditsBoostLikeUsedOnes(t *testing.T) {
+	build := func(verdict string) Ledger {
+		var events []Event
+		for i := 0; i < 3; i++ {
+			turn := "p" + strconv.Itoa(i)
+			m := i * 10
+			events = append(events, evTurn("s1", turn, m), evShows("s1", turn, "", "prompt", m+1, Item{ID: "m1", Rank: 1}),
+				evCredit("s1", turn, "", verdict, m+2, "m1"))
+		}
+		events = append(events, evTurn("s1", "p9", 100))
+		return Replay(events, testParams, at(300))
+	}
+	used, confirmed := build("used"), build("confirmed")
+	p := Params{Weight: 0.1, PriorCredits: 3, PriorMisses: 9, CreditHalfLife: 365 * 24 * time.Hour, MissHalfLife: 90 * 24 * time.Hour}
+	if b := confirmed.Boost("m1", p, at(300)); b <= 0 || b != used.Boost("m1", p, at(300)) {
+		t.Errorf("confirmed boost %v, used boost %v: want equal and positive", b, used.Boost("m1", p, at(300)))
+	}
+}

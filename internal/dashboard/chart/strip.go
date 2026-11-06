@@ -39,7 +39,7 @@ type Strip struct {
 
 // ShapeWords names each shape for people (legend, table and bucket titles).
 var ShapeWords = map[string]string{
-	"used": "used by Claude", "ignored": "shown, then ignored", "undeclared": "not declared",
+	"used": "used or confirmed", "ignored": "shown, then ignored", "undeclared": "not declared",
 	"shown": "shown only", "pending": "pending", "retired": "retired",
 }
 
