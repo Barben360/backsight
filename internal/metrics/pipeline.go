@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -161,18 +160,17 @@ func backlogAgeOf(tx *sql.Tx, now time.Time, status map[string]string) (time.Dur
 	}
 	if waits {
 		// Per document, the first event after its last status that was
-		// neither queued nor retry (any event when it never had one), or,
-		// for a home document, after the last ok of one of its project
-		// documents (settled, see readDocumentStatus).
+		// neither queued nor retry (any event when it never had one) and,
+		// for a home document, not before the last ok of its siblings
+		// (settledHomes: the same rule readDocumentStatus applies; an event
+		// in the very millisecond of that ok is not settled by it).
 		rows, err := tx.Query(`
 SELECT r.document, MIN(r.ts) FROM tel_retain r
-LEFT JOIN (SELECT document, MAX(ts) AS done FROM (
-             SELECT document, ts FROM tel_retain WHERE document IS NOT NULL AND status NOT IN ('queued', 'retry')
-             UNION ALL
-             SELECT substr(document, 1, instr(document, '@') - 1), ts FROM tel_retain
-             WHERE status = 'ok' AND instr(document, '@') > 0) GROUP BY document) d
+LEFT JOIN (SELECT document, MAX(ts) AS done FROM tel_retain
+           WHERE document IS NOT NULL AND status NOT IN ('queued', 'retry') GROUP BY document) d
        ON d.document = r.document
-WHERE r.document IS NOT NULL AND r.ts > COALESCE(d.done, -1)
+LEFT JOIN (` + siblingOKSQL + `) s ON s.home = r.document
+WHERE r.document IS NOT NULL AND r.ts > COALESCE(d.done, -1) AND r.ts >= COALESCE(s.ts, -1)
 GROUP BY r.document`)
 		if err != nil {
 			return 0, err
@@ -238,23 +236,52 @@ func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// A flush that fails before sending logs its retry on the session's home
-	// document conversation:<sid>, whichever project the records are in; the
-	// send that follows may go to conversation:<sid>@<project> only, which
-	// never supersedes it. A project document last ok after the home's last
-	// event settles that wait (#192).
-	for doc, st := range out {
-		if st != "queued" && st != "retry" || strings.ContainsAny(doc, "@#") {
-			continue
-		}
-		for other, ost := range out {
-			if ost == "ok" && at[other] > at[doc] && strings.HasPrefix(other, doc+"@") {
-				out[doc] = "ok"
-				break
-			}
+	sib, err := settledHomes(tx)
+	if err != nil {
+		return nil, err
+	}
+	for home, ts := range sib {
+		if st := out[home]; (st == "queued" || st == "retry") && ts > at[home] {
+			out[home] = "ok"
 		}
 	}
 	return out, nil
+}
+
+// siblingOKSQL gives, per home document conversation:<sid>, the latest ts
+// of an ok event on a document of the same session: conversation:<sid>@<project>
+// or a successor <id>#n (LiveDocumentID, after a purge: the successor is the
+// session's live document, so the purged home no longer waits for anything).
+// Columns: home, ts.
+const siblingOKSQL = `SELECT substr(document, 1, p - 1) AS home, MAX(ts) AS ts FROM (
+  SELECT document, ts, CASE WHEN instr(document, '@') = 0 THEN instr(document, '#')
+                            WHEN instr(document, '#') = 0 THEN instr(document, '@')
+                            ELSE min(instr(document, '@'), instr(document, '#')) END AS p
+  FROM tel_retain WHERE status = 'ok' AND document LIKE 'conversation:%') WHERE p > 0 GROUP BY home`
+
+// settledHomes is siblingOKSQL as a map. A flush that fails before sending
+// logs its retry on the session's home document conversation:<sid>, whichever
+// project the records are in; the send that follows may go to a sibling
+// document only, which never supersedes it (#192). The one rule, shared with
+// backlogAgeOf: a home whose last event is queued or retry waits no more when
+// a sibling's latest ok is strictly later; at the same millisecond it still
+// waits. Only the sibling's ok counts, whatever its later statuses.
+func settledHomes(tx *sql.Tx) (map[string]int64, error) {
+	rows, err := tx.Query(siblingOKSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int64{}
+	for rows.Next() {
+		var home string
+		var ts int64
+		if err := rows.Scan(&home, &ts); err != nil {
+			return nil, err
+		}
+		out[home] = ts
+	}
+	return out, rows.Err()
 }
 
 // sentStatus is a document's last status as the metrics count it. A note
