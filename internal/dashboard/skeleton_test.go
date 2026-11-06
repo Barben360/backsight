@@ -447,6 +447,9 @@ var raw = []string{"outdated", "batch_retain", "maintain", "partial", "warn", "d
 
 var popovers = regexp.MustCompile(`(?s)<details class="info">.*?</details>`)
 
+// funnelCard is the time-to-recall card, whose step names are plain English.
+var funnelCard = regexp.MustCompile(`(?s)<section class="card" aria-labelledby="w-pipeline-time_to_recall">.*?</section>`)
+
 func hasWord(text, w string) bool {
 	return regexp.MustCompile(`(^|[^A-Za-z_-])` + regexp.QuoteMeta(w) + `($|[^A-Za-z_-])`).MatchString(text)
 }
@@ -640,8 +643,8 @@ func TestSkipReasonsAndHookKindsAreWordsOnPages(t *testing.T) {
 	} {
 		b := render(t, page, edit)
 		text := visibleText(b)
-		if page == "pipeline" { // its popover says "an error exit": the catalog's prose for hooks.failures
-			text = visibleText(popovers.ReplaceAllString(b, ""))
+		if page == "pipeline" { // its popover says "an error exit": the catalog's prose for hooks.failures; its funnel names "first memory recalled"
+			text = visibleText(funnelCard.ReplaceAllString(popovers.ReplaceAllString(b, ""), ""))
 		}
 		if !strings.Contains(text, "skipped") && page != "pipeline" || !strings.Contains(text, "in the last 24 h") && page == "pipeline" {
 			if page == "overview" {

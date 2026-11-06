@@ -1,7 +1,7 @@
 {{/* views: system */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the cards of system (Card: Head, Note; Server and PC add Rows: Label, Pre, Time, Post, Class, Mono; PC adds Cmd; Attention adds Items: Pill, Text, Why, Cmd and Info; Checks adds Rows: Status, Class, Check, Fix). Reads the metrics server.reach, doctor.check, jobs.last_run, local.backlog, .V.system.Tables.System, .Doctor and .Jobs, and .V.system.Attention. */}}
+{{/* widgets: the cards of system (Card: Head, Note; Server and PC add Rows: Label, Pre, Time, Post, Class, Mono; PC adds Cmd; Attention adds Items: Pill, Text, Why, Cmd and Info; Checks adds Rows: Status, Class, Check, Fix; Strip adds Chart; Secret adds Found, Count, Took, Time, Pre, Post and Cmd). Reads the metrics server.reach, doctor.check, doctor.history, secrets.suspects, jobs.last_run, local.backlog, .V.system.Tables.System, .Doctor, .DoctorHistory and .Jobs, and .V.system.Attention. */}}
 {{with systempage .}}<div class="grid-3">
 {{with .Server}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}{{template "dl" .Rows}}{{end}}{{template "card-close" .Head}}{{end}}
@@ -16,5 +16,16 @@
 </div>
 {{with .Checks}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}{{template "doctor" .Rows}}{{end}}{{template "card-close" .Head}}{{end}}
+{{with .Strip}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{.Chart}}
+{{template "card-close" .Head}}{{end}}
+<div class="grid-2">
+{{with .Secret}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{if .Found}}<div class="figs"><div class="fig"><span class="lab">Possible secrets</span><span class="v">{{.Count}}</span><span class="s">found by the last scan</span></div>
+<div class="fig"><span class="lab">Last scan</span><span class="v v-word">{{template "reltime" .Time}}</span>{{with .Took}}<span class="s">took {{.}}</span>{{end}}</div></div>
+<p class="small sub">{{.Pre}}</p>
+{{else}}<p class="small">{{.Pre}}{{if .Time.Datetime}}{{template "reltime" .Time}}{{end}}{{.Post}}</p>
+{{end}}{{with .Cmd}}{{template "cmd" .}}{{end}}{{template "card-close" .Head}}{{end}}
+</div>
 {{end}}
 {{template "foot" .}}

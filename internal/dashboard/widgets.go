@@ -18,7 +18,7 @@ type Head struct {
 	ID          string // "w-" + metric id with "." → "-" (+ "-" + slot); the popover is ID + "-info"
 	Level       int    // 2 for cards, 3 for tiles
 	Title       string
-	Scope       string // machine | server
+	Scope       string // machine | server | both (this PC's record of the server's)
 	NotFiltered bool
 	Info        Info
 	CLI         string
@@ -37,6 +37,7 @@ type Info struct {
 	Limits      string
 	BasedOn     string
 	Smallest    string // a metric's rows; "" omits one
+	Privacy     string // what is kept and what never is; "" omits the row
 	Paras       []string
 	Term        string // shown in <code class="term">; "" none
 	Href        string

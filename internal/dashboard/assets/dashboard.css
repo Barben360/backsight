@@ -724,3 +724,7 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
   a.hm-c { min-height: var(--touch); }
 }
 .summary-text .sample { overflow-x: auto; }
+
+/* ---------- Task 28: the sessions sent that never became memories fold under their heading ---------- */
+details.never > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--fg-2); }
+details.never[open] > summary { margin-bottom: var(--sp-2); }

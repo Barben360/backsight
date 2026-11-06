@@ -104,6 +104,7 @@ type tableData struct {
 	rows [][]string
 	more string // the command listing every row, shown under a capped table
 	text bool   // every column is text: none is right-aligned
+	foot string // a sentence under the table; "" none
 }
 
 // figure wraps a plot, its legend and its table fallback. Only the plot
@@ -164,6 +165,9 @@ func figureLegend(label string, sz Size, focusable bool, svg string, legend stri
 		b.WriteString(`</tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)
+	if t.foot != "" {
+		b.WriteString(`<p class="tbl-more">` + esc(t.foot) + `</p>`)
+	}
 	if len(t.rows) > MaxTableRows {
 		b.WriteString(`<p class="tbl-more">Showing the latest ` + strconv.Itoa(MaxTableRows) + ` of ` +
 			strconv.Itoa(len(t.rows)) + ` rows.`)

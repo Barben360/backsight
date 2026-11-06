@@ -664,13 +664,14 @@ func richPipeline(r *metrics.Result) {
 
 func TestPipelineCards(t *testing.T) {
 	n := pageNode(t, "pipeline", false, func(d *PageData) { richPipeline(d.V["pipeline"]) })
-	want := []string{"w-pipeline-flow", "w-local-backlog", "w-server-queue", "w-server-extraction_delay", "w-hooks-failures", "w-jobs-last_run"}
+	want := []string{"w-pipeline-flow", "w-local-backlog", "w-server-queue", "w-server-extraction_delay", "w-pipeline-time_to_recall", "w-hooks-failures", "w-jobs-last_run"}
 	if got := cardIDs(n); !slices.Equal(got, want) {
 		t.Fatalf("cards %v, want %v", got, want)
 	}
-	for i := 0; i < len(want); i += 2 {
-		if cardOf(t, n, want[i]).Parent != cardOf(t, n, want[i+1]).Parent || cardOf(t, n, want[i]).Parent.attr("class") != "grid-2" {
-			t.Errorf("%s and %s are not a pair", want[i], want[i+1])
+	pairs := slices.DeleteFunc(slices.Clone(want), func(id string) bool { return id == "w-pipeline-time_to_recall" }) // the funnel is the width of the page
+	for i := 0; i < len(pairs); i += 2 {
+		if cardOf(t, n, pairs[i]).Parent != cardOf(t, n, pairs[i+1]).Parent || cardOf(t, n, pairs[i]).Parent.attr("class") != "grid-2" {
+			t.Errorf("%s and %s are not a pair", pairs[i], pairs[i+1])
 		}
 	}
 	t.Run("sent", func(t *testing.T) {
@@ -864,7 +865,7 @@ func TestPipelineBanner(t *testing.T) {
 				edit(d.V["pipeline"])
 			}
 		})
-		return mainOf(t, n).first("div.state")
+		return n.first("main > div.state") // the banner, not the state sentence of a card
 	}
 	b := banner(func(r *metrics.Result) { richPipeline(r) })
 	if b == nil || !strings.Contains(b.attr("class"), "st-bad") {
@@ -1145,7 +1146,7 @@ func TestSystemCards(t *testing.T) {
 	for _, h := range mainOf(t, n).find("h2") {
 		titles = append(titles, h.text())
 	}
-	if w := []string{"Memory server", "This PC", "What needs a look here?", "Do backsight's own health checks pass?"}; !slices.Equal(titles, w) {
+	if w := []string{"Memory server", "This PC", "What needs a look here?", "Do backsight's own health checks pass?", "Have the health checks passed lately?", "Could memory hold a secret?"}; !slices.Equal(titles, w) {
 		t.Fatalf("titles %q, want %q", titles, w)
 	}
 	grid := cardOf(t, n, "w-server-reach").Parent
@@ -1604,7 +1605,7 @@ func TestFixRoundPipeline(t *testing.T) {
 				m.Extra = map[string]any{"ok": int64(1), "failed": int64(0), "set_aside": int64(0), "waiting": int64(0), "backlog_oldest_ms": int64(0)}
 			})
 		})
-		if a := mainOf(t, n).first("div.state"); a != nil {
+		if a := n.first("main > div.state"); a != nil {
 			t.Errorf("an alert with no sentence: %q", a.text())
 		}
 	})

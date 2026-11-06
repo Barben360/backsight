@@ -2,6 +2,7 @@ package chart
 
 import (
 	"html/template"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,11 @@ type StatusStrip struct {
 	Rows    []StatusRow
 	TickFmt func(time.Time) string
 	More    string
+	// Fold folds the checks that never left ok into one row of the table
+	// ("6 other checks"); the strip still draws every check.
+	Fold bool
+	// Note is a sentence under the table; "" none.
+	Note string
 }
 
 const (
@@ -212,32 +218,74 @@ func (c StatusStrip) HTML() template.HTML {
 	}
 
 	// the table: one row per check, its tally and its last change.
-	var rows [][]string
+	type tally struct {
+		name, now, change string
+		n                 map[string]int
+	}
+	var tallies []tally
 	for _, r := range c.Rows {
-		n := map[string]int{}
-		now, change := "", dash
+		t := tally{name: r.Name, now: "", change: dash, n: map[string]int{}}
 		prev := ""
 		for _, d := range r.Days {
 			st := normStatus(d.Status)
-			n[st]++
+			t.n[st]++
 			if st == stNoRunKey {
 				continue
 			}
 			if prev != "" && prev != st {
-				change = day(d.Day) + ": " + statusWord[prev] + " → " + statusWord[st]
+				t.change = day(d.Day) + ": " + statusWord[prev] + " → " + statusWord[st]
 			}
-			prev, now = st, st
+			prev, t.now = st, st
 		}
-		if now == "" {
-			now = dash
+		if t.now == "" {
+			t.now = dash
 		} else {
-			now = statusWord[now]
+			t.now = statusWord[t.now]
 		}
-		rows = append(rows, []string{r.Name, now, strconv.Itoa(n["ok"]), strconv.Itoa(n["watch"]),
-			strconv.Itoa(n["bad"]), strconv.Itoa(n[stNoRunKey]), change})
+		tallies = append(tallies, t)
+	}
+	cells := func(t tally) []string {
+		return []string{t.name, t.now, strconv.Itoa(t.n["ok"]), strconv.Itoa(t.n["watch"]),
+			strconv.Itoa(t.n["bad"]), strconv.Itoa(t.n[stNoRunKey]), t.change}
+	}
+	var rows [][]string
+	var quiet []tally
+	for _, t := range tallies {
+		if c.Fold && t.n["watch"]+t.n["bad"] == 0 {
+			quiet = append(quiet, t)
+			continue
+		}
+		rows = append(rows, cells(t))
+	}
+	switch {
+	case len(quiet) == 1:
+		rows = append(rows, cells(quiet[0]))
+	case len(quiet) > 1:
+		name := strconv.Itoa(len(quiet)) + " checks"
+		if len(rows) > 0 {
+			name = strconv.Itoa(len(quiet)) + " other checks"
+		}
+		now, oks, noruns := quiet[0].now, make([]int, 0, len(quiet)), make([]int, 0, len(quiet))
+		for _, t := range quiet {
+			if t.now != now {
+				now = dash
+			}
+			oks, noruns = append(oks, t.n["ok"]), append(noruns, t.n[stNoRunKey])
+		}
+		rows = append(rows, []string{name, now, each(oks), "0", "0", each(noruns), dash})
 	}
 	return template.HTML(figureLegend(c.Label, sz, !focus, b.String(), lg.String(), false,
-		tableData{head: []string{"Check", "Now", "ok", "watch", "attention", "No run", "Last change"}, rows: rows, more: c.More, text: true}))
+		tableData{head: []string{"Check", "Now", "ok", "watch", "attention", "No run", "Last change"}, rows: rows, more: c.More, text: true, foot: c.Note}))
+}
+
+// each writes the counts of the folded checks: "26 each" when they agree,
+// "24–26" when they do not.
+func each(ns []int) string {
+	lo, hi := slices.Min(ns), slices.Max(ns)
+	if lo == hi {
+		return strconv.Itoa(lo) + " each"
+	}
+	return strconv.Itoa(lo) + "–" + strconv.Itoa(hi)
 }
 
 func runWord(n int) string {

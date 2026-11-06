@@ -65,6 +65,10 @@ func duration(min float64) string {
 	return s
 }
 
+// Span writes a duration in milliseconds as the chart does: "6 min",
+// "2 h 40 min", "1 d 1 h".
+func Span(ms float64) string { return duration(math.Max(0, ms) / msPerMin) }
+
 // HTML draws the ranges, or the empty sentence when no hop has a typical time.
 func (c Ranges) HTML() template.HTML {
 	hops := c.Hops
