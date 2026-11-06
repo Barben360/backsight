@@ -7,6 +7,7 @@ package dashboard
 
 import (
 	"bytes"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,38 +18,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/Barben360/backsight/internal/dashboard/chart"
 )
 
 // domHarness fronts a started dashboard with a test-only wrapper on its own
 // listener: it logs every request, serves testdata/harness.js, and adds the
-// harness script and a page fragment (a calendar, Copy summary) to HTML.
+// harness script to HTML. The calendar, Copy summary button and summary text
+// the scenarios drive are the Overview's own.
 type domHarness struct {
 	h    *harness
 	keys atomic.Bool // whether the preference cookie turns shortcuts on
 
 	mu  sync.Mutex
 	log []string
-}
-
-const tipText = `<p class="hm-tip" aria-live="polite"></p>`
-
-// domFragment is what the wrapper adds before </main>: a calendar of 60 days
-// whose today is the 31st, the page's Copy summary button and its text.
-func domFragment() string {
-	var days []chart.CalDay
-	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 60; i++ {
-		d := start.AddDate(0, 0, i)
-		days = append(days, chart.CalDay{Day: d, Value: int64(i), Recorded: true, Today: i == 30, Href: "/day/" + d.Format("2006-01-02")})
-	}
-	cal := chart.Calendar{Label: "Prompts per day", What: "prompts", Steps: [4]int64{1, 10, 20, 40},
-		StepLabels: [5]string{"Prompts", "1", "10", "20", "40+"}, Days: days, Window: "test"}
-	return `<div id="dom-fragment">` + string(cal.HTML()) + tipText +
-		`<button class="copy" type="button" hidden data-copy="Summary line" aria-label="Copy summary">Copy summary</button>` +
-		`<details class="summary-text"><summary>Summary as text</summary><pre>Summary line</pre></details></div>`
 }
 
 func newDOMHarness(t *testing.T) *domHarness {
@@ -77,7 +58,6 @@ func newDOMHarness(t *testing.T) *domHarness {
 		out := rec.Body.Bytes()
 		if strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 			out = bytes.Replace(out, []byte(copyTag), []byte(copyTag+`<script src="/_test/harness.js" defer></script>`), 1)
-			out = bytes.Replace(out, []byte("</main>"), []byte(domFragment()+"</main>"), 1)
 			rec.Header().Set("Content-Length", strconv.Itoa(len(out)))
 		}
 		for k, v := range rec.Header() {
@@ -233,10 +213,15 @@ func TestScriptBehaviourInChrome(t *testing.T) {
 		}
 	})
 	t.Run("calendar arrow keys", func(t *testing.T) {
+		cal := apiPath(t, d.h, "/api/v1/days").Tables.Calendar
+		day := func(i int) string { return "/days/" + cal[i].Day }
 		_, res := d.run(t, chrome, "cal")
+		// From the first day: a week forward (right), then a day forward
+		// (down), the last day (End), the first (Home). The tab stop moves
+		// with the focus, and the tip says the focused day's label.
 		want := strings.Join([]string{
-			"right:/day/2026-10-08:0:-1:tip=ok", "down:/day/2026-10-09:0:-1:tip=ok",
-			"end:/day/2026-10-30:0:-1:tip=ok", "home:/day/2026-09-01:0:-1:tip=ok", "zeros=1"}, ";")
+			"right:" + day(7) + ":0:-1:tip=ok", "down:" + day(8) + ":0:-1:tip=ok",
+			"end:" + day(len(cal)-1) + ":0:-1:tip=ok", "home:" + day(0) + ":0:-1:tip=ok", "zeros=1"}, ";")
 		if res != want {
 			t.Errorf("data-result %q, want %q", res, want)
 		}
@@ -261,11 +246,21 @@ func TestScriptBehaviourInChrome(t *testing.T) {
 	})
 	t.Run("Copy summary copies data-copy", func(t *testing.T) {
 		_, res := d.run(t, chrome, "copyok")
-		if want := "text=Summary line;open=false;label=Copied"; res != want {
+		// The text the page carries: its button's data-copy, which the
+		// disclosure repeats.
+		doc := parseHTML(t, body(t, d.h.do("GET", "/?days=14")))
+		btn := doc.first("button.copy[data-copy]")
+		if btn == nil {
+			t.Fatal("no Copy summary button on /")
+		}
+		text := btn.attr("data-copy")
+		if !strings.HasPrefix(text, "backsight · Is my memory working? · last 14 days (") || !strings.Contains(text, "\nNeeds attention:") {
+			t.Fatalf("the page's summary text:\n%s", text)
+		}
+		if want := "text=" + html.UnescapeString(text) + ";open=false;label=Copied"; res != want {
 			t.Errorf("data-result %q, want %q", res, want)
 		}
 	})
-
 	t.Run("shortcuts off", func(t *testing.T) {
 		d.keys.Store(false)
 		defer d.keys.Store(true)

@@ -64,7 +64,7 @@ func TestPageHeadersDeclareViews(t *testing.T) {
 			t.Errorf("%s is not a page", none)
 		}
 	}
-	if got := specs["overview"].Views; !slices.Equal(got, []string{"overview"}) {
+	if got := specs["overview"].Views; !slices.Equal(got, []string{"overview", "days"}) {
 		t.Errorf("overview reads %v", got)
 	}
 

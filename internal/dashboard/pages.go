@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -142,6 +143,7 @@ type PageData struct {
 	P     views.Params               // the page's parameters: its links carry the window and filters
 	CLI   string                     // the command that prints the page's first view
 	State *StateView                 // the state pages' words; nil elsewhere
+	HM    string                     // the Overview's calendar colouring (got, used or sessions); "" the default
 }
 
 // Frame is what every page shows around its content.
@@ -462,7 +464,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// filter must not read as no filter.
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		var p views.Params
-		var redirect string
+		var redirect, hm string
 		var refused *Custom
 		if err != nil {
 			err = views.Usage("the query string is malformed")
@@ -474,6 +476,11 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				redirect, refused, err = pickWindow(r.URL.EscapedPath(), q, s.now())
 				q.Del("from")
 				q.Del("to")
+			}
+			// The Overview's calendar colouring is the page's own: no view takes it.
+			if spec.Name == "overview" {
+				hm = q.Get("hm")
+				q.Del("hm")
 			}
 			if err == nil {
 				p, err = views.FromValues(first, q)
@@ -494,6 +501,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		}
 		data := s.pageData(r, title, prefs, started)
 		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
+		data.HM = measureOf(hm).key
 		data.CLI = cliFor(first, id, p)
 		if spec.Name == "session" || spec.Name == "memory" {
 			data.CLI = cliFor(first, id, allTimeParams(p))
@@ -502,8 +510,9 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p.Limit, p.Offset = metrics.MaxLimit, 0
 			data.P = p
 		}
-		for _, v := range spec.Views {
-			res, st, err := s.data.result(r.Context(), v, p, id)
+		outs := s.readViews(r.Context(), spec, p, id)
+		for i, v := range spec.Views {
+			res, st, err := outs[i].res, outs[i].st, outs[i].err
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
 				st, err = stateUpdating, nil
 			}
@@ -560,6 +569,42 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			s.served.Add(1)
 		}
 	}
+}
+
+// viewOut is the answer for one view of a page.
+type viewOut struct {
+	res metrics.Result
+	st  indexState
+	err error
+}
+
+// readViews computes the views of a page. A page that reads several asks for
+// them together, on separate read transactions: its time is that of the
+// slowest, not their sum (the Overview reads the days calendar beside its own
+// numbers). The answers come back in the views' order, the caller judging
+// them in it.
+func (s *Server) readViews(ctx context.Context, spec pageSpec, p views.Params, id string) []viewOut {
+	outs := make([]viewOut, len(spec.Views))
+	var wg sync.WaitGroup
+	for i, v := range spec.Views {
+		q := viewParams(spec, v, p)
+		wg.Go(func() {
+			outs[i].res, outs[i].st, outs[i].err = s.data.result(ctx, v, q, id)
+		})
+	}
+	wg.Wait()
+	return outs
+}
+
+// viewParams are the parameters view is asked with on the page spec. The
+// Overview takes only the calendar of the days view, which spans 13 months
+// whatever the window: it asks for a window of one day, so that the view does
+// not also count the window's days, which the page does not show.
+func viewParams(spec pageSpec, view string, p views.Params) views.Params {
+	if spec.Name == "overview" && view == "days" {
+		p.Days, p.DaysSet, p.Since, p.Until = 1, true, "", ""
+	}
+	return p
 }
 
 // renderPage executes the page called name on data into a buffer: the

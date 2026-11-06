@@ -96,6 +96,10 @@
       var tip = q('p.hm-tip');
       var first = q('a.hm-c[tabindex="0"]');
       first.focus();
+      // The tab stop is today, the last day: start from the first day, so
+      // that a week forward and a day forward both have a day to land on.
+      key('Home', {}, first);
+      first = document.activeElement;
       function at(prefix, prev) {
         var cur = document.activeElement;
         return prefix + ':' + cur.getAttribute('href') + ':' + cur.getAttribute('tabindex') + ':' + prev.getAttribute('tabindex') +

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"cmp"
 	"html/template"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -141,6 +142,7 @@ func tileOf(r *metrics.Result, s tileSpec, p views.Params, l format.Locale, loc 
 		}
 	case "pipeline.flow":
 		flowingTile(&t, r, l, p, m, cause)
+		recallSub(&t, r, l)
 	}
 
 	t.Note = tileNote(r, s, l, loc, m, learning, tooFew, cause)
@@ -259,6 +261,52 @@ func flowingTile(t *Tile, r *metrics.Result, l format.Locale, p views.Params, m 
 	if haveND {
 		t.Sub = ofCount(l, num, den, "session", "sessions") + " sent"
 	}
+}
+
+// recallSub puts the time to recall before the Flowing tile's subline, and
+// the sessions it comes from after its "Based on". It states the value only:
+// the metric's watch shows on its own card, never on the tile. Too few
+// sessions, no value: the subline stays as it was.
+func recallSub(t *Tile, r *metrics.Result, l format.Locale) {
+	m, ok := r.Metrics[timeToRecallID]
+	if !ok || m.Value == nil {
+		return
+	}
+	lead := "Session to recalled memory: typical " + longDuration(l, *m.Value)
+	if t.Sub != "" {
+		lead += " · " + t.Sub
+	}
+	t.Sub = lead
+	if m.Num != nil {
+		from := "time to recall from " + format.Count(l, *m.Num, "session", "sessions") + " recalled"
+		if b := t.Head.Info.BasedOn; b != "" {
+			t.Head.Info.BasedOn = b + "; " + from
+		} else {
+			t.Head.Info.BasedOn = strings.ToUpper(from[:1]) + from[1:]
+		}
+	}
+}
+
+// timeToRecallID is the metric whose typical value leads the Flowing subline.
+const timeToRecallID = "pipeline.time_to_recall"
+
+// longDuration is ms as Duration writes it below a day, and from a day on as
+// days and hours ("1 d 2 h", "9 d"): a wait of days is not told in hours.
+func longDuration(l format.Locale, ms float64) string {
+	const day, hour = 24 * 3600 * 1000.0, 3600 * 1000.0
+	if ms < day-hour/2 {
+		return l.Duration(ms)
+	}
+	d := math.Floor(ms / day)
+	h := math.Round((ms - d*day) / hour)
+	if h >= 24 {
+		d, h = d+1, 0
+	}
+	s := l.Int(int64(d)) + " d"
+	if h > 0 {
+		s += " " + l.Int(int64(h)) + " h"
+	}
+	return s
 }
 
 // tileNote is the sentence under a tile: the first that applies.

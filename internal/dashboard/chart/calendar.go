@@ -22,7 +22,9 @@ type CalDay struct {
 // the first day and ends on the Sunday on or after the last. Steps are the first
 // values of the four colours (q1 to q4); StepLabels name the measure (0) and the
 // four ranges (1 to 4) in the legend. A non-empty OfWhat adds ", of <Of>" to a
-// day's label and a column of that name to the table.
+// day's label and a column of that name to the table. The chart holds the line
+// a script writes the focused day's label into (hm-tip); a non-empty Hint is
+// the sentence under the legend.
 type Calendar struct {
 	Label, What, OfWhat string
 	Steps               [4]int64
@@ -30,6 +32,7 @@ type Calendar struct {
 	Days                []CalDay
 	Window              string
 	More                string
+	Hint                string
 }
 
 // recentWeeks is how many of the latest weeks stay on a small screen; the
@@ -152,6 +155,7 @@ func (c Calendar) HTML() template.HTML {
 	b.WriteString(`<div class="hm-dl" aria-hidden="true"><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span>Sun</span></div>`)
 	b.WriteString(`<div class="hm-dh" aria-hidden="true"><span></span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>`)
 	b.WriteString(`<div class="hm">` + weeks.String() + `</div></div></div>`)
+	b.WriteString(`<p class="hm-tip" aria-live="polite"></p>`)
 
 	sw := func(cls, text string) string {
 		return `<span class="hm-c ` + cls + `" aria-hidden="true"></span><span>` + esc(text) + `</span>`
@@ -161,6 +165,9 @@ func (c Calendar) HTML() template.HTML {
 		sw("q3", c.StepLabels[3]) + sw("q4", c.StepLabels[4]) + `</span>` +
 		`<span class="ramp">` + sw("q2 today", "today") + `</span>` +
 		`<span class="ramp">` + sw("q2 inwin", "in the window ("+c.Window+")") + `</span></div>`)
+	if c.Hint != "" {
+		b.WriteString(`<p class="xs muted">` + esc(c.Hint) + `</p>`)
+	}
 
 	// the table: the latest MaxTableRows days, the latest first.
 	rows := days

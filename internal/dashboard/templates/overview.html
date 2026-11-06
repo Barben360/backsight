@@ -1,6 +1,6 @@
-{{/* views: overview */}}
+{{/* views: overview, days */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}{{$days := index .V "days"}}{{$txt := summarytext $r $.P $.Loc $.Frame.Window $.Frame.Version}}
 
 {{/* widget: verdict banner. Reads the verdict and metrics through banner (Banner: Title, Class, Icon, Axes, Reasons, Head). */}}
 {{with banner $r $.L $.Loc $.P}}<section class="verdict {{.Class}}" aria-labelledby="{{.Head.ID}}">
@@ -16,9 +16,11 @@
 {{end}}</ul>
 {{end}}</section>
 {{end}}
-{{/* widget: summary line. Reads .V.overview.Summary through summaryline (Prompts, Turns, Tokens, Cost, Scope). */}}
+{{/* widget: summary line and Copy summary. Reads .V.overview.Summary through summaryline (Prompts, Turns, Tokens, Cost, Scope); the button copies the text summarytext writes, which sits in the disclosure at the foot. */}}
+<div class="summary-row">
 {{with summaryline $r $.L $.Frame.Window}}<p class="summary">{{.When}}: <b>{{.Prompts}}</b> {{.PromptsNoun}} got memory, Claude used it in <b>{{.Turns}}</b> {{.TurnsNoun}}, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
-{{end}}
+{{end}}<button class="copy" type="button" hidden data-copy="{{$txt}}" aria-label="Copy summary: the numbers on this page as plain text, without any memory text"><span class="i i-sm i-copy"></span>Copy summary</button>
+</div>
 
 {{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow through tiles (TileGroup: Name, Tiles; Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev). */}}
 {{template "tilegroups" tiles $r $.P $.L $.Loc $d}}
@@ -52,6 +54,7 @@
 </div>
 
 {{/* widget: memory at a glance. Reads the metrics bank.size (extras observation, world, experience, documents), bank.growth and .V.overview.Info through glance (Glance: Head, Total, Growth, Kinds, Aria, Down, Badges, Nothing). */}}
+<div class="grid-main">
 {{with glance $r $.L $.Loc $.P}}<section class="card" aria-labelledby="{{.Head.ID}}">
 {{template "card-head" .Head}}
 {{with .Down}}<div class="state st-watch"><span class="i i-server"></span><span>{{.}}</span></div>
@@ -71,4 +74,31 @@
 </div>
 </section>
 {{end}}
+
+{{/* widget: Helped most. Reads .V.overview.Tables.Helped (Memory, Project, FactType, Used, Shown) through helped (Helped: Head, Intro, Down, Rows, Few, None, Foot). */}}
+{{with helped $r $.L $.Loc $.P $.Frame.Window}}{{template "card-open" .Head}}
+<p class="small sub">{{.Intro}}</p>
+{{with .Down}}<div class="state st-watch"><span class="i i-server"></span><span>{{.}}</span></div>
+{{end}}{{if .Rows}}<ol class="helped">
+{{range .Rows}}<li><span class="rank">{{.Rank}}</span>
+{{template "idlink" .ID}}
+<span class="row">{{template "projlink" .Project}} {{if .KindWord}}<span class="muted">· <i class="sw {{.KindClass}}"></i> {{.KindWord}}</span>{{end}}</span>
+<span class="cnt">used <b>{{.Used}}</b> of {{.Shown}} shown</span>
+<span class="act">{{if .TextHref}}<a class="btn" href="{{.TextHref}}" aria-label="{{.TextAria}}"><span class="i i-doc"></span>Show text</a>{{end}}{{with .Unavailable}}<span class="xs muted">{{.}}</span>{{end}}</span></li>
+{{end}}</ol>
+{{end}}{{with .Few}}<p class="small muted">{{.}}</p>
+{{end}}{{with .None}}<div class="empty"><span class="row">{{.}}</span>
+<span class="small">When Claude says it used a memory, the ones it used most show up here. A longer window may already have some.</span></div>
+{{end}}<p class="xs muted">{{.Foot}}</p>
+{{template "card-close" .Head}}{{end}}
+</div>
+
+{{/* widget: days calendar. Reads .V.days.Tables.Calendar (Day, Prompts, PromptsWithMemory, UsedTurns, Sessions, Recorded) through calendar (CalendarCard: Head, Colour, Chart). */}}
+{{with calendar $days $r.Window $.P $.HM $.Frame.Path $.Frame.Window}}{{template "card-open" .Head}}
+<div class="row"><span class="small sub">Colour by</span>
+<nav class="seg" aria-label="Colour the days by">{{range .Colour}}{{template "seglink" .}}{{end}}</nav></div>
+{{.Chart}}
+{{template "card-close" .Head}}{{end}}
+
+<details class="why summary-text"><summary>Summary as text</summary><pre class="sample"><code>{{$txt}}</code></pre></details>
 {{template "foot" .}}

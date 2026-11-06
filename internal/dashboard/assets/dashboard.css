@@ -718,3 +718,9 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
   .chart .gap-band { fill: Canvas; stroke: GrayText; stroke-dasharray: 3 3; }
   .seg details.wpick.is-current > summary { border-bottom: 2px solid Highlight; }
 }
+
+/* ---------- Overview additions: the calendar's days are touch targets under 900 px; the summary text scrolls instead of wrapping ---------- */
+@container page (max-width: 899px) {
+  a.hm-c { min-height: var(--touch); }
+}
+.summary-text .sample { overflow-x: auto; }
