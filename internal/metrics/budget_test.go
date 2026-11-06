@@ -10,6 +10,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indexgen"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -183,4 +184,65 @@ func (c workCheck) ok(r Result) bool {
 		return float64(*m.Den) >= c.min
 	}
 	return m.Value != nil && *m.Value >= c.min
+}
+
+// TestDailyBudget computes this PC's daily figures on block 1's generated 13 months (indexgen.Budget), best
+// of 3 within 15 s, and holds the marshalled document under the write cap without Fit dropping anything.
+func TestDailyBudget(t *testing.T) {
+	if raceEnabled || testing.Short() {
+		t.Skip("time budgets are measured without -race and -short")
+	}
+	home := testtool.BenchTempDir(t)
+	t.Setenv("BACKSIGHT_HOME", home)
+	t.Setenv("BACKSIGHT_STATE_DIR", "")
+	dirs, err := paths.Resolve(runtime.GOOS, home, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexgen.Generate(t, dirs.State, indexgen.Budget)
+	ctx := context.Background()
+	ix, err := index.Open(ctx, index.Options{Dirs: dirs, Home: home, Getenv: func(string) string { return "" },
+		Now: func() time.Time { return indexgen.Now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ix.Close() })
+	fr, err := ix.CatchUp(ctx, time.Hour)
+	if err != nil || fr.Partial {
+		t.Fatalf("catch-up: %v, partial %v", err, fr.Partial)
+	}
+	cfg := config.Default(dirs, home)
+	cfg.Feedback.Enabled = true
+	src := Source{Index: ix, Fresh: fr, Now: func() time.Time { return indexgen.Now }, Config: cfg, Configured: true}
+
+	const limit = 15 * time.Second
+	best := time.Duration(1<<63 - 1)
+	var days []machines.Day
+	for range 3 {
+		start := time.Now()
+		days, err = Daily(ctx, src, indexgen.Now)
+		best = min(best, time.Since(start))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := machines.Doc{Machine: "3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6", At: indexgen.Now, OS: "linux", FirstSeen: "2025-01-01",
+		BinaryVersion: "v0.1.30", Until: indexgen.Now.UTC().AddDate(0, 0, -1).Format("2006-01-02"), Days: days}
+	body, err := doc.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("daily figures: best of 3 %v (limit %v), %d days, document %d bytes (write cap %d)", best, limit, len(days), len(body), machines.WriteMax)
+	if best > limit {
+		t.Errorf("Daily took %v, limit %v", best, limit)
+	}
+	if len(days) < 300 {
+		t.Errorf("%d days, want the generated history (>= 300)", len(days))
+	}
+	if len(body) >= machines.WriteMax {
+		t.Errorf("document is %d bytes, want under %d", len(body), machines.WriteMax)
+	}
+	if _, dropped, err := machines.Fit(doc, machines.WriteMax); err != nil || dropped != (machines.Dropped{}) {
+		t.Errorf("Fit dropped %+v (err %v), want nothing", dropped, err)
+	}
 }
