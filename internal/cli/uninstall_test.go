@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -708,7 +709,11 @@ func TestUninstallDeletesShareOneBudget(t *testing.T) {
 	old := uninstallShareBudget
 	uninstallShareBudget = time.Second
 	t.Cleanup(func() { uninstallShareBudget = old })
-	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	var reached atomic.Int32
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		<-r.Context().Done()
+	}))
 	t.Cleanup(hang.Close)
 	port, _ := strconv.Atoi(hang.URL[strings.LastIndex(hang.URL, ":")+1:])
 	m, _, _ := sharedInstall(t)
@@ -716,9 +721,7 @@ func TestUninstallDeletesShareOneBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	pointAt(t, m.home, port)
-	start := time.Now()
 	code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
-	took := time.Since(start)
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -727,7 +730,9 @@ func TestUninstallDeletesShareOneBudget(t *testing.T) {
 			t.Errorf("%s: %+v", name, s)
 		}
 	}
-	if took > 1800*time.Millisecond {
-		t.Errorf("took %s: the two deletes waited one budget each", took)
+	// The first delete hangs until the shared budget expires; the second
+	// must then not start (two budgets would let two requests through).
+	if n := reached.Load(); n != 1 {
+		t.Errorf("%d delete requests reached the server, want exactly 1", n)
 	}
 }

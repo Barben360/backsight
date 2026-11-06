@@ -321,3 +321,22 @@ func TestRankMatchesPercentile(t *testing.T) {
 		}
 	}
 }
+
+// A prompt belongs to the UTC day it fell in: 23:59:59.999Z is that day's,
+// 00:00:00Z the next one's (prompts, hit, and latency alike).
+func TestDailyAssignsDaysAtTheUTCBoundary(t *testing.T) {
+	x := newFx(t, dailyAt)
+	dailyPrompt(x, utc(1, 23).Add(59*time.Minute+59*time.Second+999*time.Millisecond), 1, "S",
+		map[string]any{"decision": "recall", "injected": 1, "ms": 40})
+	dailyPrompt(x, utc(2, 0), 2, "S", map[string]any{"decision": "recall", "injected": 0, "empty": "no_candidates", "ms": 6000})
+	days := x.daily()
+	if len(days) != 2 || days[0].Day != "2026-11-01" || days[1].Day != "2026-11-02" {
+		t.Fatalf("days = %+v, want 2026-11-01 and 2026-11-02", days)
+	}
+	if d := days[0]; d.Prompts != 1 || d.Hit != (machines.Pair{1, 1}) || d.Latency != (machines.Latency{1, 0, 0, 0, 0, 0, 0, 0, 0}) {
+		t.Errorf("23:59:59.999Z: %+v, want 1 prompt, hit [1 1], the 40 ms bucket", d.Figures)
+	}
+	if d := days[1]; d.Prompts != 1 || d.Hit != (machines.Pair{0, 1}) || d.Latency != (machines.Latency{0, 0, 0, 0, 0, 0, 0, 0, 1}) {
+		t.Errorf("00:00:00Z: %+v, want 1 prompt, hit [0 1], the 6000 ms bucket", d.Figures)
+	}
+}

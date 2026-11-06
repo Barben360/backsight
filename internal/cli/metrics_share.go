@@ -193,16 +193,40 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	if err != nil {
 		return fail(failTooLarge, false)
 	}
+	// The document is checked with the reader's own rules before it leaves:
+	// one a reader would refuse is not sent. A version figure above the day's
+	// is the likely cause, so the breakdown goes first; if it still fails,
+	// nothing is written.
+	name := machines.DocPrefix + machine
 	meta, err := doc.Marshal()
+	if err == nil {
+		if _, perr := machines.Parse(name, meta, now); perr != nil {
+			doc.Days = withoutVersions(doc.Days)
+			meta, err = doc.Marshal()
+			if err == nil {
+				_, err = machines.Parse(name, meta, now)
+			}
+		}
+	}
 	if err != nil {
 		return fail(failCompute, false)
 	}
 	content := fmt.Sprintf("daily figures of machine %s: %d days", machine, len(doc.Days))
-	if err := retain.WriteControlDocument(ctx, cl, cfg.Server.Bank, machines.DocPrefix+machine, content, map[string]string{machines.MetaKey: meta}); err != nil {
+	if err := retain.WriteControlDocument(ctx, cl, cfg.Server.Bank, name, content, map[string]string{machines.MetaKey: meta}); err != nil {
 		return fail(failServer, false)
 	}
 	s := metricsShare{Up: true, Days: len(doc.Days), Bytes: len(meta), Dropped: dropped, IndexLine: line}
 	return s, machines.SavePublished(dir, machines.Published{At: now, Server: target, Until: doc.Until, FirstSeen: first, Bytes: len(meta)})
+}
+
+// withoutVersions is days with every version breakdown removed (a copy).
+func withoutVersions(days []machines.Day) []machines.Day {
+	out := make([]machines.Day, len(days))
+	for i, d := range days {
+		d.Versions = nil
+		out[i] = d
+	}
+	return out
 }
 
 // applyMetrics puts the publish's result in the tick's: err is the

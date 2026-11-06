@@ -405,6 +405,15 @@ func TestCacheOverTheCapIsRefusedFromItsSize(t *testing.T) {
 	}
 }
 
+func TestReadCappedRefusesALongRead(t *testing.T) {
+	if b, err := readCapped(strings.NewReader("12345"), 5); err != nil || string(b) != "12345" {
+		t.Errorf("exactly the cap: %q, %v", b, err)
+	}
+	if _, err := readCapped(strings.NewReader("123456"), 5); !errors.Is(err, ErrCacheTooLarge) {
+		t.Errorf("one over the cap: %v, want ErrCacheTooLarge", err)
+	}
+}
+
 func TestCacheReadsDuringSave(t *testing.T) {
 	dir := t.TempDir()
 	c := Cache{FetchedAt: time.Now().UTC(), Docs: []CachedDoc{{Name: exampleName, Raw: strings.Repeat("x", 100_000)}}}

@@ -610,3 +610,69 @@ func TestTickCatchesUpOnceWhenThePublishIsDue(t *testing.T) {
 		t.Errorf("metrics_index %q, want %q; waiting %v", res.MetricsIndex, tickIndexText(seen), res.MetricsWaiting)
 	}
 }
+
+// A version figure above the day's makes a reader refuse the document: the
+// publish drops the breakdown rather than send what no PC would accept.
+func TestPublishDropsVersionsAReaderWouldRefuse(t *testing.T) {
+	m := newShareMachine(t)
+	writes := watchMetricsWrites(t)
+	day := figures("2026-11-05")
+	over := day.Figures
+	over.Prompts = day.Prompts + 1
+	day.Versions = map[string]machines.Figures{"0.1.30": over}
+	stubDaily(t, []machines.Day{day}, nil)
+
+	if s := m.publish(pubT0); !s.Up || s.Days != 1 {
+		t.Fatalf("publish: %+v", s)
+	}
+	w := writes()
+	if len(w) != 1 {
+		t.Fatalf("%d documents written, want 1", len(w))
+	}
+	doc := parseWrite(t, w[0], pubT0)
+	if len(doc.Days) != 1 || doc.Days[0].Versions != nil || doc.Days[0].Prompts != day.Prompts {
+		t.Errorf("published days %+v, want the day's figures with no versions", doc.Days)
+	}
+	if strings.Contains(w[0].Meta[machines.MetaKey], `"versions"`) {
+		t.Errorf("the document still carries versions: %s", w[0].Meta[machines.MetaKey])
+	}
+}
+
+// What cannot be published even without versions is not written, and the
+// failure is the class compute, never the error's text.
+func TestPublishWritesNothingThatDoesNotParse(t *testing.T) {
+	validID := pubID
+	cases := []struct {
+		name    string
+		machine string
+		first   string
+	}{
+		{"invalid first_seen in the record", validID, "not-a-date"},
+		{"invalid machine id", "../../etc/passwd-0123456789abcdef!", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newShareMachine(t)
+			writes := watchMetricsWrites(t)
+			stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+			if c.first != "" {
+				if err := machines.SavePublished(m.d.MetricsDir(), machines.Published{At: pubT0.Add(-48 * time.Hour), Server: shareTarget(m.d, m.cfg), FirstSeen: c.first}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := publishMetrics(context.Background(), m.cl, m.d, filepath.Dir(m.d.Data), m.cfg, c.machine, pubT0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Up || s.Failure != failCompute {
+				t.Fatalf("result %+v, want a failure of class compute", s)
+			}
+			if w := writes(); len(w) != 0 {
+				t.Errorf("%d documents written, want none: %+v", len(w), w)
+			}
+			if got := m.record().Failure; got != failCompute {
+				t.Errorf("recorded failure %q, want %q", got, failCompute)
+			}
+		})
+	}
+}

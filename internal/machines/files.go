@@ -3,7 +3,7 @@ package machines
 import (
 	"encoding/json"
 	"errors"
-	"os"
+	"io"
 	"path/filepath"
 	"time"
 
@@ -38,15 +38,19 @@ func CacheFile(metricsDir string) string { return filepath.Join(metricsDir, "mac
 // LoadCache reads the cache. A missing file is fs.ErrNotExist; a file over
 // MaxCacheBytes is refused from its size without being read.
 func LoadCache(metricsDir string) (Cache, error) {
-	path := CacheFile(metricsDir)
-	fi, err := os.Stat(path)
+	f, err := fsutil.OpenShared(CacheFile(metricsDir))
+	if err != nil {
+		return Cache{}, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
 	if err != nil {
 		return Cache{}, err
 	}
 	if fi.Size() > MaxCacheBytes {
 		return Cache{}, ErrCacheTooLarge
 	}
-	b, err := fsutil.ReadFileShared(path)
+	b, err := readCapped(f, MaxCacheBytes)
 	if err != nil {
 		return Cache{}, err
 	}
@@ -55,6 +59,19 @@ func LoadCache(metricsDir string) (Cache, error) {
 		return Cache{}, err
 	}
 	return c, nil
+}
+
+// readCapped reads r to its end, refusing more than max bytes (a file that
+// grew after its size was checked).
+func readCapped(r io.Reader, max int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, ErrCacheTooLarge
+	}
+	return b, nil
 }
 
 // SaveCache writes the cache atomically (0600).

@@ -232,6 +232,9 @@ func TestDailyBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := machines.Parse(machines.DocPrefix+doc.Machine, body, indexgen.Now); err != nil {
+		t.Errorf("the published document does not parse: %v", err)
+	}
 	t.Logf("daily figures: best of 3 %v (limit %v), %d days, document %d bytes (write cap %d)", best, limit, len(days), len(body), machines.WriteMax)
 	if best > limit {
 		t.Errorf("Daily took %v, limit %v", best, limit)
