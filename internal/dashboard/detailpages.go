@@ -150,7 +150,7 @@ func (d PageData) turnLines(t metrics.TurnRow) []TurnLine {
 
 // emptyWord is why a prompt got nothing, in words.
 func emptyWord(reason string) string {
-	if slices.Contains([]string{"no_candidates", "below_floor", "all_seen", "capped", "unknown"}, reason) {
+	if slices.Contains([]string{"error", "no_candidates", "below_floor", "all_seen", "capped", "unknown"}, reason) {
 		return views.EmptyWords.Replace(reason)
 	}
 	return views.EmptyWords.Replace("unknown")

@@ -62,7 +62,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "telemetry", Family: "reach", Series: "daily", Command: "backsight stats quality",
 		Extra:      []string{"empty", "skips"},
 		Question:   "Why did some prompts get no memory?",
-		Definition: "Recalls that injected nothing, counted by reason (no candidates, below the cut-off, all already seen, capped), and prompts skipped, counted by reason. \"unknown\" (shown as \"reason not recorded\") is a recall logged before version 0.1.19 (31 October 2026), which did not record why; it shrinks as those days leave the window.",
+		Definition: "Recalls that injected nothing, counted by reason (the search failed, no candidates, below the cut-off, all already seen, capped), and prompts skipped, counted by reason. \"unknown\" (shown as \"reason not recorded\") is a recall logged before version 0.1.19 (31 October 2026), which did not record why; it shrinks as those days leave the window.",
 		Action:     "Tells which fix applies: thin memory, cut-offs that are too strict, or memories already shown this session.",
 	},
 	{

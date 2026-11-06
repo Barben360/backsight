@@ -43,12 +43,14 @@ func TestPromptEmptyReasons(t *testing.T) {
 		answer string
 		extra  string
 		seen   []string
+		status int64 // the recall endpoint's failure status, when it fails
 		want   string
 	}{
 		"no_candidates": {answer: "[]", want: "no_candidates"},
 		"below_floor":   {answer: hits(0.1), want: "below_floor"},
 		"all_seen":      {answer: hits(0.9), seen: []string{"m1"}, want: "all_seen"},
 		"capped":        {answer: hits(0.9), extra: "[recall]\nprompt_chars = 20", want: "capped"},
+		"error":         {answer: "[]", status: 500, want: "error"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -60,6 +62,10 @@ func TestPromptEmptyReasons(t *testing.T) {
 				_ = sessions(home).Update("s1", func(st *session.State) error { st.Seen = c.seen; return nil })
 			}
 			recallAnswer = c.answer
+			if c.status != 0 {
+				recallStatus.Store(c.status)
+				t.Cleanup(func() { recallStatus.Store(0) })
+			}
 			prompt(t, home, "s1", longPrompt)
 			ev := lastPrompt(t, home)
 			if ev["decision"] != "recall" || ev["injected"] != float64(0) || ev["empty"] != c.want {

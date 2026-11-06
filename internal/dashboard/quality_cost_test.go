@@ -296,6 +296,21 @@ func TestEmptyReasonsHint(t *testing.T) {
 	if c := cardOf(t, other, "w-recall-empty_reasons"); strings.Contains(c.text(), "nothing close enough") {
 		t.Errorf("advice given when most prompts got nothing for another reason: %q", c.text())
 	}
+	// An outage is not an empty bank: no backfill advice, and a word of its own.
+	outage := pageNode(t, "quality", false, func(d *PageData) {
+		richQuality(d.V["quality"])
+		d.P.Project = "my proj"
+		give(d.V["quality"], "recall.empty_reasons", func(m *metrics.Metric) {
+			m.Extra = map[string]any{"empty": map[string]int64{"no_candidates": 1, "error": 5}}
+		})
+	})
+	c = cardOf(t, outage, "w-recall-empty_reasons")
+	if strings.Contains(c.text(), "nothing close enough") || hasCode(c, "backsight retain backfill --project 'my proj' --plan") {
+		t.Errorf("an outage is advised as an empty bank: %q", c.text())
+	}
+	if !strings.Contains(c.text(), "could not be searched") {
+		t.Errorf("no advice for failed recalls: %q", c.text())
+	}
 }
 
 // rich cost data: a histogram, a split, latencies and a day of extraction.

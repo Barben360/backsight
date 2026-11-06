@@ -423,10 +423,11 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 			s.Totals.Sent = "retry"
 			s.Turns = []metrics.TurnRow{
 				{N: &one, At: now, Decision: "skip", Reason: "same_topic", Check: "undeclared"},
+				{N: &one, At: now, Decision: "recall", Empty: "error"},
 				{N: &one, At: now, Decision: "recall", Empty: "below_floor", Declared: []string{"outdated", "none"},
 					Shows: []metrics.ShowChip{chip("gate", "confident_miss"), chip("failure", "unknown"), chip("briefing", "credit")}, Check: "skipped"},
 			}
-		}, []string{"retrying", "no memory looked up", "same topic as before", "didn't say", "below the cut-off", "out of date, none used", "before a question",
+		}, []string{"retrying", "no memory looked up", "same topic as before", "didn't say", "the search failed", "below the cut-off", "out of date, none used", "before a question",
 			"shown, then ignored", "after an error", "not declared", "at session start", "used by Claude", "check skipped", "looked for memory"}, notStored},
 		{"memories", func(d *PageData) {
 			for i := range d.V["memories"].Tables.Memories {

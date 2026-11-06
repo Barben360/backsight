@@ -52,3 +52,13 @@ func TestOriginWordsCoverEveryState(t *testing.T) {
 		t.Errorf("OriginWords has %d words for %d states", len(OriginWords), len(metrics.OriginStates))
 	}
 }
+
+// Every reason a recall can get nothing has a plain word of its own: the
+// replacer would otherwise leave the code (snake_case, or "error") raw.
+func TestEmptyWordsCoverEveryReason(t *testing.T) {
+	for _, k := range []string{"no_candidates", "below_floor", "all_seen", "capped", "error", "unknown"} {
+		if w := EmptyWords.Replace(k); w == "" || w == k {
+			t.Errorf("empty reason %q has no plain word (%q)", k, w)
+		}
+	}
+}
