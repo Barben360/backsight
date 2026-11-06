@@ -177,6 +177,9 @@ func viewQuery(f viewFlags, id string, now time.Time) (metrics.Query, error) {
 // viewError maps a metrics error to the command's.
 func viewError(err error) error { return views.Error(err) }
 
+// viewGOOS is the OS this PC reports in scope.pcs (a var for the goldens).
+var viewGOOS = runtime.GOOS
+
 // viewServer is what a view reads besides the index: the configuration, the
 // server through a GET-only client and the doctor.
 func viewServer(d paths.Dirs, home string) (metrics.Source, error) {
@@ -205,7 +208,7 @@ func viewServer(d paths.Dirs, home string) (metrics.Source, error) {
 	}
 	src.Doctor = func(ctx context.Context) ([]metrics.DoctorCheck, error) { return runDoctorChecks(ctx, d, home) }
 	src.Self = func() metrics.SelfPC {
-		self := metrics.SelfPC{Machine: retain.ReadMachineID(d.State), OS: machines.OS(runtime.GOOS), BinaryVersion: buildinfo.Version}
+		self := metrics.SelfPC{Machine: retain.ReadMachineID(d.State), OS: machines.OS(viewGOOS), BinaryVersion: buildinfo.Version}
 		if rec, ok := machines.LoadPublished(d.MetricsDir()); ok {
 			self.FirstSeen, self.LastSent = rec.FirstSeen, rec.At
 		}

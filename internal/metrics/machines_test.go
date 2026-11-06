@@ -223,6 +223,7 @@ func TestSharingOffAnswersThisPC(t *testing.T) {
 func TestBrowseViewsStayThisPC(t *testing.T) {
 	x := newFx(t, fxNow)
 	x.prompts("alpha", "p", fxNow, 3, nil)
+	x.declaredTurn(fxNow.Add(-3*time.Hour), "sess-item-1", "declared", "used", "mem-item-1")
 	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
 	for _, view := range []string{"projects", "sessions", "memories"} {
 		q := x.allQuery()
@@ -231,14 +232,17 @@ func TestBrowseViewsStayThisPC(t *testing.T) {
 		}
 		q.ID = "alpha"
 		if view == "sessions" {
-			q.ID = "p-0"
+			q.ID = "sess-item-1"
 		}
 		if view == "memories" {
-			q.ID = "m1"
+			q.ID = "mem-item-1"
 		}
 		q.Project = "alpha"
 		r, err := Run(context.Background(), view, x.srcAs(), q)
-		if err == nil && (r.Scope.Machines != "this" || r.Scope.OthersUnfiltered) {
+		if err != nil {
+			t.Fatalf("%s item %q: %v", view, q.ID, err)
+		}
+		if r.Scope.Machines != "this" || r.Scope.OthersUnfiltered {
 			t.Errorf("%s item: scope %+v", view, r.Scope)
 		}
 	}

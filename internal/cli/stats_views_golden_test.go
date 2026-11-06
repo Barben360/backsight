@@ -41,6 +41,9 @@ func fixedDoctor(t *testing.T) {
 // viewGolden runs a view and compares its output to testdata/<name>.golden.
 func viewGolden(t *testing.T, name string, args ...string) {
 	t.Helper()
+	old := viewGOOS
+	viewGOOS = "linux" // scope.pcs names this PC's OS: the goldens are the same on every runner
+	t.Cleanup(func() { viewGOOS = old })
 	code, out, errOut := run(t, args...)
 	if code != output.OK {
 		t.Fatalf("exit %d: %s %s", code, out, errOut)
