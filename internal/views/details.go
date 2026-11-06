@@ -56,10 +56,7 @@ func extraTime(m metrics.Metric, key string, loc *time.Location) (string, bool) 
 	if t.IsZero() {
 		return "", false
 	}
-	if loc == nil {
-		loc = time.UTC
-	}
-	return t.In(loc).Format("2006-01-02 15:04"), true
+	return When(t, loc), true
 }
 
 // extraCounts reads a map of counts, sorted by key.

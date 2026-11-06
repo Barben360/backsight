@@ -248,7 +248,7 @@ func when(loc *time.Location, t any) string {
 	if loc == nil {
 		loc = time.UTC
 	}
-	return at.In(loc).Format("2006-01-02 15:04 MST")
+	return views.When(at, loc) + at.In(loc).Format(" MST")
 }
 
 // systemRows are the lines of the system block, times in loc.
