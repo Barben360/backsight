@@ -236,12 +236,12 @@ func TestDensityKeepsTouchTargets(t *testing.T) {
 		}
 	}
 	pages, controls := 0, 0
+	all := touchSelectors(t, true)
 	for _, p := range allA11yPages(t) {
 		if len(p.Doc.find(".page.d-compact")) == 0 {
 			continue
 		}
 		pages++
-		all := touchSelectors(t, true)
 		walk(p.Doc, func(n *node) {
 			control := n.Name == "a" && n.has("href") || n.Name == "button" || n.Name == "summary" || n.Name == "input" || n.Name == "select"
 			if !control || n.Name == "input" && n.attr("type") == "hidden" {

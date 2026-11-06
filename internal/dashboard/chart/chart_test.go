@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -881,6 +882,74 @@ func TestHoverStopsPastHoverMax(t *testing.T) {
 		}
 		if got := len(segRect.FindAllString(stack, -1)); got != 2*n {
 			t.Errorf("stack at %d positions: %d bars, want %d", n, got, 2*n)
+		}
+	}
+}
+
+// TestFlatStretchesOfALongLineKeepTheirEnds: past HoverMax positions a line
+// drops the points inside a flat stretch (they draw the same line); the ends,
+// the step and what follows a gap stay. Up to HoverMax every point is kept.
+func TestFlatStretchesOfALongLineKeepTheirEnds(t *testing.T) {
+	// 0-4 flat, 5 a step, 6-9 flat, 10 a gap, 11-14 flat, then nothing.
+	vals := func(n int) []*float64 {
+		v := make([]*float64, n)
+		for i := 0; i < 15; i++ {
+			switch {
+			case i < 5, i >= 11:
+				v[i] = p(0.5)
+			case i == 5:
+				v[i] = p(0.25)
+			case i < 10:
+				v[i] = p(0.75)
+			}
+		}
+		return v
+	}
+	line := func(n int) Line {
+		x := make([]string, n)
+		for i := range x {
+			x[i] = fmt.Sprintf("d%d", i)
+		}
+		return usedLine(x, vals(n)...)
+	}
+	runs := func(out string) [][]string {
+		var rs [][]string
+		for _, m := range regexp.MustCompile(`<polyline class="ln s-used" points="([^"]*)"`).FindAllStringSubmatch(out, -1) {
+			rs = append(rs, strings.Fields(m[1]))
+		}
+		return rs
+	}
+	pick := func(run []string, idx ...int) []string {
+		var out []string
+		for _, i := range idx {
+			out = append(out, run[i])
+		}
+		return out
+	}
+	n := HoverMax + 1
+	thin := runs(string(line(n).HTML()))
+	old := HoverMax
+	HoverMax = 1 << 30
+	full := runs(string(line(n).HTML()))
+	HoverMax = old
+	if len(full) != 2 || len(full[0]) != 10 || len(full[1]) != 4 {
+		t.Fatalf("every point drawn: runs %v", full)
+	}
+	if len(thin) != 2 {
+		t.Fatalf("thinned: %d runs, want 2 around the gap: %v", len(thin), thin)
+	}
+	// Run 1 keeps its ends, the last flat point before the step, the step and the first point after it, and
+	// the end of the second flat stretch; run 2 keeps its two ends.
+	if want := pick(full[0], 0, 4, 5, 6, 9); !slices.Equal(thin[0], want) {
+		t.Errorf("first run %v, want %v", thin[0], want)
+	}
+	if want := pick(full[1], 0, 3); !slices.Equal(thin[1], want) {
+		t.Errorf("second run %v, want %v", thin[1], want)
+	}
+	// At HoverMax positions nothing is thinned.
+	for i, r := range runs(string(line(HoverMax).HTML())) {
+		if want := []int{10, 4}[i]; len(r) != want {
+			t.Errorf("run %d at %d positions has %d points, want all %d", i, HoverMax, len(r), want)
 		}
 	}
 }
