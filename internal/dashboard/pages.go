@@ -465,6 +465,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		var p views.Params
 		var redirect, hm string
+		var picked bool // the redirect is the Releases picker's comparison
 		var refused *Custom
 		if err != nil {
 			err = views.Usage("the query string is malformed")
@@ -477,6 +478,12 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				q.Del("from")
 				q.Del("to")
 			}
+			// The Releases picker sends two versions and a measure; the view
+			// takes one comparison, so the page redirects to it.
+			if spec.Name == "releases" && err == nil && redirect == "" {
+				redirect = pickVersions(r.URL.EscapedPath(), q)
+				picked = redirect != ""
+			}
 			// The calendar's colouring is the page's own (Overview, Days): no view takes it.
 			if spec.Name == "overview" || spec.Name == "days" {
 				hm = q.Get("hm")
@@ -484,6 +491,11 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			}
 			if err == nil {
 				p, err = views.FromValues(first, q)
+			}
+			// A comparison the view would refuse (the same version twice) is
+			// refused here, not redirected to.
+			if err == nil && picked {
+				_, err = views.Query(first, p, id, s.now())
 			}
 		}
 		if err != nil {

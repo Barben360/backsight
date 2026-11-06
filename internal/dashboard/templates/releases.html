@@ -1,8 +1,42 @@
 {{/* views: releases */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widget: versions. Reads .V.releases.Tables.Releases (Version, First, Last, N, Flagship through the flagship cells, ProjectShares, PromptsPerDay, BankSize) and .Page, through releasespage (ReleasesPage: Observational, Head, Note, Rows, Foot, Settings, Replay; ReplayCard: Head, Text, Cmd; ReleaseLine: Version, Href, Span, Prompts, Judged, Flags, Top, TopShare, Shares, PerDay, Bank; SettingsCard: Head, Note, Rows; SettingLine: Name, Value). Reads .V.releases.Tables.Settings and .Note. */}}
+{{/* widget: versions. Reads .V.releases.Tables.Releases (Version, First, Last, N, Flagship through the flagship cells, ProjectShares, PromptsPerDay, BankSize) and .Page, through releasespage (ReleasesPage: Observational, Head, Note, Rows, Foot, Settings, Replay, Compare, Used; ReplayCard: Head, Text, Cmd; ReleaseLine: Version, Href, Span, Prompts, Judged, Flags, Top, TopShare, Shares, PerDay, Bank; SettingsCard: Head, Note, Rows; SettingLine: Name, Value). Reads .V.releases.Tables.Settings and .Note. */}}
+{{/* widgets: the comparison of two versions and the chart of the turns where Claude used memory, through releasespage. Read .V.releases.Tables.Compare (A, B, Measure, Reading, Diff, CI, PooledA, PooledB, RawA, RawB, RawDisagrees, Strata, SessionsA, SessionsB, TooFew, SettingsDiffer, SettingsUnknown), .V.releases.Tables.Markers (At, Kind, Version, Previous, Changes) and the series of used.turn_rate (CompareCard: Head, Form, Hint, Intro, Few, Result; CompareForm: Keep, A, B, Measure; Option: Value, Text, Selected; CompareResult: Observational, Caveat, Settings, SettingsTail, Unknown, Big, Sub, Pill, Raw, NoClear, Chart, Caption, A, B, Rows, Pooled, Unmatched, Weights; SettingDiffLine: Key, Rest; CompareRow: Label, Project, Shown, A, B, Diff, Interval, Reading, Dir, Strong, Muted; CompareCell: Few, Rate, Counts; UsedCard: Head, Chart). */}}
+{{define "cmpcell"}}<td class="r">{{if .Few}}<span class="st st-few">too few</span> {{end}}{{with .Rate}}{{.}} {{end}}{{with .Counts}}<span class="muted">({{.}})</span>{{end}}</td>{{end}}
+{{define "cmprow"}}{{template "cmpcell" .A}}{{template "cmpcell" .B}}<td class="r">{{.Diff}}{{with .Interval}} <span class="muted">{{.}}</span>{{end}}</td><td{{if .Muted}} class="muted"{{end}}>{{if .Strong}}<b>{{.Reading}}</b>{{else}}{{.Reading}}{{end}}{{with .Dir}}: {{.}}{{end}}</td>{{end}}
 {{with releasespage .}}<div class="state st-few"><span class="i i-info"></span><span><b>{{.Observational}}</b> Each row covers different days and different work. Read differences as hints, not proof.</span></div>
+{{with .Compare}}{{template "card-open" .Head}}
+<form class="row" method="get" action="/releases">
+{{range .Form.Keep}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
+{{end}}<label class="field">Compare version<select name="a">{{range .Form.A}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Text}}</option>{{end}}</select></label>
+<label class="field">with version<select name="b">{{range .Form.B}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Text}}</option>{{end}}</select></label>
+<label class="field">on measure<select name="measure">{{range .Form.Measure}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Text}}</option>{{end}}</select></label>
+<button class="btn btn-primary" type="submit">Compare</button>
+</form>
+{{with .Hint}}<p class="small sub">{{.}}</p>
+{{end}}{{with .Intro}}<p class="small sub">{{.}}</p>
+{{end}}{{with .Few}}<div class="state st-few"><span class="i i-few"></span><span>{{.}}</span></div>
+{{end}}{{with .Result}}<div class="state st-few"><span class="i i-info"></span><span><b>{{.Observational}}</b> {{.Caveat}}</span></div>
+{{if .Settings}}<div class="state st-watch"><span class="i i-watch"></span><span><b>Settings differ:</b> {{range $i, $s := .Settings}}{{if $i}}; {{end}}<code>{{$s.Key}}</code> {{$s.Rest}}{{end}}. {{.SettingsTail}}</span></div>
+{{end}}{{with .Unknown}}<div class="state st-few"><span class="i i-info"></span><span>{{.}}</span></div>
+{{end}}<div class="row lead">
+<div><span class="big">{{.Big}}</span> <span class="small sub">{{.Sub}}</span></div>
+<div><span class="pill st {{.Pill.Class}}">{{.Pill.Word}}</span></div>
+{{with .Raw}}<div class="small sub">{{.}}</div>
+{{end}}</div>
+{{with .NoClear}}<p class="small">{{.}}</p>
+{{end}}{{.Chart}}
+<div class="tbl-wrap"><table class="tbl">
+<caption class="sr-only">{{.Caption}}</caption>
+<thead><tr><th>Project</th><th>Where memory was shown</th><th class="r">{{.A}}</th><th class="r">{{.B}}</th><th class="r">Difference (95 %)</th><th>Reading</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{.Project}}</td><td>{{.Shown}}</td>{{template "cmprow" .}}</tr>
+{{end}}{{with .Pooled}}<tr class="total"><td colspan="2">{{.Label}}</td>{{template "cmprow" .}}</tr>
+{{end}}{{with .Unmatched}}<tr><td colspan="2">{{.Label}}</td>{{template "cmprow" .}}</tr>
+{{end}}</tbody></table></div>
+{{with .Weights}}<p class="tbl-more">{{.}}</p>
+{{end}}{{end}}{{template "card-close" .Head}}{{end}}
 {{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
 <thead>
@@ -26,5 +60,8 @@
 <p class="small sub">{{.Text}}</p>
 {{template "cmd" .Cmd}}{{template "card-close" .Head}}{{end}}
 </div>
+{{with .Used}}{{template "card-open" .Head}}
+{{.Chart}}
+{{template "card-close" .Head}}{{end}}
 {{end}}
 {{template "foot" .}}
