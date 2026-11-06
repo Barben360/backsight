@@ -728,3 +728,9 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
 /* ---------- Task 28: the sessions sent that never became memories fold under their heading ---------- */
 details.never > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--fg-2); }
 details.never[open] > summary { margin-bottom: var(--sp-2); }
+
+/* ---------- Task 31: the heading that folds the never-extracted list and the project filter's field are touch targets under 900 px ---------- */
+@container page (max-width: 899px) {
+  details.never > summary { min-height: var(--touch); padding-block: 8px; box-sizing: border-box; }
+  input[type="text"] { min-height: var(--touch); box-sizing: border-box; }
+}

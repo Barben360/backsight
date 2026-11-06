@@ -26,7 +26,7 @@
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{range .Charts}}{{.HTML}}
 {{end}}{{template "ctail" .Card}}{{if .Rows}}<details class="tblfb"><summary>Show the weeks as a table</summary><div class="tbl-wrap"><table class="tbl">
 <caption class="sr-only">Memories made each week, and how many were used within 28 days</caption>
-<thead><tr><th>Week of</th><th class="r">New memories</th><th class="r">Used within 28 days</th><th class="r">Share</th><th class="r">Tokens per memory used</th></tr></thead>
+<thead><tr><th scope="col">Week of</th><th class="r" scope="col">New memories</th><th class="r" scope="col">Used within 28 days</th><th class="r" scope="col">Share</th><th class="r" scope="col">Tokens per memory used</th></tr></thead>
 <tbody>
 {{range .Rows}}{{if .Note}}<tr><td>{{.Week}}</td><td class="r">{{.New}}</td><td colspan="3" class="muted">{{.Note}}</td></tr>
 {{else}}<tr><td>{{.Week}}</td><td class="r">{{.New}}</td><td class="r">{{.Used}}</td><td class="r">{{if .ShareClass}}<span class="st {{.ShareClass}}">{{.Share}}</span>{{else}}{{.Share}}{{end}}</td><td class="r">{{.Tokens}}</td></tr>
