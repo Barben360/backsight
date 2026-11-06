@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -560,4 +562,44 @@ func (x *fx) prompts(project, prefix string, start time.Time, count int, edit fu
 		sessions = append(sessions, s)
 	}
 	return sessions
+}
+
+// pcRow is one row of pc_days: an other PC's day (version "" = the day's
+// totals) with its figures; flow is left out of a version row.
+type pcRow struct {
+	machine, day, version string
+	f                     machines.Figures
+	flow                  machines.Pair
+}
+
+// pcRows writes rows into pc_days, as Task 6's refresh would have.
+func (x *fx) pcRows(rows ...pcRow) {
+	x.t.Helper()
+	x.source() // opens the index
+	db, err := sql.Open("sqlite", "file:"+x.ix.Path())
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, r := range rows {
+		d, err := time.Parse("2006-01-02", r.day)
+		if err != nil {
+			x.t.Fatal(err)
+		}
+		var flowN, flowD any = r.flow[0], r.flow[1]
+		if r.version != "" {
+			flowN, flowD = nil, nil
+		}
+		args := []any{r.machine, r.day, r.version, d.Add(12 * time.Hour).UnixMilli(), r.f.Prompts,
+			r.f.Hit[0], r.f.Hit[1], r.f.Used[0], r.f.Used[1], r.f.Coverage[0], r.f.Coverage[1], r.f.Wrong[0], r.f.Wrong[1],
+			r.f.Context[0], r.f.Context[1], flowN, flowD}
+		for _, c := range r.f.Latency {
+			args = append(args, c)
+		}
+		if _, err := db.Exec(`INSERT INTO pc_days(machine, day, version, noon, prompts, hit_n, hit_d, used_n, used_d, cov_n, cov_d, wrong_n, wrong_d,
+ ctx_chars, ctx_sessions, flow_n, flow_d, lat0, lat1, lat2, lat3, lat4, lat5, lat6, lat7, lat8)
+ VALUES (?`+strings.Repeat(", ?", 25)+`)`, args...); err != nil {
+			x.t.Fatal(err)
+		}
+	}
 }

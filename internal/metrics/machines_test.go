@@ -3,11 +3,15 @@ package metrics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -314,9 +318,6 @@ func TestAssessRunsOnThisPC(t *testing.T) {
 			t.Errorf("%s/%s: this() must not merge", c.view, c.machines)
 		}
 	}
-	if got := othersAt(e, e.q.Window); len(got) != 0 {
-		t.Errorf("othersAt = %v: Task 8 fills it", got)
-	}
 }
 
 func TestOthersUnfiltered(t *testing.T) {
@@ -343,5 +344,560 @@ func TestOthersUnfiltered(t *testing.T) {
 	q.Machines = "all"
 	if r := x.runAs("quality", q); r.Scope.OthersUnfiltered {
 		t.Error("sharing off: others_unfiltered must be absent")
+	}
+}
+
+// mergedOf runs view for q as all PCs and returns the metrics.
+func (x *fx) mergedOf(view string, q Query) map[string]Metric {
+	x.t.Helper()
+	q.Machines = "all"
+	return x.runAs(view, q).Metrics
+}
+
+// seriesOf is a metric's daily series as day -> [num, den].
+func seriesOf(m Metric) map[string][2]int64 {
+	out := map[string][2]int64{}
+	for _, p := range m.Series {
+		if p.Num != nil && p.Den != nil {
+			out[p.Day+p.Hour] = [2]int64{*p.Num, *p.Den}
+		}
+	}
+	return out
+}
+
+func sameSeries(t *testing.T, id string, m Metric, want map[string][2]int64) {
+	t.Helper()
+	got := seriesOf(m)
+	for k, v := range got {
+		if v != want[k] {
+			t.Errorf("%s series %s = %v, want %v", id, k, v, want[k])
+		}
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s series %s = %v, want %v", id, k, got[k], v)
+		}
+	}
+}
+
+func num0(p *int64) int64 {
+	if p == nil {
+		return -1
+	}
+	return *p
+}
+
+func isNum(t *testing.T, id string, m Metric, num, den int64) {
+	t.Helper()
+	if m.Num == nil || m.Den == nil || *m.Num != num || *m.Den != den {
+		t.Fatalf("%s = %d/%d (status %s %q), want %d/%d", id, num0(m.Num), num0(m.Den), m.Status, m.Reason, num, den)
+	}
+	if m.Value == nil || !close4(*m.Value, float64(num)/float64(den)) {
+		t.Errorf("%s value %v, want %d/%d", id, m.Value, num, den)
+	}
+}
+
+// thisFigures writes this PC's part of the two-PC fixture: 30 recalls of
+// which 12 injected, 9 declared turns of which 5 used, 2 undeclared turns
+// (decided 11), 6 used verdicts and none wrong, 3 documents sent, all ok.
+// Paris days (the window's zone), hand-counted:
+//
+//	Oct 30: recalls at 11:00 down to 00:00 = 12, all injected; declared turns
+//	        at 09:00..01:00 = 9, the first 5 credited used (5 verdicts); 3 documents
+//	Oct 29: the other 18 recalls (23:00..06:00), none injected; the 2
+//	        undeclared turns at 03:00 and 02:00, the first credited used (1 verdict)
+func thisFigures(x *fx) {
+	x.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	turns(x, "d", fxNow, 9, "declared", firstK(5, "used", ""))
+	turns(x, "u", fxNow.Add(-30*time.Hour), 2, "undeclared", firstK(1, "used", ""))
+	for i, h := range []time.Duration{5, 6, 7} {
+		x.retained(fxNow.Add(-h*time.Hour), fmt.Sprintf("doc-%d", i), "ok", 100)
+	}
+}
+
+// The other PC of the fixture, over two days. Sums: hit 16+10 / 40+30 =
+// 26/70, used 6+3 / 12+9 = 9/21, coverage 12+9 / 14+11 = 21/25, wrong 1+0 /
+// 8+6 = 1/14, flow 3+2 / 3+2 = 5/5.
+func otherPC(x *fx) {
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 40, Hit: machines.Pair{16, 40}, Used: machines.Pair{6, 12},
+			Coverage: machines.Pair{12, 14}, Wrong: machines.Pair{1, 8}}, flow: machines.Pair{3, 3}},
+		pcRow{machine: pcOther1, day: "2026-10-27", f: machines.Figures{Prompts: 30, Hit: machines.Pair{10, 30}, Used: machines.Pair{3, 9},
+			Coverage: machines.Pair{9, 11}, Wrong: machines.Pair{0, 6}}, flow: machines.Pair{2, 2}},
+	)
+}
+
+// TestMergeTwoPCsGivesExactSums: this PC 12/30 + the other 26/70 = 38/100,
+// and so for each rate and the sessions sent; every series day is the sum of
+// both, the interval, MDC and status come from the merged counts.
+func TestMergeTwoPCsGivesExactSums(t *testing.T) {
+	x := newFx(t, fxNow)
+	thisFigures(x)
+	otherPC(x)
+
+	// this PC alone: the fixture's own arithmetic
+	this := x.runAs("quality", x.query(7)).Metrics
+	isNum(t, "this hit", this["recall.hit_rate"], 12, 30)
+	isNum(t, "this used", this["used.turn_rate"], 5, 9)
+	isNum(t, "this coverage", this["declare.coverage"], 9, 11)
+	isNum(t, "this wrong", this["verdict.wrong_rate"], 0, 6)
+	isNum(t, "this flow", x.runAs("pipeline", x.query(7)).Metrics["pipeline.flow"], 3, 3)
+
+	m := x.mergedOf("quality", x.query(7))
+	hit := m["recall.hit_rate"]
+	isNum(t, "hit", hit, 38, 100)
+	lo, hi := Wilson(38, 100)
+	if hit.CI == nil || hit.CI[0] != lo || hit.CI[1] != hi {
+		t.Errorf("hit ci %v, want Wilson(38,100) = [%v %v]", hit.CI, lo, hi)
+	}
+	if hit.MDC == nil || *hit.MDC != MDC(100) {
+		t.Errorf("hit mdc %v, want MDC(100)", hit.MDC)
+	}
+	// 38% with an interval of about [29%, 48%]: not under 10%, no baseline
+	if hit.Status != StatusOK {
+		t.Errorf("hit status %s, want ok", hit.Status)
+	}
+	sameSeries(t, "hit", hit, map[string][2]int64{"2026-10-30": {12, 12}, "2026-10-29": {16, 58}, "2026-10-27": {10, 30},
+		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+
+	used := m["used.turn_rate"]
+	isNum(t, "used", used, 14, 30)
+	if wc, _ := used.Extra["worst_case"].(*float64); wc == nil || !close4(*wc, 14.0/36) {
+		t.Errorf("worst_case %v, want 14/36", used.Extra["worst_case"])
+	}
+	if used.Extra["pending"] != int64(0) {
+		t.Errorf("pending %v: this PC's", used.Extra["pending"])
+	}
+	if slices.Contains(used.Tags, tagUnreliable) {
+		t.Errorf("used tags %v: coverage 30/36 is reliable", used.Tags)
+	}
+	sameSeries(t, "used", used, map[string][2]int64{"2026-10-30": {5, 9}, "2026-10-29": {6, 12}, "2026-10-27": {3, 9},
+		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+	cov := m["declare.coverage"]
+	isNum(t, "coverage", cov, 30, 36)
+	sameSeries(t, "coverage", cov, map[string][2]int64{"2026-10-30": {9, 9}, "2026-10-29": {12, 16}, "2026-10-27": {9, 11},
+		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+	wrong := m["verdict.wrong_rate"]
+	isNum(t, "wrong", wrong, 1, 20)
+	lo, hi = Wilson(1, 20)
+	if wrong.CI == nil || wrong.CI[0] != lo || wrong.CI[1] != hi || wrong.Status != StatusOK {
+		t.Errorf("wrong ci %v status %s, want Wilson(1,20) and ok (its lower bound %.3f is under 5%%)", wrong.CI, wrong.Status, lo)
+	}
+	sameSeries(t, "wrong", wrong, map[string][2]int64{"2026-10-30": {0, 5}, "2026-10-29": {1, 9}, "2026-10-27": {0, 6},
+		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+
+	flow := x.mergedOf("pipeline", x.query(7))["pipeline.flow"]
+	isNum(t, "flow", flow, 8, 8)
+	if flow.Status != StatusOK || !slices.Contains(flow.Tags, tagStatusThisPC) {
+		t.Errorf("flow status %s tags %v, want this PC's ok with status_this_pc", flow.Status, flow.Tags)
+	}
+	sameSeries(t, "flow", flow, map[string][2]int64{"2026-10-30": {3, 3}, "2026-10-29": {3, 3}, "2026-10-27": {2, 2},
+		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+
+	// this PC's mode is untouched by the same index
+	isNum(t, "this hit again", x.runAs("quality", x.query(7)).Metrics["recall.hit_rate"], 12, 30)
+}
+
+// The status of a rate is read from the merged counts: this PC alone reads
+// 12/30 (ok), with 200 more recalls of which none injected the merged 12/230
+// has an interval under 10% (upper bound about 8.9%): watch.
+func TestMergedStatusComesFromTheMergedCounts(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 200, Hit: machines.Pair{0, 200}}})
+	if s := x.runAs("quality", x.query(7)).Metrics["recall.hit_rate"].Status; s != StatusOK {
+		t.Fatalf("this PC alone reads %s, want ok", s)
+	}
+	hit := x.mergedOf("quality", x.query(7))["recall.hit_rate"]
+	isNum(t, "hit", hit, 12, 230)
+	if hit.Status != StatusWatch {
+		t.Errorf("merged status %s, want watch", hit.Status)
+	}
+	if hit.CI == nil || hit.CI[1] >= 0.10 || hit.CI[1] < 0.085 {
+		t.Errorf("merged ci %v, want an upper bound near 0.089", hit.CI)
+	}
+}
+
+// The failed document stays this PC's: 2 ok + 1 failed here, 5/5 there is
+// 7/8 whose status is this PC's watch.
+func TestMergedFlowKeepsThisPCsStatus(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.retained(fxNow.Add(-5*time.Hour), "d1", "ok", 100)
+	x.retained(fxNow.Add(-6*time.Hour), "d2", "ok", 100)
+	x.retained(fxNow.Add(-7*time.Hour), "d3", "failed", 100)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", flow: machines.Pair{5, 5}})
+	if s := x.runAs("pipeline", x.query(7)).Metrics["pipeline.flow"]; s.Status != StatusWatch {
+		t.Fatalf("this PC reads %s, want watch (one failed)", s.Status)
+	}
+	flow := x.mergedOf("pipeline", x.query(7))["pipeline.flow"]
+	isNum(t, "flow", flow, 7, 8)
+	if flow.Status != StatusWatch || !slices.Contains(flow.Tags, tagStatusThisPC) {
+		t.Errorf("flow status %s tags %v, want watch and status_this_pc", flow.Status, flow.Tags)
+	}
+	if flow.Extra["failed"] != int64(1) || flow.Extra["ok"] != int64(2) {
+		t.Errorf("flow extra %v: this PC's", flow.Extra)
+	}
+}
+
+// used.turn_rate is unreliable while the merged coverage's upper bound is
+// under 80%: this PC declares 20 of 20 (bound 1), the other PC 0 of 180,
+// so 20/200 (upper bound about 0.15).
+func TestMergedUnreliableReadsTheMergedCoverage(t *testing.T) {
+	x := newFx(t, fxNow)
+	turns(x, "d", fxNow, 20, "declared", nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 1, Coverage: machines.Pair{0, 180}}})
+	if m := x.runAs("quality", x.query(7)).Metrics["used.turn_rate"]; slices.Contains(m.Tags, tagUnreliable) {
+		t.Fatalf("this PC alone is reliable, tags %v", m.Tags)
+	}
+	m := x.mergedOf("quality", x.query(7))
+	isNum(t, "coverage", m["declare.coverage"], 20, 200)
+	if used := m["used.turn_rate"]; !slices.Contains(used.Tags, tagUnreliable) {
+		t.Errorf("used tags %v, want unreliable from the merged coverage", used.Tags)
+	}
+}
+
+// TestMiddayRuleTakesNDays: a PC with a day a row, windows of 7 days ending
+// 00:30, 11:59, 12:00 and 23:59 UTC in three zones all hold exactly 7 of its
+// days (a day counts when its 12:00 UTC is in the window); a 24 h window
+// exactly 1; a local day of 25 h exactly 1.
+func TestMiddayRuleTakesNDays(t *testing.T) {
+	paris, _ := time.LoadLocation("Europe/Paris")
+	auckland, _ := time.LoadLocation("Pacific/Auckland")
+	anchorage, _ := time.LoadLocation("America/Anchorage")
+	rows := func(machine string) []pcRow {
+		var out []pcRow
+		for d := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC); d.Before(time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)); d = d.AddDate(0, 0, 1) {
+			out = append(out, pcRow{machine: machine, day: d.Format("2006-01-02"), f: machines.Figures{Prompts: 1, Hit: machines.Pair{1, 1}}})
+		}
+		return out
+	}
+	run := func(t *testing.T, now time.Time, w Window) Metric {
+		x := newFx(t, now)
+		x.pcDoc(pcOther1, "2026-09-10", now.Add(-time.Hour), "")
+		x.pcRows(rows(pcOther1)...)
+		return x.mergedOf("quality", Query{Window: w})["recall.hit_rate"]
+	}
+	for _, now := range []time.Time{
+		time.Date(2026, 10, 30, 0, 30, 0, 0, time.UTC), time.Date(2026, 10, 30, 11, 59, 0, 0, time.UTC),
+		time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 23, 59, 0, 0, time.UTC)} {
+		for name, loc := range map[string]*time.Location{"UTC": time.UTC, "Paris": paris, "Auckland": auckland} {
+			t.Run(fmt.Sprintf("%s %s", name, now.Format("15:04")), func(t *testing.T) {
+				w7, err := NewWindow(now, 7, time.Time{}, time.Time{}, loc, name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				isNum(t, "7 days", run(t, now, w7), 7, 7)
+				w1, _ := NewWindow(now, 1, time.Time{}, time.Time{}, loc, name)
+				m := run(t, now, w1)
+				isNum(t, "24 h", m, 1, 1)
+				if !slices.Contains(m.Tags, tagSeriesThisPC) {
+					t.Errorf("24 h tags %v, want series_this_pc", m.Tags)
+				}
+			})
+		}
+	}
+	// A day lands in the bucket holding its noon: at 12:00 UTC on Oct 30 the
+	// window's noons are Oct 23..29. Paris (CEST, then CET from Oct 25 03:00
+	// local) is 14:00/13:00 on the same date; Auckland (+13) is 01:00 of the
+	// next date.
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		loc  *time.Location
+		name string
+		days []string
+	}{
+		{paris, "Europe/Paris", []string{"2026-10-23", "2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29"}},
+		{auckland, "Pacific/Auckland", []string{"2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"}},
+	} {
+		w, _ := NewWindow(now, 7, time.Time{}, time.Time{}, c.loc, c.name)
+		want := map[string][2]int64{}
+		for _, d := range c.days {
+			want[d] = [2]int64{1, 1}
+		}
+		m := run(t, now, w)
+		for _, b := range w.Buckets() {
+			if _, ok := want[b.Key]; !ok {
+				want[b.Key] = [2]int64{0, 0}
+			}
+		}
+		sameSeries(t, c.name, m, want)
+	}
+	// the day page of a 25 h local day, and a 25 h window holding two noons
+	// (Nov 1 11:30Z .. Nov 2 12:30Z): the first only
+	late := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name         string
+		since, until time.Time
+		loc          *time.Location
+	}{
+		{"Paris 2026-10-25", time.Date(2026, 10, 25, 0, 0, 0, 0, paris), time.Date(2026, 10, 26, 0, 0, 0, 0, paris), paris},
+		{"Anchorage 2026-11-01", time.Date(2026, 11, 1, 0, 0, 0, 0, anchorage), time.Date(2026, 11, 2, 0, 0, 0, 0, anchorage), anchorage},
+		{"two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 12, 30, 0, 0, time.UTC), time.UTC},
+	} {
+		w, err := NewWindow(late, 0, c.since, c.until, c.loc, c.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.Length() != 25*time.Hour {
+			t.Fatalf("%s: window of %v, want 25 h", c.name, w.Length())
+		}
+		isNum(t, c.name, run(t, late, w), 1, 1)
+	}
+}
+
+// The previous window and the four baselines are merged runs too. This PC:
+// 4/40 in every week; the other PC 40/160 now and 120/160 in each of the four
+// weeks before. Merged now 44/200 = 0.22, before 124/200 = 0.62 each: previous
+// 0.62, delta -0.40, and the relative rule watches (upper bound of 44/200 is
+// about 0.28, under 0.7 x 0.62 = 0.434). This PC alone, 0.1 against 0.1, is
+// fine, so only merged baselines can trigger the watch.
+func TestMergedPreviousAndBaselines(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 40, injecting(4))
+	for k := 1; k <= 4; k++ {
+		x.prompts("alpha", fmt.Sprintf("b%d", k), since7.Add(-time.Duration(7*(k-1))*day), 40, injecting(4))
+	}
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	rows := []pcRow{{machine: pcOther1, day: "2026-10-27", f: machines.Figures{Prompts: 160, Hit: machines.Pair{40, 160}}}}
+	for _, d := range []string{"2026-10-20", "2026-10-12", "2026-10-05", "2026-09-28"} {
+		rows = append(rows, pcRow{machine: pcOther1, day: d, f: machines.Figures{Prompts: 160, Hit: machines.Pair{120, 160}}})
+	}
+	x.pcRows(rows...)
+
+	this := x.runAs("quality", x.query(7)).Metrics["recall.hit_rate"]
+	if this.Status != StatusOK || this.Previous == nil || !close4(*this.Previous, 0.1) || this.Delta == nil || !close4(*this.Delta, 0) {
+		t.Fatalf("this PC: status %s previous %v delta %v, want ok, 0.1 and 0", this.Status, this.Previous, this.Delta)
+	}
+	m := x.mergedOf("quality", x.query(7))["recall.hit_rate"]
+	isNum(t, "hit", m, 44, 200)
+	if m.Previous == nil || !close4(*m.Previous, 0.62) {
+		t.Errorf("previous %v, want 124/200 = 0.62", m.Previous)
+	}
+	if m.Delta == nil || !close4(*m.Delta, -0.40) {
+		t.Errorf("delta %v, want 0.22 - 0.62 = -0.40", m.Delta)
+	}
+	if m.Status != StatusWatch {
+		t.Errorf("status %s, want watch from the merged baselines", m.Status)
+	}
+}
+
+// A counted PC with no day in the window adds nothing and is not active.
+func TestMergeWithAnIdlePC(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcDoc(pcOther2, "2026-09-11", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 70, Hit: machines.Pair{26, 70}}},
+		pcRow{machine: pcOther2, day: "2026-09-01", f: machines.Figures{Prompts: 500, Hit: machines.Pair{500, 500}}}) // 59 days back
+	r := x.runAs("quality", x.allQuery())
+	isNum(t, "hit", r.Metrics["recall.hit_rate"], 38, 100)
+	if p := r.Scope.PCs; p.Count != 3 || p.Active != 2 {
+		t.Errorf("pcs count %d active %d, want 3 and 2", p.Count, p.Active)
+	}
+	// with the idle PC alone nothing differs from this PC's own figures
+	y := newFx(t, fxNow)
+	y.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	y.pcDoc(pcOther2, "2026-09-11", fxNow.Add(-time.Hour), "")
+	y.pcRows(pcRow{machine: pcOther2, day: "2026-09-01", f: machines.Figures{Prompts: 500, Hit: machines.Pair{500, 500}}})
+	if all, this := y.runAs("quality", y.allQuery()).Metrics, y.runAs("quality", y.query(7)).Metrics; !reflect.DeepEqual(all, this) {
+		t.Errorf("an idle PC changed the figures:\nall  %+v\nthis %+v", all["recall.hit_rate"], this["recall.hit_rate"])
+	}
+}
+
+func TestMergeWithNoPCData(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 70, Hit: machines.Pair{26, 70}}})
+	if m := x.runAs("quality", x.query(7)).Metrics["recall.hit_rate"]; m.Status != StatusNoData || m.Reason != ReasonNoEvents {
+		t.Fatalf("this PC has no prompt: %s %q, want no_data no_events", m.Status, m.Reason)
+	}
+	hit := x.mergedOf("quality", x.query(7))["recall.hit_rate"]
+	isNum(t, "hit", hit, 26, 70)
+	if hit.Status != StatusOK {
+		t.Errorf("status %s %q, want ok", hit.Status, hit.Reason)
+	}
+	// the PC with data in another figure only: this one stays without data
+	if u := x.mergedOf("quality", x.query(7))["used.turn_rate"]; u.Status != StatusNoData || u.Reason != ReasonNoEvents || u.Num != nil {
+		t.Errorf("used: %s %q num %v, want no_data no_events", u.Status, u.Reason, u.Num)
+	}
+	// neither has prompts: still no data
+	y := newFx(t, fxNow)
+	y.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	y.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 3}})
+	if m := y.mergedOf("quality", y.query(7))["recall.hit_rate"]; m.Status != StatusNoData || m.Reason != ReasonNoEvents {
+		t.Errorf("neither has: %s %q, want no_data no_events", m.Status, m.Reason)
+	}
+}
+
+// A cache that cannot refresh keeps ageing by now: a document 3 days old is
+// counted and stale, one 31 days old (fetched 29 days ago) is neither
+// counted nor listed, though its rows lie in the window.
+func TestOldCacheAgesByNow(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.writeIndex(`INSERT INTO pc_fetch(id, fetched_at, size, mtime, sha256, ingested_at) VALUES (1, ?, 1, 1, 'x', 1)`, fxNow.Add(-29*24*time.Hour).UnixMilli())
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-3*24*time.Hour), "2026-10-27")
+	x.pcDoc(pcOther2, "2026-09-11", fxNow.Add(-31*24*time.Hour), "2026-10-28")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-27", f: machines.Figures{Prompts: 10, Hit: machines.Pair{5, 10}}},
+		pcRow{machine: pcOther2, day: "2026-10-28", f: machines.Figures{Prompts: 10, Hit: machines.Pair{7, 10}}})
+	r := x.runAs("quality", x.allQuery())
+	isNum(t, "hit", r.Metrics["recall.hit_rate"], 5, 10)
+	p := r.Scope.PCs
+	if p.Count != 2 || p.Stale != 1 || len(p.List) != 2 || p.List[1].Machine != "bbbbbbbb" || !p.List[1].Stale {
+		t.Errorf("pcs = %+v", p)
+	}
+}
+
+// The edges of counted and stale, as the merge reads them: 48 h is not
+// stale, 48 h + 1 s is; 30 d is counted, 30 d + 1 s is dropped; now + 24 h is
+// counted, now + 24 h + 1 s is not. Each PC has one day, 1/1.
+func TestStaleAndDropBoundaries(t *testing.T) {
+	x := newFx(t, fxNow)
+	ids := []string{"11111111-0000-4000-8000-000000000001", "22222222-0000-4000-8000-000000000002", "33333333-0000-4000-8000-000000000003",
+		"44444444-0000-4000-8000-000000000004", "55555555-0000-4000-8000-000000000005", "66666666-0000-4000-8000-000000000006"}
+	ats := []time.Time{fxNow.Add(-48 * time.Hour), fxNow.Add(-48*time.Hour - time.Second), fxNow.Add(-30 * 24 * time.Hour),
+		fxNow.Add(-30*24*time.Hour - time.Second), fxNow.Add(24 * time.Hour), fxNow.Add(24*time.Hour + time.Second)}
+	var rows []pcRow
+	for i, id := range ids {
+		x.pcDoc(id, fmt.Sprintf("2026-09-%02d", i+1), ats[i], "")
+		rows = append(rows, pcRow{machine: id, day: "2026-10-28", f: machines.Figures{Prompts: 1, Hit: machines.Pair{1, 1}}})
+	}
+	x.pcRows(rows...)
+	r := x.runAs("quality", x.allQuery())
+	// counted: 11111111, 22222222, 33333333, 55555555
+	isNum(t, "hit", r.Metrics["recall.hit_rate"], 4, 4)
+	stale := map[string]bool{}
+	for _, row := range r.Scope.PCs.List {
+		stale[row.Machine] = row.Stale
+	}
+	want := map[string]bool{"aaaaaaaa": false, "11111111": false, "22222222": true, "33333333": true, "55555555": false}
+	if !reflect.DeepEqual(stale, want) {
+		t.Errorf("listed (stale) %v, want %v", stale, want)
+	}
+}
+
+// A server-only host has no part of its own; its figures on all PCs are the
+// others' sums, on this PC no_data server_only_host.
+func TestMergeOnAServerOnlyHost(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.cfg = func(c *config.Config) { c.Server.Role = config.RoleServer }
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcDoc(pcOther2, "2026-09-05", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 10, Hit: machines.Pair{4, 10}, Used: machines.Pair{3, 5}, Coverage: machines.Pair{5, 6}}},
+		pcRow{machine: pcOther2, day: "2026-10-28", f: machines.Figures{Prompts: 20, Hit: machines.Pair{6, 20}, Used: machines.Pair{2, 5}, Coverage: machines.Pair{5, 6}}})
+	this := x.runAs("quality", x.query(7))
+	if m := this.Metrics["recall.hit_rate"]; m.Status != StatusNoData || m.Reason != ReasonServerOnlyHost {
+		t.Fatalf("this: %s %q, want no_data server_only_host", m.Status, m.Reason)
+	}
+	r := x.runAs("quality", x.allQuery())
+	isNum(t, "hit", r.Metrics["recall.hit_rate"], 10, 30)
+	if r.Metrics["recall.hit_rate"].Status != StatusOK {
+		t.Errorf("status %s %q, want ok", r.Metrics["recall.hit_rate"].Status, r.Metrics["recall.hit_rate"].Reason)
+	}
+	used := r.Metrics["used.turn_rate"]
+	isNum(t, "used", used, 5, 10)
+	if wc, _ := used.Extra["worst_case"].(*float64); wc == nil || !close4(*wc, 5.0/12) {
+		t.Errorf("worst_case %v, want 5/12", used.Extra["worst_case"])
+	}
+	if r.Scope.PCs.Count != 2 {
+		t.Errorf("pcs.count %d, want 2", r.Scope.PCs.Count)
+	}
+}
+
+// Under a project filter this PC's figures are the project's and the other
+// PC's are whole: 6/10 + 5/20 = 11/30, tagged; without the filter 8/30 +
+// 5/20 = 13/50 and no tag.
+func TestProjectFilterAddsOthersWhole(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("backsight", "bs", fxNow, 10, injecting(6))
+	x.prompts("alpha", "al", fxNow.Add(-12*time.Hour), 20, injecting(2))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 20, Hit: machines.Pair{5, 20}}})
+	q := x.allQuery()
+	q.Project = "backsight"
+	r := x.runAs("quality", q)
+	hit := r.Metrics["recall.hit_rate"]
+	isNum(t, "hit", hit, 11, 30)
+	if !slices.Contains(hit.Tags, tagOthersNotFiltered) || !r.Scope.OthersUnfiltered {
+		t.Errorf("tags %v unfiltered %v, want others_not_filtered", hit.Tags, r.Scope.OthersUnfiltered)
+	}
+	all := x.mergedOf("quality", x.query(7))["recall.hit_rate"]
+	isNum(t, "no filter", all, 13, 50)
+	if slices.Contains(all.Tags, tagOthersNotFiltered) {
+		t.Errorf("no filter, tags %v", all.Tags)
+	}
+}
+
+// In a window drawn by the hour the totals add the days whose noon is in it
+// but the series stay this PC's: 4 of 10 here, 6 of 9 there (Oct 29 12:00Z
+// is in the last 24 h, Oct 30 12:00Z is after the window's end).
+func TestHourlySeriesStayThisPC(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "h", fxNow, 10, injecting(4))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 9, Hit: machines.Pair{6, 9}}},
+		pcRow{machine: pcOther1, day: "2026-10-30", f: machines.Figures{Prompts: 50, Hit: machines.Pair{50, 50}}})
+	m := x.mergedOf("quality", x.query(1))["recall.hit_rate"]
+	isNum(t, "hit", m, 10, 19)
+	var num, den int64
+	for _, p := range m.Series {
+		if p.Hour == "" {
+			t.Fatalf("point %+v is not an hour", p)
+		}
+		num += *p.Num
+		den += *p.Den
+	}
+	if num != 4 || den != 10 {
+		t.Errorf("series sums %d/%d, want this PC's 4/10", num, den)
+	}
+	if !slices.Contains(m.Tags, tagSeriesThisPC) {
+		t.Errorf("tags %v, want series_this_pc", m.Tags)
+	}
+	if this := x.runAs("quality", x.query(1)).Metrics["recall.hit_rate"]; slices.Contains(this.Tags, tagSeriesThisPC) {
+		t.Errorf("this PC's tags %v", this.Tags)
+	}
+}
+
+// The merged copy never writes the memo's maps: this PC's run, made before
+// and after, is the same; the merged one differs and is memoized apart.
+func TestMergeLeavesThisPCsRunAlone(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 70, Hit: machines.Pair{26, 70}}})
+	q := x.allQuery()
+	err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
+		e.view = "quality"
+		fam := families.byID["recall.hit_rate"]
+		snap := func(e env) string {
+			obs, met, err := e.runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal([]any{obs, met})
+			return string(b)
+		}
+		before := snap(e.this())
+		merged := snap(e)
+		if after := snap(e.this()); after != before {
+			t.Errorf("this PC's run changed:\nbefore %s\nafter  %s", before, after)
+		}
+		if merged == before {
+			t.Error("the merged run equals this PC's")
+		}
+		if snap(e) != merged {
+			t.Error("the merged run changed on a second read")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

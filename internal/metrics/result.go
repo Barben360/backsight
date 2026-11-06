@@ -107,7 +107,12 @@ type ServerState struct {
 	LastOK *time.Time `json:"last_ok"`
 }
 
-// Metric is one number with its judgement.
+// Metric is one number with its judgement. Its tags: unreliable,
+// not_filtered, judged_28d, partial, old_scan, and on all PCs (--machines
+// all): others_not_filtered (a project filter: the other PCs' whole figures
+// are added), series_this_pc (a window drawn by the hour: the totals add the
+// other PCs' days, the series stay this PC's) and status_this_pc
+// (pipeline.flow: the status is this PC's rule).
 type Metric struct {
 	Value       *float64       `json:"value"`
 	Num         *int64         `json:"num"`
@@ -117,7 +122,7 @@ type Metric struct {
 	Status      Status         `json:"status"`
 	Reason      string         `json:"reason,omitempty"`
 	Borderline  bool           `json:"borderline"`
-	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial, old_scan
+	Tags        []string       `json:"tags"` // see Metric
 	CI          *[2]float64    `json:"ci"`
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`

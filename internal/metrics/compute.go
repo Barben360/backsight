@@ -71,6 +71,7 @@ type memo struct {
 	yield     map[[2]int64]*yieldRun  // memory.yield's reads, by window
 	doctor    map[[2]int64]*doctorRun // doctor.history's reads, by window
 	prompts   map[string]*promptRead  // reach's prompts over the span of every window asked, by binary version
+	others    map[othersKey]others    // the other PCs' days by window and version (othersAt)
 }
 
 // newMemo is an empty memo.
@@ -115,17 +116,22 @@ func (e env) run(fam *family, w Window) (map[string]Observation, map[string]Metr
 // full run already made); any other family computes all its ids. ids nil:
 // all.
 func (e env) runIDs(fam *family, w Window, ids []string) (map[string]Observation, map[string]Metric, error) {
+	if merge := mergers[fam.name]; merge != nil && e.merging() {
+		return e.runMerged(fam, w, ids, merge)
+	}
+	return e.runOne(fam, w, ids)
+}
+
+// runOne is runIDs for the env's own PCs: this PC's run, or the merged one
+// that runMerged memoizes under the all key.
+func (e env) runOne(fam *family, w Window, ids []string) (map[string]Observation, map[string]Metric, error) {
 	if e.memo == nil {
 		return fam.f(e.asking(fam, ids), w)
 	}
-	k := runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano(), e.q.version, "", e.machines()}
+	k := e.runKey(fam, w)
 	e = e.asking(fam, ids)
-	// a run of at least the steps asked serves them: a full run any subset
-	for sk, r := range e.memo.runs {
-		if sk.family == k.family && sk.since == k.since && sk.until == k.until && sk.qSince == k.qSince && sk.qUntil == k.qUntil &&
-			sk.version == k.version && sk.machines == k.machines && stepsCover(r.steps, e.want) {
-			return r.obs, r.met, nil
-		}
+	if obs, met, ok := e.memo.served(k, e.want); ok {
+		return obs, met, nil
 	}
 	if e.want != nil {
 		k.want = wantKey(e.want)
@@ -135,6 +141,55 @@ func (e env) runIDs(fam *family, w Window, ids []string) (map[string]Observation
 		e.memo.runs[k] = familyRun{obs, met, e.want}
 	}
 	return obs, met, err
+}
+
+// runMerged is runIDs on all PCs: this PC's run (the memo's, shared with the
+// verdict, which runs on this()) then a merged copy of it, memoized under
+// the all key. The memo's own maps are never written: merge copies what it
+// changes. Beyond M2 and M3 nothing merges here; the previous window and
+// the baselines are runs of their own windows, each merged by this same path.
+func (e env) runMerged(fam *family, w Window, ids []string, merge mergeFunc) (map[string]Observation, map[string]Metric, error) {
+	var k runKey
+	if e.memo != nil {
+		k = e.runKey(fam, w)
+		if obs, met, ok := e.memo.served(k, e.asking(fam, ids).want); ok {
+			return obs, met, nil
+		}
+	}
+	obs, met, err := e.this().runOne(fam, w, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	o, err := othersAt(e, w, e.q.version)
+	if err != nil {
+		return nil, nil, err
+	}
+	obs, met = merge(e, w, o, obs, met)
+	if e.memo != nil {
+		want := e.asking(fam, ids).want
+		if want != nil {
+			k.want = wantKey(want)
+		}
+		e.memo.runs[k] = familyRun{obs, met, want}
+	}
+	return obs, met, nil
+}
+
+// runKey is the memo key of fam over w for e.
+func (e env) runKey(fam *family, w Window) runKey {
+	return runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano(), e.q.version, "", e.machines()}
+}
+
+// served is a memoized run of at least the steps want (nil: all) for k's
+// family, window, version and machines.
+func (m *memo) served(k runKey, want map[string]bool) (map[string]Observation, map[string]Metric, bool) {
+	for sk, r := range m.runs {
+		if sk.family == k.family && sk.since == k.since && sk.until == k.until && sk.qSince == k.qSince && sk.qUntil == k.qUntil &&
+			sk.version == k.version && sk.machines == k.machines && stepsCover(r.steps, want) {
+			return r.obs, r.met, true
+		}
+	}
+	return nil, nil, false
 }
 
 // asking is e asking fam for ids: for a family that runs by steps and a
