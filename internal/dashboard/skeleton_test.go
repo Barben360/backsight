@@ -641,7 +641,8 @@ func TestSkipReasonsAndHookKindsAreWordsOnPages(t *testing.T) {
 			r.Tables.NeverExtracted = []metrics.NeverExtractedRow{
 				{Session: "9e04c2b7a1f34d5e", Project: "project-a", Sent: r.GeneratedAt.Add(-48 * time.Hour), State: "failed", Retries: 2},
 				{Session: "c1d8e5a0b2f94c61", Project: "backsight", Sent: r.GeneratedAt.Add(-72 * time.Hour), State: "no_memory"},
-				{Session: "60fa21d9c7e84b35", Project: "project-c", Sent: r.GeneratedAt.Add(-96 * time.Hour), State: "none"}}
+				{Session: "60fa21d9c7e84b35", Project: "project-c", Sent: r.GeneratedAt.Add(-96 * time.Hour), State: "none"},
+				{Session: "7b3e90d1c4a85f26", Project: "project-d", Sent: r.GeneratedAt.Add(-120 * time.Hour), State: "timeout"}} // a stored name, not a state the page knows
 		},
 	} {
 		b := render(t, page, edit)

@@ -153,6 +153,8 @@ func (d PageData) funnelOf(r *metrics.Result) FunnelCard {
 		hop := hops[hp.key]
 		x := FunnelHop{Name: hp.name, Watch: watch && i == 1}
 		switch {
+		case x.Watch && hop.P50 != nil && hop.P95 != nil: // a watch outranks too few for the hop it names
+			x.Value, x.Note = dur(hop.P50), "1 in 20: "+dur(hop.P95)
 		case few || hop.P50 == nil:
 			x.Value, x.Note = dash, l.Int(hop.N)+" timed"
 			if hop.N < need {
@@ -166,13 +168,13 @@ func (d PageData) funnelOf(r *metrics.Result) FunnelCard {
 		c.Hops = append(c.Hops, x)
 	}
 
+	if s := hops["sent_to_extracted"]; watch && s.P95 != nil {
+		c.Slow = &FunnelSlow{Took: dur(s.P95), Limit: chartLimit(v)}
+	}
 	if few {
 		c.Few = &Alert{Class: "st-few", Icon: "i-few", Lead: "Too few to time yet:", Rest: format.Count(l, f["recalled"], "session was", "sessions were") +
 			" recalled in the " + d.frame().Window + ", " + l.Int(need) + " are needed. The counts below are exact; the times are not shown."}
 	} else {
-		if s := hops["sent_to_extracted"]; watch && s.P95 != nil {
-			c.Slow = &FunnelSlow{Took: dur(s.P95), Limit: chartLimit(v)}
-		}
 		rng := chart.Ranges{Label: "Time for each step from session to recalled memory, typical and slowest 1 in 20, on a logarithmic time scale",
 			Empty: "No step has enough sessions to time yet.", More: d.more()}
 		if w := v.Def.Absolute.Watch; w != nil {

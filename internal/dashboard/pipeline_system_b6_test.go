@@ -285,9 +285,27 @@ func TestFunnelStates(t *testing.T) {
 	t.Run("a watch outranks too few", func(t *testing.T) {
 		in := funnelFew
 		in.status = metrics.StatusWatch
+		in.hops[1] = hopIn{24, 160, 181} // the watched hop has its own sample
 		c := funnelNode(t, in, nil)
 		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "watch" {
 			t.Errorf("pill %v", p)
+		}
+		cells, classes := hopTexts(t, c)
+		wantHops := [][3]string{{stepNames[0], "—", "9 timed, 20 needed"}, {stepNames[1], "24 min", "1 in 20: 2 h 40 min"}, {stepNames[2], "—", "4 timed, 20 needed"}}
+		if !slices.Equal(cells, wantHops) {
+			t.Errorf("hops %q, want %q", cells, wantHops)
+		}
+		for i, cl := range classes {
+			if got := slices.Contains(strings.Fields(cl), "is-watch"); got != (i == 1) {
+				t.Errorf("hop %d: is-watch %v", i, got)
+			}
+		}
+		st := c.find("div.state")
+		if len(st) != 2 || !strings.HasPrefix(st[0].text(), "Too few to time yet:") || !strings.HasPrefix(st[1].text(), "Slow to become memory: 1 in 20 sessions took over 2 h 40 min") {
+			t.Errorf("states %q: want the too-few sentence and the slow note", texts(st))
+		}
+		if len(c.find("div.chart-plot")) != 0 || c.first("p.small.sub") != nil {
+			t.Error("whole-way times drawn with too few sessions")
 		}
 	})
 	t.Run("one session", func(t *testing.T) {
