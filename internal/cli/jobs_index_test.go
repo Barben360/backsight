@@ -463,3 +463,19 @@ func TestMaintainIndexText(t *testing.T) {
 		}
 	}
 }
+
+func TestTickIndexText(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		fr   index.Freshness
+		want string
+	}{
+		{"caught up", index.Freshness{Lines: 3}, "caught up: 3 line(s)"},
+		{"budget", index.Freshness{Lines: 3, Partial: true}, "partial: 3 line(s), the next tick goes on"},
+		{"yielded", index.Freshness{Partial: true, Yielded: true}, "partial: yielded, another backsight process holds the index's write lock; 0 line(s) read, the next tick goes on"},
+	} {
+		if got := tickIndexText(c.fr); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
