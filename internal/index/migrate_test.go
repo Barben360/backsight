@@ -962,3 +962,36 @@ func TestMigrationStillPendingStaysBusy(t *testing.T) {
 		t.Fatalf("applied %v, %v; want none and SQLITE_BUSY", applied, err)
 	}
 }
+
+// TestANewerSchemaAfterTheMigrationsSendsOpenToTheSideFile: a newer
+// binary migrates metrics.db after this one read its version and before
+// the final read. The handle must not stay on that file (its writes
+// would pass the schema check): Open ends on the side file and
+// metrics.db is as the newer binary left it.
+func TestANewerSchemaAfterTheMigrationsSendsOpenToTheSideFile(t *testing.T) {
+	d := tempDirs(t)
+	build(t, opts(t, d, regB()))
+	main := mainFile(d)
+	done := false
+	prev := beforeFinalRead
+	beforeFinalRead = func(path string) {
+		if done || path != main {
+			return
+		}
+		done = true
+		bumpVersion(t, path, 3)
+	}
+	t.Cleanup(func() { beforeFinalRead = prev })
+
+	ix := mustOpen(t, opts(t, d, regB()))
+	if !done {
+		t.Fatal("the seam did not run")
+	}
+	if !ix.Side() || ix.Path() == main {
+		t.Errorf("side %v, path %s: Open stayed on metrics.db", ix.Side(), ix.Path())
+	}
+	mustClose(t, ix)
+	if v := headerVersion(t, main); v != 3 {
+		t.Errorf("metrics.db user_version %d, want 3 (untouched)", v)
+	}
+}
