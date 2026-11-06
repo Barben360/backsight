@@ -110,7 +110,7 @@ document.addEventListener('DOMContentLoaded', function () {
     } else if (e.key === 'End') {
       n = days.length - 1;
     } else if (!steps[e.key]) {
-      return;
+      return false;
     }
     e.preventDefault();
     if (n >= 0 && n < days.length) {
@@ -120,6 +120,7 @@ document.addEventListener('DOMContentLoaded', function () {
       days[n].tabIndex = 0;
       days[n].focus();
     }
+    return true;
   }
 
   doc.addEventListener('focusin', function (e) {
@@ -135,8 +136,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (e.ctrlKey || e.altKey || e.metaKey) {
       return;
     }
-    if (t.matches && t.matches('a.hm-c')) {
-      calendar(e, t);
+    if (t.matches && t.matches('a.hm-c') && calendar(e, t)) {
       return;
     }
     if (!keys) {

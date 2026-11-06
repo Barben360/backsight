@@ -241,6 +241,18 @@ func TestScriptBehaviourInChrome(t *testing.T) {
 			t.Errorf("data-result %q, want %q", res, want)
 		}
 	})
+	t.Run("g then q with a calendar day focused", func(t *testing.T) {
+		log, _ := d.run(t, chrome, "calg")
+		if i, j := indexOf(log, page), indexOf(log, "GET /quality?days=14"); i != 0 || j <= i {
+			t.Errorf("request log %q: want GET /quality?days=14 after the page", log)
+		}
+	})
+	t.Run("? and Esc with a calendar day focused", func(t *testing.T) {
+		_, res := d.run(t, chrome, "calhelp")
+		if want := "opened=true;closed=true;focus=a.hm-c+today"; !strings.HasPrefix(res, "opened=true;closed=true;focus=a.hm-c") {
+			t.Errorf("data-result %q, want prefix of %q", res, want)
+		}
+	})
 	t.Run("Copy summary refused shows the text", func(t *testing.T) {
 		_, res := d.run(t, chrome, "copyfail")
 		if want := "open=true;label=Couldn't copy: the text is shown below"; res != want {

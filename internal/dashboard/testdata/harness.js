@@ -113,6 +113,23 @@
       key('Home', {}, last);
       out([r, d, e, at('home', last), 'zeros=' + document.querySelectorAll('a.hm-c[tabindex="0"]').length].join(';'));
     },
+    calg: function () {
+      var day = q('a.hm-c[tabindex="0"]');
+      day.focus();
+      out('sent');
+      key('g', {}, day);
+      key('q', {}, day);
+    },
+    calhelp: function () {
+      var day = q('a.hm-c[tabindex="0"]');
+      day.focus();
+      key('?', { shiftKey: true }, day);
+      var opened = q('dialog.keys').open;
+      key('Escape', {}, document.activeElement);
+      setTimeout(function () {
+        out('opened=' + opened + ';closed=' + !q('dialog.keys').open + ';focus=' + desc(document.activeElement));
+      }, 100);
+    },
     copyfail: function () {
       clip(function () { return Promise.reject(new Error('refused')); });
       var btn = q('button.copy[data-copy]');
