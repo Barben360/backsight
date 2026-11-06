@@ -31,8 +31,9 @@ import (
 // skill, which the doctor and memory skills point to for an update;
 // v11: the doctor and memory skills read `stats overview` and allow only the read-only stats views;
 // v12: a prompt that points at an issue, PR or link is read before searching: the pointer line, the
-// guide and the reminder say so).
-const Version = "v12"
+// guide and the reminder say so; v13: memory_credit takes the verdict confirmed, for what this
+// session established independently, with its guard and one call per verdict).
+const Version = "v13"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -220,8 +221,11 @@ const (
 		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
 		"Memories were shown but none informed the answer: `verdict: none`, without ids. Only memories shown in this session count: a search sent in the same message " +
 		"must return its result first. " +
+		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): it did not inform the answer, and you checked it here. Never as a default, never for a memory you did not check; evidence is optional, at most 300 characters; it returns its own line to print. " +
+		"When verdicts differ, make one call per verdict. " +
 		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output). " +
 		"Examples: {\"ids\": [\"0b4c2a52\"]} after using that memory · {\"verdict\": \"none\"} when the memories shown were off-topic · " +
+		"{\"ids\": [\"5a1d0c33\"], \"verdict\": \"confirmed\", \"evidence\": \"the user: rtk was removed\"} · " +
 		"{\"ids\": [\"7e1f9d03\"], \"verdict\": \"wrong\", \"correction\": \"Billing runs PostgreSQL 16, not 15.\", \"evidence\": \"psql --version printed 16.4\"} · " +
 		"{\"ids\": [\"c93a0e17\"], \"verdict\": \"outdated\", \"correction\": \"Deploys moved from Jenkins to GitHub Actions on 2026-10-20.\", \"evidence\": \"the user: we dropped Jenkins last week\"}."
 )

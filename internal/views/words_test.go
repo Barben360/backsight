@@ -62,3 +62,19 @@ func TestEmptyWordsCoverEveryReason(t *testing.T) {
 		}
 	}
 }
+
+// Every verdict a turn can declare has a word of its own: confirmed is
+// not read as "not understood", nor as used.
+func TestDeclaredWordsCoverEveryVerdict(t *testing.T) {
+	seen := map[string]string{}
+	for _, v := range []string{"used", "confirmed", "none", "wrong", "outdated", "invalid"} {
+		w, ok := DeclaredWords[v]
+		if !ok || w == "" {
+			t.Errorf("verdict %q has no word", v)
+		}
+		if other, dup := seen[w]; dup {
+			t.Errorf("verdicts %q and %q share the word %q", other, v, w)
+		}
+		seen[w] = v
+	}
+}

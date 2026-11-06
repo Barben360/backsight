@@ -39,7 +39,7 @@ var catalogRows = []catalogRow{
 	{"used.rank", "Position of the memories used", "count", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "histogram,hit_at_1,hit_at_3"},
 	{"used.by_path", "Used, by where memory was shown", "ratio", "up", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "by_path"},
 	{"search.rescue_rate", "Memories Claude found itself", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
-	{"verdict.wrong_rate", "Memories reported wrong or out of date", "ratio", "down", 20, 0.05, 0.15, "lo", false, false, "wilson_approx", "machine", false, "quality", "daily", "backsight stats sessions --has wrong", "wrong,outdated,used"},
+	{"verdict.wrong_rate", "Memories reported wrong or out of date", "ratio", "down", 20, 0.05, 0.15, "lo", false, false, "wilson_approx", "machine", false, "quality", "daily", "backsight stats sessions --has wrong", "wrong,outdated,used,confirmed"},
 	{"stale.never_used", "Often shown, never used", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "quality", "none", "backsight memory stale", ""},
 	{"stale.hidden", "Hidden", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "quality", "none", "backsight memory stale", ""},
 	{"stale.reported", "Reported wrong", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "quality", "none", "backsight memory stale", ""},

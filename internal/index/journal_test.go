@@ -618,3 +618,15 @@ func TestJournalRetirementsAndKeys(t *testing.T) {
 		{"pos": 0, "ts": ms(jT0.Add(5 * time.Second)), "source": "telemetry", "key": nil, "memory_id": nil, "at": nil, "outcome": nil, "rank": nil},
 	})
 }
+
+// A confirmed credit is its own verdict in the index: not used, not other.
+func TestJournalKeepsConfirmedApartFromUsed(t *testing.T) {
+	e := newEnv(t)
+	e.appendJ(feedback.Event{TS: jT0, Kind: "credit", Session: "s1", Turn: "t1", IDs: []string{"m1"}, Verdict: "confirmed"})
+	e.appendJ(feedback.Event{TS: jT0, Kind: "credit", Session: "s1", Turn: "t1", IDs: []string{"m2"}, Verdict: "bogus"})
+	e.ingest()
+	e.checkRows("credits", `"offset", pos`, []map[string]any{
+		{"pos": 0, "ts": ms(jT0), "session": "s1", "turn": "t1", "agent": nil, "project": "proj", "memory_id": "m1", "verdict": "confirmed"},
+		{"pos": 0, "ts": ms(jT0), "session": "s1", "turn": "t1", "agent": nil, "project": "proj", "memory_id": "m2", "verdict": "other"},
+	})
+}

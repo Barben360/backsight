@@ -15,6 +15,7 @@ const (
 	emojiNotRetired = "⚠️"
 	emojiNothing    = "🔍"
 	emojiRetro      = "📚"
+	emojiConfirmed  = "✔"
 )
 
 // NothingLine answers an empty search; RetroLine opens a retro's summary.
@@ -40,6 +41,13 @@ func short(id string) string {
 // the memories of one project it used, by short id.
 func CreditLine(project string, ids8 []string) string {
 	return line("", "From memory", project+" · "+strings.Join(ids8, ", "), "<the facts you used, in your words>")
+}
+
+// ConfirmedLine is the line memory_credit hands back for a confirmed
+// verdict: the memories of one project that this session established
+// independently, by short id.
+func ConfirmedLine(project string, ids8 []string) string {
+	return line(emojiConfirmed, "Confirmed by memory", project+" · "+strings.Join(ids8, ", "), "<what this session confirmed, in your words>")
 }
 
 // SavedLine and UpdatedLine are memory_store's: a new fact, or one that

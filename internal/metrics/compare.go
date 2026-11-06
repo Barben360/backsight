@@ -94,8 +94,8 @@ WITH c AS (
   SELECT c.session, c.turn, c.verdict,
          COALESCE((SELECT MIN(s.ts) FROM shows s WHERE s.session = c.session AND s.turn = c.turn AND s.memory_id = c.memory_id), c.ts) AS at
   FROM credits c
-  WHERE c.memory_id IS NOT NULL AND c.verdict IN ('used', 'wrong', 'outdated') AND c.ts >= ?)
-SELECT COALESCE(c.session, ''), `+turnAttrSQL("c", "project")+`, `+turnAttrSQL("c", "binary_version")+`, c.at, `+turnPathSQL("c")+`, c.verdict <> 'used'
+  WHERE c.memory_id IS NOT NULL AND c.verdict IN ('used', 'confirmed', 'wrong', 'outdated') AND c.ts >= ?)
+SELECT COALESCE(c.session, ''), `+turnAttrSQL("c", "project")+`, `+turnAttrSQL("c", "binary_version")+`, c.at, `+turnPathSQL("c")+`, c.verdict IN ('wrong', 'outdated')
 FROM c WHERE c.at >= ? AND c.at < ?`, since, since, until)
 	default: // used.turn_rate
 		rows, err = e.tx.QueryContext(e.ctx, `

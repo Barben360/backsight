@@ -59,7 +59,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v12" {
+	if Version != "v13" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -354,6 +354,24 @@ func TestGuideTellsClaudeNeverToAskForASecret(t *testing.T) {
 	}
 }
 
+// v13: memory_credit takes the verdict confirmed, guarded: what this
+// session established itself, never a default, one call per verdict.
+func TestCreditDescriptionTeachesConfirmedWithItsGuard(t *testing.T) {
+	for _, want := range []string{
+		"verdict confirmed only for a memory whose fact this session established independently",
+		"Never as a default, never for a memory you did not check",
+		"one call per verdict",
+		`"verdict": "confirmed"`,
+	} {
+		if !strings.Contains(CreditDescription, want) {
+			t.Errorf("credit description lacks %q: %s", want, CreditDescription)
+		}
+	}
+	if line := ConfirmedLine("p", []string{"a", "b"}); line != "> 🧠✔ **Confirmed by memory (p · a, b)** — <what this session confirmed, in your words>" {
+		t.Errorf("confirmed line %q", line)
+	}
+}
+
 // wordings records the hash of every instruction text per Version: a
 // change of wording without a new Version fails here, so telemetry never
 // mixes two wordings under one version.
@@ -369,6 +387,7 @@ var wordings = map[string]string{
 	"v10": "951a7ad31110632dda7081ea584084a93ecb0ede29141181d32ff0fb8f0a1295",
 	"v11": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
 	"v12": "8e8aec126cbede943fcee5c75d31a2a9e781059316444c66255602ae4c94c9a0",
+	"v13": "3604f461366ee756fc69b3e3583a0af3ac9eaf8ebe5a543aef7d853e98a8240f",
 }
 
 func wordingHash() string {
@@ -376,7 +395,7 @@ func wordingHash() string {
 	texts := []string{Credit, Guide, ShortGuide, Reminder, Nudge(nil), Nudge([]string{"a", "b"}), DetectorRule, DetectorApproval, GateReason,
 		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
 		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader,
-		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
+		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), ConfirmedLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
 		SavedLine("p", "k"), UpdatedLine("p", "k"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
 		HiddenLine("wrong", "p", "i", true), HiddenLine("outdated", "p", "i", false), NotRetiredLine("p", "i", "r", true), NotRetiredLine("p", "i", "r", false),
 		NothingLine, RetroLine, Pointer([]string{"#1", "https://example.com/2"})}

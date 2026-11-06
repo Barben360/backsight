@@ -46,7 +46,7 @@ var (
 	// DecisionWords say what the recall did for a prompt; DeclaredWords what
 	// Claude said of the memories it was shown.
 	DecisionWords = map[string]string{"recall": "looked for memory", "skip": "no memory looked up"}
-	DeclaredWords = map[string]string{"used": "used", "none": "none used", "wrong": "reported wrong", "outdated": "out of date", "invalid": "not understood"}
+	DeclaredWords = map[string]string{"used": "used", "confirmed": "confirmed", "none": "none used", "wrong": "reported wrong", "outdated": "out of date", "invalid": "not understood"}
 
 	// RetireWords name what was done to a memory; ServerStateWords the
 	// state the server keeps it in.

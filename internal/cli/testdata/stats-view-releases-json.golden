@@ -659,6 +659,7 @@
                 }
               ],
               "extra": {
+                "confirmed": 0,
                 "outdated": 0,
                 "used": 0,
                 "wrong": 0
@@ -1215,6 +1216,7 @@
                 }
               ],
               "extra": {
+                "confirmed": 0,
                 "outdated": 0,
                 "used": 0,
                 "wrong": 0

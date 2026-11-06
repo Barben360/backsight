@@ -437,7 +437,7 @@ WHERE s.ts >= ? AND s.ts < ? AND s.key IS NOT NULL AND COALESCE(s.path, '') <> ?
 }
 
 // qualityVerdicts fills verdict.wrong_rate: the per-memory credits used,
-// wrong or outdated (a credit naming no memory is none of them), each at
+// confirmed, wrong or outdated (a credit naming no memory is none of them), each at
 // the time of its memory's earliest show in its turn, else at its own
 // time. A memory is credited after it is shown, so a credit before the
 // window's start cannot belong to it. A credit has no upper bound: one
@@ -454,7 +454,7 @@ SELECT verdict, at FROM (
   SELECT c.verdict, COALESCE((SELECT MIN(s.ts) FROM shows s
            WHERE s.session = c.session AND s.turn = c.turn AND s.memory_id = c.memory_id), c.ts) AS at
   FROM credits c
-  WHERE c.memory_id IS NOT NULL AND c.verdict IN ('used', 'wrong', 'outdated') AND c.ts >= ? AND `+sessionProject("c")+` AND `+sessionVersion("c")+`)
+  WHERE c.memory_id IS NOT NULL AND c.verdict IN ('used', 'confirmed', 'wrong', 'outdated') AND c.ts >= ? AND `+sessionProject("c")+` AND `+sessionVersion("c")+`)
 WHERE at >= ? AND at < ?`,
 		since, e.q.Project, e.q.Project, e.q.version, e.q.version, since, until)
 	if err != nil {
@@ -462,7 +462,7 @@ WHERE at >= ? AND at < ?`,
 	}
 	defer func() { _ = rows.Close() }()
 	buckets := w.Buckets()
-	type acc struct{ used, wrong, outdated int64 }
+	type acc struct{ used, confirmed, wrong, outdated int64 }
 	var total acc
 	days := make([]acc, len(buckets))
 	for rows.Next() {
@@ -479,6 +479,8 @@ WHERE at >= ? AND at < ?`,
 			switch verdict {
 			case "used":
 				a.used++
+			case "confirmed":
+				a.confirmed++
 			case "wrong":
 				a.wrong++
 			case "outdated":
@@ -489,12 +491,12 @@ WHERE at >= ? AND at < ?`,
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	num, den := total.wrong+total.outdated, total.used+total.wrong+total.outdated
+	num, den := total.wrong+total.outdated, total.used+total.confirmed+total.wrong+total.outdated
 	m := Metric{Num: i64(num), Den: i64(den), Value: ratio(num, den),
-		Extra: map[string]any{"wrong": total.wrong, "outdated": total.outdated, "used": total.used}}
+		Extra: map[string]any{"wrong": total.wrong, "outdated": total.outdated, "used": total.used, "confirmed": total.confirmed}}
 	for i, b := range buckets {
 		d := days[i]
-		pn, pd := d.wrong+d.outdated, d.used+d.wrong+d.outdated
+		pn, pd := d.wrong+d.outdated, d.used+d.confirmed+d.wrong+d.outdated
 		p := pointOf(w, b.Key)
 		p.Value, p.Num, p.Den = ratio(pn, pd), i64(pn), i64(pd)
 		m.Series = append(m.Series, p)

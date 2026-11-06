@@ -77,6 +77,8 @@ var typedCases = []typedCase{
 		"tel_tool_use", map[string]any{"n": 6, "name": "mcp__x__memory_search", "ids_n": 2, "subagent": true}},
 	{"credit", map[string]any{"verdict": "used", "ids_n": 2, "ok": true},
 		"tel_credit", map[string]any{"verdict": "used", "ids_n": 2, "ok": true}},
+	{"credit", map[string]any{"verdict": "confirmed", "ids_n": 1, "ok": true}, // kept apart from used
+		"tel_credit", map[string]any{"verdict": "confirmed", "ids_n": 1, "ok": true}},
 	{"credit_check", map[string]any{"outcome": "declared", "shown": 3, "flags": []string{"zeta", "alpha"}, "after_block": true},
 		"tel_credit_check", map[string]any{"outcome": "declared", "shown": 3, "flags": "alpha,zeta", "after_block": true}},
 	{"retire", map[string]any{"action": "hidden", "ids_n": 1},

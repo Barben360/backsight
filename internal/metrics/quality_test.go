@@ -952,3 +952,24 @@ func TestCalendarUsedTurnsFollowTheFinalMainStop(t *testing.T) {
 		t.Errorf("calendar used turns = %d, want 1 (the turn whose last main stop declares)", used)
 	}
 }
+
+// A confirmed credit says the memory was right: it counts among the
+// verdicts wrong_rate divides by (1 wrong of 1 used + 2 confirmed + 1
+// wrong = 1/4), apart in its extras, and is no use for used.turn_rate.
+func TestWrongRateCountsConfirmedAsRight(t *testing.T) {
+	x := newFx(t, fxNow)
+	for i, v := range []string{"used", "confirmed", "confirmed", "wrong"} {
+		x.declaredTurn(hoursAgo(i+1), fmt.Sprintf("c-%d", i), "declared", v, fmt.Sprintf("m%d", i))
+	}
+	m := qualityOf(x, x.query(7))
+	w := m["verdict.wrong_rate"]
+	if num(w) != 1 || den(w) != 4 {
+		t.Errorf("verdict.wrong_rate = %d/%d, want 1/4", num(w), den(w))
+	}
+	if w.Extra["confirmed"] != int64(2) || w.Extra["used"] != int64(1) {
+		t.Errorf("extras %v, want confirmed 2 and used 1 apart", w.Extra)
+	}
+	if u := m["used.turn_rate"]; num(u) != 1 || den(u) != 4 {
+		t.Errorf("used.turn_rate = %d/%d, want 1/4: a confirmed turn used nothing", num(u), den(u))
+	}
+}

@@ -180,7 +180,7 @@
           "id": "used.turn_rate",
           "label": "Turns where Claude used memory",
           "question": "When memory was shown, did Claude use it?",
-          "definition": "Main-agent turns that showed memory and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
+          "definition": "Main-agent turns that showed memory and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only confirmed, wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "up",
@@ -389,7 +389,7 @@
           "id": "verdict.wrong_rate",
           "label": "Memories reported wrong or out of date",
           "question": "How many memories that Claude relied on were wrong?",
-          "definition": "Wrong and out-of-date verdicts, out of used, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
+          "definition": "Wrong and out-of-date verdicts, out of used, confirmed, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "down",
@@ -412,7 +412,8 @@
           "extra": [
             "wrong",
             "outdated",
-            "used"
+            "used",
+            "confirmed"
           ],
           "drill": "backsight stats sessions --has wrong",
           "n": 0,
