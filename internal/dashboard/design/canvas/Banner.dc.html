@@ -18,13 +18,14 @@ body{margin:0}
 <section class="verdict {{b.cls}}" aria-label="Verdict, last 7 days">
   <div class="v-head">
     <span class="v-ico {{b.icon}}" aria-hidden="true"></span>
-    <h2 class="v-title">{{b.title}}<span class="v-when">(last 7 days)</span></h2>
+    <h2 class="v-title">{{b.title}}<span class="v-when">{{when}}</span></h2>
     <details class="info">
       <summary aria-label="How the verdict is judged"><span class="i i-info"></span></summary>
       <div class="pop">
         <b>How the verdict is judged</b>
         <p>Always the last 7 days against the 7 before, whatever window is selected. Per axis, the first rule that applies wins: learning, not enough yet, can't judge, attention, ok.</p>
         <p class="muted">An axis turns to attention when a number stays at watch two weeks in a row, or is bad once. Flowing reacts at once.</p>
+        <sc-if value="{{b8}}" hint-placeholder-val="{{ false }}"><p>With all PCs shown, the verdict stays this PC’s: it also weighs what only this PC knows (what waits to be sent, its health checks, the server’s answers), which other PCs do not send. The tiles below add up all PCs.</p></sc-if>
         <a href="#">All definitions</a>
       </div>
     </details>
@@ -56,7 +57,7 @@ body{margin:0}
 </section>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"variant":{"editor":"enum","options":["healthy","new","tooearly","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"$preview":{"width":1440,"height":440}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"variant":{"editor":"enum","options":["healthy","new","tooearly","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"b8":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":440}}'>
 class Component extends DCLogic {
   renderVals() {
     const theme = this.props.theme ?? 'light';
@@ -89,7 +90,9 @@ class Component extends DCLogic {
           { st: 'st-watch', word: 'watch', text: '2 steps crashed in the last 24 h.', cmd: 'backsight report' } ] },
     };
     const b = B[v] || B.healthy;
-    return { theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', b, hasReasons: b.reasons.length > 0 };
+    // Block 8 (opt-in, off for every earlier artboard): with all PCs shown, the verdict says it is this PC's.
+    const b8 = String(this.props.b8 ?? false) === 'true';
+    return { theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', b, hasReasons: b.reasons.length > 0, b8, when: b8 ? '(last 7 days, this PC)' : '(last 7 days)' };
   }
 }
 </script>

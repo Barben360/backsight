@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Memory page with the other PCs' counts</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="memories" b6="true" b8="true" machines="this" win="90" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <nav class="small muted" aria-label="Breadcrumb"><a href="#">Memories</a> / <span class="mono" title="7f3a9c21e04b4d0e9a1f6c55b2d18e07">7f3a9c21</span> <button class="copy" type="button" aria-label="Copy the memory id"><span class="i i-sm i-copy"></span>Copy id</button></nav>
+  <div class="page-head"><h1>How has memory <span class="mono" title="7f3a9c21e04b4d0e9a1f6c55b2d18e07">7f3a9c21</span> been used?</h1><span class="muted">window: last 90 days</span></div>
+  <div class="row small muted memory-meta"><a href="#">backsight</a> · <i class="sw f-about"></i> fact about you and your work · created <time datetime="2026-09-14" title="2026-09-14 10:31">Sep 14</time><span class="pill st st-ok">active</span></div>
+
+  <div class="grid-main">
+    <div class="figs">
+      <div class="fig"><span class="lab">Shown</span><span class="v">23</span><span class="s">last <time datetime="2026-10-30T14:52" title="2026-10-30 14:52">today 14:52</time></span></div>
+      <div class="fig"><span class="lab"><i class="sw f-used"></i>Used by Claude</span><span class="v">8.6</span><span class="s">recent-weighted · last today 14:52</span></div>
+      <div class="fig"><span class="lab"><i class="sw f-ignored"></i>Shown, then ignored</span><span class="v">5.1</span><span class="s">recent-weighted</span></div>
+      <div class="fig"><span class="lab">Used when judged</span><span class="v">63 %</span></div>
+      <div class="fig"><span class="lab">Learned ranking now</span><span class="v v-word">raised</span><span class="s">shown a little higher</span></div>
+    </div>
+    <section class="card" aria-labelledby="txt-h">
+      <div class="card-head"><h2 id="txt-h">What does it say?</h2><span class="chip"><span class="i i-sm i-server"></span>server</span></div>
+      <p class="small sub">The text is read live from the memory server when you ask, and never kept by the dashboard.</p>
+      <div class="row"><a class="btn" href="#"><span class="i i-doc"></span>Show text</a></div>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="oth-h">
+    <div class="card-head">
+      <h2 id="oth-h">Has it helped on your other PCs?</h2>
+      <span class="chip" title="This PC’s counts and the counts your other PCs share"><span class="i i-sm i-pcs"></span>all PCs (4)</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About the other PCs’ counts"><span class="i i-info"></span></summary><div class="pop"><b>Counts from your other PCs</b><dl><dt>What</dt><dd>How often Claude used this memory, or was shown it and ignored it, on each of your PCs, added up. Recent uses weigh more, as for this PC.</dd><dt>Where from</dt><dd>The copies of their counts your other PCs share through the memory server (<code>feedback.share_ledger</code>), combined on this PC.</dd><dt>Used for</dt><dd>The learned ranking: on this PC, recall weighs the “All PCs” column.</dd></dl><span class="term">shared-combined · credits · misses</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories 7f3a9c21 --machines all</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl cmp">
+        <thead><tr><th>Recent-weighted counts</th><th class="r">This PC</th><th class="r">3 other PCs</th><th class="r">All PCs</th></tr></thead>
+        <tbody>
+          <tr><td><i class="sw f-used"></i> Used by Claude</td><td class="r">8.6</td><td class="r">4.2</td><td class="r"><b>12.8</b></td></tr>
+          <tr><td><i class="sw f-ignored"></i> Shown, then ignored</td><td class="r">5.1</td><td class="r">1.8</td><td class="r"><b>6.9</b></td></tr>
+          <tr><td>Used when judged</td><td class="r">63 %</td><td class="r">70 %</td><td class="r"><b>65 %</b></td></tr>
+          <tr><td>Hidden from recall</td><td class="r">no</td><td class="r">no</td><td class="r">no</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="xs muted">Combined <time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time> from the copies the other PCs share: memory ids and numbers only. The page shows their sum, not which PC. Shows, the timeline and the ranks below are this PC’s.</p>
+  </section>
+
+  <h2 class="sec-h">The same card in its other states</h2>
+  <div class="grid-2">
+    <section class="card" aria-labelledby="o1">
+      <div class="card-head"><h3 id="o1">Has it helped on your other PCs?</h3><span class="spacer"></span><span class="pill st st-watch">hidden elsewhere</span></div>
+      <div class="state st-watch"><span class="i i-watch"></span><span>Hidden from recall on one of your other PCs since <time datetime="2026-10-27" title="2026-10-27 16:20">Oct 27</time>. Recall skips it on this PC too. To use it here again:</span></div>
+      <div class="cmd"><code>backsight forget --restore 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+    <section class="card" aria-labelledby="o2">
+      <div class="card-head"><h3 id="o2">Has it helped on your other PCs?</h3></div>
+      <p class="small">Not counted on your other PCs yet: none of them has been shown this memory. The ranking uses this PC’s counts.</p>
+    </section>
+    <section class="card" aria-labelledby="o3">
+      <div class="card-head"><h3 id="o3">Has it helped on your other PCs?</h3><span class="spacer"></span><span class="pill st st-info">sharing off</span></div>
+      <p class="small">Sharing is off on this PC (<code>feedback.share_ledger</code>): your other PCs’ counts are not read, and the ranking uses this PC’s alone. <a href="#">Machines on System</a> says how to turn it on.</p>
+    </section>
+    <section class="card" aria-labelledby="o4">
+      <div class="card-head"><h3 id="o4">Has it helped on your other PCs?</h3><span class="spacer"></span><span class="pill st st-watch">not answering</span></div>
+      <p class="small">The counts are the ones combined <time datetime="2026-10-29T08:10" title="2026-10-29 08:10">yesterday</time>: the memory server has not answered since 09:12. Recall keeps using them.</p>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="strip-h">
+    <div class="card-head">
+      <h2 id="strip-h">When and where was it shown?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <dc-import name="StripTimeline" theme="inherit" hint-size="100%,300px"></dc-import>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

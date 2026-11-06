@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cost, all PCs</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="cost" b6="true" b8="true" machines="all" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is it worth it?</h1><span class="muted">window: last 30 days</span></div>
+
+  <div class="figs">
+    <div class="fig"><span class="lab"><span class="i i-sm i-pcs"></span>Context per session</span><span class="v">2,300 chars</span><span class="s">average, all PCs · this PC’s high value 3,600</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-pc"></span>Context per prompt that got memory</span><span class="v">1,500 chars</span><span class="s">high · typical 640 · this PC</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-pcs"></span>Time added to a prompt</span><span class="v">1.0–2.0 s</span><span class="s"><span class="approx">approximate</span> · slowest 1 in 20, all PCs</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-pc"></span>Time of a memory search</span><span class="v">1.9 s</span><span class="s">slowest 1 in 20 · this PC</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-server"></span>Extraction cost</span><span class="v">$186.40</span><span class="s">server, all PCs · 30 days</span></div>
+  </div>
+
+  <div class="grid-2">
+    <section class="card" aria-labelledby="lat-h">
+      <div class="card-head">
+        <h2 id="lat-h">How long does memory make a prompt wait?</h2>
+        <span class="chip" title="Added up from the 4 PCs that share their activity on this server"><span class="i i-sm i-pcs"></span>all PCs (4)</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Time memory adds to a prompt, all PCs</b><dl><dt>What</dt><dd>Per day, the slowest 1 in 20 prompts across the PCs. Each PC sends how many prompts fell in each time bucket (50, 100, 250, 500 ms, 1, 2, 2.5, 5 s, more); added up, they place the slowest 1 in 20 between two bucket edges, drawn as a bar from one edge to the other.</dd><dt>Limits</dt><dd>Watch over 2.0 s, attention over 2.5 s. Both are bucket edges, so the status is exact.</dd><dt>Based on</dt><dd>1,468 prompts on 3 PCs</dd></dl><span class="term">recall.latency p95 from merged buckets</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30 --machines all</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <figure class="chart">
+        <div class="legend">
+          <span><i class="sw sw-bkt"></i>slowest 1 in 20, all PCs: between two bucket edges</span>
+          <span><svg viewBox="-6 -6 12 12" aria-hidden="true"><circle class="bkt-own" r="3.5"></circle></svg>this PC alone (exact)</span>
+          <span><i class="sw sw-dash" style="color: var(--watch)"></i>watch 2.0 s</span>
+          <span><i class="sw sw-dash" style="color: var(--bad)"></i>limit 2.5 s</span>
+        </div>
+        <div class="chart-plot">
+          <svg viewBox="0 0 680 230" role="img" aria-label="Slowest 1 in 20 prompts per day, all PCs, as bucket ranges, last 30 days; the table below lists them">
+            <sc-for list="{{yt}}" as="g" hint-placeholder-count="4">
+              <line class="gl" x1="44" x2="672" y1="{{g.y}}" y2="{{g.y}}"></line>
+              <text class="ta-e" x="38" y="{{g.ty}}">{{g.label}}</text>
+            </sc-for>
+            <line class="thr-w" x1="44" x2="672" y1="80" y2="80"></line>
+            <line class="thr" x1="44" x2="672" y1="50" y2="50"></line>
+            <text class="thr-t ta-e" x="670" y="44">2.5 s</text>
+            <sc-for list="{{bars}}" as="b" hint-placeholder-count="30">
+              <rect class="bkt" x="{{b.x}}" y="{{b.y}}" width="10" height="{{b.h}}"><title>{{b.t}}</title></rect>
+            </sc-for>
+            <sc-for list="{{own}}" as="o" hint-placeholder-count="30">
+              <circle class="bkt-own" cx="{{o.x}}" cy="{{o.y}}" r="3.5"></circle>
+            </sc-for>
+            <line class="bl" x1="44" x2="672" y1="200" y2="200"></line>
+            <sc-for list="{{xt}}" as="x" hint-placeholder-count="5">
+              <text class="ta-m" x="{{x.x}}" y="218">{{x.label}}</text>
+            </sc-for>
+          </svg>
+        </div>
+        <details class="tblfb">
+          <summary>Show as a table</summary>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Day</th><th class="r">Prompts, all PCs</th><th>Slowest 1 in 20, all PCs</th><th class="r">This PC alone</th></tr></thead>
+              <tbody>
+                <tr><td>Oct 30</td><td class="r">41</td><td>1.0–2.0 s</td><td class="r">1.6 s</td></tr>
+                <tr><td>Oct 29</td><td class="r">52</td><td>1.0–2.0 s</td><td class="r">1.5 s</td></tr>
+                <tr><td>Oct 14</td><td class="r">61</td><td>2.0–2.5 s</td><td class="r">1.9 s</td></tr>
+                <tr><td>…</td><td class="r"></td><td></td><td class="r"></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+        <details class="tblfb">
+          <summary>By PC</summary>
+          <div class="tbl-wrap">
+            <table class="tbl mach">
+              <thead><tr><th>PC</th><th class="r">Prompts</th><th>Slowest 1 in 20</th><th>Typical</th></tr></thead>
+              <tbody>
+                <tr><td><span class="idc">3f9c2a17</span>Linux · this PC</td><td class="r">676</td><td>1.6 s</td><td>840 ms</td></tr>
+                <tr><td><span class="idc">a07be4d1</span>macOS</td><td class="r">612</td><td>2.0–2.5 s</td><td>500 ms–1.0 s</td></tr>
+                <tr><td><span class="idc">c84e1f39</span>Linux · up to Oct 21</td><td class="r">180</td><td>1.0–2.0 s</td><td>500 ms–1.0 s</td></tr>
+                <tr><td><span class="idc">5d21c8e0</span>Windows</td><td class="r">0</td><td class="muted">no activity in this window</td><td class="muted">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </figure>
+      <div class="card-foot"><a href="#">This PC’s 676 prompts →</a><span class="muted">Other PCs send counts per bucket, not prompts: their events stay on them.</span></div>
+    </section>
+
+    <section class="card" aria-labelledby="ctx-h">
+      <div class="card-head">
+        <h2 id="ctx-h">How much context does memory add per session?</h2>
+        <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="state st-few"><span class="i i-pcs"></span><span>This chart is this PC’s: other PCs send a total and a count, not sizes. All PCs: <b>2,300</b> characters per session on average, over 311 sessions.</span></div>
+      <dc-import name="Histogram" theme="inherit" data="context" hint-size="100%,330px"></dc-import>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card" aria-labelledby="where-h">
+      <div class="card-head">
+        <h2 id="where-h">Where is that context added?</h2>
+        <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 14</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="xs muted">This PC’s only, with all PCs too: other PCs do not send where context was added.</p>
+      <dc-import name="StackBars" theme="inherit" data="context" hint-size="100%,330px"></dc-import>
+    </section>
+    <section class="card" aria-labelledby="ext-h">
+      <div class="card-head">
+        <h2 id="ext-h">What does the server’s model spend?</h2>
+        <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="xs muted">The server’s own figures, already every PC’s: the same with this PC or all PCs.</p>
+      <dc-import name="StackBars" theme="inherit" data="extraction" hint-size="100%,330px"></dc-import>
+    </section>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    // y: 0 s at 200, 3 s at 20 (60 units a second); x: Oct 1 to Oct 30.
+    const Y = (s) => 200 - s * 60;
+    const X = (d) => 50 + d * (616 / 29);
+    const day = (d) => 'Oct ' + (d + 1);
+    const slow = [12, 13, 14];
+    const own = [1.5, 1.6, 1.4, 1.5, 1.7, 1.6, 1.5, 1.4, 1.6, 1.7, 1.5, 1.6, 1.9, 1.9, 1.8, 1.6, 1.5, 1.4, 1.5, 1.6, 1.7, 1.6, 1.5, 1.5, 1.4, 1.6, 1.7, 1.5, 1.5, 1.6];
+    const bars = [];
+    const pts = [];
+    for (let d = 0; d < 30; d++) {
+      const lo = slow.includes(d) ? 2.0 : 1.0;
+      const hi = slow.includes(d) ? 2.5 : 2.0;
+      const x = X(d);
+      bars.push({ x: (x - 5).toFixed(1), y: Y(hi), h: Y(lo) - Y(hi), t: day(d) + ' · all PCs: slowest 1 in 20 between ' + lo.toFixed(1) + ' and ' + hi.toFixed(1) + ' s · this PC alone ' + own[d].toFixed(1) + ' s' });
+      pts.push({ x: x.toFixed(1), y: Y(own[d]).toFixed(1) });
+    }
+    const yt = [0, 1, 2, 3].map((s) => ({ y: Y(s), ty: Y(s) + 4, label: s === 0 ? '0' : s + ' s' }));
+    const xt = [0, 7, 14, 21, 28].map((d) => ({ x: X(d).toFixed(1), label: day(d) }));
+    return { theme, bars, own: pts, yt, xt };
+  }
+}
+</script>
+</body>
+</html>
