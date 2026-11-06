@@ -49,7 +49,7 @@ func corpus() []string {
 		spark("Found per day", 24, 31, 27, 22, 30, 29, 28), spark("L", 1),
 		string(Spark{Label: "L", Fmt: plain, Y: []*float64{nil, p(1), p(2)}}.HTML()),
 	}
-	return append(out, histStripOutputs()...)
+	return append(append(out, histStripOutputs()...), calStatusOutputs()...)
 }
 
 func spark(label string, vs ...float64) string {
@@ -227,8 +227,9 @@ func TestChartEscapesText(t *testing.T) {
 	cc.N = nil
 	for name, out := range map[string]string{
 		"line": keep(string(c.HTML())), "capped table": keep(string(cc.HTML())),
-		"spark": keep(string(Spark{Label: markup, Y: []*float64{p(1)}, Fmt: func(float64) string { return markup }}.HTML())),
-		"empty": keep(string(Line{Empty: markup}.HTML())),
+		"spark":    keep(string(Spark{Label: markup, Y: []*float64{p(1)}, Fmt: func(float64) string { return markup }}.HTML())),
+		"empty":    keep(string(Line{Empty: markup}.HTML())),
+		"calendar": markupCalendar(), "status strip": markupStatus(),
 	} {
 		if !strings.Contains(out, escaped) {
 			t.Errorf("%s: markup not escaped: %s", name, out)
@@ -239,6 +240,18 @@ func TestChartEscapesText(t *testing.T) {
 	}
 	if !strings.Contains(string(cc.HTML()), `<code>`+escaped+`</code>`) {
 		t.Error("the more-command is not escaped")
+	}
+	cal, st := markupCalendar(), markupStatus()
+	for _, want := range []string{`aria-label="Fri, Oct 30: 1 ` + escaped + `, of 1"`, `href="` + escaped + `"`,
+		`<span>` + escaped + `:</span>`, `(` + escaped + `)</span>`, `<code>` + escaped + `</code>`} {
+		if !strings.Contains(cal, want) {
+			t.Errorf("calendar lacks %q", want)
+		}
+	}
+	for _, want := range []string{`<title>Oct 1 · ` + escaped + ` · ok</title>`, `>` + escaped + `</text>`, `<td>` + escaped + `</td>`, `<code>` + escaped + `</code>`} {
+		if !strings.Contains(st, want) {
+			t.Errorf("status strip lacks %q", want)
+		}
 	}
 	line := keep(string(c.HTML()))
 	for _, want := range []string{`aria-label="` + escaped + `"`, `<th scope="col">` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {

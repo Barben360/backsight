@@ -47,7 +47,9 @@ var Classes = []string{
 	"seg", "seg-fine", "hatch-ln", "val",
 	"f-used", "f-ignored", "f-undeclared", "f-shown", "f-pending", "f-summary", "f-about", "f-session",
 	"f-ok", "f-queued", "f-aside", "f-failed", "f-neutral", "f-seq1", "f-seq2", "f-seq3",
-	"mkp", "mk-pend", "lbl", "sw-dash", "mk", "sr-only",
+	"mkp", "mk-pend", "f-st-ok", "f-st-watch", "f-st-bad", "norun",
+	"hm", "hm-box", "hm-wrap", "hm-months", "hm-w1", "hm-w2", "hm-w3", "hm-w4", "hm-w5", "hm-w6", "hm-dl", "hm-dh", "hm-wk", "hm-c",
+	"q0", "q1", "q2", "q3", "q4", "none", "pad", "today", "inwin", "hm-old", "hm-legend", "ramp", "lbl", "sw-dash", "mk", "sr-only",
 }
 
 // known keeps the tokens of a caller's class list that Classes defines.
