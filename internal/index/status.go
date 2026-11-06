@@ -21,6 +21,7 @@ const statusName = "status.json"
 // recoveryState is <state>/index/status.json.
 type recoveryState struct {
 	CheckedAt       time.Time `json:"checked_at,omitzero"`        // last quick_check passed
+	CheckTriedAt    time.Time `json:"check_tried_at,omitzero"`    // last quick_check that hit its own time bound
 	RebuiltAt       time.Time `json:"rebuilt_at,omitzero"`        // last automatic set-aside and rebuild
 	StoppedAt       time.Time `json:"stopped_at,omitzero"`        // a second failure within 24 h
 	MigrateFailedAt time.Time `json:"migrate_failed_at,omitzero"` // stats index migrate's last failure
@@ -56,7 +57,7 @@ func readStatus(d paths.Dirs) (recoveryState, error) {
 
 // writeStatus writes status.json atomically, 0600, times in UTC.
 func writeStatus(d paths.Dirs, st recoveryState) error {
-	for _, t := range []*time.Time{&st.CheckedAt, &st.RebuiltAt, &st.StoppedAt, &st.MigrateFailedAt} {
+	for _, t := range []*time.Time{&st.CheckedAt, &st.CheckTriedAt, &st.RebuiltAt, &st.StoppedAt, &st.MigrateFailedAt} {
 		if !t.IsZero() {
 			*t = t.UTC()
 		}

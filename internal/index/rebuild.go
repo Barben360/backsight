@@ -22,7 +22,7 @@ import (
 var (
 	// ErrInUse: another connection holds the index, or the rename over it
 	// failed; the new file is removed, the old one kept.
-	ErrInUse = errors.New("the metrics index is in use: close the dashboard and run backsight stats index rebuild again; the old index is kept")
+	ErrInUse = errors.New("the metrics index is in use by another backsight process (the dashboard, a jobs tick or a command): run backsight stats index rebuild again in a minute; the old index is kept")
 	// ErrNeedsYes: a rebuild would drop rows whose source files are gone.
 	ErrNeedsYes = errors.New("some months would be lost")
 )
@@ -296,9 +296,11 @@ func tableNames(ctx context.Context, db *sql.DB, q string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// buildTmp builds t.path, this run's own, from nothing: migrations, every line with no
-// deadline, the ledger, the local status; then out of WAL mode, so that
-// it is one file to rename, and closed. It returns the lines read.
+// buildTmp builds t.path, this run's own, from nothing: migrations, every
+// line with no deadline, the ledger, the local status, the pruning that
+// maintain does daily (a rebuild must not bring back rows it removed);
+// then out of WAL mode, so that it is one file to rename, and closed. It
+// returns the lines read.
 func buildTmp(ctx context.Context, o Options, t target) (int64, error) {
 	if err := removeTmp(t.path); err != nil {
 		return 0, err
@@ -308,6 +310,9 @@ func buildTmp(ctx context.Context, o Options, t target) (int64, error) {
 		return 0, err
 	}
 	_, st, err := ix.refresh(ctx, o.Now(), time.Time{}, false)
+	if err == nil { // the journal holds more than the retention keeps
+		err = ix.prune(ctx, &MaintainResult{})
+	}
 	if err == nil {
 		err = ix.leaveWAL(ctx)
 	}

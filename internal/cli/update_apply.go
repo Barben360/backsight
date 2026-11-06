@@ -946,6 +946,12 @@ func indexStep(r index.MigrateResult, plan bool) (status, detail string) {
 	return "done", "the metrics index is up to date"
 }
 
+// legacyIndexInUse is index.ErrInUse's sentence before it named the other
+// holders. The child that prints it is the new binary, so the running
+// (older) one cannot know the new sentence; this one knows both, for a
+// child older than itself (a downgrade or a pinned older release).
+const legacyIndexInUse = "the metrics index is in use: close the dashboard and run backsight stats index rebuild again; the old index is kept"
+
 // indexMigrateReason is why stats index migrate failed, in fixed words:
 // never the child's stderr nor its error's text. Every failure exits 20
 // with one of indexError's fixed sentences, which name the cause; ctx is
@@ -964,7 +970,7 @@ func indexMigrateReason(ctx, cctx context.Context, err error) string {
 	switch ce.env.Message {
 	case indexUpdatingSentence:
 		return "an update is in progress"
-	case indexClassMessage("busy"): // index.ErrInUse's sentence
+	case indexClassMessage("busy"), legacyIndexInUse: // index.ErrInUse's sentence
 		return "the index is in use"
 	case indexClassMessage("full"):
 		return "the disk is full"

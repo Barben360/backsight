@@ -334,8 +334,23 @@ func (ix *Index) migrate(ctx context.Context, t target) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return applied, ix.sh.w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&ix.schema)
+	if beforeFinalRead != nil {
+		beforeFinalRead(ix.path)
+	}
+	if err := ix.sh.w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&ix.schema); err != nil {
+		return applied, err
+	}
+	// A newer binary may have migrated between the two reads: the handle
+	// must not write there (beginWrite compares with ix.schema).
+	if ix.schema > t.head && !t.side {
+		return nil, errNewer
+	}
+	return applied, nil
 }
+
+// beforeFinalRead, when set, runs between the migrations and migrate's
+// last read of user_version (tests migrate the file there).
+var beforeFinalRead func(path string)
 
 // writerVersion reads the committed user_version through the writer's
 // connection, the -wal included, without the write lock: an open never
