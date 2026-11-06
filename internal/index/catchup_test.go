@@ -643,11 +643,14 @@ func TestCatchUpYieldsToAnotherWriter(t *testing.T) {
 	if err != nil || !fr.Partial || fr.Lines != 0 {
 		t.Fatalf("%+v, %v; want a partial catch-up and no error", fr, err)
 	}
+	if !fr.Yielded {
+		t.Errorf("%+v: want Yielded, the lock was held by another writer", fr)
+	}
 	if writes != 1 {
 		t.Errorf("%d write transactions tried, want 1: the rest is left to the other process", writes)
 	}
 	release()
-	if fr := e.catchUp(time.Minute); fr.Partial || fr.Lines != 10 {
+	if fr := e.catchUp(time.Minute); fr.Partial || fr.Yielded || fr.Lines != 10 {
 		t.Errorf("after the lock was freed: %+v", fr)
 	}
 	if n, m := e.count("tel_prompt"), e.count("ledger"); n != 10 || m != 1 {

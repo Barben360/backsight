@@ -134,3 +134,26 @@ func TestDoctorMetricsIndexReadIsBounded(t *testing.T) {
 		t.Errorf("waited %v", d)
 	}
 }
+
+// A read that finishes after the deadline but succeeded is facts, not a
+// timeout; one that Inspect cut short (Exists, not Readable) is.
+func TestDoctorIndexFactsTimeoutOnlyWhenTheReadFailed(t *testing.T) {
+	prevInspect, prevTimeout := inspectIndex, indexFactsTimeout
+	t.Cleanup(func() { inspectIndex, indexFactsTimeout = prevInspect, prevTimeout })
+	indexFactsTimeout = 20 * time.Millisecond
+	late := func(st index.Status) {
+		inspectIndex = func(ctx context.Context, _ index.Options) (index.Status, error) {
+			<-ctx.Done()
+			return st, nil
+		}
+	}
+	late(index.Status{Exists: true, Readable: true, Size: 123})
+	f, err := indexFacts(context.Background(), pathsOf(t.TempDir()), t.TempDir())
+	if err != nil || !f.Built || f.Size != 123 {
+		t.Errorf("a full status after the deadline: %+v, %v; want facts", f, err)
+	}
+	late(index.Status{Exists: true, Readable: false})
+	if _, err := indexFacts(context.Background(), pathsOf(t.TempDir()), t.TempDir()); err == nil || err.Error() != "timeout" {
+		t.Errorf("an unreadable status after the deadline: %v, want timeout", err)
+	}
+}

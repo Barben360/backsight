@@ -351,15 +351,6 @@ func missingOr(d *lineDec) string {
 	return errMissingField
 }
 
-// idValue is s when it is an id (a name without whitespace), nil
-// otherwise.
-func idValue(s string) any {
-	if !keyPartOK(s) {
-		return nil
-	}
-	return s
-}
-
 func strID(d *lineDec, key string) any {
 	s, _ := d.str(key)
 	return idValue(s)

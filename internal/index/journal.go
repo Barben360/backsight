@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/Barben360/backsight/internal/feedback"
 )
@@ -39,14 +38,9 @@ func keyValue(s string) any { return keyShape(s, true) }
 // the middle parts are empty or names.
 func importKeyValue(s string) any { return keyShape(s, false) }
 
-// keyPartOK: a name without whitespace (an id, never prose).
-func keyPartOK(s string) bool {
-	return nameOK(s) && !strings.ContainsFunc(s, unicode.IsSpace)
-}
-
 func keyShape(s string, digits bool) any {
 	parts := strings.Split(s, "|")
-	if len(parts) != 4 || !keyPartOK(parts[0]) || !keyPartOK(parts[3]) {
+	if len(parts) != 4 || !idOK(parts[0]) || !idOK(parts[3]) {
 		return nil
 	}
 	for i, p := range parts[1:3] {
@@ -55,7 +49,7 @@ func keyShape(s string, digits bool) any {
 			if p == "" || strings.Trim(p, "0123456789") != "" {
 				return nil
 			}
-		case p != "" && !keyPartOK(p):
+		case p != "" && !idOK(p):
 			return nil
 		}
 	}
@@ -122,7 +116,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 	if e.Kind == "" {
 		return nil, 0, errMissingField
 	}
-	session, turn, agent, project := nameValue(e.Session), nameValue(e.Turn), nameValue(e.Agent), nameValue(e.Project)
+	session, turn, agent, project := idValue(e.Session), nameValue(e.Turn), nameValue(e.Agent), nameValue(e.Project)
 
 	var out []row
 	switch e.Kind {
@@ -159,7 +153,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			r.add("turn", turn)
 			r.add("agent", agent)
 			r.add("path", closedValue(e.Path, showPaths))
-			r.add("memory_id", nameValue(it.ID))
+			r.add("memory_id", idValue(it.ID))
 			r.add("rank", intOrNil(it.Rank))
 			r.add("reranker", realOrNil(it.Reranker))
 			r.add("boost", realOrNil(it.Boost))
@@ -184,7 +178,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			r.add("turn", turn)
 			r.add("agent", agent)
 			r.add("project", project)
-			r.add("memory_id", nameValue(id))
+			r.add("memory_id", idValue(id))
 			r.add("verdict", closedValue(e.Verdict, verdicts))
 			out = append(out, r)
 		}
@@ -202,7 +196,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		for i, s := range e.Settled {
 			r := jrow("settles", rel, off, i, true)
 			r.add("key", keyValue(s.Key))
-			r.add("memory_id", nameValue(s.ID))
+			r.add("memory_id", idValue(s.ID))
 			r.add("show_at", msOrNil(s.At))
 			r.add("outcome", closedValue(s.Outcome, settleOutcomes))
 			r.add("settle_ts", ts)
@@ -218,7 +212,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			r.add("ts", ts)
 			r.add("session", session)
 			r.add("kind", e.Kind)
-			r.add("memory_id", nameValue(id))
+			r.add("memory_id", idValue(id))
 			r.add("verdict", closedValue(e.Verdict, retireVerdicts))
 			r.add("outcome", closedValue(e.Outcome, retireOutcomes))
 			r.add("note_id", note)
@@ -232,7 +226,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			r.add("turn", turn)
 			r.add("agent", agent)
 			r.add("path", closedValue(e.Path, showPaths))
-			r.add("memory_id", nameValue(it.ID))
+			r.add("memory_id", idValue(it.ID))
 			r.add("rank", intOrNil(it.Rank))
 			r.add("rank_without_boost", intOrNil(it.RankWithoutBoost))
 			r.add("reranker", realOrNil(it.Reranker))
@@ -252,7 +246,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			r.add("ts", ts)
 			r.add("source", source)
 			r.add("key", importKeyValue(s.Key))
-			r.add("memory_id", nameValue(s.ID))
+			r.add("memory_id", idValue(s.ID))
 			r.add("at", msOrNil(s.At))
 			r.add("outcome", closedValue(s.Outcome, settleOutcomes))
 			r.add("rank", intOrNil(s.Rank))

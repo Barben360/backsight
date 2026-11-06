@@ -27,6 +27,9 @@ type Freshness struct {
 	LagSeconds int64     `json:"lag_seconds"`
 	Partial    bool      `json:"partial"`
 	Lines      int64     `json:"-"`
+	// Yielded: the run stopped short because another process held the
+	// write lock (Partial too). Not part of the views' JSON.
+	Yielded bool `json:"-"`
 }
 
 // progressMin is the unread size from which a catch-up reports progress.
@@ -146,6 +149,7 @@ func (ix *Index) refresh(ctx context.Context, start, deadline time.Time, yield b
 	// Yielded, the run is partial even with no line left: the ledger or
 	// the local status may not be written yet.
 	fr.Partial = fr.Partial || yielded
+	fr.Yielded = yielded
 	if !fr.Partial {
 		// Caught up as of start, whether or not it wrote anything (a
 		// catch-up with nothing new writes no cursor).

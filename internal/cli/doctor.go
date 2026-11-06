@@ -138,7 +138,9 @@ func indexFacts(ctx context.Context, d paths.Dirs, home string) (doctor.IndexFac
 	ctx, cancel := context.WithTimeout(ctx, indexFactsTimeout)
 	defer cancel()
 	st, err := inspectIndex(ctx, indexOptions(d, home, nil))
-	if ctx.Err() != nil {
+	// The deadline only counts when it cost the read: Inspect returns a nil
+	// error with Readable=false when the context ends inside its row reads.
+	if ctx.Err() != nil && (err != nil || st.Exists && !st.Readable) {
 		return doctor.IndexFacts{}, errors.New("timeout")
 	}
 	if err != nil {

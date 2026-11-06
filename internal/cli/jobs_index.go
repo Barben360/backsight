@@ -50,10 +50,18 @@ func tickIndex(ctx context.Context, d paths.Dirs, home string) string {
 	// A reader that keeps the checkpoint from finishing is no failure:
 	// the next tick finishes it.
 	_ = ix.Checkpoint(ctx)
-	if fr.Partial {
-		return fmt.Sprintf("partial: %d line(s), the next tick goes on", fr.Lines) + side
+	return tickIndexText(fr) + side
+}
+
+// tickIndexText is the tick's line for a catch-up that ran.
+func tickIndexText(fr index.Freshness) string {
+	switch {
+	case fr.Yielded:
+		return fmt.Sprintf("partial: yielded, another backsight process holds the index's write lock; %d line(s) read, the next tick goes on", fr.Lines)
+	case fr.Partial:
+		return fmt.Sprintf("partial: %d line(s), the next tick goes on", fr.Lines)
 	}
-	return fmt.Sprintf("caught up: %d line(s)", fr.Lines) + side
+	return fmt.Sprintf("caught up: %d line(s)", fr.Lines)
 }
 
 // maintainIndex prunes the metrics index (index.Maintain) by the cli's

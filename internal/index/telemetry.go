@@ -206,7 +206,7 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 	if !ok || event == "" {
 		return nil, 0, errMissingField
 	}
-	session, project, binary := d.name("session"), d.name("project"), d.name("binary_version")
+	session, project, binary := d.id("session"), d.name("project"), d.name("binary_version")
 	k, typed := telKinds[event]
 	if !typed {
 		r := row{table: "events"}
@@ -295,11 +295,11 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 }
 
 // idRows are the tel_ids rows of a line's ids, pos being the index in
-// its array; an id that is not a valid name is left out.
+// its array; an id that is not a valid id is left out.
 func idRows(rel string, off, ts int64, kind string, ids []string) []row {
 	var out []row
 	for i, id := range ids {
-		if !nameOK(id) {
+		if !idOK(id) {
 			continue
 		}
 		r := row{table: "tel_ids"}
@@ -447,6 +447,11 @@ func (d *lineDec) str(key string) (string, bool) {
 		return "", false
 	}
 	return s, true
+}
+
+func (d *lineDec) id(key string) any {
+	s, _ := d.str(key)
+	return idValue(s)
 }
 
 func (d *lineDec) name(key string) any {
