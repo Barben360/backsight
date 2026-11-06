@@ -246,11 +246,12 @@ func acquire(ctx context.Context, path string, o Options) (sh *shared, fresh boo
 		return sh, false, nil
 	}
 	fs := detectFS(dir, o.Home, o.Getenv)
-	w, err := openWriter(ctx, path, fs)
+	wal := useWAL(path, fs)
+	w, err := openWriterMode(ctx, path, wal)
 	if err != nil {
 		return nil, false, err
 	}
-	r, err := sql.Open(driverName, dsn(path, fs, true))
+	r, err := sql.Open(driverName, dsn(path, wal, true))
 	if err != nil {
 		_ = w.Close()
 		return nil, false, err
@@ -266,7 +267,13 @@ func acquire(ctx context.Context, path string, o Options) (sh *shared, fresh boo
 // SQLITE_BUSY at once, the busy timeout aside (waiting would deadlock), so
 // that one tries again.
 func openWriter(ctx context.Context, path string, fs FSInfo) (*sql.DB, error) {
-	w, err := sql.Open(driverName, dsn(path, fs, false))
+	return openWriterMode(ctx, path, fs.Kind == FSLocal)
+}
+
+// openWriterMode is openWriter with the journal mode decided: wal, or the
+// rollback journal.
+func openWriterMode(ctx context.Context, path string, wal bool) (*sql.DB, error) {
+	w, err := sql.Open(driverName, dsn(path, wal, false))
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,7 @@ func TestFileVersionSeesAnotherBinary(t *testing.T) {
 	if v, err := ix.FileVersion(ctx); err != nil || v != head {
 		t.Fatalf("FileVersion before = %d, %v; want %d", v, err, head)
 	}
-	db, err := sql.Open(driverName, dsn(ix.Path(), ix.FS(), false))
+	db, err := sql.Open(driverName, dsn(ix.Path(), ix.FS().Kind == FSLocal, false))
 	if err != nil {
 		t.Fatal(err)
 	}

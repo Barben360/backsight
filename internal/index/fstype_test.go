@@ -85,3 +85,29 @@ garbage line without separator
 		t.Errorf("empty input: %q", got)
 	}
 }
+
+// TestWindowsMappedDriveIsNetwork: a drive GetDriveType calls remote is a
+// network share (a mapped drive looks like C:\ otherwise); the root asked
+// is the drive's, whatever the path form. Pure: the syscall is faked.
+func TestWindowsMappedDriveIsNetwork(t *testing.T) {
+	const remote, fixed = 4, 3
+	for _, tc := range []struct {
+		dir      string
+		dt       uint32
+		wantRoot string
+		want     FSInfo
+	}{
+		{`Z:\state\index`, remote, `Z:\`, FSInfo{FSNetwork, "smb"}},
+		{`z:/state/index`, remote, `z:\`, FSInfo{FSNetwork, "smb"}},
+		{`\\?\Z:\state`, remote, `Z:\`, FSInfo{FSNetwork, "smb"}},
+		{`C:\Users\u\state`, fixed, `C:\`, FSInfo{FSLocal, ""}},
+		{`\\srv\share\x`, remote, "", FSInfo{FSLocal, ""}}, // UNC: classifyPath's
+		{`relative\x`, remote, "", FSInfo{FSLocal, ""}},
+	} {
+		asked := ""
+		got := winFSType(tc.dir, func(root string) uint32 { asked = root; return tc.dt })
+		if got != tc.want || asked != tc.wantRoot {
+			t.Errorf("%s: got %+v asking %q, want %+v asking %q", tc.dir, got, asked, tc.want, tc.wantRoot)
+		}
+	}
+}

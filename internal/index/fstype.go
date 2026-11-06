@@ -120,3 +120,29 @@ func classifyPath(goos, home, dir string, getenv func(string) string) FSInfo {
 	}
 	return FSInfo{FSLocal, ""}
 }
+
+// driveRemote is Windows' DRIVE_REMOTE, the GetDriveType answer for a
+// network drive.
+const driveRemote = 4
+
+// winVolumeRoot is the drive root ("C:\\") of a Windows path in drive form
+// (C:\x or \\?\C:\x), or "" for any other form (a UNC share, which
+// classifyPath recognises, or a relative path).
+func winVolumeRoot(dir string) string {
+	d := strings.ReplaceAll(dir, "/", `\`)
+	d = strings.TrimPrefix(d, `\\?\`)
+	if len(d) >= 2 && d[1] == ':' && (d[0]|0x20 >= 'a' && d[0]|0x20 <= 'z') {
+		return d[:2] + `\`
+	}
+	return ""
+}
+
+// winFSType is osFSType on Windows: a drive that GetDriveType (driveType,
+// the seam) reports as remote is a network share, whether it is mapped
+// (Z:\) or not. Other drives are left to classifyPath.
+func winFSType(dir string, driveType func(root string) uint32) FSInfo {
+	if root := winVolumeRoot(dir); root != "" && driveType(root) == driveRemote {
+		return FSInfo{FSNetwork, "smb"}
+	}
+	return FSInfo{FSLocal, ""}
+}

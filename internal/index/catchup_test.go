@@ -588,7 +588,7 @@ func shortBusyWait(t *testing.T) {
 // in the middle of a batch does; release lets it go.
 func holdWriteLock(t *testing.T, path string, fs FSInfo) (release func()) {
 	t.Helper()
-	db, err := sql.Open(driverName, dsn(path, fs, false))
+	db, err := sql.Open(driverName, dsn(path, fs.Kind == FSLocal, false))
 	if err != nil {
 		t.Fatal(err)
 	}

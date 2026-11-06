@@ -62,8 +62,8 @@ func TestDSNsOpenADoubleSlashPath(t *testing.T) {
 	// file in WAL mode; the read-only reader cannot (its journal_mode
 	// pragma on a rollback-journal file is a write it is refused).
 	for _, c := range []struct{ name, dsn string }{
-		{"writer", dsn(slashed, FSInfo{Kind: FSLocal}, false)},
-		{"reader", dsn(slashed, FSInfo{Kind: FSLocal}, true)},
+		{"writer", dsn(slashed, true, false)},
+		{"reader", dsn(slashed, true, true)},
 		{"probe", probeDSN(slashed, false)},
 		{"lock", lockDSN(slashed)},
 	} {
@@ -113,5 +113,26 @@ func TestWriterCheckpointPolicy(t *testing.T) {
 	}
 	if ckpt, cache := read(ix.sh.r); ckpt != 1000 || cache != -2000 {
 		t.Errorf("reader: wal_autocheckpoint %d, cache_size %d; want SQLite's 1000, -2000", ckpt, cache)
+	}
+}
+
+// TestSynchronousFollowsTheJournal: NORMAL is safe only with the write-ahead
+// log (a commit is synced by the next checkpoint). The rollback journal
+// with NORMAL can lose or corrupt the file on a power cut, so it gets FULL,
+// for the writer and the reader alike: a network or synced folder, or a
+// local one that refused WAL.
+func TestSynchronousFollowsTheJournal(t *testing.T) {
+	for _, tc := range []struct {
+		wal  bool
+		want string
+	}{
+		{true, "journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)&_pragma=synchronous(NORMAL)"},
+		{false, "journal_mode(DELETE)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)&_pragma=synchronous(FULL)"},
+	} {
+		for _, ro := range []bool{false, true} {
+			if got := dsn("/p/m.db", tc.wal, ro); !strings.Contains(got, "_pragma="+tc.want) {
+				t.Errorf("wal=%v readOnly=%v: %s lacks %s", tc.wal, ro, got, tc.want)
+			}
+		}
 	}
 }

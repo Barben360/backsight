@@ -163,8 +163,7 @@ func TestFailedOpenIsNotCounted(t *testing.T) {
 }
 
 func TestDSN(t *testing.T) {
-	loc := FSInfo{Kind: FSLocal}
-	w := dsn("/p/m.db", loc, false)
+	w := dsn("/p/m.db", true, false)
 	for _, s := range []string{"file:/p/m.db?", "_pragma=journal_mode(WAL)", "_pragma=busy_timeout(5000)", "_pragma=foreign_keys(on)", "_pragma=synchronous(NORMAL)", "_pragma=journal_size_limit(67108864)", "_txlock=immediate"} {
 		if !strings.Contains(w, s) {
 			t.Errorf("%s lacks %s", w, s)
@@ -173,11 +172,11 @@ func TestDSN(t *testing.T) {
 	if strings.Contains(w, "mode=ro") {
 		t.Error("writer is read-only")
 	}
-	r := dsn("/p/m.db", loc, true)
+	r := dsn("/p/m.db", true, true)
 	if !strings.Contains(r, "mode=ro") || !strings.Contains(r, "_txlock=deferred") || strings.Contains(r, "immediate") {
 		t.Errorf("reader dsn %s", r)
 	}
-	if n := dsn("/p/m.db", FSInfo{FSSynced, "dropbox"}, false); !strings.Contains(n, "journal_mode(DELETE)") {
+	if n := dsn("/p/m.db", false, false); !strings.Contains(n, "journal_mode(DELETE)") {
 		t.Errorf("synced dsn %s", n)
 	}
 }
