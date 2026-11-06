@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
@@ -310,6 +311,12 @@ func TestTickBoundsTheIngest(t *testing.T) {
 	d := pathsOf(home)
 	const total = 12_000
 	writeIndexLines(t, d, "2026-09", total, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	// A due publish of the daily figures catches the index up within a budget
+	// of its own before the tick's (TestPublishWaitsForAFullCatchUp): a recent
+	// failure keeps it from running here, so that this measures the tick's alone.
+	if err := machines.SavePublished(d.MetricsDir(), machines.Published{FailedAt: time.Now(), FailedSince: time.Now(), Failure: "server"}); err != nil {
+		t.Fatal(err)
+	}
 	var mu sync.Mutex
 	at := time.Now()
 	prevClock, prevBudget := tickIndexClock, tickIndexBudget

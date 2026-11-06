@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,10 +19,13 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
@@ -588,4 +592,109 @@ func TestUninstallKeepingTheServerSaysNothingOfItsImages(t *testing.T) {
 	if strings.Contains(out, "docker image rm") {
 		t.Errorf("image removal offered for a kept server: %q", env.Data.NextSteps)
 	}
+}
+
+// --purge-local deletes this PC's daily-figures document with its shared
+// counts, before the server stops; --plan lists it; a server that fails
+// keeps it with a line and the uninstall goes on; a PC that never
+// published (no record) asks the server for nothing.
+func TestUninstallDeletesTheMetricsDocument(t *testing.T) {
+	publishedBefore := func(m installed, machine string, cl *hindsight.Client) {
+		t.Helper()
+		if err := machines.SavePublished(pathsOf(m.home).MetricsDir(), machines.Published{At: time.Now(), Server: "x", Until: "2026-11-05", FirstSeen: "2026-11-01", Bytes: 10}); err != nil {
+			t.Fatal(err)
+		}
+		if err := retain.WriteControlDocument(context.Background(), cl, config.LegacyBank, machines.DocPrefix+machine, "x", map[string]string{machines.MetaKey: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metricsDocs := func(cl *hindsight.Client) []string {
+		items, err := retain.ControlDocuments(context.Background(), cl, config.LegacyBank, machines.DocPrefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, it := range items {
+			ids = append(ids, it.ID)
+		}
+		return ids
+	}
+
+	t.Run("deleted, after a plan that lists it", func(t *testing.T) {
+		m, machine, cl := sharedInstall(t)
+		publishedBefore(m, machine, cl)
+		code, env, out := uninstall(t, "--plan", "--stop", "--purge-local")
+		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "planned" || !strings.Contains(s.Detail, machines.DocPrefix+machine) {
+			t.Fatalf("plan: exit %d\n%s", code, out)
+		}
+		if got := metricsDocs(cl); len(got) != 1 {
+			t.Fatalf("the plan deleted: %v", got)
+		}
+		code, env, out = uninstall(t, "--stop", "--purge-local", "--answer", "identity_saved=yes")
+		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "done" {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if i, j := stepIndex(env.Data, "daily figures"), stepIndex(env.Data, "server"); i > j {
+			t.Errorf("the server stopped before the delete: %+v", env.Data.Steps)
+		}
+		if got := metricsDocs(cl); len(got) != 0 {
+			t.Errorf("the server still holds %v", got)
+		}
+		want := "DELETE /v1/default/banks/" + config.LegacyBank + "-control/documents/" + strings.ReplaceAll(machines.DocPrefix+machine, ":", "%3A")
+		if !slices.ContainsFunc(curation, func(c string) bool { return strings.HasPrefix(c, want) }) {
+			t.Errorf("no %q in %q", want, curation)
+		}
+	})
+
+	t.Run("an uninstall keeping the id keeps the document", func(t *testing.T) {
+		m, machine, cl := sharedInstall(t)
+		publishedBefore(m, machine, cl)
+		if code, env, out := uninstall(t); code != output.OK || stepNamed(env.Data, "daily figures") != nil {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if got := metricsDocs(cl); len(got) != 1 {
+			t.Errorf("deleted: %v", got)
+		}
+	})
+
+	t.Run("the server down keeps it and the uninstall goes on", func(t *testing.T) {
+		m, machine, cl := sharedInstall(t)
+		publishedBefore(m, machine, cl)
+		pointAt(t, m.home, closedPort(t))
+		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+		s := stepNamed(env.Data, "daily figures")
+		if code != output.OK || s == nil || s.Status != "kept" || !strings.Contains(s.Detail, "30 days") || strings.ContainsAny(s.Detail, "\n\r\t") {
+			t.Fatalf("exit %d, step %+v\n%s", code, s, out)
+		}
+		if onDisk(pathsOf(m.home).StateFile()) {
+			t.Error("the uninstall stopped short")
+		}
+	})
+
+	t.Run("no record: skipped, the server is not asked", func(t *testing.T) {
+		_, machine, cl := sharedInstall(t)
+		if err := retain.WriteControlDocument(context.Background(), cl, config.LegacyBank, machines.DocPrefix+machine, "x", map[string]string{machines.MetaKey: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "skipped" {
+			t.Fatalf("exit %d, step %+v\n%s", code, s, out)
+		}
+		if got := metricsDocs(cl); len(got) != 1 {
+			t.Errorf("deleted without a record: %v", got)
+		}
+	})
+
+	t.Run("another server answers: nothing is deleted there", func(t *testing.T) {
+		m, machine, cl := sharedInstall(t)
+		publishedBefore(m, machine, cl)
+		recordMismatch(t, m.home)
+		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "skipped" {
+			t.Fatalf("exit %d, step %+v\n%s", code, s, out)
+		}
+		if got := metricsDocs(cl); len(got) != 1 {
+			t.Errorf("deleted on another server: %v", got)
+		}
+	})
 }

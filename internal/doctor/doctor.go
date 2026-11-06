@@ -130,7 +130,7 @@ const (
 // ClientChecks look at Claude Code's side of this machine: its wiring,
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
-var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "metrics-index", "noise-headless", "noise-subagent",
+var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "machines-share", "metrics-index", "noise-headless", "noise-subagent",
 	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "replace-unconfirmed", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
 	"transverse-keyword", "usage", "version-skew", "writes"}
 
@@ -258,7 +258,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkJobs(env.Dirs, now(), env.Linger))
 	feedbackOn := cfgErr != nil || cfg.Feedback.Enabled // no config.toml: the default, on
 	shareOn := cfgErr != nil || cfg.Feedback.ShareLedger
-	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn), checkFeedbackShared(env.Dirs, feedbackOn, shareOn, now()))
+	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn), checkFeedbackShared(env.Dirs, feedbackOn, shareOn, now()), checkMachinesShare(env.Dirs, feedbackOn, shareOn, now()))
 	if env.MetricsIndex != nil {
 		f, err := env.MetricsIndex()
 		add(checkMetricsIndex(f, err, f.LagSeconds > indexLagLimit && tickRecent(env.Dirs, now())))

@@ -90,7 +90,7 @@ var doctorNames = map[string]string{
 	"client": "Claude Code setup", "compose-owner": "server ownership", "config": "settings", "disk": "disk space", "docker": "Docker",
 	"feedback-journal": "feedback log", "feedback-ledger": "feedback counts", "feedback-shared": "shared feedback",
 	"gpu": "graphics card", "jobs": "background jobs", "latency": "speed", "learning": "learned ranking",
-	"locks": "locks", "maintenance": "maintenance", "metrics-index": "activity index", "native-fsync": "native disk safety",
+	"locks": "locks", "machines-share": "activity sharing", "maintenance": "maintenance", "metrics-index": "activity index", "native-fsync": "native disk safety",
 	"native-home": "native install folder", "native-identity": "native install identity", "native-linger": "native service lingering", "native-owner": "native server ownership",
 	"native-refused": "native install refusal", "native-stray": "stray native files", "native-unit": "native service",
 	"native-venv": "native Python environment", "native-task": "native scheduled task", "supervisor": "native server supervisor",
