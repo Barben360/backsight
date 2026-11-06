@@ -227,14 +227,18 @@ func System(ctx context.Context, s Source, q Query) (Result, error) {
 // of need first), with the envelope every view carries, and makes every
 // list of the result marshal as [] rather than null.
 func runView(ctx context.Context, src Source, q Query, name string, need []string, fill func(e env, r *Result) error) (Result, error) {
-	machines := q.Machines
-	if machines == "" {
-		machines = "this"
+	// Sharing off answers this PC's figures, and the browse views always
+	// do: the scope says so.
+	machines := "this"
+	if q.Machines == "all" && sharingOn(src.Config) && !slices.Contains(thisOnlyViews, name) {
+		machines = "all"
 	}
+	q.Machines = machines
 	prev := q.Window.Previous()
 	r := Result{View: name, ViewSchema: ViewSchema, Window: q.Window, Previous: Span{Since: prev.Since, Until: prev.Until},
 		Scope: Scope{Machines: machines, Server: src.ServerHost, Project: q.Project}, Index: src.Fresh}
 	err := withTx(ctx, src, q, need, func(e env) error {
+		e.view = name
 		r.GeneratedAt = e.now.In(viewLoc(e))
 		if !r.Index.IngestedAt.IsZero() {
 			r.Index.IngestedAt = r.Index.IngestedAt.In(viewLoc(e))
@@ -249,6 +253,12 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 			}
 			r.Scope.ServerOK, r.Scope.ServerOKAt = ok, at
 		}
+		pcs, others, err := scopePCs(e)
+		if err != nil {
+			return err
+		}
+		r.Scope.PCs = pcs
+		r.Scope.OthersUnfiltered = machines == "all" && q.Project != "" && others
 		return fill(e, &r)
 	})
 	if err != nil {

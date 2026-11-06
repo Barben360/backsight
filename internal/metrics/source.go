@@ -53,6 +53,16 @@ type Source struct {
 	Server     ServerReader // nil: none configured
 	ServerHost string       // host:port of server.url
 	Doctor     func(ctx context.Context) ([]DoctorCheck, error)
+	// Self is this PC's identity for the scope of the other PCs; nil: this
+	// PC's row shows no id.
+	Self func() SelfPC
+}
+
+// SelfPC is what this PC says of itself in scope.pcs. A missing or corrupt
+// publish record leaves FirstSeen "" and LastSent zero, with no error.
+type SelfPC struct {
+	Machine, OS, FirstSeen, BinaryVersion string
+	LastSent                              time.Time
 }
 
 // now is the source's clock, the wall clock when it has none.

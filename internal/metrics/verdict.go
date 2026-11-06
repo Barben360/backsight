@@ -128,6 +128,7 @@ func verdictSkips(id string) bool {
 }
 
 func assess(e env) (assessment, error) {
+	e = e.this() // the verdict, attention and info items are this PC's, whatever the switch says
 	loc := e.q.Window.Loc
 	if loc == nil {
 		loc = time.UTC

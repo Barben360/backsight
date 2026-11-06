@@ -68,6 +68,36 @@ type Scope struct {
 	// server, whose answer is as of generated_at.
 	ServerOKAt *time.Time `json:"server_ok_at,omitempty"`
 	Project    string     `json:"project,omitempty"`
+	// PCs says which PCs the figures count (every view, both modes).
+	PCs *PCs `json:"pcs,omitempty"`
+	// OthersUnfiltered: machines "all" under a project filter with at least
+	// one other PC, whose whole figures are added (they send no project).
+	OthersUnfiltered bool `json:"others_unfiltered,omitempty"`
+}
+
+// PCs is the scope of the PCs: who is counted, who went quiet, what was
+// ignored. Count is N of "all PCs on this server (N)": this PC when it
+// shares and is not a server-only host, plus every counted other PC.
+type PCs struct {
+	Sharing   bool       `json:"sharing"`
+	Count     int        `json:"count"`
+	Active    int        `json:"active"`
+	Stale     int        `json:"stale"`
+	Ignored   int        `json:"ignored"`
+	FetchedAt *time.Time `json:"fetched_at"`
+	Until     *string    `json:"until"`
+	List      []PCRow    `json:"list"`
+}
+
+// PCRow is one counted PC; Machine is its short id (8 characters, 13 when
+// two counted PCs share their first 8).
+type PCRow struct {
+	Machine   string  `json:"machine"`
+	This      bool    `json:"this"`
+	OS        string  `json:"os"`
+	FirstSeen string  `json:"first_seen"`
+	Until     *string `json:"until"`
+	Stale     bool    `json:"stale"`
 }
 
 // ServerState is whether the server answered; LastOK is null when unknown.

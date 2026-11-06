@@ -96,7 +96,7 @@ func TestDrillHref(t *testing.T) {
 		{"backsight stats quality --dev", "/quality?dev=1"},
 		{"backsight memory stale", ""},
 		{"backsight stats sessions --text", ""},
-		{"backsight stats sessions --machines all", ""},
+		{"backsight stats sessions --machines all", "/sessions?machines=all"},
 		{"backsight stats sessions --has", ""},
 		{"backsight stats overview", "/"},
 		{"backsight stats sessions --has 'memory", ""},

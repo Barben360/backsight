@@ -19,7 +19,26 @@
     "scope": {
       "machines": "this",
       "server": "127.0.0.1:PORT",
-      "server_ok": true
+      "server_ok": true,
+      "pcs": {
+        "sharing": true,
+        "count": 1,
+        "active": 1,
+        "stale": 0,
+        "ignored": 0,
+        "fetched_at": null,
+        "until": null,
+        "list": [
+          {
+            "machine": "",
+            "this": true,
+            "os": "linux",
+            "first_seen": "",
+            "until": null,
+            "stale": false
+          }
+        ]
+      }
     },
     "index": {
       "ingested_at": "2026-10-08T14:00:00+02:00",

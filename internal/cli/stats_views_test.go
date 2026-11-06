@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
@@ -194,6 +196,9 @@ func TestPersistentFlags(t *testing.T) {
 		{[]string{"stats", "--path", "prompt"}, "--path applies to a view"},
 		{[]string{"stats", "--limit", "3"}, "--limit applies to a view"},
 		{[]string{"stats", "--offset", "3"}, "--offset applies to a view"},
+		{[]string{"stats", "7", "--machines", "all"}, "--machines applies to a view"},
+		{[]string{"stats", "index", "--machines", "all"}, "--machines applies to a view"},
+		{[]string{"stats", "overview", "--machines", "both"}, "--machines: this or all"},
 		{[]string{"stats", "index", "--days", "3"}, "--days applies to a view"},
 		{[]string{"stats", "index", "rebuild", "--plan", "--project", "x"}, "--project applies to a view"},
 		{[]string{"stats", "index", "migrate", "--since", "2026-10-01"}, "--since applies to a view"},
@@ -630,5 +635,69 @@ func TestAgreementWithStats(t *testing.T) {
 	rows, _ := at(list.env.Data, "tables", "sessions").([]any)
 	if len(rows) != 1 || at(rows[0], "id") != "s2" {
 		t.Errorf("--has contradicted lists %v, want s2 alone", rows)
+	}
+}
+
+// --machines reaches the Query of every view, and a view without it reads this.
+func TestMachinesFlagReachesTheQuery(t *testing.T) {
+	nowT := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	f := viewFlags{limit: 50, tz: "UTC"}
+	if q, err := viewQuery(f, "", nowT); err != nil || q.Machines != "this" {
+		t.Errorf("no flag: %q, %v", q.Machines, err)
+	}
+	f.machines = "all"
+	if q, err := viewQuery(f, "", nowT); err != nil || q.Machines != "all" {
+		t.Errorf("--machines all: %q, %v", q.Machines, err)
+	}
+	viewsFixture(t)
+	v := runView(t, "stats", "overview", "--machines", "all")
+	if v.code != output.OK || at(v.env.Data, "scope", "machines") != "all" || at(v.env.Data, "scope", "pcs", "count") != float64(1) {
+		t.Errorf("--machines all: exit %d scope %v", v.code, at(v.env.Data, "scope"))
+	}
+	v = runView(t, "stats", "sessions", "--machines", "all")
+	if v.code != output.OK || at(v.env.Data, "scope", "machines") != "this" {
+		t.Errorf("sessions --machines all: exit %d scope %v", v.code, at(v.env.Data, "scope"))
+	}
+}
+
+// This PC's row in scope.pcs reads its id and first seen date from its own
+// files; a corrupt publish record leaves the date out, with no error.
+func TestScopeSelfRow(t *testing.T) {
+	viewsFixture(t)
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(d.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const id = "3f9c2a17-1b2c-4d3e-8f40-0123456789ab"
+	if err := os.WriteFile(filepath.Join(d.State, "machine_id"), []byte(id+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(d.MetricsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec := filepath.Join(d.MetricsDir(), "published.json")
+	row := func() map[string]any {
+		t.Helper()
+		v := runView(t, "stats", "overview")
+		list, _ := at(v.env.Data, "scope", "pcs", "list").([]any)
+		if v.code != output.OK || len(list) != 1 {
+			t.Fatalf("exit %d, list %v", v.code, list)
+		}
+		return list[0].(map[string]any)
+	}
+	if err := os.WriteFile(rec, []byte(`{"at":"2026-10-20T10:00:00Z","first_seen":"2026-09-02","bytes":5}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := row(); r["machine"] != "3f9c2a17" || r["first_seen"] != "2026-09-02" || r["this"] != true || r["os"] != machines.OS(runtime.GOOS) {
+		t.Errorf("row %v", r)
+	}
+	if err := os.WriteFile(rec, []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := row(); r["machine"] != "3f9c2a17" || r["first_seen"] != "" {
+		t.Errorf("corrupt record: row %v", r)
 	}
 }

@@ -45,6 +45,8 @@ type env struct {
 	// want, for a family that runs by steps, is the steps it is asked for.
 	// nil: every step.
 	want map[string]bool
+	// view is the view being run ("" outside runView).
+	view string
 }
 
 // memo is what one view's transaction already computed, so that a view
@@ -54,8 +56,9 @@ type env struct {
 // within the transaction, nor the server data or the clock. The key holds
 // what a run depends on that a view varies: the family, the window, the
 // view's own window (figures as of now), the binary version (releases) and
-// the steps asked of a family that runs by steps. It assumes the rest of the
-// Query (project, path, machines) fixed for the env: an env must never be
+// the steps asked of a family that runs by steps, and the machines (this | all:
+// the verdict's runs on this() serve the merged runs). It assumes the rest of
+// the Query (project, path) fixed for the env: an env must never be
 // reused for another of them, whose figures would be served from this memo.
 type memo struct {
 	runs      map[runKey]familyRun
@@ -79,6 +82,7 @@ type runKey struct {
 	family                       string
 	since, until, qSince, qUntil int64
 	version, want                string // want: the steps asked of a family that runs by steps, "" for all
+	machines                     string // this | all
 }
 
 type familyRun struct {
@@ -114,12 +118,12 @@ func (e env) runIDs(fam *family, w Window, ids []string) (map[string]Observation
 	if e.memo == nil {
 		return fam.f(e.asking(fam, ids), w)
 	}
-	k := runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano(), e.q.version, ""}
+	k := runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano(), e.q.version, "", e.machines()}
 	e = e.asking(fam, ids)
 	// a run of at least the steps asked serves them: a full run any subset
 	for sk, r := range e.memo.runs {
 		if sk.family == k.family && sk.since == k.since && sk.until == k.until && sk.qSince == k.qSince && sk.qUntil == k.qUntil &&
-			sk.version == k.version && stepsCover(r.steps, e.want) {
+			sk.version == k.version && sk.machines == k.machines && stepsCover(r.steps, e.want) {
 			return r.obs, r.met, nil
 		}
 	}

@@ -142,15 +142,17 @@ func TestAPIParams(t *testing.T) {
 
 	mem := "/api/v1/memories/mem-a1b2c3d4"
 	for path, param := range map[string]string{
-		"/api/v1/overview?has=used":     "has",
-		"/api/v1/overview?foo=1":        "foo",
-		mem + "?text=1":                 "text",
-		"/api/v1/overview?machines=all": "machines",
+		"/api/v1/overview?has=used": "has",
+		"/api/v1/overview?foo=1":    "foo",
+		mem + "?text=1":             "text",
 	} {
 		r, m := apiGet(t, h, ck, path)
 		if r.StatusCode != 400 || dig(t, m, "error.code") != float64(2) || !strings.Contains(fmt.Sprint(dig(t, m, "error.message")), `"`+param+`"`) {
 			t.Errorf("%s: %d %v, want 400 naming %q", path, r.StatusCode, m["error"], param)
 		}
+	}
+	if r, m := apiGet(t, h, ck, "/api/v1/overview?machines=both"); r.StatusCode != 400 || dig(t, m, "error.message") != "--machines: this or all" {
+		t.Errorf("machines=both: %d %v, want 400 \"--machines: this or all\"", r.StatusCode, m["error"])
 	}
 }
 
