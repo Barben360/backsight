@@ -109,3 +109,14 @@ func TestCohortIncompleteWithoutACount(t *testing.T) {
 		t.Errorf("%d dashed bands in the plot, want 1 (the complete week with no memory draws a dash)", got)
 	}
 }
+
+// A complete week the record does not hold is not a week without memories.
+func TestCohortNotRecorded(t *testing.T) {
+	c := Cohort{Label: "L", Weeks: []CohortWeek{{Label: "Aug 4", Complete: true, NotRecorded: true}, {Label: "Aug 11", Complete: true}}}
+	out := string(c.HTML())
+	must(t, out,
+		`<text class="few-t ta-m" x="`,
+		`>not recorded</text>`,
+		`<tr><td>Aug 4</td><td class="r">—</td><td class="r">—</td><td class="r">not recorded</td></tr>`,
+		`<tr><td>Aug 11</td><td class="r">0</td><td class="r">—</td><td class="r">—</td></tr>`)
+}

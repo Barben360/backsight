@@ -15,7 +15,10 @@ type CohortWeek struct {
 	Num, Den int64
 	Share    *float64
 	Complete bool
-	Title    string
+	// NotRecorded: a complete week whose new memories the record does not
+	// hold, so its count is unknown (not 0).
+	NotRecorded bool
+	Title       string
 }
 
 // Cohort draws weekly cohorts as bars of a share: a complete week with a
@@ -102,6 +105,9 @@ func (c Cohort) HTML() template.HTML {
 				first = i
 			}
 			last = i
+		case w.NotRecorded:
+			b.WriteString(`<text class="few-t ta-m" x="` + f(centre(i)) + `" y="` + f(base-6) + `">not recorded</text>`)
+			row[1], row[3] = dash, "not recorded"
 		case w.Den == 0:
 			b.WriteString(`<text class="lbl ta-m" x="` + f(centre(i)) + `" y="` + f(base-6) + `">` + dash + `</text>`)
 		case !hasShare:

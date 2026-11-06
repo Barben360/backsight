@@ -135,6 +135,17 @@ type langTest struct {
 // as behind.
 const langGapLimit = 0.15
 
+// LangGapPoints is that limit in points, for the words that name it.
+const LangGapPoints = int(langGapLimit * 100)
+
+// LangBehind reports whether a language's gap to the reference (the
+// reference's share minus its own) and the gap's 95 % interval make it read
+// as behind or ahead: the gap is over the limit in either direction and the
+// interval excludes 0. The language test and the page's watch line both use it.
+func LangBehind(gap, lo, hi float64) bool {
+	return math.Abs(gap) > langGapLimit && (lo > 0 || hi < 0)
+}
+
 // langTestOf compares each language to the one with the most recalls (the
 // first by name on a tie). Prompts without a language are not a language:
 // they are neither the reference nor tested. A language needs minN recalls of
@@ -174,7 +185,7 @@ func langTestOf(langs map[string][2]int64, minN int64) (lt langTest, watch bool)
 		half := 1.96 * math.Sqrt(p1*(1-p1)/float64(ref[1])+p2*(1-p2)/float64(c[1]))
 		lo, hi := gap-half, gap+half
 		lt.Gaps = append(lt.Gaps, langGap{Lang: l, Num: c[0], Den: c[1], Value: p2, Gap: gap, Interval: [2]float64{lo, hi}})
-		if math.Abs(gap) > langGapLimit && (lo > 0 || hi < 0) {
+		if LangBehind(gap, lo, hi) {
 			watch = true
 		}
 	}

@@ -21,9 +21,6 @@ import (
 const BoostReplayCommand = "backsight feedback replay --set boost_weight=0.15"
 
 const (
-	// langGapPts is the gap, in points of share, past which the language test
-	// reads a language as behind; it mirrors the metrics package's limit.
-	langGapPts = 15
 	// allByShows lists every memory, the most shown first.
 	allByShows = "/memories?sort=shown"
 )
@@ -112,7 +109,7 @@ func (d PageData) yieldOf(r *metrics.Result) YieldCard {
 	notOver := 0
 	for _, p := range v.M.Series {
 		weeks = append(weeks, chart.CohortWeek{Label: dayLabel(p.Week), Num: countOf(p.Num), Den: countOf(p.Den), Share: p.Value,
-			Complete: p.Complete != nil && *p.Complete, Title: d.yieldTitle(p)})
+			Complete: p.Complete != nil && *p.Complete, NotRecorded: p.Complete != nil && *p.Complete && p.Den == nil, Title: d.yieldTitle(p)})
 		if p.Complete == nil || !*p.Complete {
 			notOver++
 		}
@@ -492,7 +489,7 @@ func (d PageData) langOf(r *metrics.Result) LangCard {
 // the limit with an interval that excludes 0, in either direction.
 func langLine(g langGap, ref string) (LangLine, bool) {
 	lo, hi := g.Interval[0], g.Interval[1]
-	if math.Abs(g.Gap)*100 <= langGapPts || (lo <= 0 && hi >= 0) {
+	if !metrics.LangBehind(g.Gap, lo, hi) {
 		return LangLine{}, false
 	}
 	dir, n, a, b := "less", pts(g.Gap), pts(lo), pts(hi)
@@ -500,5 +497,5 @@ func langLine(g langGap, ref string) (LangLine, bool) {
 		dir, n, a, b = "more", -n, -b, -a
 	}
 	return LangLine{Text: fmt.Sprintf("%s prompts get memory %d pts %s often than %s (%d to %d pts): a gap over %d pts whose interval excludes 0.",
-		languageName(g.Lang), n, dir, languageName(ref), a, b, langGapPts)}, true
+		languageName(g.Lang), n, dir, languageName(ref), a, b, metrics.LangGapPoints)}, true
 }

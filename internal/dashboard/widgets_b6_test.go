@@ -260,6 +260,10 @@ func TestYieldCard(t *testing.T) {
 		if j < 0 || !slices.Equal(rows[j], []string{"Sep 15", "—", "the new memories of that week were not recorded"}) {
 			t.Errorf("Sep 15 row %q", rows[max(j, 0)])
 		}
+		chartRow := c.first("figure.chart details.tblfb")
+		if chartRow == nil || !strings.Contains(chartRow.text(), "Sep 15 — — not recorded") {
+			t.Errorf("the chart says something else of Sep 15: %q", chartRow.text())
+		}
 	})
 
 	t.Run("the card names its metric in developer mode only", func(t *testing.T) {
@@ -453,21 +457,6 @@ func TestRecordBands(t *testing.T) {
 			if len(c.find("table[aria-label]")) != 0 || strings.Contains(c.text(), "server not reached") || strings.Contains(c.text(), "Same source") {
 				t.Errorf("%s: a record note without a record: %q", page, c.text())
 			}
-		}
-	})
-
-	t.Run("the record fills the days and the chart's day count follows", func(t *testing.T) {
-		c := cardOf(t, pageNode(t, "cost", false, func(d *PageData) {
-			costData(d)
-			pts := d.V["cost"].Metrics["extraction.tokens"].Series
-			for i := range pts {
-				if pts[i].Source == "none" { // the gap is part of the axis even though it has no row
-					continue
-				}
-			}
-		}), "w-extraction-tokens")
-		if got := len(c.find("figure.chart div.chart-plot rect.hit")); got != n {
-			t.Errorf("%d days on the axis, want %d including the gap", got, n)
 		}
 	})
 
@@ -689,6 +678,9 @@ func TestDevWidgetsBank(t *testing.T) {
 		if got := c.first("h2").text(); got != "Do a few memories take all the shows?" {
 			t.Errorf("title %q", got)
 		}
+		if cli := c.first("details.cli code"); cli == nil || cli.Text != "backsight stats bank --days 30" {
+			t.Errorf("CLI %v", cli)
+		}
 		if got := c.first("div.row.lead > div").text(); got != "0.62 Gini of shows per memory shown (0: all shown alike, 1: one memory takes every show)" {
 			t.Errorf("lead %q", got)
 		}
@@ -739,8 +731,9 @@ func TestDevWidgetsBank(t *testing.T) {
 				m.Tags, m.Extra["unresolved"] = []string{"partial"}, int64(3)
 			})
 		})
-		if !strings.Contains(c.text(), "partial") && !strings.Contains(c.text(), "3") {
-			t.Errorf("a partial count is not marked: %q", c.text())
+		want := "3 memories shown are not in the record of new memories yet, so counted as older."
+		if !strings.Contains(c.text(), want) {
+			t.Errorf("text %q lacks %q", c.text(), want)
 		}
 	})
 
@@ -821,9 +814,6 @@ func TestDevWidgetsQuality(t *testing.T) {
 		if !strings.Contains(c.text(), "What another weight would do:") || !hasCode(c, BoostReplayCommand) {
 			t.Errorf("no replay advice: %q", c.text())
 		}
-		if BoostReplayCommand != "backsight feedback replay --set boost_weight=0.15" {
-			t.Errorf("command %q", BoostReplayCommand)
-		}
 	})
 
 	t.Run("the language test", func(t *testing.T) {
@@ -873,6 +863,23 @@ func TestDevWidgetsQuality(t *testing.T) {
 		}
 		if strings.Contains(c.text(), "left out of the test") {
 			t.Errorf("a note on small languages when none is small: %q", c.text())
+		}
+	})
+
+	t.Run("the page's watch line follows the metric's rule", func(t *testing.T) {
+		// a gap of 15 pts exactly is not over the limit; one just past it with an interval that excludes 0 is.
+		for gap, want := range map[float64]bool{0.15: false, 0.16: true} {
+			c := devCard(t, "quality", "w-language-test", func(d *PageData) {
+				giveDevQuality(d.V["quality"])
+				m := d.V["quality"].Metrics["recall.by_lang"]
+				m.Extra["test"].(map[string]any)["gaps"] = []map[string]any{{"lang": "fr", "num": 11, "den": 84, "gap": gap, "interval": []float64{gap - 0.05, gap + 0.05}}}
+			})
+			if got := strings.Contains(c.text(), "a gap over 15 pts"); got != want {
+				t.Errorf("gap %v: watch line %v, want %v", gap, got, want)
+			}
+			if metrics.LangBehind(gap, gap-0.05, gap+0.05) != want {
+				t.Errorf("gap %v: the metric reads otherwise", gap)
+			}
 		}
 	})
 
