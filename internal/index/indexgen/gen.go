@@ -297,7 +297,10 @@ const appendBig = 2_000_000
 // AppendLongSession appends one main-agent session of the given number of
 // turns, the day before End(), a turn every 30 seconds, and returns its id.
 // Each turn has its prompt (telemetry) and its turn, shows, credit and
-// stop (journal), so the session page has a rail as long as turns.
+// stop (journal), so the session page has a rail as long as turns. Its
+// prompts carry v0.1.18, one above the generated lines' version, so its
+// day holds release markers; the memories it shows get memory-docs lines
+// naming it as their document.
 func AppendLongSession(t testing.TB, stateDir string, turns int) string {
 	t.Helper()
 	d := paths.Dirs{State: stateDir}
@@ -309,7 +312,7 @@ func AppendLongSession(t testing.TB, stateDir string, turns int) string {
 		turn := fmt.Sprintf("long-turn-%04d", i)
 		stamp := ts.Format(time.RFC3339Nano)
 		ids := []string{MemID(i % 500), MemID((i + 1) % 500), MemID((i + 2) % 500)}
-		tel = append(tel, map[string]any{"event": "prompt", "ts": stamp, "session": sid, "project": "proj-1", "binary_version": "v0.1.17",
+		tel = append(tel, map[string]any{"event": "prompt", "ts": stamp, "session": sid, "project": "proj-1", "binary_version": "v0.1.18",
 			"decision": "recall", "reason": "gap", "plen": 120, "above": 3, "injected": 3, "ms": 80, "top": 0.8, "ids": ids, "lang": "en", "n": i})
 		seq := appendBig + i*4
 		base := map[string]any{"schema": 1, "ts": stamp, "session": sid, "turn": turn, "project": "proj-1"}
@@ -331,12 +334,43 @@ func AppendLongSession(t testing.TB, stateDir string, turns int) string {
 	}
 	appendLines(t, filepath.Join(d.TelemetryDir(), "events-"+day.Format("2006-01")+".jsonl"), tel)
 	appendLines(t, filepath.Join(d.FeedbackDir(), "journal-"+day.Format("2006-01")+".jsonl"), jr)
+	// The memories it shows come from its own document, so the Helped most
+	// and Memory pages have a session to name.
+	var docs []string
+	for i := 0; i < min(turns+2, 500); i++ {
+		docs = append(docs, MemID(i))
+	}
+	appendMemoryDocs(t, d, docs, sid, day, "world", 0)
 	return sid
+}
+
+// longSessionID is the id AppendLongSession gives its session.
+func longSessionID() string {
+	return session(time.Date(End().Year(), End().Month(), End().Day(), 8, 0, 0, 0, time.UTC).AddDate(0, 0, -1), 900)
+}
+
+// appendMemoryDocs appends one memory-docs line a memory, as the daily
+// listing writes them (later lines win): the memories made from the
+// session sid on its day. Written after every generated line, in the
+// month of End().
+func appendMemoryDocs(t testing.TB, d paths.Dirs, memories []string, sid string, day time.Time, factType string, round int) {
+	t.Helper()
+	if err := os.MkdirAll(d.MetricsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := &collWriter{t: t, dir: d.MetricsDir(), files: map[string]*os.File{}, bufs: map[string]*bufio.Writer{}}
+	defer w.close()
+	base := End().Add(-time.Minute + time.Duration(round)*time.Second)
+	for i, id := range memories {
+		w.line(familyMemoryDocs, "memory", base.Add(time.Duration(i)*time.Millisecond), map[string]any{"memory": id, "outcome": "found",
+			"created_day": day.Format(time.DateOnly), "doc_kind": "session", "document": "conversation:" + sid, "session": sid, "fact_type": factType})
+	}
 }
 
 // AppendHotMemory appends the given number of shows of one memory (the
 // first of the ledger), spread over the 85 days before End(), one session
-// and turn each, and returns the memory's id.
+// and turn each, and returns the memory's id. A memory-docs line makes the
+// long session's document its origin.
 func AppendHotMemory(t testing.TB, stateDir string, shows int) string {
 	t.Helper()
 	d := paths.Dirs{State: stateDir}
@@ -353,5 +387,8 @@ func AppendHotMemory(t testing.TB, stateDir string, shows int) string {
 	for month, lines := range byMonth {
 		appendLines(t, filepath.Join(d.FeedbackDir(), "journal-"+month+".jsonl"), lines)
 	}
+	// Made from the long session's document, whether or not that session is
+	// appended: the Memory page then names where it came from.
+	appendMemoryDocs(t, d, []string{id}, longSessionID(), End().AddDate(0, 0, -1), "experience", 1)
 	return id
 }
