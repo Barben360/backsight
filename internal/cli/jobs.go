@@ -88,6 +88,12 @@ type tickResult struct {
 	MetricsEmpty   bool   `json:"metrics_empty,omitempty"`
 	MetricsFailure string `json:"metrics_failure,omitempty"`
 	MetricsError   string `json:"metrics_error,omitempty"`
+	// MetricsFetched and MetricsIgnored: the other PCs' documents the
+	// fetch cached and refused; MetricsFetchError: the class of a failed
+	// fetch (server, budget, cache), never an error's text.
+	MetricsFetched    int    `json:"metrics_fetched,omitempty"`
+	MetricsIgnored    int    `json:"metrics_ignored,omitempty"`
+	MetricsFetchError string `json:"metrics_fetch_error,omitempty"`
 	// metricsDropped: what the write cap left out of the document.
 	metricsDropped machines.Dropped
 	// metricsIndex: the index line of the publish's catch-up, when it ran
@@ -134,10 +140,15 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// figures; it runs in finish, with the tick's one catch-up of the
 			// metrics index (its own when it is due, else tickIndex's).
 			publishFigures := false
+			// listing: the tick's one look at the control bank, for the shared
+			// counts and the other PCs' daily figures.
+			listing := &controlListing{}
 			var f *retain.Flusher
 			finish := func(failed error) error {
 				if publishFigures && f != nil && otherServer(d, cfg) == nil && f.StartedOver() == nil {
 					res.applyMetrics(publishMetrics(cmd.Context(), f.Client, d, home, cfg, f.MachineID, now()))
+					// Also on a server-only host, which publishes nothing.
+					res.applyFetch(fetchMetrics(cmd.Context(), f.Client, listing, d, cfg, f.MachineID, now()))
 				}
 				if res.MetricsIndex = res.metricsIndex; res.MetricsIndex == "" {
 					res.MetricsIndex = tickIndex(cmd.Context(), d, home)
@@ -146,7 +157,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
 					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History, "import_sent": res.importSent,
 						"shared_up": res.SharedUp, "shared_machines": res.SharedMachines, "shared_skipped": res.SharedSkipped, "shared_error": res.SharedError,
-						"metrics_up": res.MetricsUp, "metrics_days": res.MetricsDays, "metrics_bytes": res.MetricsBytes, "metrics_failure": res.MetricsFailure}})
+						"metrics_up": res.MetricsUp, "metrics_days": res.MetricsDays, "metrics_bytes": res.MetricsBytes, "metrics_failure": res.MetricsFailure,
+						"metrics_fetched": res.MetricsFetched, "metrics_ignored": res.MetricsIgnored, "metrics_fetch_error": res.MetricsFetchError}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -204,7 +216,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				sctx, cancel := context.WithTimeout(cmd.Context(), shareTickBudget)
 				defer cancel()
 				var err error
-				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedger(sctx, f.Client, d, cfg, f.MachineID, now()); err != nil {
+				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now()); err != nil {
 					res.SharedError = err.Error()
 				}
 				publishFigures = true
@@ -387,6 +399,9 @@ func tickText(r tickResult) string {
 		msg += fmt.Sprintf(", %d shared document(s) skipped (unreadable or of a newer version)", r.SharedSkipped)
 	}
 	if t := r.metricsText(); t != "" {
+		msg += ", " + t
+	}
+	if t := r.fetchText(); t != "" {
 		msg += ", " + t
 	}
 	return msg + metrics + "\n"

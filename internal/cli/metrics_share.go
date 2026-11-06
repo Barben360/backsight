@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
@@ -50,15 +52,12 @@ const (
 // written (Days days, Bytes bytes, Dropped what the cap left out);
 // Waiting: the index was not caught up (Failure is then budget);
 // Empty: no complete day to share yet; Failure: the class of a failed
-// attempt. Fetched, Ignored and FetchError are the fetch of the other
-// PCs' documents (not part of the publish).
+// attempt.
 type metricsShare struct {
 	Up, Waiting, Empty bool
 	Days, Bytes        int
 	Dropped            machines.Dropped
 	Failure            string
-	Fetched, Ignored   int
-	FetchError         string
 	// IndexLine is the tick's metrics index line when this step caught the
 	// index up (the tick then does not catch it up again), "" otherwise.
 	IndexLine string
@@ -261,6 +260,124 @@ func (r tickResult) metricsText() string {
 		return "daily figures not shared (" + r.MetricsFailure + "): the next tick retries"
 	case r.MetricsError != "":
 		return "daily figures: " + r.MetricsError
+	}
+	return ""
+}
+
+// metricsRefreshEvery: the other PCs' documents are fetched when the cache
+// is this old, missing, unreadable or dated ahead of now.
+const metricsRefreshEvery = shareRefreshEvery
+
+// The classes of a failed fetch (the job event's metrics_fetch_error);
+// never an error's text.
+const (
+	fetchServer = "server"
+	fetchBudget = "budget"
+	fetchCache  = "cache"
+)
+
+// refreshMetricsDocs fetches the other PCs' daily figures into machines.json,
+// when sharing is on and the cache is metricsRefreshEvery old (or dated ahead
+// of now), missing or unreadable. The documents come from the tick's one
+// listing l. Each is read with machines.Parse at now (untrusted): this PC's
+// own is left out, so is one more than machines.DropAfter old, a name listed
+// twice keeps its first, at most machines.MaxDocs are kept, the newest by at;
+// every refused one is recorded as ignored (its short id, if any, and the
+// reason). A failure keeps the cache as it was.
+func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time) (fetched, ignored int, err error) {
+	if !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger || machine == "" {
+		return 0, 0, nil
+	}
+	dir := d.MetricsDir()
+	if c, cerr := machines.LoadCache(dir); cerr == nil {
+		if age := now.Sub(c.FetchedAt); age >= 0 && age < metricsRefreshEvery {
+			return 0, 0, nil
+		}
+	}
+	items, err := l.docs(ctx, cl, cfg.Server.Bank, machines.DocPrefix)
+	if err != nil {
+		return 0, 0, err
+	}
+	slices.SortStableFunc(items, func(a, b hindsight.DocumentItem) int { return cmp.Compare(a.ID, b.ID) })
+	type kept struct {
+		name, raw string
+		at        time.Time
+	}
+	var good []kept
+	fresh := machines.Cache{FetchedAt: now, Docs: []machines.CachedDoc{}, Ignored: []machines.Ignored{}}
+	seen := map[string]bool{}
+	for _, it := range items {
+		if it.ID == machines.DocPrefix+machine || seen[it.ID] {
+			continue
+		}
+		seen[it.ID] = true
+		raw := it.Metadata[machines.MetaKey]
+		doc, perr := machines.Parse(it.ID, raw, now)
+		if perr != nil {
+			reason := machines.NotValid
+			if pe := (*machines.ParseError)(nil); errors.As(perr, &pe) {
+				reason = pe.Reason
+			}
+			if len(fresh.Ignored) < machines.MaxDocs {
+				fresh.Ignored = append(fresh.Ignored, machines.Ignored{Machine: machines.Short(it.ID), Reason: reason})
+			}
+			continue
+		}
+		if now.Sub(doc.At) > machines.DropAfter {
+			continue
+		}
+		good = append(good, kept{it.ID, raw, doc.At})
+	}
+	slices.SortStableFunc(good, func(a, b kept) int { // newest first
+		return b.at.Compare(a.at)
+	})
+	good = good[:min(len(good), machines.MaxDocs)]
+	slices.SortFunc(good, func(a, b kept) int { return cmp.Compare(a.name, b.name) })
+	for _, g := range good {
+		fresh.Docs = append(fresh.Docs, machines.CachedDoc{Name: g.name, Raw: g.raw})
+	}
+	if err := machines.SaveCache(dir, fresh); err != nil {
+		return 0, 0, errCacheWrite
+	}
+	return len(fresh.Docs), len(fresh.Ignored), nil
+}
+
+var errCacheWrite = errors.New("the cache could not be written")
+
+// fetchMetrics is the tick's fetch of the other PCs' daily figures, within
+// metricsShareBudget; the failure is a class, never an error's text.
+func fetchMetrics(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time) (fetched, ignored int, class string) {
+	ctx, cancel := context.WithTimeout(ctx, metricsShareBudget)
+	defer cancel()
+	fetched, ignored, err := refreshMetricsDocs(ctx, cl, l, d, cfg, machine, now)
+	switch {
+	case err == nil:
+		return fetched, ignored, ""
+	case errors.Is(err, errCacheWrite):
+		return 0, 0, fetchCache
+	case ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded):
+		return 0, 0, fetchBudget
+	}
+	return 0, 0, fetchServer
+}
+
+// applyFetch puts the fetch's result in the tick's.
+func (r *tickResult) applyFetch(fetched, ignored int, class string) {
+	r.MetricsFetched, r.MetricsIgnored, r.MetricsFetchError = fetched, ignored, class
+}
+
+// fetchText is the tick line's part for the other PCs' figures, "" when the
+// fetch did nothing.
+func (r tickResult) fetchText() string {
+	switch {
+	case r.MetricsFetchError != "":
+		return "other PCs' daily figures not fetched (" + r.MetricsFetchError + "): the next tick retries"
+	case r.MetricsFetched > 0 || r.MetricsIgnored > 0:
+		msg := fmt.Sprintf("daily figures of %d other PC(s) fetched", r.MetricsFetched)
+		if r.MetricsIgnored > 0 {
+			msg += fmt.Sprintf(", %d document(s) ignored", r.MetricsIgnored)
+		}
+		return msg
 	}
 	return ""
 }
