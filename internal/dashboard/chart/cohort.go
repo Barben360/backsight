@@ -90,15 +90,20 @@ func (c Cohort) HTML() template.HTML {
 		s, hasShare := w.share()
 		row := []string{w.Label, strconv.FormatInt(w.Den, 10), dash, dash}
 		switch {
-		case w.Den == 0:
-			b.WriteString(`<text class="lbl ta-m" x="` + f(centre(i)) + `" y="` + f(base-6) + `">` + dash + `</text>`)
 		case !w.Complete:
+			// A week not over has no count to give (Den 0): it is still drawn
+			// as not over, never as a week without memories.
 			b.WriteString(`<rect class="inc" x="` + f(x) + `" y="` + f(top+40) + `" width="` + f(bw) + `" height="` + f(base-top-40) + `" rx="2"></rect>`)
 			row[3] = "not complete yet"
+			if w.Den == 0 {
+				row[1] = dash
+			}
 			if first < 0 {
 				first = i
 			}
 			last = i
+		case w.Den == 0:
+			b.WriteString(`<text class="lbl ta-m" x="` + f(centre(i)) + `" y="` + f(base-6) + `">` + dash + `</text>`)
 		case !hasShare:
 			b.WriteString(`<text class="few-t ta-m" x="` + f(centre(i)) + `" y="` + f(base-6) + `">too few</text>`)
 			row[2], row[3] = strconv.FormatInt(w.Num, 10), "too few"

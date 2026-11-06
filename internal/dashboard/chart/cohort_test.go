@@ -91,3 +91,21 @@ func markupCohort() string {
 	return string(Cohort{Label: markup, More: markup, Weeks: []CohortWeek{
 		{Label: markup, Num: 1, Den: 30, Share: p(0.5), Complete: true, Title: markup}}}.HTML())
 }
+
+// A week not over whose count the record does not give (Den 0) is drawn as
+// not over, with a dash for the count: never as a week without memories.
+func TestCohortIncompleteWithoutACount(t *testing.T) {
+	c := Cohort{Label: "L", Weeks: []CohortWeek{
+		{Label: "Aug 4", Num: 14, Den: 45, Share: p(0.31), Complete: true},
+		{Label: "Aug 11", Complete: false},
+		{Label: "Aug 18", Complete: true}, // a complete week with nothing made: a dash
+	}}
+	out := string(c.HTML())
+	must(t, out,
+		`<tr><td>Aug 11</td><td class="r">—</td><td class="r">—</td><td class="r">not complete yet</td></tr>`,
+		`<tr><td>Aug 18</td><td class="r">0</td><td class="r">—</td><td class="r">—</td></tr>`,
+		`>not complete: their 28 days are not over</text>`)
+	if got := len(regexp.MustCompile(`<rect class="inc" x="[\d.]+" y="64.0"`).FindAllString(out, -1)); got != 1 {
+		t.Errorf("%d dashed bands in the plot, want 1 (the complete week with no memory draws a dash)", got)
+	}
+}

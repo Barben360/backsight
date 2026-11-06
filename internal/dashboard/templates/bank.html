@@ -1,7 +1,7 @@
 {{/* views: bank */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the figures and cards of bank (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Projects adds Bars: Name, Full, Href, Count, W; Consolidation adds Rows, Info; Review adds Tabs: Title, Count, Question, Open, Rows, Note, Foot). Reads the metrics bank.size, bank.growth, bank.by_project, bank.consolidation, notes.stored, bank.churn, imports.sent, stale.never_used, stale.hidden, stale.reported, .V.bank.Tables.ByProject and .Review. */}}
+{{/* widgets: the figures and cards of bank (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Projects adds Bars: Name, Full, Href, Count, W; Consolidation adds Rows, Info; Review adds Tabs: Title, Count, Question, Open, Rows, Note, Foot). Reads the metrics bank.size, bank.growth, bank.by_project, bank.consolidation, notes.stored, bank.churn, imports.sent, stale.never_used, stale.hidden, stale.reported, .V.bank.Tables.ByProject and .Review, and with developer mode bank.active_share, shows.concentration and .V.bank.Tables.TopShown (Dev: Active, a Card; Concentration adds Sentence: Memories, Share, Shows, Rows: N, Memory, Project, Shown, Share, Used, and More). */}}
 {{with bankpage .}}<section aria-labelledby="w-bank-size">
 <h2 class="sr-only" id="w-bank-size">{{.StripTitle}}</h2>
 <div class="figs">
@@ -42,5 +42,17 @@
 {{end}}{{end}}</details>
 {{end}}<div class="card-foot"><span class="muted">Shown: recent-weighted counts.</span></div>
 </section>
+{{end}}{{with .Dev}}<div class="grid-2">
+{{template "pcard" .Active}}
+{{with .Concentration}}{{$more := .More}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<p class="small sub">{{.Sentence.Memories}} took <b>{{.Sentence.Share}}</b> of the {{.Sentence.Shows}} shows.</p>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th class="r">#</th><th>Memory</th><th>Project</th><th class="r">Shown</th><th class="r">Share of shows</th><th class="r">Used</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td class="r">{{.N}}</td><td>{{template "idlink" (memlink .Memory)}}</td><td>{{template "projlink" .Project}}</td><td class="r">{{.Shown}}</td><td class="r">{{.Share}}</td><td class="r">{{if eq .Used "0"}}<span class="st st-few">{{.Used}}</span>{{else}}{{.Used}}{{end}}</td></tr>
+{{end}}<tr><td colspan="6" class="muted"><a href="{{$more}}">all, by shows →</a></td></tr>
+</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
+</div>
 {{end}}{{end}}
 {{template "foot" .}}

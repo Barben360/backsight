@@ -1,11 +1,17 @@
 {{/* views: memories */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the page of one memory through memorypage (MemoryDetail: Found, ID, FullID, Project, Kind, Swatch, Created, Server, ServerMissing, State, StateIcon, Figs, TextHref, TextHead, Strip, RankHead, Rank, DoHead, Do; Strip: Head, HTML, AllShows; Do: Label, Command). Reads .V.memories.Tables.Memory (Row, Kind, ServerState, Created, Shows, Retirements, RankHistogram, Commands) and .Page. The memory's text is on its text page only. */}}
+{{/* widgets: the page of one memory through memorypage (MemoryDetail: Found, ID, FullID, Project, Kind, Swatch, Created, Server, ServerMissing, State, StateIcon, Origin, Figs, TextHref, TextHead, Strip, RankHead, Rank, DoHead, Do; Strip: Head, HTML, AllShows; Do: Label, Command; Origin: Head, Rows: Label, Session, Project, Pre, Post, Time, then Text and Note). Reads .V.memories.Tables.Memory (Row, Kind, ServerState, Created, Shows, Retirements, RankHistogram, Origin, Commands) and .Page. The memory's text is on its text page only. */}}
 {{with memorypage .}}{{$pg := .}}<nav class="small muted" aria-label="Breadcrumb"><a href="/memories">Memories</a> / <span class="mono" title="{{.ID.Full}}">{{.ID.Text}}</span> <button class="copy" type="button" hidden data-copy="{{.FullID}}" aria-label="Copy the memory id"><span class="i i-sm i-copy"></span>Copy id</button></nav>
 {{if .Found}}<div class="row small muted memory-meta">{{template "projlink" .Project}}{{with .Kind}} · {{with $pg.Swatch}}<i class="sw {{.}}"></i> {{end}}{{.}}{{end}}{{if .Created.Datetime}} · created {{template "reltime" .Created}}{{end}}{{if .Server.Word}}<span class="pill st {{.Server.Class}}">{{.Server.Word}}</span>{{end}}</div>
 {{if .ServerMissing}}<p class="small muted">Kind, creation and state on the server are not available: the server did not answer.</p>
-{{end}}{{end}}<div class="grid-main">
+{{end}}{{with .Origin}}{{template "card-open" .Head}}
+{{if .Rows}}<dl class="dl">
+{{range .Rows}}<dt>{{.Label}}</dt><dd>{{with .Session}}{{template "idlink" .}}{{end}}{{with .Project}} · {{template "projlink" .}}{{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}</dd>
+{{end}}</dl>
+{{end}}{{with .Text}}<p class="small">{{.}}</p>
+{{end}}{{with .Note}}<p class="xs muted">{{.}}</p>
+{{end}}{{template "card-close" .Head}}{{end}}{{end}}<div class="grid-main">
 {{if .Found}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
 {{end}}{{with .TextHead}}{{template "card-open" .}}
 <p class="small sub">The text is read live from the memory server when you ask, and never kept by the dashboard.</p>

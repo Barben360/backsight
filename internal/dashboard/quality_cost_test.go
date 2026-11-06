@@ -342,7 +342,7 @@ func richCost(r *metrics.Result) {
 
 func TestCostCards(t *testing.T) {
 	n := pageNode(t, "cost", false, func(d *PageData) { richCost(d.V["cost"]) })
-	want := []string{"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens"}
+	want := []string{"w-context-per_session", "w-context-split", "w-recall-latency", "w-extraction-tokens", "w-memory-yield"}
 	if got := cardIDs(n); !slices.Equal(got, want) {
 		t.Fatalf("cards %v, want %v", got, want)
 	}
