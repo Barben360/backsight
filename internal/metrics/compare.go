@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"database/sql"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -330,8 +331,8 @@ func pooled(ss []*stratum) (d, variance float64) {
 		return d, 0
 	}
 	var sq float64
-	for _, v := range sums {
-		sq += v * v
+	for _, k := range slices.Sorted(maps.Keys(sums)) { // a fixed order: float addition is not associative
+		sq += sums[k] * sums[k]
 	}
 	return d, sq * float64(g) / float64(g-1)
 }

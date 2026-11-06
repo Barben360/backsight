@@ -722,29 +722,7 @@ func TestCompareRecordGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The last digits of a float depend on the order the engine sums in:
-	// the file keeps nine decimals.
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		t.Fatal(err)
-	}
-	var round func(v any) any
-	round = func(v any) any {
-		switch x := v.(type) {
-		case float64:
-			return math.Round(x*1e9) / 1e9
-		case []any:
-			for i := range x {
-				x[i] = round(x[i])
-			}
-		case map[string]any:
-			for k := range x {
-				x[k] = round(x[k])
-			}
-		}
-		return v
-	}
-	got, err := json.MarshalIndent(round(tree), "", "  ")
+	got, err := json.MarshalIndent(json.RawMessage(raw), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,5 +742,22 @@ func TestCompareRecordGolden(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("the comparison of the fixture of record changed (run with -update and review the diff):\n%s", got)
+	}
+}
+
+// The same input gives the same bytes: the variance is summed over sessions
+// in a fixed order, not the order a map is walked in.
+func TestCompareIsDeterministic(t *testing.T) {
+	var first []byte
+	for i := range 50 {
+		raw, err := json.Marshal(compareOf(recordFixture(1), "v0.1.16-m7", "v0.1.17-m7", "used.turn_rate", fxParis))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = raw
+		} else if !bytes.Equal(raw, first) {
+			t.Fatalf("run %d differs from run 0:\n%s\n%s", i, raw, first)
+		}
 	}
 }

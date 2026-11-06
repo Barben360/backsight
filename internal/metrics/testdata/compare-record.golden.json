@@ -1,113 +1,113 @@
 {
   "a": "v0.1.16-m7",
   "b": "v0.1.17-m7",
-  "ci": [
-    0.024782634,
-    0.204466378
-  ],
-  "diff": 0.114624506,
   "measure": "used.turn_rate",
-  "pooled_a": 0.48972332,
-  "pooled_b": 0.604347826,
+  "reading": "differs",
+  "diff": 0.11462450592885379,
+  "ci": [
+    0.024782633992309205,
+    0.20446637786539837
+  ],
+  "pooled_a": 0.48972332015810277,
+  "pooled_b": 0.6043478260869565,
   "raw_a": {
-    "den": 326,
-    "num": 187
+    "num": 187,
+    "den": 326
   },
   "raw_b": {
-    "den": 295,
-    "num": 154
+    "num": 154,
+    "den": 295
   },
   "raw_disagrees": true,
-  "reading": "differs",
-  "sessions_a": 270,
-  "sessions_b": 250,
-  "settings_differ": [],
-  "settings_unknown": false,
   "strata": [
     {
+      "project": "backsight",
+      "path": "prompt",
       "a": {
-        "days": 21,
+        "num": 140,
         "den": 200,
-        "num": 140
+        "days": 21
       },
       "b": {
-        "days": 9,
+        "num": 46,
         "den": 60,
-        "num": 46
+        "days": 9
       },
+      "weight": 46.15384615384615,
+      "diff": 0.06666666666666676,
       "ci": [
-        -0.058021488,
-        0.191354821
+        -0.05802148808724701,
+        0.19135482142058052
       ],
-      "diff": 0.066666667,
-      "eligible": true,
-      "path": "prompt",
-      "project": "backsight",
       "reading": "no_clear_difference",
-      "weight": 46.153846154
+      "eligible": true
     },
     {
+      "project": "backsight",
+      "path": "search",
       "a": {
-        "days": 20,
+        "num": 17,
         "den": 36,
-        "num": 17
+        "days": 20
       },
       "b": {
-        "days": 7,
+        "num": 6,
         "den": 12,
-        "num": 6
+        "days": 7
       },
-      "ci": null,
-      "diff": null,
-      "eligible": false,
-      "path": "search",
-      "project": "backsight",
-      "reading": "too_few",
       "weight": null,
+      "diff": null,
+      "ci": null,
+      "reading": "too_few",
+      "eligible": false,
       "why": "units"
     },
     {
+      "project": "project-a",
+      "path": "prompt",
       "a": {
-        "days": 18,
+        "num": 21,
         "den": 70,
-        "num": 21
+        "days": 18
       },
       "b": {
-        "days": 9,
+        "num": 87,
         "den": 190,
-        "num": 87
+        "days": 9
       },
+      "weight": 51.15384615384615,
+      "diff": 0.15789473684210525,
       "ci": [
-        0.029024388,
-        0.286765086
+        0.029024387754110176,
+        0.2867650859301003
       ],
-      "diff": 0.157894737,
-      "eligible": true,
-      "path": "prompt",
-      "project": "project-a",
       "reading": "differs",
-      "weight": 51.153846154
+      "eligible": true
     },
     {
+      "project": "project-b",
+      "path": "prompt",
       "a": {
-        "days": 4,
+        "num": 9,
         "den": 20,
-        "num": 9
+        "days": 4
       },
       "b": {
-        "days": 8,
+        "num": 15,
         "den": 33,
-        "num": 15
+        "days": 8
       },
-      "ci": null,
-      "diff": null,
-      "eligible": false,
-      "path": "prompt",
-      "project": "project-b",
-      "reading": "too_few",
       "weight": null,
+      "diff": null,
+      "ci": null,
+      "reading": "too_few",
+      "eligible": false,
       "why": "days"
     }
   ],
-  "too_few": null
+  "sessions_a": 270,
+  "sessions_b": 250,
+  "too_few": null,
+  "settings_differ": [],
+  "settings_unknown": false
 }
