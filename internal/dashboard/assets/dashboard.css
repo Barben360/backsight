@@ -734,3 +734,6 @@ details.never[open] > summary { margin-bottom: var(--sp-2); }
   details.never > summary { min-height: var(--touch); padding-block: 8px; box-sizing: border-box; }
   input[type="text"] { min-height: var(--touch); box-sizing: border-box; }
 }
+
+/* ---------- Fix wave: the shortcuts list stays hidden until opened (.keys sets display: flex, which would show the closed dialog) ---------- */
+dialog.keys:not([open]) { display: none; }

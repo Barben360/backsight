@@ -530,3 +530,26 @@ func TestAttentionPillDoesNotStretch(t *testing.T) {
 	}
 	t.Error(".att-item > .pill has no align-self: start")
 }
+
+// A <dialog> is hidden by the browser's own rule only while nothing of the
+// page sets its display: .keys sets flex for the open list, so a rule must
+// hide it again while it is closed, or the list shows after the footer.
+func TestClosedKeysDialogStaysHidden(t *testing.T) {
+	var flex, hidden bool
+	for _, r := range cssRules(dashboardCSS(t)) {
+		for _, s := range r.Sel {
+			if s == ".keys" && r.declStarts("display", "flex") {
+				flex = true
+			}
+			if s == "dialog.keys:not([open])" && r.At == "" && r.declStarts("display", "none") {
+				hidden = true
+			}
+		}
+	}
+	if !flex {
+		t.Fatal("no .keys rule with display: flex: this guard is stale")
+	}
+	if !hidden {
+		t.Error("the closed shortcuts dialog is not hidden: .keys { display: flex } shows it inline")
+	}
+}
