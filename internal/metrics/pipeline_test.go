@@ -216,6 +216,122 @@ func TestBacklogCountsFromTheStartOfTheWait(t *testing.T) {
 	})
 }
 
+// TestBacklogSettledByAProjectDocument (#192): a flush that fails before
+// sending logs its retry on the home document conversation:<sid>; the send
+// that follows goes to conversation:<sid>@<project> and never touches it. The
+// later ok on the sibling settles the home wait: nothing waits, no backlog,
+// the axis is not bad. A retry after the ok, or on a document of another
+// session, still waits.
+func TestBacklogSettledByAProjectDocument(t *testing.T) {
+	flow := func(x *fx) Metric { return pipeOf(x, x.query(7))["pipeline.flow"] }
+	t.Run("settled by a later ok on the project document", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s1", "retry", 0)
+		x.retained(ago(29*time.Hour), "conversation:s1", "retry", 0)
+		x.retained(ago(2*time.Hour), "conversation:s1@beta", "ok", 100)
+		m := flow(x)
+		if got := extraInt(t, m, "backlog_oldest_ms"); got != 0 {
+			t.Errorf("backlog_oldest_ms = %d, want 0", got)
+		}
+		if got := extraInt(t, m, "waiting"); got != 0 {
+			t.Errorf("waiting = %d, want 0", got)
+		}
+		if m.Status == StatusBad {
+			t.Errorf("pipeline.flow is bad (%q), want not bad", m.Reason)
+		}
+		wantStatus(t, "local.backlog", pipeOf(x, x.query(7))["local.backlog"], StatusOK)
+	})
+	t.Run("a retry after the ok still waits", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s2", "retry", 0)
+		x.retained(ago(5*time.Hour), "conversation:s2@beta", "ok", 100)
+		x.retained(ago(time.Hour), "conversation:s2", "retry", 0)
+		m := flow(x)
+		if got := extraInt(t, m, "waiting"); got != 1 {
+			t.Errorf("waiting = %d, want 1", got)
+		}
+		if got := extraInt(t, m, "backlog_oldest_ms"); got != 3_600_000 {
+			t.Errorf("backlog_oldest_ms = %d, want 1 h", got)
+		}
+	})
+	t.Run("an ok on another session does not settle", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s3", "retry", 0)
+		x.retained(ago(2*time.Hour), "conversation:s30@beta", "ok", 100)
+		x.retained(ago(2*time.Hour), "conversation:s4", "ok", 100)
+		m := flow(x)
+		if got := extraInt(t, m, "waiting"); got != 1 {
+			t.Errorf("waiting = %d, want 1", got)
+		}
+		if got := extraInt(t, m, "backlog_oldest_ms"); got != 30*3_600_000 {
+			t.Errorf("backlog_oldest_ms = %d, want 30 h", got)
+		}
+		wantStatus(t, "pipeline.flow", m, StatusBad)
+	})
+	wantWait := func(t *testing.T, x *fx, waiting int64, backlog time.Duration) {
+		t.Helper()
+		m := flow(x)
+		if got := extraInt(t, m, "waiting"); got != waiting {
+			t.Errorf("waiting = %d, want %d", got, waiting)
+		}
+		if got := extraInt(t, m, "backlog_oldest_ms"); got != backlog.Milliseconds() {
+			t.Errorf("backlog_oldest_ms = %d, want %d", got, backlog.Milliseconds())
+		}
+	}
+	t.Run("an ok in the same millisecond does not settle", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s6", "retry", 0)
+		x.retained(ago(30*time.Hour), "conversation:s6@beta", "ok", 100)
+		wantWait(t, x, 1, 30*time.Hour)
+	})
+	t.Run("a project document that waits neither settles nor is settled", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s7", "retry", 0)
+		x.retained(ago(10*time.Hour), "conversation:s7@beta", "retry", 0)
+		wantWait(t, x, 2, 30*time.Hour)
+	})
+	t.Run("a project document that retries after its ok leaves only itself waiting", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s8", "retry", 0)
+		x.retained(ago(5*time.Hour), "conversation:s8@beta", "ok", 100)
+		x.retained(ago(2*time.Hour), "conversation:s8@beta", "retry", 0)
+		wantWait(t, x, 1, 2*time.Hour)
+	})
+	t.Run("several projects: one ok settles the home", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s9", "retry", 0)
+		x.retained(ago(20*time.Hour), "conversation:s9@alpha", "ok", 100)
+		x.retained(ago(10*time.Hour), "conversation:s9@beta", "quarantined", 0)
+		wantWait(t, x, 0, 0)
+	})
+	t.Run("a successor document settles the home", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s10", "retry", 0)
+		x.retained(ago(2*time.Hour), "conversation:s10#2", "ok", 100)
+		x.retained(ago(31*time.Hour), "conversation:s11", "retry", 0)
+		x.retained(ago(2*time.Hour), "conversation:s11@beta#2", "ok", 100)
+		wantWait(t, x, 0, 0)
+	})
+	t.Run("bulk queued notes stay waiting", func(t *testing.T) {
+		x := pipeFx(t)
+		x.local(index.LocalStatus{NotesQueued: 300, NotesOldestAt: ago(4 * time.Hour)})
+		for i := range 300 {
+			x.retained(ago(4*time.Hour-time.Duration(i)*time.Second), fmt.Sprintf("note:%d", i), "queued", 0)
+		}
+		x.retained(ago(30*time.Hour), "conversation:s12", "retry", 0)
+		x.retained(ago(2*time.Hour), "conversation:s12@beta", "ok", 100)
+		wantWait(t, x, 300, 4*time.Hour)
+	})
+	t.Run("a failed project document does not settle", func(t *testing.T) {
+		x := pipeFx(t)
+		x.retained(ago(30*time.Hour), "conversation:s5", "retry", 0)
+		x.retained(ago(2*time.Hour), "conversation:s5@beta", "failed", 100)
+		if got := extraInt(t, flow(x), "waiting"); got != 1 {
+			t.Errorf("waiting = %d, want 1", got)
+		}
+	})
+}
+
 // TestRetainOutcomesP95OkOnly: 100 documents sent ok at 200 ms, 1 minute
 // apart (today, 2026-10-30), 3 failed at 9,000 ms two days ago (10-28):
 // p95 of the ok events is 200, not 9,000; 103 documents, today 100 ok,
