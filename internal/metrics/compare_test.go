@@ -330,8 +330,15 @@ func TestCompareMeasures(t *testing.T) {
 
 	t.Run("verdict.wrong_rate: verdicts, wrong or outdated is the hit", func(t *testing.T) {
 		x := newFx(t, fxNow)
+		// The hits are wrong and outdated alternately: both count (a hit that
+		// were only "wrong" would leave the outdated ones out of the 12 and 21).
+		n := 0
 		journalUnits(x, false, func(hit bool) string {
 			if hit {
+				n++
+				if n%2 == 0 {
+					return "outdated"
+				}
 				return "wrong"
 			}
 			return "used"
@@ -399,6 +406,29 @@ func TestCompareMeasures(t *testing.T) {
 			t.Errorf("interval reads %v to %v pts, want -4 to +6", lo, hi)
 		}
 	})
+}
+
+// TestCompareRawDisagreesNeedsASign: a pooled difference of exactly 0 does
+// not disagree with a raw one that is not 0: two strata of equal weight
+// (20 = 40*40/80 = 30*60/90) that move in opposite directions by 25 pts
+// pool to D = 0, where the raw rates, 25/70 and 35/100, differ by -0.7 pt.
+func TestCompareRawDisagreesNeedsASign(t *testing.T) {
+	var g cmpGen
+	g.add("v1", "p", "prompt", 40, 10, 8, 0, 1)
+	g.add("v2", "p", "prompt", 40, 20, 8, 0, 1)
+	g.add("v1", "q", "prompt", 30, 15, 8, 0, 1)
+	g.add("v2", "q", "prompt", 60, 15, 8, 0, 1)
+	c := compareOf(g.units, "v1", "v2", "recall.hit_rate", fxParis)
+	noNaN(t, c)
+	if c.Diff == nil || *c.Diff != 0 {
+		t.Fatalf("diff %v, want 0", c.Diff)
+	}
+	if c.RawA != (Rate{25, 70}) || c.RawB != (Rate{35, 100}) {
+		t.Fatalf("raw %+v -> %+v", c.RawA, c.RawB)
+	}
+	if c.RawDisagrees {
+		t.Error("a pooled 0 reads as disagreeing with the raw -0.7 pt")
+	}
 }
 
 func TestCompareSettings(t *testing.T) {

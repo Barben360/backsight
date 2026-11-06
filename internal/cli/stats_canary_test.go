@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,6 +25,7 @@ import (
 // asks for.
 func TestStatsViewsHoldNoCanary(t *testing.T) {
 	home := canaryState(t)
+	canaryCompareHistory(t, home)
 	canaryServer(t, home)
 	canaryCollect(t, home)
 	const memText = "CANARY-MEMORY-TEXT"
@@ -77,6 +80,21 @@ func TestStatsViewsHoldNoCanary(t *testing.T) {
 		scan("contradicted", append([]string{"stats", "sessions", "--has", "contradicted"}, js...)...)
 		scan("compare", append([]string{"stats", "releases", "--compare", "v0.0.1," + buildinfo.Version}, js...)...)
 		scan("compare measure", append([]string{"stats", "releases", "--compare", "v0.0.1," + buildinfo.Version, "--measure", "recall.hit_rate"}, js...)...)
+		// a comparison that passes the gates: populated strata and a settings diff
+		scan("compare full", append([]string{"stats", "releases", "--days", "30", "--compare", canaryVersionA + "," + canaryVersionB, "--measure", "recall.hit_rate"}, js...)...)
+	}
+	// the comparison above is no too_few payload: it has a stratum, a reading
+	// and the settings that differ, so the scans above had those to leak
+	cmp := runView(t, "stats", "releases", "--days", "30", "--compare", canaryVersionA+","+canaryVersionB, "--measure", "recall.hit_rate")
+	if at(cmp.env.Data, "tables", "compare", "too_few") != nil || at(cmp.env.Data, "tables", "compare", "reading") == "too_few" {
+		t.Errorf("the canary comparison is too few: %s", cmp.raw)
+	}
+	strata, _ := at(cmp.env.Data, "tables", "compare", "strata").([]any)
+	if len(strata) == 0 || at(strata[0], "project") != ctlProject || at(strata[0], "path") == "" {
+		t.Errorf("the canary comparison has no populated stratum: %s", cmp.raw)
+	}
+	if sd, _ := at(cmp.env.Data, "tables", "compare", "settings_differ").([]any); len(sd) == 0 {
+		t.Errorf("the canary comparison has no settings diff: %s", cmp.raw)
 	}
 	// a settings marker names the numeric settings only: the key that is no
 	// setting does not come through
@@ -120,4 +138,53 @@ func TestStatsViewsHoldNoCanary(t *testing.T) {
 	noCanaryInMetrics(t, home)
 	noServerTextOnDisk(t, "after the views", home)
 	noCanary(t, "after the views", home, ctlListed, ctlSessionA)
+}
+
+// The two versions of the gated comparison.
+const (
+	canaryVersionA = "v0.0.2"
+	canaryVersionB = "v0.0.3"
+)
+
+// canaryCompareHistory adds to the telemetry the history of a comparison
+// that passes its gates: 8 days of 5 prompts for each of two versions, one
+// after the other, each prompt in its own session of the same project with
+// a canary in its free text, and a settings record before each version that
+// moves one numeric setting (and a canary key).
+func canaryCompareHistory(t *testing.T, home string) {
+	t.Helper()
+	d := pathsOf(home)
+	base := time.Now().UTC().Add(-2 * time.Hour)
+	byMonth := map[string][]string{}
+	add := func(at time.Time, line string) { m := monthOf(at); byMonth[m] = append(byMonth[m], line) }
+	cfg := func(at time.Time, sha string, score string) {
+		add(at, `{"event":"config","ts":"`+at.Format(time.RFC3339Nano)+`","sha256":"`+strings.Repeat(sha, 64)+`","recall.min_score":`+score+`,"CANARY-KEY":3}`)
+	}
+	cfg(base.AddDate(0, 0, -17), "c", "0.4")
+	cfg(base.AddDate(0, 0, -8).Add(-12*time.Hour), "d", "0.7")
+	for vi, v := range []string{canaryVersionA, canaryVersionB} {
+		for day := range 8 {
+			for k := range 5 {
+				at := base.AddDate(0, 0, -16+vi*8+day).Add(time.Duration(k) * time.Minute)
+				injected := 0
+				if (day+k)%(2+vi) == 0 {
+					injected = 1
+				}
+				add(at, `{"event":"prompt","ts":"`+at.Format(time.RFC3339Nano)+`","session":"cmp-`+v+`-`+strings.Repeat("x", day)+`-`+string(rune('a'+k))+`","project":"`+ctlProject+
+					`","binary_version":"`+v+`","decision":"recall","n":1,"plen":80,"injected":`+string(rune('0'+injected))+`,"prompt":"CANARY-PROMPT-CMP","cwd":"/home/u/CANARY-PATH/cmp"}`)
+			}
+		}
+	}
+	for month, lines := range byMonth {
+		f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-"+month+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

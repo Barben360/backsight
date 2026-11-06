@@ -208,7 +208,7 @@ func TestPersistentFlags(t *testing.T) {
 		{[]string{"stats", "overview", "--since", "2026-10-08", "--until", "2026-10-01"}, "--since must be before --until"},
 		{[]string{"stats", "overview", "--since", "soon"}, "--since:"},
 		{[]string{"stats", "overview", "--tz", "Mars/Base"}, "--tz: unknown zone"},
-		{[]string{"stats", "sessions", "--has", "nope"}, "--has: one of used, wrong, undeclared, memory"},
+		{[]string{"stats", "sessions", "--has", "nope"}, "--has: one of used, wrong, undeclared, memory, never_extracted, contradicted"},
 		{[]string{"stats", "memories", "--sort", "nope"}, "--sort: one of shown, used, rate, last_shown"},
 		{[]string{"stats", "memories", "--state", "nope"}, "--state: one of hidden, wrong, never_used"},
 		{[]string{"stats", "memories", "--text"}, "--text needs a memory id"},
