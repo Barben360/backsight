@@ -104,12 +104,14 @@ func TestDashboardGuideNewCards(t *testing.T) {
 	requireInSection(t, "../../docs/dashboard.md", "What the newer cards show",
 		"Which memories helped most?", "Which days did memory help?", "Colour by", "Copy summary", "Summary as text",
 		"no memory text, no session or memory id", "a remote server",
+		"the project name when you filtered by one", "the window's dates", "the backsight version and the time it was written", "`::1` included",
 		"Did anything change that day?", "How long until a session's memories come back?",
 		"Sent, never turned into memories", "Have the health checks passed lately?", "Could memory hold a secret?",
 		"Do new memories turn out useful?", "Where did it come from?", "Do two versions differ?", "When did Claude use memory?",
 		"never says one is better")
 	requireInSection(t, "../../docs/dashboard.md", "Keyboard shortcuts",
-		"`g` `o`", "Filter by project", "Refresh this page", "Ctrl, Alt or Meta", "Off by default")
+		"`g` `o`", "Filter by project", "Refresh this page", "Ctrl, Alt or Meta", "Off by default",
+		"the left and right arrows one week", "Home and End", "work even with shortcuts off")
 	requireInSection(t, "../../docs/dashboard.md", "What the pages show",
 		"Custom window", "Both days are included", "13 months")
 	requireInSection(t, "../../docs/dashboard.md", "Preferences", "Density", "Compact", "Keyboard shortcuts")
@@ -121,7 +123,8 @@ func TestDashboardGuideNewCards(t *testing.T) {
 
 func TestPrivacyCopySummary(t *testing.T) {
 	requireInSection(t, "../../docs/privacy.md", "The dashboard",
-		"**Copy summary**", "no memory text and no session or memory id", "(`127.0.0.1` or `localhost`)", "a remote server")
+		"**Copy summary**", "no memory text and no session or memory id", "`127.0.0.1`, `::1`", "any loopback address", "a remote server",
+		"the project name when you filtered by one", "the window's dates", "the backsight version and the time it was written")
 }
 
 // The command reference names what the new numbers add to each view.
