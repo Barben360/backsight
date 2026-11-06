@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,6 +69,8 @@ func TestMetricsDueRule(t *testing.T) {
 		{"offset 45: after it", sent("2026-11-05T09:00:00Z"), true, target, m2d, "2026-11-06T00:46:00Z", true},
 		{"offset 59: before it", sent("2026-11-05T23:30:00Z"), true, target, m3b, "2026-11-06T00:58:00Z", false},
 		{"offset 59: at it", sent("2026-11-05T23:30:00Z"), true, target, m3b, "2026-11-06T00:59:00Z", true},
+		{"new target, failed 30 min ago", failed("2026-11-05T09:00:00Z", "2026-11-06T09:30:00Z"), true, "url http://y bank b", zero, "2026-11-06T10:00:00Z", false},
+		{"new target, failed 61 min ago", failed("2026-11-05T09:00:00Z", "2026-11-06T08:59:00Z"), true, "url http://y bank b", zero, "2026-11-06T10:00:00Z", true},
 		{"never sent, a failure record only", machines.Published{FailedAt: at("2026-11-06T09:30:00Z"), FailedSince: at("2026-11-06T09:30:00Z"), Failure: "server", Server: target}, true, target, zero, "2026-11-06T10:00:00Z", false},
 		{"never sent, waiting for the index", machines.Published{FailedSince: at("2026-11-06T09:30:00Z"), Failure: "budget", Server: target}, true, target, zero, "2026-11-06T10:00:00Z", true},
 	}
@@ -566,5 +569,44 @@ func TestTickPublishesAndReports(t *testing.T) {
 	}
 	if text := tickText(r); !strings.Contains(text, "daily figures not shared (server)") {
 		t.Errorf("tick line: %s", text)
+	}
+}
+
+// A tick whose publish is due and whose index holds more than one budget of
+// lines does one catch-up, the publish's: the tick's line is its freshness.
+func TestTickCatchesUpOnceWhenThePublishIsDue(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	const total = 12_000
+	writeIndexLines(t, d, "2026-09", total, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	var mu sync.Mutex
+	at := time.Now()
+	prevClock, prevBudget := tickIndexClock, tickIndexBudget
+	tickIndexClock = func() time.Time { mu.Lock(); defer mu.Unlock(); at = at.Add(time.Second); return at }
+	tickIndexBudget = index.TickBudget
+	t.Cleanup(func() { tickIndexClock, tickIndexBudget = prevClock, prevBudget })
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	calls, seen := 0, index.Freshness{}
+	old := publishCatchUp
+	publishCatchUp = func(ctx context.Context, ix *index.Index, b time.Duration) (index.Freshness, error) {
+		calls++
+		fr, err := ix.CatchUp(ctx, b)
+		seen = fr
+		return fr, err
+	}
+	t.Cleanup(func() { publishCatchUp = old })
+	withClock(t, pubT0)
+
+	_, res := tickJSON(t)
+	n := indexCount(t, home, `SELECT count(*) FROM tel_prompt WHERE session = ?`, indexCanary)
+	if calls != 1 || !seen.Partial {
+		t.Fatalf("%d publish catch-up(s), freshness %+v: the backlog must outlast one budget", calls, seen)
+	}
+	if n <= 0 || n >= total {
+		t.Errorf("%d rows after one tick: the tick caught up again (want a single partial pass)", n)
+	}
+	if res.MetricsIndex != tickIndexText(seen) || !res.MetricsWaiting {
+		t.Errorf("metrics_index %q, want %q; waiting %v", res.MetricsIndex, tickIndexText(seen), res.MetricsWaiting)
 	}
 }

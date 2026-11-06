@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -697,4 +700,34 @@ func TestUninstallDeletesTheMetricsDocument(t *testing.T) {
 			t.Errorf("deleted on another server: %v", got)
 		}
 	})
+}
+
+// The two deletes (shared counts and daily figures) share one budget: with a
+// server that never answers, the uninstall waits for it once, not twice.
+func TestUninstallDeletesShareOneBudget(t *testing.T) {
+	old := uninstallShareBudget
+	uninstallShareBudget = time.Second
+	t.Cleanup(func() { uninstallShareBudget = old })
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(hang.Close)
+	port, _ := strconv.Atoi(hang.URL[strings.LastIndex(hang.URL, ":")+1:])
+	m, _, _ := sharedInstall(t)
+	if err := machines.SavePublished(pathsOf(m.home).MetricsDir(), machines.Published{At: time.Now(), Server: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	pointAt(t, m.home, port)
+	start := time.Now()
+	code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+	took := time.Since(start)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, name := range []string{"shared counts", "daily figures"} {
+		if s := stepNamed(env.Data, name); s == nil || s.Status != "kept" {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+	if took > 1800*time.Millisecond {
+		t.Errorf("took %s: the two deletes waited one budget each", took)
+	}
 }

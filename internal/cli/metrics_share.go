@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -58,6 +59,9 @@ type metricsShare struct {
 	Failure            string
 	Fetched, Ignored   int
 	FetchError         string
+	// IndexLine is the tick's metrics index line when this step caught the
+	// index up (the tick then does not catch it up again), "" otherwise.
+	IndexLine string
 }
 
 // publishOffset spreads the PCs over the first hour of the UTC day: the
@@ -89,11 +93,11 @@ func metricsDue(last machines.Published, ok bool, target, machine string, now ti
 	if !ok || last.At.After(now) || last.FailedAt.After(now) {
 		return true
 	}
+	if !last.FailedAt.IsZero() && now.Sub(last.FailedAt) < metricsRetryAfter {
+		return false // also after a change of server: a failing publish waits its hour
+	}
 	if !last.At.IsZero() && last.Server != target {
 		return true
-	}
-	if !last.FailedAt.IsZero() && now.Sub(last.FailedAt) < metricsRetryAfter {
-		return false
 	}
 	if !last.At.IsZero() && !utcMidnight(last.At).Before(utcMidnight(now)) {
 		return false
@@ -121,6 +125,8 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	ctx, cancel := context.WithTimeout(ctx, metricsShareBudget)
 	defer cancel()
 
+	line := "" // the tick's metrics index line, once this step caught the index up
+
 	// fail records a failed attempt: failed_at moves, failed_since stays.
 	// A record that never sent anything also names the target, so that a
 	// change of server is told from a failure.
@@ -138,7 +144,7 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 			rec.FailedSince = now
 		}
 		rec.Failure = class
-		return metricsShare{Waiting: wait, Failure: class}, machines.SavePublished(dir, rec)
+		return metricsShare{Waiting: wait, Failure: class, IndexLine: line}, machines.SavePublished(dir, rec)
 	}
 
 	o := indexOptions(d, home, nil)
@@ -148,7 +154,18 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 		return fail(failCompute, false)
 	}
 	defer func() { _ = ix.Close() }()
-	if fr, err := publishCatchUp(ctx, ix, tickIndexBudget); err != nil || fr.Partial || fr.Yielded {
+	side := ""
+	if ix.Side() {
+		side = " (" + filepath.Base(ix.Path()) + ": a newer backsight's index is kept)"
+	}
+	fr, cerr := publishCatchUp(ctx, ix, tickIndexBudget)
+	line = tickIndexText(fr) + side
+	if cerr != nil {
+		line = indexStepError(cerr) + side
+	} else {
+		_ = ix.Checkpoint(ctx)
+	}
+	if cerr != nil || fr.Partial || fr.Yielded {
 		return fail(failBudget, true)
 	}
 	days, err := dailyFigures(ctx, metrics.Source{Index: ix, Config: cfg, Configured: true, Now: func() time.Time { return now }}, now)
@@ -159,7 +176,7 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 		return fail(failCompute, false)
 	}
 	if len(days) == 0 {
-		return metricsShare{Empty: true}, nil
+		return metricsShare{Empty: true, IndexLine: line}, nil
 	}
 
 	first := rec.FirstSeen
@@ -184,7 +201,7 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	if err := retain.WriteControlDocument(ctx, cl, cfg.Server.Bank, machines.DocPrefix+machine, content, map[string]string{machines.MetaKey: meta}); err != nil {
 		return fail(failServer, false)
 	}
-	s := metricsShare{Up: true, Days: len(doc.Days), Bytes: len(meta), Dropped: dropped}
+	s := metricsShare{Up: true, Days: len(doc.Days), Bytes: len(meta), Dropped: dropped, IndexLine: line}
 	return s, machines.SavePublished(dir, machines.Published{At: now, Server: target, Until: doc.Until, FirstSeen: first, Bytes: len(meta)})
 }
 
@@ -193,7 +210,7 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 func (r *tickResult) applyMetrics(s metricsShare, err error) {
 	r.MetricsUp, r.MetricsDays, r.MetricsBytes = s.Up, s.Days, s.Bytes
 	r.MetricsWaiting, r.MetricsEmpty, r.MetricsFailure = s.Waiting, s.Empty, s.Failure
-	r.metricsDropped = s.Dropped
+	r.metricsDropped, r.metricsIndex = s.Dropped, s.IndexLine
 	if err != nil {
 		r.MetricsError = "the publish record could not be written"
 	}

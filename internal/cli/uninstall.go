@@ -120,7 +120,8 @@ func shellWord(s string) string {
 // jobLockWait bounds the wait for a running jobs tick or jobs maintain.
 var jobLockWait = 2 * time.Minute
 
-// uninstallShareBudget bounds the delete of this machine's shared counts.
+// uninstallShareBudget bounds the deletes of this machine's shared counts and
+// daily figures together.
 var uninstallShareBudget = 5 * time.Second
 
 // The Windows seams; tests replace them (TestMain refuses both).
@@ -478,8 +479,11 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// This machine's shared counts, with the machine id they are named
 	// after: before the server stops.
 	if f.purgeLocal {
-		add(uninstallSharedCounts(ctx, d, cfg, sec, generation, f.plan))
-		add(uninstallMetricsDocument(ctx, d, cfg, sec, generation, f.plan))
+		// One budget for both deletes: the uninstall waits 5 s at most.
+		sctx, scancel := context.WithTimeout(ctx, uninstallShareBudget)
+		add(uninstallSharedCounts(sctx, d, cfg, sec, generation, f.plan))
+		add(uninstallMetricsDocument(sctx, d, cfg, sec, generation, f.plan))
+		scancel()
 	}
 
 	// 4. The server: kept, stopped, or deleted with its data. Its images

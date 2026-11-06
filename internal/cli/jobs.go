@@ -90,6 +90,9 @@ type tickResult struct {
 	MetricsError   string `json:"metrics_error,omitempty"`
 	// metricsDropped: what the write cap left out of the document.
 	metricsDropped machines.Dropped
+	// metricsIndex: the index line of the publish's catch-up, when it ran
+	// one (the tick's own is then skipped: one catch-up per tick).
+	metricsIndex string
 	// MetricsIndex: the catch-up of the metrics index, run on every way
 	// out of the tick (tickIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
@@ -127,8 +130,18 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res := tickResult{Status: "done"}
 			// Every way out goes through finish: the metrics index catches up
 			// first, so that the tick's own job event waits for the next one.
+			// publishFigures: the sharing step cleared the publish of the daily
+			// figures; it runs in finish, with the tick's one catch-up of the
+			// metrics index (its own when it is due, else tickIndex's).
+			publishFigures := false
+			var f *retain.Flusher
 			finish := func(failed error) error {
-				res.MetricsIndex = tickIndex(cmd.Context(), d, home)
+				if publishFigures && f != nil && otherServer(d, cfg) == nil && f.StartedOver() == nil {
+					res.applyMetrics(publishMetrics(cmd.Context(), f.Client, d, home, cfg, f.MachineID, now()))
+				}
+				if res.MetricsIndex = res.metricsIndex; res.MetricsIndex == "" {
+					res.MetricsIndex = tickIndex(cmd.Context(), d, home)
+				}
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
 					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History, "import_sent": res.importSent,
@@ -166,7 +179,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Server = startLateServer(sctx, d, cfg)
 			scancel()
 
-			f, err := newFlusher(d, home, cfg, sec, generation, true)
+			f, err = newFlusher(d, home, cfg, sec, generation, true)
 			if err != nil {
 				res.Status, res.Reason = "failed", clientSetupFailed
 				return finish(err)
@@ -194,7 +207,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedger(sctx, f.Client, d, cfg, f.MachineID, now()); err != nil {
 					res.SharedError = err.Error()
 				}
-				res.applyMetrics(publishMetrics(cmd.Context(), f.Client, d, home, cfg, f.MachineID, now()))
+				publishFigures = true
 			}
 			files := transcripts(home)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
