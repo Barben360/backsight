@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>System: Machines</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="system" b6="true" b8="true" machines="this" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is the service up?</h1><span class="muted">window: last 7 days · the new card sits under the first row, before “Do the health checks pass?”</span></div>
+
+  <div class="grid-3">
+    <section class="card" aria-labelledby="srv-h">
+      <div class="card-head"><h2 id="srv-h">Memory server</h2><span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span><span class="spacer"></span><span class="pill st st-ok">answering</span></div>
+      <dl class="dl">
+        <dt>Address</dt><dd class="mono">192.168.1.20:18888</dd>
+        <dt>Version</dt><dd>Hindsight 1.1.0</dd>
+        <dt>Runs as</dt><dd>native Linux service, on another machine</dd>
+        <dt>Last answer</dt><dd><time datetime="2026-10-30T15:43" title="2026-10-30 15:43">1 min ago</time></dd>
+        <dt>Pausing after errors</dt><dd>no</dd>
+        <dt>Prompts skipped</dt><dd>0 in the last 7 days</dd>
+      </dl>
+    </section>
+    <section class="card" aria-labelledby="pc-h">
+      <div class="card-head"><h2 id="pc-h">This PC</h2><span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <dl class="dl">
+        <dt>backsight</dt><dd>v0.1.17-m7</dd>
+        <dt>Machine</dt><dd><span class="idc" title="Short machine id: the label other PCs see">3f9c2a17</span> Linux · since Sep 2</dd>
+        <dt>Shares its activity</dt><dd>yes, last sent <time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time></dd>
+        <dt>Update</dt><dd>none newer</dd>
+        <dt>Background jobs</dt><dd>sending: ok, 4 min ago · upkeep: ok, 3 h ago</dd>
+        <dt>Last backup</dt><dd><time datetime="2026-10-28" title="2026-10-28 03:00">2 d ago</time> · verified</dd>
+      </dl>
+    </section>
+    <section class="card" aria-labelledby="look-h">
+      <div class="card-head"><h2 id="look-h">What needs a look here?</h2><span class="spacer"></span><span class="muted small">nothing</span></div>
+      <div class="empty"><span class="row"><span class="st st-ok">Nothing needs a look.</span></span><span class="small">Every health check passes.</span></div>
+      <p class="xs muted">Warnings that do not affect memory stay on this page; they never change the verdict.</p>
+    </section>
+  </div>
+
+  <section class="card" id="machines" aria-labelledby="m-h">
+    <div class="card-head">
+      <h2 id="m-h">Which PCs share their activity here?</h2>
+      <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+      <span class="spacer"></span>
+      <span class="muted small">4 PCs · 1 document ignored</span>
+      <details class="info"><summary aria-label="About Machines"><span class="i i-info"></span></summary><div class="pop"><b>Machines</b><dl><dt>What</dt><dd>Each PC with sharing on sends, once a day, its daily totals to the memory server; “all PCs” adds them up. A PC is named by the start of its machine id, its system and the day it first sent.</dd><dt>Not here</dt><dd>A PC with sharing off (<code>feedback.share_ledger</code>) sends nothing, so no one can list it.</dd><dt>Privacy</dt><dd>The totals hold no project name, session, memory id, text or computer name.</dd></dl><span class="term">backsight:metrics:&lt;machine_id&gt;</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats system</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl mach">
+        <thead><tr><th>PC</th><th>System</th><th>First seen</th><th>Last sent</th><th>backsight</th><th>In “all PCs”</th></tr></thead>
+        <tbody>
+          <tr><td><span class="idc" title="Short machine id">3f9c2a17</span><b>this PC</b></td><td>Linux</td><td><time datetime="2026-09-02" title="2026-09-02">Sep 2</time></td><td><time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time></td><td>v0.1.17-m7</td><td><span class="st st-ok">counted</span> <span class="muted small">its own figures, live</span></td></tr>
+          <tr><td><span class="idc" title="Short machine id">a07be4d1</span></td><td>macOS</td><td><time datetime="2026-10-10" title="2026-10-10">Oct 10</time></td><td><time datetime="2026-10-30T10:12" title="2026-10-30 10:12">5 h ago</time></td><td>v0.1.17-m7</td><td><span class="st st-ok">counted</span></td></tr>
+          <tr><td><span class="idc" title="Short machine id">5d21c8e0</span></td><td>Windows</td><td><time datetime="2026-10-28" title="2026-10-28">Oct 28</time></td><td><time datetime="2026-10-30T14:31" title="2026-10-30 14:31">1 h ago</time></td><td>v0.1.17-m7</td><td><span class="st st-ok">counted</span> <span class="muted small">no activity yet</span></td></tr>
+          <tr><td><span class="idc" title="Short machine id">c84e1f39</span></td><td>Linux</td><td><time datetime="2026-07-18" title="2026-07-18">Jul 18</time></td><td><span class="st st-watch"><time datetime="2026-10-21T07:02" title="2026-10-21 07:02">9 d ago</time></span></td><td>v0.1.16-m7</td><td><span class="st st-watch">up to Oct 21</span></td></tr>
+          <tr class="ign"><td><span class="idc" title="Short machine id, from the document’s name">e19b77a0</span></td><td>—</td><td>—</td><td>—</td><td>—</td><td><span class="st st-few">ignored: not valid</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="xs muted">Fetched from the memory server <time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time>, every 6 h. An ignored document is left out whole; what it holds is not shown. A PC that has not sent for 30 days drops off this list.</p>
+  </section>
+
+  <h2 class="sec-h">The Machines card in its other states</h2>
+  <div class="grid-3">
+    <section class="card" aria-labelledby="m1">
+      <div class="card-head"><h3 id="m1">Which PCs share their activity here?</h3><span class="spacer"></span><span class="muted small">this PC only</span></div>
+      <div class="tbl-wrap">
+        <table class="tbl mach">
+          <thead><tr><th>PC</th><th>System</th><th>Last sent</th><th>backsight</th></tr></thead>
+          <tbody><tr><td><span class="idc">3f9c2a17</span><b>this PC</b></td><td>Linux</td><td>2 h ago</td><td>v0.1.17-m7</td></tr></tbody>
+        </table>
+      </div>
+      <p class="small sub">Only this PC shares its activity on this server. Your other PCs appear here after their first daily send, with sharing on (the default). The scope line shows no switch until then.</p>
+    </section>
+
+    <section class="card" aria-labelledby="m2">
+      <div class="card-head"><h3 id="m2">Which PCs share their activity here?</h3><span class="spacer"></span><span class="pill st st-info">sharing off</span></div>
+      <ul class="att">
+        <li class="att-item"><span class="pill st st-info">info</span><div class="body"><p>This PC does not share its activity: <code>feedback.share_ledger</code> is off. Your other PCs do not see it, and “all PCs” is off here. To share, set <code>share_ledger = true</code> under <code>[feedback]</code> in <code>config.toml</code> (<code>backsight paths</code> shows where it is), then send now:</p><div class="cmd"><code>backsight jobs tick</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div><details class="why"><summary>Why this matters</summary><div>Off is a valid choice and nothing is broken. Sharing sends daily totals and which memories Claude used: no project, session, memory text or computer name. The same setting shares the counts that rank memory on all your PCs.</div></details></div></li>
+      </ul>
+      <p class="xs muted">The same item shows in “What needs a look here?”, never in “What should I do?”: it is a choice, not a fault.</p>
+    </section>
+
+    <section class="card" aria-labelledby="m3">
+      <div class="card-head"><h3 id="m3">Which PCs share their activity here?</h3><span class="spacer"></span><span class="pill st st-watch">not answering</span></div>
+      <div class="state st-watch"><span class="i i-server"></span><span>Memory server not answering since 09:12. The list is the one fetched at 07:40.</span></div>
+      <div class="tbl-wrap">
+        <table class="tbl mach">
+          <thead><tr><th>PC</th><th>System</th><th>Last sent</th><th>backsight</th></tr></thead>
+          <tbody>
+            <tr><td><span class="idc">3f9c2a17</span><b>this PC</b></td><td>Linux</td><td>7 h ago</td><td>v0.1.17-m7</td></tr>
+            <tr><td><span class="idc">a07be4d1</span></td><td>macOS</td><td>yesterday</td><td>v0.1.17-m7</td></tr>
+            <tr><td><span class="idc">5d21c8e0</span></td><td>Windows</td><td>yesterday</td><td>v0.1.17-m7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="xs muted">This PC’s figures wait and are sent once the server answers; nothing is lost.</p>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="chk-h">
+    <div class="card-head">
+      <h2 id="chk-h">Do the health checks pass?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="chip"><span class="i i-sm i-server"></span>server</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight doctor</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <p class="small muted">Unchanged: the table, the health checks over time and the secrets card follow, as shipped in block 6.</p>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2100}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

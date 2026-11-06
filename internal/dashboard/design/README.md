@@ -7,7 +7,7 @@ First draft of the `backsight dashboard` UI for issue #115 (decision 0079 §8–
 - `reference/dashboard.css`: the single stylesheet built on `tokens.css`. The canvas uses this same file, so the mockups and the references cannot drift apart.
 - `reference/overview.html`, `reference/memory.html`: static HTML, no script. Open them straight from disk; they load the logos from `docs/assets/`.
 
-`canvas/` holds read-only, byte-for-byte copies of the 26 canvas artboards (`*.dc.html`) the pages are built from, taken on 2026-11-01, the day block 5 started (refreshed the same day with the block 6 draft: 27 new `B6*` artboards and the three masters it changed, see the last section), so the scenarios' wording and numbers can be read offline and reviewed in a diff. The canvas above stays the source: a change to the design is made there and these copies are refreshed from it, never edited here. They are mockups that need the canvas's runtime (`support.js`, `<dc-import>`, inline styles): nothing embeds, serves or links them.
+`canvas/` holds read-only, byte-for-byte copies of the 26 canvas artboards (`*.dc.html`) the pages are built from, taken on 2026-11-01, the day block 5 started (refreshed the same day with the block 6 draft: 27 new `B6*` artboards and the three masters it changed, see "Block 6 additions"; refreshed again on 2026-11-06 with the block 8 draft: 19 new `B8*` artboards and the three masters it changed, see "Block 8 additions"), so the scenarios' wording and numbers can be read offline and reviewed in a diff. The canvas above stays the source: a change to the design is made there and these copies are refreshed from it, never edited here. They are mockups that need the canvas's runtime (`support.js`, `<dc-import>`, inline styles): nothing embeds, serves or links them.
 
 ## Rules for block 5 (from the review)
 
@@ -208,3 +208,90 @@ Every mark that carries meaning clears 3:1 in both themes; each day also has its
 - Numbers are invented and consistent within each board, not across boards; the calendar and charts use seeded pseudo-random series.
 - The `?` list is drawn over the page with `.keys-shade`, which stands for `dialog::backdrop`; the canvas cannot show a real modal, focus or keys.
 - Copy summary's text is a proposal; its exact lines are for block 6 to settle with the CLI's text output.
+
+## Block 8 additions
+
+Draft for issue #120 (scope item 1; decision 0079 §13, its privacy line in §15, and §7 and §8 as built in block 6), on the same canvas, in three new rows titled "Block 8: …", each with a sticky note listing the states it shows. The author approved it on 2026-11-06 (canvas version 46) with the proposed answer to each of the questions below, as drawn; block 8 builds from it.
+
+**Nothing drawn for blocks 3 and 6 changed.** Three masters gained props that are off by default: `TopBar` (`b8`: the machines switch in the scope line; `machines` `this`|`all`; `b8scope` `issues`|`clean`|`host`|`sharingoff`|`single`|`down`; `open` value `pcs`), `Tile` (`machines`: the tile added up over all PCs) and `Banner` (`b8`: "(last 7 days, this PC)" and one paragraph in its ⓘ). Checked statically: with the new props off, every value the three masters computed before is unchanged (TopBar on 5 prop sets, Tile on all 42 scenario × slot pairs, Banner on its 8 variants), and the two template holes the Tile gained default to the old text. The canvas's `dashboard.css` gained one appended section, "Block 8 additions (draft)"; its copy here is `reference/dashboard-b8-draft.css`, byte for byte the section as appended on the canvas. It is not appended to `reference/dashboard.css` yet: `TestStylesheetIsTheDesigns` requires every rule of that file from the block 6 section on to be in the shipped `assets/dashboard.css`, so a draft section there fails `make check` until block 8 ships its styles. When block 8 is built, the section moves to the end of `reference/dashboard.css` and into `assets/dashboard.css` (its block-numbered comments reworded, as the test does for block 6), and the draft file goes. No new colour and no new token: `tokens.css` is unchanged.
+
+| Row | Artboards (`B8*`) |
+|---|---|
+| Block 8: scope line, machines switch, CLI | `B8Scope` and `-dark`, `-390`, `-390-dark`: the scope line with this PC (default) and all PCs; "Which PCs" open; all PCs with a project filter; this PC's sharing off; only this PC shares (no switch); a client in remote mode; the server host; the server not answering; the CLI disclosure with and without `--machines all`; the flag in the terminal and the API. |
+| Block 8: Overview and Cost in all PCs | `B8Overview` (all PCs, healthy) and `-dark`, `-390`, `-390-dark`; `B8Overview-filter` (project filter and a latency watch: the Speed tile as a bucket range at watch, the attention item this PC's). `B8Cost` and `-dark` (the detail page: latency per day as bucket bars with this PC exact, a By PC table; widgets that stay this PC's; the server's cost unchanged). `B8Parts` and `-dark` (Speed ok and watch from buckets beside this PC's exact tile; Context as an average; reported wrong leaving too few once added up; the project-filter chip; a PC with no activity, no PC with activity, a PC that stopped sending, documents ignored; the summary line and "Summary as text"). |
+| Block 8: System's Machines section and the Memory page | `B8System` and `-dark`, `-390`, `-390-dark` (Machines with several PCs; this PC only; this PC's sharing off as an attention-style item; the server not answering; the This PC card gains its label and whether it shares). `B8Memory` and `-dark` (this PC's, the other PCs' and all PCs' counts from `shared-combined`; hidden on another PC; not counted elsewhere; sharing off; server not answering). |
+
+### What follows the switch
+
+Other PCs send per day: the numerators and denominators of the six tile metrics, the same per `binary_version` for Releases, latency in fixed buckets, `binary_version` and the OS. Everything else stays this PC's in all PCs, with its "this PC" chip.
+
+| Widget | In all PCs |
+|---|---|
+| Six tiles, summary line, Days calendar (prompts with memory, used turns), Quality and Cost time charts of those metrics, Releases per version | Added up, chip "all PCs (4)", CLI with `--machines all` |
+| Speed (`recall.latency`) | A bucket range, "approximate"; the status is exact (below) |
+| Context (`context.per_session`) | The average per session (total ÷ sessions); the status is judged on this PC's high value and says so |
+| Verdict banner, "What should I do?", the review queue, the Days calendar's "sessions" colouring, histograms, outcome mixes, where context is added | This PC's, labelled. The verdict also weighs this PC's backlog, doctor and server answers, which other PCs do not send |
+| Lately, sessions, projects, memories, Helped most, the turn rail | This PC's: other PCs send no session, project or memory id (§15) |
+| Server widgets (memory size, the server model's cost, server tasks) | Unchanged: already every PC's; their commands never carry the flag |
+| Memory page, "Has it helped on your other PCs?" | Always shown beside this PC's counts, whatever the switch |
+
+### Proposed widget titles
+
+| What | Label | Question |
+|---|---|---|
+| System view, the machines table | Machines | Which PCs share their activity here? |
+| Memory page, counts from `shared-combined` | Counts from your other PCs | Has it helped on your other PCs? |
+| The scope-line switch (a control, not a widget) | Whose activity | (none) |
+
+### Questions for the author
+
+Each is drawn with the proposed answer; the author approved every proposed answer on 2026-11-06.
+
+1. **Where does the switch live?** Proposed and drawn: in the scope line, replacing "Activity on **this PC**" with "Activity on [this PC | all PCs on this server (4)]". The scope line already states whose activity a page shows, it stays visible under 900 px (the top bar's tools fold into the Menu there), and the top bar has no room left at 1440 px. Other option: a third control in the top bar's tools, and a group in the Menu.
+2. **Is "all" ever the default?** Proposed: never. `this` is the default (issue item 3); the choice is a URL parameter kept by every link, like the project filter, not a preference, so a fresh link always opens on this PC.
+3. **With no other PC sharing, is the switch shown?** Proposed and drawn: hidden; the scope line stays as shipped and System says "Only this PC shares". `?machines=all` still works and reads "(1)".
+4. **When this PC's sharing is off, can it still read the others?** Proposed and drawn: no, "all PCs" is not offered, since `feedback.share_ledger = false` already means "neither sends nor reads" for the shared counts (`docs/configuration.md`). The switch's second half becomes a link to Machines on System, which says how to turn it on. Other option: read the others' figures anyway and add this PC's local ones.
+5. **Does the verdict follow the switch?** Proposed and drawn: no; it stays this PC's and says "(last 7 days, this PC)", with "What should I do?" (things only this PC can fix). Other option: judge Found, Right and Cost on the merged figures and Flowing on this PC.
+6. **Context in all PCs: average, or a mergeable high value?** Proposed and drawn: the average, from the numerator and denominator the issue lists, labelled, with the status from this PC's high value. Other option: add size buckets in characters to the document, as for latency, so the high value merges like Speed.
+7. **Speed in all PCs: a range or an estimate?** Proposed and drawn: the bucket range ("1.0–2.0 s, approximate"), which claims nothing the buckets do not hold. Other option: interpolate inside the bucket ("≈ 1.7 s"), labelled approximate.
+8. **A project filter with all PCs.** Proposed and drawn, as the issue says: this PC's figures filtered, the other PCs' whole, with "other PCs: not filtered" on the scope line and "other PCs not filtered" on every merged tile. Other option: with a project filter, all PCs falls back to this PC and says why.
+9. **Freshness rules.** Proposed and drawn: other PCs' documents are fetched every 6 h with the shared counts (`jobs tick`) and kept on this PC, so all PCs works while the server is down ("other PCs as fetched at 07:40"); a PC is stale after 2 days without a send (they send daily) and dropped after 30, as for the shared counts.
+
+### Where this draft departs from the issue, the decision or the shipped pages, and why
+
+1. **The scope line gains a switch**, two links in the window control's style (`.seg`), not text. "Activity on this PC" was a statement; with several PCs it has to be a choice, and a link works without a script.
+2. **N in "all PCs on this server (N)" counts every PC with a valid, current document**, this PC included, also one with no activity in the window or one that is stale; the tiles say how many had activity ("on the 2 PCs with activity this week").
+3. **This PC's part comes from its own index, not from its published document**: it is live, and the same figures as with this PC selected. "Which PCs" says "its own figures, live".
+4. **Tile links read "This PC's 167 prompts →"** in all PCs: other PCs' events never reach this PC, so the link can only lead to this PC's.
+5. **Speed's status is exact although its value is a range**: watch over 2.0 s and attention over 2.5 s are bucket edges (2000 and 2500 ms), so the bucket holding the slowest 1 in 20 decides the word without doubt. This needs buckets counted upper-inclusive (a 2000 ms prompt is in "up to 2000"), which matches "over 2.0 s".
+6. **The Cost page draws latency per day as bars from one bucket edge to the next**, with this PC's exact value as a ring, and a "By PC" disclosure (short id, system, prompts, slowest 1 in 20, typical). The ring is this PC's own index; the bars are the merge.
+7. **This PC's sharing off is an `info` item**, on System's "What needs a look here?" and the Machines card only, never on the Overview's "What should I do?": decision 0079 §8 keeps info items off the Overview, and off is a choice, not a fault. No `backsight config set` command exists, so the item names the setting (`share_ledger = true` under `[feedback]`, `backsight paths` for the file) and gives `backsight jobs tick` to send at once. `.pill.st-info` gains the `--learn-bg` tint the other pills have.
+8. **An ignored document shows only the short id from its name**, and only when the name holds a valid machine id; nothing from its content reaches a page or the JSON: "1 document ignored: not valid" or "over the 1 MiB cap".
+9. **The Memory page's other-PC counts are used and ignored only, recent-weighted**: `shared-combined` holds credits, misses and hidden times, not shows, and only their sum over the other PCs (which PC is not kept). Shows, the timeline and ranks stay this PC's. The card is always shown, not tied to the switch, as issue item 5 says "next to this PC's"; its CLI carries `--machines all`.
+10. **The host's scope line adds ", this PC" after its local address** (`127.0.0.1:18888, this PC`), only in block 8, so a host and a client read differently at a glance.
+11. **The Machines card's scope chip is "server"**: the list is read from the server's control bank. Its CLI is `backsight stats system`, with no flag: the list is the same either way.
+12. **No 390 px boards for Cost and the Memory page**: they use the shipped one-column collapse and tables in `.tbl-wrap`; Overview, the scope line and System are drawn at 390 px.
+13. **The Days calendar is not redrawn**: the Overview board shows its card head with the "all PCs" chip and a sentence; its colouring by sessions stays this PC's.
+
+### Colour-blind check (block 8)
+
+No new colour. The latency bars use `--c-used` and this PC's value an outline ring in `--fg`: the two differ by shape (filled bar, hollow ring), not hue, and the watch and limit lines keep their block 3 dash patterns. Stale and ignored states carry a word and an icon (clock, info) besides colour. The validator was not run again: no colour pair is new.
+
+### Contrast (block 8)
+
+| Mark or text | On | Light | Dark |
+|---|---|---|---|
+| latency bucket bar (`--c-used`) | card | 4.42 | 4.75 |
+| this PC's ring (`--fg`, 2 px) | card | 15.80 | 14.64 |
+| "all PCs: sharing is off here" (`--fg-3`) | the switch's inset (`--surface-2`) | 5.12 | 5.40 |
+| "sharing off" and "info" pills (`--learn` on `--learn-bg`) | tint | 5.08 | 6.93 |
+| stale PC in "Which PCs" (`--watch`) | popover (`--surface`) | 6.13 | 7.91 |
+
+All from the block 3 table; every mark that carries meaning clears 3:1 and every text 4.5:1 in both themes. In forced colours the bars keep their fill as data with a `CanvasText` outline, the ring is `CanvasText`, and the off link is `GrayText`.
+
+### Limits of this draft
+
+- The canvas was not opened or rendered after publishing (the Claude Design type forbids checking without asking). The files were checked statically only: balanced tags, valid `data-props` (enum defaults among their options), every `renderVals` run once with sample props, and the 24 published files byte-identical to the local ones. Heights are estimates; "Which PCs" open sits in a box sized by guess.
+- Numbers are invented and consistent within each board, not across boards (the Overview says 1 document ignored, the states sheet 2).
+- Machine ids, systems and dates are samples; no real machine id, hostname, project or session of another PC appears anywhere.
+- The canvas's inline styles (two legend swatch colours, sheet spacing) are mockup layout only; block 8's pages need classes, as for blocks 5 and 6.

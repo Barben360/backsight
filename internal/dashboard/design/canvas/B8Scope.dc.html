@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Several PCs: the scope line and its switch</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Whose activity is this?</h1><span class="muted">The scope line under the top bar, in every state of block 8. The switch is a pair of links (<code>?machines=this</code>, <code>?machines=all</code>) that keep the page, the window and the project filter.</span></div>
+
+  <h2 class="sec-h">This PC, the default. Other PCs share on this server, so the switch shows how many.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="this" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">All PCs: the scope reads “all PCs on this server (4)”. One PC sent nothing for 9 days and one document was ignored: each says so.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="all" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">All PCs, “Which PCs” open: short machine id, system and first-seen date only.</h2>
+  <div style="padding-bottom: 330px">
+    <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="all" open="pcs" hint-size="100%,94px"></dc-import>
+  </div>
+
+  <h2 class="sec-h">All PCs with a project filter: the filter applies to this PC only, and the scope line says the other PCs are counted whole.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="all" filter="backsight" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">This PC’s sharing is off: “all PCs” is not offered. The link goes to Machines on System, which says what to change.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" b8scope="sharingoff" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">Only this PC shares on this server: no switch, the scope line is the one shipped today.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" b8scope="single" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">A client in remote mode, all PCs: the server is another machine.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="all" b8scope="clean" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">The server host, all PCs: the same switch and the same figures; the address is local and says so.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="all" b8scope="host" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">Memory server not answering, all PCs: the other PCs’ figures are the ones fetched last, and the line says when.</h2>
+  <dc-import name="TopBar" theme="inherit" active="overview" b6="true" b8="true" machines="all" b8scope="down" hint-size="100%,94px"></dc-import>
+
+  <h2 class="sec-h">The CLI disclosure: the command carries <code>--machines all</code> only when all PCs is selected (this PC is the default).</h2>
+  <div class="grid-3" style="padding-bottom: 60px">
+    <section class="card" aria-labelledby="cli-a">
+      <div class="card-head">
+        <h3 id="cli-a">Found</h3>
+        <span class="chip" title="Added up from the 4 PCs that share their activity on this server"><span class="i i-sm i-pcs"></span>all PCs (4)</span>
+        <span class="spacer"></span>
+        <details class="cli" open="true"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 7 --machines all</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="small sub" style="margin-top: 52px">With this PC selected, the same tile shows <code>backsight stats quality --days 7</code>, as today.</p>
+    </section>
+    <section class="card" aria-labelledby="cli-b">
+      <div class="card-head">
+        <h3 id="cli-b">What does the server’s model spend?</h3>
+        <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <details class="cli" open="true"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="small sub" style="margin-top: 52px">A server widget is already every PC’s: the flag would change nothing, so its command never carries it.</p>
+    </section>
+    <section class="card" aria-labelledby="cli-c">
+      <div class="card-head">
+        <h3 id="cli-c">What should I do?</h3>
+        <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli" open="true"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats overview --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <p class="small sub" style="margin-top: 52px">A widget that stays this PC’s in all PCs keeps its chip and its command without the flag.</p>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="flag-h">
+    <div class="card-head"><h2 id="flag-h">The flag in the terminal</h2><span class="spacer"></span><span class="muted small">every <code>stats</code> view</span></div>
+    <dl class="dl">
+      <dt><code>--machines this</code></dt><dd>The default: this PC’s activity, as today.</dd>
+      <dt><code>--machines all</code></dt><dd>This PC’s activity added to the figures the other PCs on this server share: “all PCs on this server (4)”. Project filters apply to this PC only.</dd>
+      <dt>API</dt><dd><code>/api/v1/&lt;view&gt;?machines=all</code> returns what <code>stats &lt;view&gt; --machines all --json</code> returns.</dd>
+    </dl>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

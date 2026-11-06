@@ -147,13 +147,45 @@ body{margin:0}
 </header>
 <div class="scopebar">
   <div class="wrap scope">
-    <span>Activity on <b>this PC</b></span>
+    <sc-if value="{{scopePlain}}" hint-placeholder-val="{{ true }}">
+      <span>Activity on <b>this PC</b></span>
+    </sc-if>
+    <sc-if value="{{b8sw}}" hint-placeholder-val="{{ false }}">
+      <span class="mscope">Activity on
+        <nav class="seg mseg" aria-label="Whose activity">
+          <a href="#" aria-current="{{mThis}}">this PC</a>
+          <sc-if value="{{allOn}}" hint-placeholder-val="{{ true }}"><a href="#" aria-current="{{mAll}}">all PCs on this server ({{pcsN}})</a></sc-if>
+          <sc-if value="{{allOff}}" hint-placeholder-val="{{ false }}"><a class="seg-off" href="#" title="This PC does not share its activity (feedback.share_ledger is off), so it does not read the other PCs’ either. See Machines on System.">all PCs: sharing is off here</a></sc-if>
+        </nav>
+        <sc-if value="{{allMode}}" hint-placeholder-val="{{ false }}">
+          <details class="menu pcs" open="{{openPcs}}">
+            <summary class="chip" aria-label="Which PCs are counted in all PCs"><span class="i i-sm i-pcs"></span>Which PCs <span class="caret">▾</span></summary>
+            <div class="menu-pop wider pcs-pop">
+              <span class="grp">Counted in “all PCs” ({{pcsN}})</span>
+              <ul class="pcl">
+                <sc-for list="{{pcs}}" as="c" hint-placeholder-count="4">
+                  <li><span class="idc" title="Short machine id of this PC">{{c.id}}</span><span>{{c.lab}}</span><span class="{{c.cls}}">{{c.st}}</span></li>
+                </sc-for>
+              </ul>
+              <sc-if value="{{hasIgn}}" hint-placeholder-val="{{ false }}">
+                <span class="grp">Not counted</span>
+                <p class="pcl-note">{{ignText}}</p>
+              </sc-if>
+              <hr>
+              <p class="pcl-note">A PC with sharing off (<code>feedback.share_ledger</code>) sends nothing, so it is not here.</p>
+              <p class="pcl-note">{{fetchText}}</p>
+              <a href="#">Machines on System →</a>
+            </div>
+          </details>
+        </sc-if>
+      </span>
+    </sc-if>
     <sc-if value="{{serverDown}}" hint-placeholder-val="{{ false }}">
-      <span class="dot">memory on <b>127.0.0.1:18888</b></span>
+      <span class="dot">memory on <b>{{addr}}</b>{{addrNote}}</span>
       <span class="st st-watch">not answering since 09:12</span>
     </sc-if>
     <sc-if value="{{serverOk}}" hint-placeholder-val="{{ true }}">
-      <span class="dot">memory on <b>127.0.0.1:18888</b></span>
+      <span class="dot">memory on <b>{{addr}}</b>{{addrNote}}</span>
     </sc-if>
     <span class="dot">updated <time datetime="2026-10-30T15:42" title="2026-10-30 15:42">{{age}}</time></span>
     <sc-if value="{{stale}}" hint-placeholder-val="{{ false }}">
@@ -165,11 +197,23 @@ body{margin:0}
     <sc-if value="{{partial}}" hint-placeholder-val="{{ false }}">
       <span class="chip"><span class="i i-sm i-clock"></span>Catching up: 3 days of history still being read</span>
     </sc-if>
+    <sc-if value="{{allNf}}" hint-placeholder-val="{{ false }}">
+      <span class="chip chip-nf" title="The project filter applies to this PC only: other PCs send no project names, so their figures are counted whole.">other PCs: not filtered</span>
+    </sc-if>
+    <sc-if value="{{chipStale}}" hint-placeholder-val="{{ false }}">
+      <a class="chip chip-stale" href="#" title="c84e1f39 last sent its figures 9 days ago: its days since Oct 21 are missing."><span class="i i-sm i-clock"></span>1 PC: nothing sent for 9 days</a>
+    </sc-if>
+    <sc-if value="{{chipIgn}}" hint-placeholder-val="{{ false }}">
+      <a class="chip" href="#" title="A document from another PC did not pass the checks and is left out. Its content is not shown."><span class="i i-sm i-info"></span>1 document ignored</a>
+    </sc-if>
+    <sc-if value="{{chipCached}}" hint-placeholder-val="{{ false }}">
+      <span class="chip chip-stale"><span class="i i-sm i-clock"></span>other PCs as fetched at 07:40</span>
+    </sc-if>
   </div>
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"active":{"editor":"enum","options":["overview","quality","cost","bank","pipeline","projects","sessions","memories","system","releases","defs"],"default":"overview"},"dev":{"editor":"boolean","default":false},"open":{"editor":"enum","options":["none","browse","developer","project","prefs","menu","custom","menucustom"],"default":"none"},"b6":{"editor":"boolean","default":false},"custom":{"editor":"enum","options":["none","applied","invalid"],"default":"none"},"density":{"editor":"enum","options":["comfortable","compact"],"default":"comfortable"},"keys":{"editor":"boolean","default":false},"scope":{"editor":"enum","options":["ok","serverdown","stale","partial"],"default":"ok"},"filter":{"editor":"text","default":""},"win":{"editor":"enum","options":["1","7","30","90"],"default":"7"},"$preview":{"width":1440,"height":520}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"active":{"editor":"enum","options":["overview","quality","cost","bank","pipeline","projects","sessions","memories","system","releases","defs"],"default":"overview"},"dev":{"editor":"boolean","default":false},"open":{"editor":"enum","options":["none","browse","developer","project","prefs","menu","custom","menucustom","pcs"],"default":"none"},"b8":{"editor":"boolean","default":false},"machines":{"editor":"enum","options":["this","all"],"default":"this"},"b8scope":{"editor":"enum","options":["issues","clean","host","sharingoff","single","down"],"default":"issues"},"b6":{"editor":"boolean","default":false},"custom":{"editor":"enum","options":["none","applied","invalid"],"default":"none"},"density":{"editor":"enum","options":["comfortable","compact"],"default":"comfortable"},"keys":{"editor":"boolean","default":false},"scope":{"editor":"enum","options":["ok","serverdown","stale","partial"],"default":"ok"},"filter":{"editor":"text","default":""},"win":{"editor":"enum","options":["1","7","30","90"],"default":"7"},"$preview":{"width":1440,"height":520}}'>
 class Component extends DCLogic {
   renderVals() {
     const p = this.props;
@@ -212,6 +256,40 @@ class Component extends DCLogic {
       kOff: keysOn ? undefined : 'true', kOffCheck: keysOn ? '' : '✓',
       kOn: keysOn ? 'true' : undefined, kOnCheck: keysOn ? '✓' : '',
     };
+    // Block 8 (opt-in, off for every block 3 and block 6 artboard): the machines switch in the scope line.
+    const b8 = String(p.b8 ?? false) === 'true';
+    const bs = p.b8scope ?? 'issues';
+    const single = b8 && bs === 'single';
+    const sharingOff = b8 && bs === 'sharingoff';
+    const allMode = b8 && (p.machines ?? 'this') === 'all' && !single && !sharingOff;
+    const b8down = b8 && bs === 'down';
+    const host = b8 && bs === 'host';
+    const four = bs === 'issues' || bs === 'down';
+    const pcs = [
+      { id: '3f9c2a17', lab: host ? 'Linux · since Sep 2 · this PC, holds the memory server' : 'Linux · since Sep 2 · this PC', cls: 'pcl-st', st: 'its own figures, live' },
+      { id: 'a07be4d1', lab: 'macOS · since Oct 10', cls: 'pcl-st', st: 'sent 5 h ago' },
+      { id: '5d21c8e0', lab: 'Windows · since Oct 28', cls: 'pcl-st', st: 'sent 1 h ago · no activity in this window' },
+    ];
+    if (four) pcs.push({ id: 'c84e1f39', lab: 'Linux · since Jul 18', cls: 'pcl-st st st-watch', st: 'sent 9 d ago: its figures stop on Oct 21' });
+    const b8v = {
+      scopePlain: !b8 || single,
+      b8sw: b8 && !single,
+      allOn: !sharingOff, allOff: sharingOff,
+      mThis: allMode ? undefined : 'true',
+      mAll: allMode ? 'true' : undefined,
+      allMode, pcs,
+      pcsN: four ? '4' : '3',
+      openPcs: (allMode && open === 'pcs') || undefined,
+      hasIgn: four,
+      ignText: '1 document did not pass the checks (not valid) and is left out. What it holds is not shown.',
+      fetchText: b8down ? 'Fetched at 07:40: the memory server has not answered since 09:12.' : 'Other PCs’ figures were fetched 2 h ago; they are fetched every 6 h.',
+      addr: !b8 || host ? '127.0.0.1:18888' : '192.168.1.20:18888',
+      addrNote: host ? ', this PC' : '',
+      allNf: allMode && !!filter,
+      chipStale: allMode && bs === 'issues',
+      chipIgn: allMode && bs === 'issues',
+      chipCached: allMode && b8down,
+    };
     const keys = ['overview','quality','cost','bank','pipeline','projects','sessions','memories','system','releases','defs'];
     const cur = {};
     keys.forEach((k) => { cur[k] = k === active ? 'page' : undefined; });
@@ -233,11 +311,12 @@ class Component extends DCLogic {
       allCheck: filter ? '' : '✓',
       devOff: dev ? undefined : 'true', devOffCheck: dev ? '' : '✓',
       devOn: dev ? 'true' : undefined, devOnCheck: dev ? '✓' : '',
-      serverDown: scope === 'serverdown',
-      serverOk: scope !== 'serverdown',
+      ...b8v,
+      serverDown: scope === 'serverdown' || b8down,
+      serverOk: scope !== 'serverdown' && !b8down,
       stale: scope === 'stale',
       partial: scope === 'partial',
-      age: scope === 'stale' ? '12 min ago' : (scope === 'serverdown' ? '1 min ago' : '2 min ago'),
+      age: scope === 'stale' ? '12 min ago' : (scope === 'serverdown' || b8down ? '1 min ago' : '2 min ago'),
     };
   }
 }

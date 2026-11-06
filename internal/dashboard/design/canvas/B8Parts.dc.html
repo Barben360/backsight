@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>All PCs: tiles and states</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>All PCs: how merged figures read</h1><span class="muted">Tiles and states that the Overview and the detail pages share when all PCs is selected.</span></div>
+
+  <h2 class="sec-h">Speed from merged time buckets: a range, labelled approximate. The limits sit on bucket edges, so ok and watch are exact.</h2>
+  <div class="grid-3">
+    <dc-import name="Tile" theme="inherit" scenario="healthy" slot="speed" machines="all" hint-size="100%,340px"></dc-import>
+    <dc-import name="Tile" theme="inherit" scenario="latency" slot="speed" machines="all" hint-size="100%,340px"></dc-import>
+    <dc-import name="Tile" theme="inherit" scenario="healthy" slot="speed" hint-size="100%,340px"></dc-import>
+  </div>
+  <p class="xs muted">Left, all PCs, ok: between 1.0 and 2.0 s. Middle, all PCs, watch: between 2.0 and 2.5 s. Right, the same tile with this PC selected, as shipped: exact.</p>
+
+  <h2 class="sec-h">Context and verdicts: what adding up changes</h2>
+  <div class="grid-3">
+    <dc-import name="Tile" theme="inherit" scenario="healthy" slot="context" machines="all" hint-size="100%,340px"></dc-import>
+    <dc-import name="Tile" theme="inherit" scenario="healthy" slot="wrong" machines="all" hint-size="100%,340px"></dc-import>
+    <dc-import name="Tile" theme="inherit" scenario="healthy" slot="found" machines="all" nf="true" hint-size="100%,340px"></dc-import>
+  </div>
+  <p class="xs muted">Left, the average per session (other PCs send totals, not sizes). Middle, “reported wrong” leaves “too few” once the PCs’ verdicts are added up. Right, a project filter: this PC’s figures are filtered, the other PCs’ are not, and the chip says so.</p>
+
+  <h2 class="sec-h">The other PCs, in the states a page can meet</h2>
+  <div class="grid-2">
+    <section class="card" aria-labelledby="st1">
+      <div class="card-head"><h3 id="st1">A PC with no activity in the window</h3></div>
+      <p class="small"><span class="idc">5d21c8e0</span> Windows, since Oct 28, sent its figures 1 h ago, with no prompt in the last 7 days. It is counted in “all PCs (4)” and adds nothing; tiles say “on the 2 PCs with activity this week”.</p>
+    </section>
+    <section class="card" aria-labelledby="st2">
+      <div class="card-head"><h3 id="st2">No PC has activity in the window</h3></div>
+      <div class="empty"><span>No activity on any of the 4 PCs in the last 7 days. The latest was Oct 21.</span><span class="small">Pick a longer window</span><div class="seg" role="group" aria-label="Longer windows"><a href="#">30 d</a><a href="#">90 d</a></div></div>
+    </section>
+    <section class="card" aria-labelledby="st3">
+      <div class="card-head"><h3 id="st3">A PC that stopped sending</h3><span class="spacer"></span><span class="pill st st-watch">watch</span></div>
+      <div class="state st-watch"><span class="i i-clock"></span><span><span class="idc">c84e1f39</span> Linux, since Jul 18, last sent its figures 9 days ago: its days after Oct 21 are missing from all PCs. It may be off, or its sending fails: <code>backsight doctor</code> on that PC says which.</span></div>
+      <p class="xs muted">Stale after 2 days without a send (the PCs send daily). After 30 days it is no longer counted, as for the shared counts of memory use.</p>
+    </section>
+    <section class="card" aria-labelledby="st4">
+      <div class="card-head"><h3 id="st4">Documents ignored</h3></div>
+      <div class="state st-few"><span class="i i-info"></span><span>2 documents from other PCs are left out: 1 is not valid, 1 is over the 1 MiB cap. What they hold is not shown.</span></div>
+      <p class="xs muted">Other PCs’ documents are checked before use (their form, every count a number, at most 400 days and 1 MiB). A document that fails is skipped whole; no text from it reaches a page or the JSON.</p>
+    </section>
+  </div>
+
+  <h2 class="sec-h">Summary line and “Summary as text” with all PCs</h2>
+  <section class="card" aria-labelledby="st5">
+    <div class="summary-row">
+      <p class="summary">In the last 7 days, on all PCs (4): <b>98</b> prompts got memory, Claude used it in <b>21</b> turns, about <b>31 k</b> tokens added; extraction cost <b>$43.62</b> <span class="muted">(server, all PCs).</span></p>
+      <button class="copy" type="button" aria-label="Copy summary: the numbers on this page as plain text, without any memory text"><span class="i i-sm i-copy"></span>Copy summary</button>
+    </div>
+    <pre class="sample">Activity on all PCs on this server (4) · memory on 192.168.1.20:18888
+1 PC sent nothing for 9 days · 1 document ignored
+Speed      ok      slowest 1 in 20 between 1.0 and 2.0 s (approximate), all PCs
+Context    ok      2,300 chars per session on average, all PCs; high value 3,600 on this PC</pre>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

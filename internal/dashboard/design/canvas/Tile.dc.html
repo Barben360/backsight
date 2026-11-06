@@ -19,7 +19,7 @@ body{margin:0}
   <div class="tile-top">
     <h3 class="tile-name">{{t.name}}</h3>
     <span class="chip" title="{{chipTitle}}"><span class="i i-sm {{chipIco}}"></span>{{t.chip}}</span>
-    <sc-if value="{{t.nf}}" hint-placeholder-val="{{ false }}"><span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span></sc-if>
+    <sc-if value="{{t.nf}}" hint-placeholder-val="{{ false }}"><span class="chip chip-nf" title="{{nfTitle}}">{{nfText}}</span></sc-if>
     <span class="spacer"></span>
     <details class="info" open="{{infoOpen}}">
       <summary aria-label="About {{t.name}}"><span class="i i-info"></span></summary>
@@ -38,7 +38,7 @@ body{margin:0}
   </div>
   <sc-if value="{{dev}}" hint-placeholder-val="{{ false }}"><span class="devid">{{t.devid}} · {{t.devx}}</span></sc-if>
   <p class="tile-q">{{t.q}}</p>
-  <div class="tile-v"><span class="big num">{{t.big}}</span><span class="unit">{{t.unit}}</span><span class="ci">{{t.ci}}</span></div>
+  <div class="tile-v"><span class="big num">{{t.big}}</span><span class="unit">{{t.unit}}</span><span class="ci {{ciCls}}">{{t.ci}}</span></div>
   <p class="tile-sub">{{t.sub}}</p>
   <div class="tile-st">
     <span class="st {{t.st}}">{{t.word}}</span>
@@ -62,7 +62,7 @@ body{margin:0}
 </article>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"ttr":{"editor":"enum","options":["none","ok","watch"],"default":"none"},"$preview":{"width":300,"height":400}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"ttr":{"editor":"enum","options":["none","ok","watch"],"default":"none"},"machines":{"editor":"enum","options":["this","all"],"default":"this"},"$preview":{"width":300,"height":400}}'>
 class Component extends DCLogic {
   renderVals() {
     const p = this.props;
@@ -169,6 +169,24 @@ class Component extends DCLogic {
       t.sub = 'Session to recalled memory: typical ' + (ttr === 'watch' ? '1 d 3 h' : '1 d 2 h') + ' · ' + t.sub;
       t.n = t.n + '; time to recall from ' + (ttr === 'watch' ? '109' : '118') + ' sessions recalled';
     }
+    // Block 8 (opt-in, off for every block 3 and block 6 artboard): the tile added up over all PCs.
+    const allPCs = (p.machines ?? 'this') === 'all';
+    if (allPCs) {
+      const ALL = {
+        found: { ...OK, cls: '', big: '30', unit: '%', ci: '(25–35 %)', sub: '98 of 325 prompts · this PC 46 of 167', note: '', ...better('+1 pt'), s: [27,30,31,26,32,30,30], n: '325 prompts on the 2 PCs with activity this week', mdc: 'about 7 pts', link: 'This PC’s 167 prompts →', devx: 'n 325 · 2 of 4 PCs with activity' },
+        used: { ...OK, cls: '', big: '64', unit: '%', ci: '(54–72 %)', sub: 'Said what it used on 99 % of turns.', note: 'Judged on the last 28 days: too few turns in 7.', ...better('+3 pts'), s: [61,66,60,67,63,64,64], n: '67 of 105 turns, last 28 days', mdc: 'about 18 pts', link: 'This PC’s 61 turns →', devx: 'n 105 (28 d) · 2 PCs' },
+        wrong: { ...OK, cls: '', big: '12', unit: '%', ci: '(4–30 %)', sub: '3 of 25 verdicts', note: 'Enough verdicts once the PCs are added up (20 needed).', nodelta: true, s: [0,8,0,13,0,12,12], n: '25 verdicts', mdc: 'about 20 pts', link: 'This PC’s 14 verdicts →', devx: 'lb 4.2 % < 5 % · this PC alone too few' },
+        context: { ...OK, cls: '', big: '2,300', unit: 'chars', ci: '≈ 580 tokens', sub: 'average per session, all PCs · this PC’s high value 3,600', note: 'Other PCs send totals, not sizes: the status is judged on this PC’s high value.', nodelta: true, s: [2200,2400,2300,2500,2300,2200,2300], n: '311 sessions', mdc: '—', link: 'This PC’s 34 sessions →', devx: 'mean = chars / sessions · p95 this PC only' },
+        speed: { ...OK, cls: '', big: '1.0–2.0', unit: 's', ci: 'approximate', sub: 'slowest 1 in 20, from the PCs’ time buckets · typical 500 ms–1.0 s', note: 'A range, not a value: other PCs send their times in buckets (… 1 s, 2 s, 2.5 s, 5 s).', dcls: '', darr: '=', dtext: 'same bucket as the week before', s: [1.5,1.5,1.5,1.5,1.5,1.5,1.5], n: '325 prompts on 2 PCs', mdc: 'one bucket', link: 'This PC’s 167 prompts →', devx: 'p95 in bucket (1000, 2000] ms' },
+        flowing: { ...OK, cls: '', big: '100', unit: '%', ci: '', sub: '360 of 360 sessions sent', note: '', ...same, s: [100,100,100,100,100,100,100], n: '360 sessions', mdc: '—', link: 'This PC’s 239 sessions →', devx: 'failed 0 · 2 PCs' },
+      };
+      if (sc === 'latency') {
+        ALL.speed = { st: 'st-watch', word: 'watch', cls: 'is-watch', big: '2.0–2.5', unit: 's', ci: 'approximate', sub: 'slowest 1 in 20, from the PCs’ time buckets · limit 2.5 s', note: 'Over 2.0 s for sure: the limits sit on bucket edges, so the status is exact even though the value is a range.', dcls: 'worse', darr: '▲', dtext: 'one bucket slower, worse', s: [1.5,1.5,2.25,2.25,2.25,2.25,2.25], n: '325 prompts on 2 PCs', mdc: 'one bucket', link: 'This PC’s 167 prompts →', devx: 'p95 in bucket (2000, 2500] ms' };
+      }
+      Object.assign(t, ALL[slot]);
+      t.chip = 'all PCs (4)';
+      t.cli = t.cli + ' --machines all';
+    }
     t.nf = String(p.nf ?? false) === 'true';
     // sparkline geometry (188 x 32 box, 3 px padding)
     const vals = t.s || [];
@@ -187,8 +205,11 @@ class Component extends DCLogic {
     return {
       theme, dev, t,
       rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad',
-      chipIco: isServer ? 'i-server' : 'i-pc',
-      chipTitle: isServer ? 'From the memory server: all PCs' : 'Activity recorded on this PC',
+      chipIco: allPCs ? 'i-pcs' : (isServer ? 'i-server' : 'i-pc'),
+      chipTitle: allPCs ? 'Added up from the 4 PCs that share their activity on this server' : (isServer ? 'From the memory server: all PCs' : 'Activity recorded on this PC'),
+      nfText: allPCs ? 'other PCs not filtered' : 'not filtered',
+      nfTitle: allPCs ? 'The project filter applies to this PC only: the other PCs’ figures are counted whole.' : 'Not filtered: this shows the whole memory.',
+      ciCls: allPCs && slot === 'speed' ? 'approx' : '',
       hasDelta: !t.nodelta, hasNote: !!t.note,
       infoOpen: String(p.info ?? false) === 'true' || undefined,
       pts, area, ex: last[0], ey: last[1],
