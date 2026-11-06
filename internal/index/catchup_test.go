@@ -517,6 +517,34 @@ func TestHelperIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = ix.Close() }()
+	role, barrier := os.Getenv("BACKSIGHT_INDEX_ROLE"), os.Getenv("BACKSIGHT_INDEX_BARRIER")
+	batches := 0
+	if barrier != "" {
+		maxBatchBytes = 20_000 // ~200 lines a transaction: many small ones
+		switch role {
+		case "a":
+			// A commits a first batch, then stays stopped, its write lock
+			// free, until B has committed one of its own.
+			afterBatch = func() {
+				batches++
+				if batches == 1 {
+					touchBarrier(barrier, "a.started")
+					waitBarrier(barrier, "b.started")
+				}
+			}
+		case "b":
+			// B starts only once A has committed, and tells A when it has
+			// committed in turn.
+			afterBatch = func() {
+				batches++
+				touchBarrier(barrier, "b.started")
+			}
+			waitBarrier(barrier, "a.started")
+		default:
+			t.Fatalf("role %q", role)
+		}
+	}
+	defer func() { fmt.Printf("HELPER role=%s batches=%d\n", role, batches) }()
 	// Each partial run means the other child committed meanwhile: the
 	// bound is far above what the 20,000 lines can take.
 	for range 100 {
@@ -531,6 +559,30 @@ func TestHelperIngest(t *testing.T) {
 	t.Fatal("still partial after 100 runs")
 }
 
+// touchBarrier creates the marker file name in dir.
+func touchBarrier(dir, name string) {
+	if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "barrier:", err)
+		os.Exit(3)
+	}
+}
+
+// waitBarrier polls for the marker file name in dir; a broken barrier
+// ends the child with an error instead of a hang.
+func waitBarrier(dir, name string) {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintln(os.Stderr, "barrier: timed out waiting for", name)
+			os.Exit(3)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func TestTwoProcessesIngestConcurrently(t *testing.T) {
 	d := tempDirs(t)
 	for _, month := range []string{"2026-09", "2026-10"} {
@@ -540,11 +592,13 @@ func TestTwoProcessesIngestConcurrently(t *testing.T) {
 		}
 		writeFile(t, filepath.Join(d.TelemetryDir(), "events-"+month+".jsonl"), b.String())
 	}
+	barrier := t.TempDir()
 	var cmds []*exec.Cmd
 	var outs []*bytes.Buffer
-	for range 2 {
+	for _, role := range []string{"a", "b"} {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperIngest$", "-test.count=1")
-		cmd.Env = append(os.Environ(), "BACKSIGHT_INDEX_HELPER="+d.State)
+		cmd.Env = append(os.Environ(), "BACKSIGHT_INDEX_HELPER="+d.State,
+			"BACKSIGHT_INDEX_ROLE="+role, "BACKSIGHT_INDEX_BARRIER="+barrier)
 		out := &bytes.Buffer{}
 		cmd.Stdout, cmd.Stderr = out, out
 		cmds, outs = append(cmds, cmd), append(outs, out)
@@ -561,6 +615,18 @@ func TestTwoProcessesIngestConcurrently(t *testing.T) {
 	}
 	if t.Failed() {
 		return
+	}
+	// The barrier forces the overlap: B starts only after A's first
+	// commit and A stays stopped until B has committed one, so both
+	// committed batches, B's among A's. (A may find nothing left after.)
+	batches := map[string]int{}
+	for _, m := range regexp.MustCompile(`HELPER role=(\w) batches=(\d+)`).FindAllStringSubmatch(outs[0].String()+outs[1].String(), -1) {
+		var n int
+		_, _ = fmt.Sscan(m[2], &n)
+		batches[m[1]] = n
+	}
+	if batches["a"] < 1 || batches["b"] < 1 {
+		t.Errorf("no overlap: committed batches %v; outputs:\n%s\n%s", batches, outs[0], outs[1])
 	}
 	e := envAt(t, d)
 	if n := e.count("tel_prompt"); n != 20_000 {
