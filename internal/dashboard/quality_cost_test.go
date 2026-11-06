@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/dashboard/chart"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -885,6 +886,10 @@ func TestLatencyLimitBelongsToRecall(t *testing.T) {
 }
 
 func TestLongLatencyLinesMergeByMax(t *testing.T) {
+	// The merged positions' sentences are what is read: ask the chart for them past its hover limit.
+	oldHover := chart.HoverMax
+	chart.HoverMax = 1 << 30
+	t.Cleanup(func() { chart.HoverMax = oldHover })
 	var ps []metrics.Point
 	for i := 0; i < 1000; i++ {
 		v := 100.0

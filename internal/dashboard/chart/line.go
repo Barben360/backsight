@@ -224,6 +224,9 @@ func (c Line) HTML() template.HTML {
 			if nmax > 0 && v > 0 {
 				h = float64(v) / float64(nmax) * plotH * 0.3
 			}
+			if h == 0 && m > HoverMax {
+				continue // a day of none draws nothing: on a long window those are a quarter of the page
+			}
 			bx0, bx1 := math.Max(left, x(j)-bw/2), math.Min(right, x(j)+bw/2)
 			b.WriteString(`<rect class="nb" x="` + f(bx0) + `" y="` + f(plotBase-h) + `" width="` + f(bx1-bx0) + `" height="` + f(h) + `"></rect>`)
 		}
@@ -246,12 +249,23 @@ func (c Line) HTML() template.HTML {
 		if ser.Dashed {
 			cls = strings.TrimSpace(cls + " ln-2")
 		}
-		var run []string
+		var run, runY []string
 		flush := func() {
 			if len(run) > 1 {
-				b.WriteString(`<polyline class="ln ` + cls + `" points="` + strings.Join(run, " ") + `"></polyline>`)
+				pts := run
+				if m > HoverMax {
+					// A flat stretch is its two ends: the points between draw the same line.
+					pts = nil
+					for i, p := range run {
+						if i > 0 && i < len(run)-1 && runY[i] == runY[i-1] && runY[i] == runY[i+1] {
+							continue
+						}
+						pts = append(pts, p)
+					}
+				}
+				b.WriteString(`<polyline class="ln ` + cls + `" points="` + strings.Join(pts, " ") + `"></polyline>`)
 			}
-			run = run[:0]
+			run, runY = run[:0], runY[:0]
 		}
 		for j, v := range vals[s] {
 			if !v.ok {
@@ -259,10 +273,11 @@ func (c Line) HTML() template.HTML {
 				continue
 			}
 			run = append(run, f(x(j))+","+f(y(v.v)))
+			runY = append(runY, f(y(v.v)))
 		}
 		flush()
 		for j, v := range vals[s] {
-			if v.ok && !ser.Dashed {
+			if v.ok && !ser.Dashed && m <= HoverMax {
 				b.WriteString(`<circle class="pt ` + cls + `" cx="` + f(x(j)) + `" cy="` + f(y(v.v)) + `" r="3"></circle>`)
 			}
 		}
@@ -273,7 +288,7 @@ func (c Line) HTML() template.HTML {
 	}
 
 	focus := m <= FocusMax
-	for j := 0; j < m; j++ {
+	for j := 0; j < m && m <= HoverMax; j++ {
 		title := xs[j]
 		for s, ser := range c.Series {
 			title += " · " + ser.Name + ": " + c.show(vals[s][j])

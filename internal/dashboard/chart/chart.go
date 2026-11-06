@@ -20,6 +20,13 @@ const (
 	FocusMax = 100
 )
 
+// HoverMax is the most positions of a line or stacked chart that each get a hover rect with its sentence.
+// Beyond it the plot has none (and no dots on a line: they would overlap into the line): the lines and
+// bars are the same, the figure keeps its name, and the table lists the days. A rect with its sentence
+// costs about 130 to 200 bytes, a point dot 62: on 395 days of five charts they were over half of a page.
+// A variable so a test can ask for the sentences of a long series.
+var HoverMax = 200
+
 const dash = "—"
 
 // Num formats a value for people.

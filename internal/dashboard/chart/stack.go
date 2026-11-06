@@ -109,7 +109,7 @@ func (c Stack) frame(d stackData, top float64, centre func(j int) float64, hit f
 		b.WriteString(`<text class="ta-m" x="` + f(l.x) + `" y="218">` + esc(d.xs[l.j]) + `</text>`)
 	}
 	focus := m <= FocusMax
-	for j := 0; j < m; j++ {
+	for j := 0; j < m && m <= HoverMax; j++ {
 		title := c.title(d, j)
 		x0, x1 := hit(j)
 		b.WriteString(`<rect class="hit" x="` + f(x0) + `" y="` + f(plotTop) + `" width="` + f(x1-x0) + `" height="` + f(plotH) + `"`)

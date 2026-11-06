@@ -338,6 +338,7 @@ func many(n int) Line {
 }
 
 func TestLineCapsMarks(t *testing.T) {
+	withHover(t)
 	out := keep(string(many(2000).HTML()))
 	if got := strings.Count(out, "<title>"); got != 500 {
 		t.Errorf("titles = %d, want 500", got)
@@ -833,5 +834,53 @@ func TestGapBandAndSource(t *testing.T) {
 	must(t, bo, `>kept by the server (300 days)</text>`)
 	if strings.Count(bo, `<rect class="gap-band"`) != 2 { // the band and the legend swatch
 		t.Errorf("bucketed band: %d", strings.Count(bo, `<rect class="gap-band"`))
+	}
+}
+
+// withHover lets a test read the sentences of positions past HoverMax: it
+// checks how many positions a chart buckets, not how many it hovers.
+func withHover(t *testing.T) {
+	t.Helper()
+	old := HoverMax
+	HoverMax = 1 << 30
+	t.Cleanup(func() { HoverMax = old })
+}
+
+// TestHoverStopsPastHoverMax: up to HoverMax positions every position has
+// its rect, its sentence and (a line) its dot; one position more and the
+// plot has none of them, while the lines, the bars, the name and the table
+// are the same.
+func TestHoverStopsPastHoverMax(t *testing.T) {
+	mk := func(n int) (line string, stack string) {
+		x, u, g := make([]string, n), make([]float64, n), make([]float64, n)
+		for i := range x {
+			x[i], u[i], g[i] = fmt.Sprintf("d%d", i), 2, 1
+		}
+		l := many(n)
+		return string(l.HTML()), string(outcomes(x, u, g).Bars())
+	}
+	for _, n := range []int{HoverMax, HoverMax + 1} {
+		line, stack := mk(n)
+		hover := n <= HoverMax
+		for name, out := range map[string]string{"line": line, "stack": stack} {
+			if got := strings.Count(out, `class="hit"`); (got == n) != hover || (got != 0) != hover {
+				t.Errorf("%s at %d positions: %d hit rects, want %d", name, n, got, map[bool]int{true: n, false: 0}[hover])
+			}
+			if got := strings.Count(out, "<title>"); (got != 0) != hover {
+				t.Errorf("%s at %d positions: %d titles", name, n, got)
+			}
+			if !strings.Contains(out, `aria-label="`) || !strings.Contains(out, "<table") {
+				t.Errorf("%s at %d positions lost its name or its table", name, n)
+			}
+		}
+		if got := strings.Count(line, `<circle class="pt`); (got != 0) != hover {
+			t.Errorf("line at %d positions: %d dots", n, got)
+		}
+		if got := strings.Count(line, "<polyline"); got == 0 {
+			t.Errorf("line at %d positions: no line", n)
+		}
+		if got := len(segRect.FindAllString(stack, -1)); got != 2*n {
+			t.Errorf("stack at %d positions: %d bars, want %d", n, got, 2*n)
+		}
 	}
 }

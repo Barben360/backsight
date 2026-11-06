@@ -289,8 +289,10 @@ func TestAcceptancePageSet(t *testing.T) {
 	if n := strings.Count(pageOf(t, "memory", "all", false).Body, "<title>"); n < 500 {
 		t.Errorf("the hot memory's page with limit=500 draws %d marks, want 500 shows", n)
 	}
-	if n := strings.Count(pageOf(t, "quality", "365", false).Body, "<title>"); n < 365 {
-		t.Errorf("the quality page over 365 days draws %d marks", n)
+	// A year of days is drawn: a bar for each day of the outcomes chart (the hover sentences stop at
+	// chart.HoverMax positions, the bars do not).
+	if n := strings.Count(pageOf(t, "quality", "365", false).Body, `<rect class="seg `); n < 365 {
+		t.Errorf("the quality page over 365 days draws %d bars", n)
 	}
 }
 
@@ -475,38 +477,20 @@ func TestEveryCopyButtonIsHidden(t *testing.T) {
 	}
 }
 
-// overCapAtLongestWindow are the pages whose charts still draw a position and a hover title for every day of
-// the longest window (395 days) and so exceed the cap there: the kind and the size they must stay under. A
-// known gap, not an allowance: the test fails when a page falls under the cap (drop its entry) or grows.
-var overCapAtLongestWindow = map[string]int{"quality": 700_000, "cost": 520_000}
-
 func TestPagesUnderSizeCap(t *testing.T) {
 	type sized struct {
 		name string
 		n    int
 	}
 	var all []sized
-	over := map[string]bool{}
 	eachAcceptancePage(t, func(p accPage) bool {
-		return p.Set == "90" || p.Set == "all" || p.Set == "long" || p.Set == "compare" || p.Set == "markers"
+		return p.Set == "90" || p.Set == "365" || p.Set == "all" || p.Set == "long" || p.Set == "compare" || p.Set == "markers"
 	}, func(t *testing.T, p accPage) {
 		all = append(all, sized{p.Name, len(p.Body)})
-		ceiling, known := overCapAtLongestWindow[p.Kind]
-		switch {
-		case p.Set == "long" && known && len(p.Body) > sizeCap:
-			over[p.Kind] = true
-			if len(p.Body) > ceiling {
-				t.Errorf("%d bytes, cap %d, and over the known %d for the %s page", len(p.Body), sizeCap, ceiling, p.Kind)
-			}
-		case len(p.Body) > sizeCap:
+		if len(p.Body) > sizeCap {
 			t.Errorf("%d bytes, cap %d", len(p.Body), sizeCap)
 		}
 	})
-	for kind := range overCapAtLongestWindow {
-		if !over[kind] {
-			t.Errorf("the %s page at the longest window is under the cap: drop it from overCapAtLongestWindow", kind)
-		}
-	}
 	sort.Slice(all, func(i, j int) bool { return all[i].n > all[j].n })
 	for _, s := range all[:min(5, len(all))] {
 		t.Logf("%7d bytes  %s", s.n, s.name)

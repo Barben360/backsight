@@ -202,6 +202,7 @@ func TestAreaHasOneHitPerPosition(t *testing.T) {
 }
 
 func TestStacksCapMarksAndKeepTotals(t *testing.T) {
+	withHover(t)
 	const n = 2000
 	x := make([]string, n)
 	parts := make([]Series, 5)
@@ -480,6 +481,7 @@ func TestAreaSkipsZeroPartsAndDrawsOnePositionAsBand(t *testing.T) {
 }
 
 func TestBucketedLabelsShowTheRange(t *testing.T) {
+	withHover(t)
 	x := make([]string, 1000)
 	v := make([]float64, 1000)
 	for i := range x {
