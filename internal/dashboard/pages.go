@@ -531,22 +531,15 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			data.P = p
 		}
 		outs := s.readViews(r.Context(), spec, p, id)
+		if bad, ok := firstProblem(outs); ok {
+			if s.notReadyPage(w, r, bad.st, prefs) {
+				return
+			}
+			s.failurePage(w, r, title, prefs, bad.err)
+			return
+		}
 		for i, v := range spec.Views {
-			res, st, err := outs[i].res, outs[i].st, outs[i].err
-			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
-				st, err = stateUpdating, nil
-			}
-			if s.notReadyPage(w, r, st, prefs) {
-				return
-			}
-			if st == stateBroken && err == nil {
-				err = errNoIndex
-			}
-			if err != nil {
-				s.failurePage(w, r, title, prefs, err)
-				return
-			}
-			data.V[v] = &res
+			data.V[v] = &outs[i].res
 		}
 		head := data.V[first]
 		s.withResult(&data, head)
@@ -604,16 +597,56 @@ type viewOut struct {
 // numbers). The answers come back in the views' order, the caller judging
 // them in it.
 func (s *Server) readViews(ctx context.Context, spec pageSpec, p views.Params, id string) []viewOut {
+	return readViewsWith(ctx, spec, p, id, s.data.result)
+}
+
+// viewReader reads one view: data.result, or a stand-in in a test.
+type viewReader func(ctx context.Context, view string, p views.Params, id string) (metrics.Result, indexState, error)
+
+// errViewFailed is what a view that panicked reports: the page fails, not
+// the process. The panic's value stays out of it (it may name a path).
+var errViewFailed = errors.New("a view of the page could not be read")
+
+func readViewsWith(ctx context.Context, spec pageSpec, p views.Params, id string, read viewReader) []viewOut {
 	outs := make([]viewOut, len(spec.Views))
 	var wg sync.WaitGroup
 	for i, v := range spec.Views {
 		q := viewParams(spec, v, p)
 		wg.Go(func() {
-			outs[i].res, outs[i].st, outs[i].err = s.data.result(ctx, v, q, id)
+			defer func() {
+				if recover() != nil {
+					outs[i] = viewOut{st: stateReady, err: errViewFailed}
+				}
+			}()
+			outs[i].res, outs[i].st, outs[i].err = read(ctx, v, q, id)
 		})
 	}
 	wg.Wait()
 	return outs
+}
+
+// firstProblem judges the answers in the views' order and returns the first
+// that is not a result: bad.st is then a state that has a page of its own
+// (building, updating, updated), or bad.err the failure to tell. So a
+// failure of the first view is told even when the second is still building,
+// and a building first view hides a failure of the second.
+func firstProblem(outs []viewOut) (bad viewOut, ok bool) {
+	for _, o := range outs {
+		if o.st == stateReady && errors.Is(o.err, index.ErrUpdateInProgress) {
+			o.st, o.err = stateUpdating, nil
+		}
+		switch o.st {
+		case stateBuilding, stateUpdating, stateUpdated:
+			return viewOut{st: o.st}, true
+		}
+		if o.st == stateBroken && o.err == nil {
+			o.err = errNoIndex
+		}
+		if o.err != nil {
+			return viewOut{st: o.st, err: o.err}, true
+		}
+	}
+	return viewOut{}, false
 }
 
 // viewParams are the parameters view is asked with on the page spec. The
