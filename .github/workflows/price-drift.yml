@@ -1,0 +1,67 @@
+name: price-drift
+# Compares the binary's built-in price table with LiteLLM's public list
+# every week (scripts/pricedrift, issue 143): a provider's price change is
+# noticed without users' PCs fetching anything. On a difference it opens
+# one issue, or updates the open one; a person checks the provider's own
+# pricing page and changes the table in a release. LiteLLM's numbers only
+# ever reach an issue, never the binary. A download or parse failure fails
+# the run, so a broken source never reads as "no difference".
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+# Not used by the check; every workflow sets its runner slot
+# (scripts/workflows_test.go).
+env:
+  BACKSIGHT_CI_SLOT: "1"
+jobs:
+  price-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          cache: false
+      - name: Compare with LiteLLM and file an issue on a difference
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "💲 The built-in price table differs from LiteLLM's list"
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 60 -o "$RUNNER_TEMP/prices.json" \
+            https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+          # Built, not go run: go run turns every failure into exit status 1,
+          # which would read a broken download as a difference.
+          go build -o "$RUNNER_TEMP/pricedrift" ./scripts/pricedrift
+          status=0
+          "$RUNNER_TEMP/pricedrift" -litellm "$RUNNER_TEMP/prices.json" > "$RUNNER_TEMP/report.md" || status=$?
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          case $status in
+            0) exit 0 ;;
+            1) ;;
+            *) exit "$status" ;;
+          esac
+          report=$(cat "$RUNNER_TEMP/report.md")
+          printf '%s\n\nFound by the weekly price-drift workflow: %s/%s/actions/runs/%s\n' \
+            "$report" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/body.md"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number,title \
+            --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -z "$n" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+            exit 0
+          fi
+          # The same difference as the open issue's: nothing new to say.
+          old=$(gh issue view "$n" --repo "$GITHUB_REPOSITORY" --json body --jq .body | tr -d '\r')
+          old=$(printf '%s' "${old%%Found by the weekly price-drift workflow*}")
+          if [ "$old" = "$report" ]; then
+            exit 0
+          fi
+          gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+          gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "The difference changed: the description now holds this week's report."
