@@ -24,11 +24,33 @@ type Head struct {
 	CLI         string
 	Drill       string
 	DrillText   string
-	Aside       string // a short muted note after the spacer, before the ⓘ; "" none
-	Chip        string // a chip after the scope ("developer"); "" none
-	Pill        Word   // the status of the card, a pill after the spacer; zero none
-	Pager       Pager  // the paging of a list card, under its table; zero none
+	Aside       string   // a short muted note after the spacer, before the ⓘ; "" none
+	Chip        string   // a chip after the scope ("developer"); "" none
+	Pill        Word     // the status of the card, a pill after the spacer; zero none
+	Pager       Pager    // the paging of a list card, under its table; zero none
+	PCs         *PCsChip // the figure adds up the PCs: the chip "all PCs (N)" replaces "this PC"; nil none
+	OthersNF    bool     // a project filter spares the other PCs: the chip "other PCs not filtered"
+	Note        string   // a muted line under the card's content (what stays this PC's); "" none
 }
+
+// PCsChip is the chip "all PCs (N)" a widget carries when its figure adds up
+// the PCs that share their activity on this server.
+type PCsChip struct{ Text, Title string }
+
+// allPCsChip is the chip for the scope pcs; nil when the result does not add
+// the PCs up (this PC's figures, or sharing off).
+func allPCsChip(sc metrics.Scope) *PCsChip {
+	if sc.Machines != "all" || sc.PCs == nil {
+		return nil
+	}
+	n := sc.PCs.Count
+	who := "the " + plural(n, "PC that shares", "PCs that share")
+	return &PCsChip{Text: "all PCs (" + strconv.Itoa(n) + ")", Title: "Added up from " + who + " their activity on this server"}
+}
+
+// othersNotFiltered says the merged metric adds the other PCs' whole figures
+// under a project filter.
+func othersNotFiltered(m metrics.Metric) bool { return slices.Contains(m.Tags, "others_not_filtered") }
 
 // Info is the ⓘ popover of a widget.
 type Info struct {

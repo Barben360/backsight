@@ -104,6 +104,8 @@ var funcs = template.FuncMap{
 	"count":       roundInt,
 	"ranks":       rankLines,
 
+	"thispc":       thisPC,
+	"nopcactivity": noPCActivity,
 	"banner":       bannerOf,
 	"summaryline":  summaryPage,
 	"attention":    attentionPage,

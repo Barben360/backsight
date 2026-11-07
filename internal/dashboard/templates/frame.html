@@ -215,14 +215,18 @@
 {{define "card-open"}}<section class="card" aria-labelledby="{{.ID}}">
 {{template "card-head" .}}{{end}}
 
+{{/* pcschip: dot is a PCsChip; othersnf: the chip of a merged figure whose project filter spares the other PCs. */}}
+{{define "pcschip"}}<span class="chip" title="{{.Title}}"><span class="i i-sm i-pcs"></span>{{.Text}}</span>{{end}}
+{{define "othersnf"}}<span class="chip chip-nf" title="The project filter applies to this PC only: the other PCs’ figures are counted whole.">other PCs not filtered</span>{{end}}
 {{define "card-head"}}<div class="card-head">{{if eq .Level 3}}<h3 id="{{.ID}}">{{.Title}}</h3>{{else}}<h2 id="{{.ID}}">{{.Title}}</h2>{{end}}
-{{if or (eq .Scope "machine") (eq .Scope "both")}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{end}}{{if or (eq .Scope "server") (eq .Scope "both")}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{with .Chip}}<span class="chip chip-dev">{{.}}</span>{{end}}<span class="spacer"></span>
+{{if .PCs}}{{template "pcschip" .PCs}}{{else if or (eq .Scope "machine") (eq .Scope "both")}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{end}}{{if or (eq .Scope "server") (eq .Scope "both")}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .OthersNF}}{{template "othersnf"}}{{end}}{{with .Chip}}<span class="chip chip-dev">{{.}}</span>{{end}}<span class="spacer"></span>
 {{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{if .Pill.Word}}<span class="pill st {{.Pill.Class}}">{{.Pill.Word}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
 {{end}}
 
 {{/* calendarcard: dot is a CalendarCard (Head, Colour, Chart); the Overview and the Days page draw it alike. */}}
 {{define "calendarcard"}}{{template "card-open" .Head}}
-<div class="row"><span class="small sub">Colour by</span>
+{{with .Note}}<p class="small sub">{{.}}</p>
+{{end}}<div class="row"><span class="small sub">Colour by</span>
 <nav class="seg" aria-label="Colour the days by">{{range .Colour}}{{template "seglink" .}}{{end}}</nav></div>
 {{.Chart}}
 {{template "card-close" .Head}}{{end}}
@@ -236,7 +240,8 @@
 
 {{define "cmd"}}<div class="cmd"><code>{{.}}</code><button class="copy" type="button" hidden aria-label="Copy: {{plain .}}"><span class="i i-sm i-copy"></span>Copy</button></div>{{end}}
 
-{{define "card-close"}}{{if .Pager.Total}}<div class="pager">{{with .Pager.Prev}}<a href="{{.}}" rel="prev" class="btn">← Previous</a>{{end}}<span>{{.Pager.From}}–{{.Pager.To}} of {{.Pager.Total}}</span>{{with .Pager.Next}}<a href="{{.}}" rel="next" class="btn">Next →</a>{{end}}</div>
+{{define "card-close"}}{{with .Note}}<p class="xs muted">{{.}}</p>
+{{end}}{{if .Pager.Total}}<div class="pager">{{with .Pager.Prev}}<a href="{{.}}" rel="prev" class="btn">← Previous</a>{{end}}<span>{{.Pager.From}}–{{.Pager.To}} of {{.Pager.Total}}</span>{{with .Pager.Next}}<a href="{{.}}" rel="next" class="btn">Next →</a>{{end}}</div>
 {{end}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a></div>
 {{end}}</section>
 {{end}}
@@ -297,16 +302,16 @@
 {{end}}</tbody></table></div>
 {{end}}
 
-{{/* tilegroups: dot is a list of TileGroup (Name, Tiles); Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev. */}}
+{{/* tilegroups: dot is a list of TileGroup (Name, Tiles); Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev, Approx. */}}
 {{define "tilegroups"}}<div class="tgroups" role="group" aria-label="Key numbers">
 {{range .}}<section class="tgroup"><h2 class="tgroup-h">{{.Name}}</h2><div class="tgroup-tiles">
 {{range .Tiles}}<article class="tile {{.Class}}" aria-labelledby="{{.Head.ID}}">
 <div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
-{{if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
+{{if .Head.PCs}}{{template "pcschip" .Head.PCs}}{{else if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .Head.OthersNF}}{{template "othersnf"}}{{end}}<span class="spacer"></span>
 {{template "info" .Head}}</div>
 {{with .Dev}}<span class="devid">{{.}}</span>
 {{end}}<p class="tile-q">{{.Question}}</p>
-<div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{with .CI}}<span class="ci">{{.}}</span>{{end}}</div>
+<div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{if .CI}}<span class="ci{{if .Approx}} approx{{end}}">{{.CI}}</span>{{end}}</div>
 {{with .Sub}}<p class="tile-sub">{{.}}</p>
 {{end}}<div class="tile-st"><span class="st {{.WordClass}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}</div>
 {{with .Note}}<p class="tile-note">{{.}}</p>

@@ -56,7 +56,11 @@ type CalendarCard struct {
 	Head   Head
 	Colour []Choice // the measures, as links back to this page
 	Chart  template.HTML
+	Note   string // under the head: what adding up the PCs leaves this PC's; "" none
 }
+
+// calendarAllPCs is the sentence under the head of the calendar on all PCs.
+const calendarAllPCs = "The calendar is drawn from the PCs’ daily figures added up. “Colour by sessions” is this PC’s only: other PCs send no sessions, so with all PCs that link shows this PC’s and says so."
 
 // calendarHint is the sentence under the calendar's legend.
 const calendarHint = "One Tab stop: arrow keys move from day to day, Enter opens it. On a small screen, the last 13 weeks; older days are in the table."
@@ -99,6 +103,9 @@ func calendarOf(r *metrics.Result, win metrics.Window, p views.Params, hm, path,
 	var rows []metrics.CalendarDay
 	if r != nil {
 		rows = r.Tables.Calendar
+		if c.Head.PCs = allPCsChip(r.Scope); c.Head.PCs != nil {
+			c.Note = calendarAllPCs
+		}
 	}
 	loc := zoneOr(win.Loc)
 	var since, until time.Time
@@ -106,8 +113,12 @@ func calendarOf(r *metrics.Result, win metrics.Window, p views.Params, hm, path,
 		since, until = win.Since.In(loc), win.Until.In(loc).Add(-time.Nanosecond)
 	}
 	first, last := "", ""
+	what := m.what
+	if c.Head.PCs != nil && m.key == "sessions" {
+		what, m.name = "sessions on this PC", "Sessions, this PC" // the others send none
+	}
 	cal := chart.Calendar{
-		What: m.what, OfWhat: m.of, Steps: m.steps, Window: window, More: "backsight stats days", Hint: calendarHint,
+		What: what, OfWhat: m.of, Steps: m.steps, Window: window, More: "backsight stats days", Hint: calendarHint,
 		StepLabels: [5]string{m.name, m.ranges[0], m.ranges[1], m.ranges[2], m.ranges[3]},
 	}
 	for i, row := range rows {

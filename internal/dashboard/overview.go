@@ -19,6 +19,7 @@ type Banner struct {
 	Axes               []AxisRow
 	Reasons            []ReasonRow
 	Head               Head
+	ThisPC             bool // all PCs is selected: the verdict stays this PC's and says so
 }
 
 // AxisRow is one axis of the banner: its name, state word and note.
@@ -106,12 +107,20 @@ func bannerCLI(p views.Params) string {
 	return s
 }
 
+// bannerThisPC is what the banner's ⓘ adds when all PCs is selected.
+const bannerThisPC = "With all PCs shown, the verdict stays this PC’s: it also weighs what only this PC knows (what waits to be sent, its health checks, the server’s answers), which other PCs do not send. The tiles below add up all PCs."
+
 // bannerHead is the banner's frame, with its ⓘ.
 func bannerHead(title string, p views.Params) Head {
-	h := withInfo(fixedHead("verdict", title, "machine", bannerCLI(p)),
-		"How the verdict is judged", "How the verdict is judged", "",
+	paras := []string{
 		"Always the last 7 days against the 7 before, whatever window is selected. Per axis, the first rule that applies wins: learning, not enough yet, can't judge, attention, ok.",
-		"An axis turns to attention when a number stays at watch two weeks in a row, or is bad once. Flowing reacts at once.")
+		"An axis turns to attention when a number stays at watch two weeks in a row, or is bad once. Flowing reacts at once.",
+	}
+	if p.Machines == "all" {
+		paras = append(paras, bannerThisPC)
+	}
+	h := withInfo(fixedHead("verdict", title, "machine", bannerCLI(p)),
+		"How the verdict is judged", "How the verdict is judged", "", paras...)
 	h.Info.Href, h.Info.HrefText = "/defs", "All definitions"
 	return h
 }
@@ -120,11 +129,11 @@ func bannerHead(title string, p views.Params) Head {
 func bannerOf(r *metrics.Result, l format.Locale, loc *time.Location, p views.Params) Banner {
 	v := r.Verdict
 	if v == nil {
-		b := Banner{Title: "Nothing to judge yet.", Class: "v-cant", Icon: "st-cant"}
+		b := Banner{Title: "Nothing to judge yet.", Class: "v-cant", Icon: "st-cant", ThisPC: p.Machines == "all"}
 		b.Head = bannerHead(b.Title, p)
 		return b
 	}
-	var b Banner
+	b := Banner{ThisPC: p.Machines == "all"}
 	cause := rootCause(v)
 	for _, an := range views.AxisNames {
 		ax, ok := v.Axes[an.Key]
@@ -321,7 +330,8 @@ func flowingNote(r *metrics.Result, l format.Locale, ax metrics.Axis, cause bool
 
 // SummaryLine is the figures of the line under the banner.
 // When is the opening words, "In the last 30 days" or "From Oct 1 to Oct 7".
-type SummaryLine struct{ When, Prompts, PromptsNoun, Turns, TurnsNoun, Tokens, Cost, Scope string }
+// Who is ", on all PCs (4)" when the figures add up the PCs, else empty.
+type SummaryLine struct{ When, Who, Prompts, PromptsNoun, Turns, TurnsNoun, Tokens, Cost, Scope string }
 
 // ofCount is "4 of 5 prompts", "1 of 1 prompt": the noun agrees with the whole.
 func ofCount(l format.Locale, num, den int64, one, many string) string {
@@ -361,6 +371,9 @@ func summaryOf(r *metrics.Result, l format.Locale) SummaryLine {
 	}
 	if down {
 		out.Scope = "(the memory server is not answering)."
+	}
+	if r.Scope.Machines == "all" && r.Scope.PCs != nil {
+		out.Who = ", on all PCs (" + strconv.Itoa(r.Scope.PCs.Count) + ")"
 	}
 	return out
 }
@@ -419,6 +432,9 @@ func allAxesOK(v *metrics.Verdict) bool {
 func attentionPage(r *metrics.Result, l format.Locale, cli string) AttentionCard {
 	c := attentionOf(r, l)
 	c.Head.CLI = strings.TrimSpace(cli)
+	if r.Scope.Machines == "all" {
+		c.Head.Note = "Things to do are this PC’s, with all PCs too: each PC lists what it can fix itself."
+	}
 	return c
 }
 
