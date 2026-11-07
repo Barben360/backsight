@@ -7,8 +7,6 @@ import (
 )
 
 func TestZoneName(t *testing.T) {
-	saved := time.Local
-	defer func() { time.Local = saved }()
 	none := func(string) string { return "" }
 	noLink := func(string) (string, error) { return "", errors.New("no link") }
 	env := func(v string) func(string) string {
@@ -33,8 +31,10 @@ func TestZoneName(t *testing.T) {
 	}
 
 	// The process-local zone is named by TZ first, then /etc/localtime; this
-	// fixed zone stands for it (its abbreviation is "Local").
-	time.Local = time.FixedZone("Local", 3600)
+	// fixed zone stands for it (its abbreviation is "Local"). It is passed in,
+	// never written to time.Local: a goroutine an earlier test abandoned may
+	// still read the clock (issue #204).
+	local := time.FixedZone("Local", 3600)
 	for name, c := range map[string]struct {
 		getenv   func(string) string
 		readlink func(string) (string, error)
@@ -51,26 +51,32 @@ func TestZoneName(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			// "link without name" falls to the zone's abbreviation.
-			if got := ZoneName(time.Local, c.getenv, c.readlink); got != c.want {
+			if got := ZoneName(local, local, c.getenv, c.readlink); got != c.want {
 				t.Errorf("ZoneName = %q, want %q", got, c.want)
 			}
 		})
 	}
 
 	// Nothing known: the zone abbreviation.
-	time.Local = time.FixedZone("CET", 3600)
-	if got := ZoneName(time.Local, none, noLink); got != "CET" {
+	cet := time.FixedZone("CET", 3600)
+	if got := ZoneName(cet, cet, none, noLink); got != "CET" {
 		t.Errorf("nothing known: %q, want CET", got)
 	}
 
+	// Only the zone passed as local reads TZ and /etc/localtime: any other,
+	// time.Local included, is its own name.
+	if got := ZoneName(time.Local, local, env("Europe/Paris"), noLink); got != "Local" {
+		t.Errorf("time.Local not passed as local: %q, want Local", got)
+	}
+
 	// A named zone is its own name, whatever TZ says; UTC and nil are UTC.
-	if got := ZoneName(paris, env("America/New_York"), link("/usr/share/zoneinfo/Asia/Tokyo")); got != "Europe/Paris" {
+	if got := ZoneName(paris, local, env("America/New_York"), link("/usr/share/zoneinfo/Asia/Tokyo")); got != "Europe/Paris" {
 		t.Errorf("named zone: %q", got)
 	}
-	if got := ZoneName(time.UTC, env("Europe/Paris"), noLink); got != "UTC" {
+	if got := ZoneName(time.UTC, local, env("Europe/Paris"), noLink); got != "UTC" {
 		t.Errorf("UTC: %q", got)
 	}
-	if got := ZoneName(nil, none, noLink); got != "UTC" {
+	if got := ZoneName(nil, local, none, noLink); got != "UTC" {
 		t.Errorf("nil: %q", got)
 	}
 }

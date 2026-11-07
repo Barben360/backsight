@@ -169,7 +169,7 @@ func TestPersistentFlags(t *testing.T) {
 	}
 	// without --tz the window is read in this machine's zone and names it
 	v = runView(t, "stats", "overview", "--since", "2026-10-01")
-	local := metrics.ZoneName(time.Local, os.Getenv, os.Readlink)
+	local := metrics.ZoneName(time.Local, time.Local, os.Getenv, os.Readlink)
 	if want := time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339); v.code != output.OK || at(v.env.Data, "window", "since") != want || at(v.env.Data, "window", "tz") != local {
 		t.Errorf("local zone: exit %d window %v, want %s in %s", v.code, at(v.env.Data, "window"), want, local)
 	}
@@ -514,7 +514,7 @@ func TestViewQueryDefaultsToTheLocalZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.Window.TZ != metrics.ZoneName(time.Local, os.Getenv, os.Readlink) || q.Window.Loc != time.Local {
+	if q.Window.TZ != metrics.ZoneName(time.Local, time.Local, os.Getenv, os.Readlink) || q.Window.Loc != time.Local {
 		t.Errorf("window %+v", q.Window)
 	}
 }
