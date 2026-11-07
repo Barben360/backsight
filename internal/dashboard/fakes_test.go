@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indexgen"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/paths"
 )
@@ -53,7 +54,10 @@ func newFakeIndex(t *testing.T, dirs paths.Dirs, home string, now func() time.Ti
 	t.Helper()
 	indexgen.Generate(t, dirs.State, dataSpec)
 	ctx := context.Background()
-	ix, err := index.Open(ctx, index.Options{Dirs: dirs, Home: home, Getenv: func(string) string { return "" }, Now: now})
+	// The other PCs' cache is read as the command line reads it (a spec with
+	// OtherPCs wrote one).
+	ix, err := index.Open(ctx, index.Options{Dirs: dirs, Home: home, Getenv: func(string) string { return "" }, Now: now,
+		Machines: func() (machines.Cache, error) { return machines.LoadCache(dirs.MetricsDir()) }})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1749,3 +1749,46 @@ func TestMemorySharedStates(t *testing.T) {
 		}
 	})
 }
+
+// This PC's "until" in By PC and in scope.pcs is the day its last publish
+// ended on (Self.Until), as System's table reads it; null before it ever
+// published.
+func TestThisPCUntilInByPCAndScope(t *testing.T) {
+	for _, until := range []string{"2026-10-29", ""} {
+		x := newFx(t, fxNow)
+		x.prompts("alpha", "p", fxNow, 3, nil)
+		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-28")
+		src := x.source()
+		src.Self = func() SelfPC { return SelfPC{Machine: pcThis, OS: "linux", Until: until} }
+		check := func(what string, got *string) {
+			t.Helper()
+			if until == "" && got != nil || until != "" && (got == nil || *got != until) {
+				t.Errorf("self until %q: %s until %v", until, what, got)
+			}
+		}
+		all := x.allQuery()
+		cost, err := Run(context.Background(), "cost", src, all)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cost.Tables.ByPC[0].This {
+			t.Fatalf("first By PC row %+v is not this PC", cost.Tables.ByPC[0])
+		}
+		check("by_pc", cost.Tables.ByPC[0].Until)
+		for _, q := range []Query{x.query(7), all} {
+			r, err := Run(context.Background(), "overview", src, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := r.Scope.PCs.List[0]
+			if !row.This {
+				t.Fatalf("first scope row %+v is not this PC", row)
+			}
+			check("scope.pcs ("+q.Machines+")", row.Until)
+			// The scope's oldest until stays the others' (D2/M9).
+			if r.Scope.PCs.Until == nil || *r.Scope.PCs.Until != "2026-10-28" {
+				t.Errorf("scope.pcs.until %v, want the other PC's 2026-10-28", r.Scope.PCs.Until)
+			}
+		}
+	}
+}

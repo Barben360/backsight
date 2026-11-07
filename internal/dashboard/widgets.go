@@ -73,6 +73,12 @@ func headOf(v MetricView, cli string, l format.Locale, slot string, p views.Para
 			Term: d.ID, Href: "/defs#" + d.ID, HrefText: "Definition",
 		},
 	}
+	// A metric the views add up over the PCs shows the command with the flag
+	// in all PCs; every other widget (this PC's, the server's) shows the
+	// page's command, which carries none.
+	if p.Machines == "all" && metrics.MergedMetric(d.ID) {
+		h.CLI = withMachines(cli)
+	}
 	h.NotFiltered = slices.Contains(v.M.Tags, "not_filtered")
 	if h.Drill = drillHref(v.M.Drill, p); h.Drill != "" {
 		h.DrillText = "See the events →"
@@ -359,7 +365,20 @@ func cliFor(view, id string, p views.Params) string {
 	flag("has", p.Has)
 	flag("sort", p.Sort)
 	flag("state", p.State)
+	if p.Machines == "all" && metrics.MergingView(view) {
+		b.WriteString(" --machines all")
+	}
 	return b.String()
+}
+
+// withMachines is the command cmd with --machines all, when it is a view
+// that adds the PCs up and does not carry the flag yet.
+func withMachines(cmd string) string {
+	w := strings.Fields(cmd)
+	if len(w) < 3 || w[0] != "backsight" || w[1] != "stats" || !metrics.MergingView(w[2]) || slices.Contains(w, "--machines") {
+		return cmd
+	}
+	return cmd + " --machines all"
 }
 
 // Word is a status word and the class that colours it.

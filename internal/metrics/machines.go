@@ -29,6 +29,25 @@ var thisOnlyViews = []string{"projects", "sessions", "memories"}
 // on and the ledger shared).
 func sharingOn(c config.Config) bool { return c.Feedback.Enabled && c.Feedback.ShareLedger }
 
+// MergingView says whether view's figures add up the other PCs' with
+// --machines all (the CLI and the pages carry the flag only for these).
+func MergingView(view string) bool { return slices.Contains(mergingViews, view) }
+
+// MergedMetric says whether the metric id is one the views add up over the
+// PCs (M2-M5): the ratio rates, context per session, speed and flow.
+func MergedMetric(id string) bool {
+	switch id {
+	case "context.per_session", "recall.latency", "pipeline.flow":
+		return true
+	}
+	for _, r := range rates {
+		if r.id == id {
+			return true
+		}
+	}
+	return false
+}
+
 // machines is the env's switch, "this" when unset.
 func (e env) machines() string {
 	if e.q.Machines == "all" {
@@ -536,6 +555,10 @@ WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
 	var out []ByPCRow
 	if thisCounts {
 		row := ByPCRow{This: true, OS: self.OS}
+		if self.Until != "" { // the last day this PC published, as System's table reads it
+			u := self.Until
+			row.Until = &u
+		}
 		var typed int64
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
@@ -613,6 +636,10 @@ func scopePCs(e env) (*PCs, bool, error) {
 
 	if thisCounts {
 		row := PCRow{Machine: "", This: true, OS: self.OS, FirstSeen: self.FirstSeen}
+		if self.Until != "" {
+			u := self.Until
+			row.Until = &u
+		}
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}

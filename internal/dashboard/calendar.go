@@ -65,7 +65,7 @@ const calendarHint = "One Tab stop: arrow keys move from day to day, Enter opens
 // days view's, with the filters the calendar follows (it spans 13 months,
 // whatever the window).
 func calendarHead(p views.Params) Head {
-	h := fixedHead("calendar", "Which days did memory help?", "machine", cliFor("days", "", views.Params{Project: p.Project, TZ: p.TZ}))
+	h := fixedHead("calendar", "Which days did memory help?", "machine", cliFor("days", "", views.Params{Project: p.Project, TZ: p.TZ, Machines: p.Machines}))
 	h.Info = Info{
 		Label: "About the days calendar", Name: "Which days did memory help?",
 		What: "One square per day for the last 13 months, coloured by the count you pick. A square links to that day.",

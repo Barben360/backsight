@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -319,5 +320,508 @@ func TestMenuRefreshProjectAndPreferencesHint(t *testing.T) {
 		"g then a letter opens a page; press ? to list them all."}
 	if !slices.Equal(got, want) {
 		t.Errorf("preference hints %q", got)
+	}
+}
+
+// scopeFx is one state of the scope line, drawn on the Overview from a
+// fixture frame: the request's machines, the view's scope, the server's answer.
+type scopeFx struct {
+	path     string // the page's request path and query ("/")
+	machines string // the URL's machines, "" this PC
+	scope    metrics.Scope
+	read     *metrics.ServerState
+}
+
+var scopeNow = time.Date(2026, 10, 30, 15, 42, 0, 0, time.UTC)
+
+func ptrS(s string) *string { return &s }
+
+// fourPCs is this PC and three others sharing, one of which has sent
+// nothing for 9 days (it sent on Oct 21: its figures stop on Oct 20).
+func fourPCs() *metrics.PCs {
+	fetched := time.Date(2026, 10, 30, 13, 42, 0, 0, time.UTC)
+	return &metrics.PCs{Sharing: true, Count: 4, Active: 3, Stale: 1, Ignored: 1, FetchedAt: &fetched, Until: ptrS("2026-10-20"), List: []metrics.PCRow{
+		{Machine: "3f9c2a17", This: true, OS: "linux", FirstSeen: "2026-09-02", Until: ptrS("2026-10-29")},
+		{Machine: "a07be4d1", OS: "darwin", FirstSeen: "2026-10-10", Until: ptrS("2026-10-29")},
+		{Machine: "5d21c8e0", OS: "windows", FirstSeen: "2026-10-28", Until: ptrS("2026-10-29")},
+		{Machine: "c84e1f39", OS: "linux", FirstSeen: "2026-07-18", Until: ptrS("2026-10-20"), Stale: true},
+	}}
+}
+
+// scopeBar draws c and returns the scope line's node and its raw HTML.
+func scopeBar(t *testing.T, c scopeFx) (*node, string) {
+	t.Helper()
+	set, err := newPageSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := set.specs["overview"]
+	d := fixtureData(t, spec, false)
+	d.Loc, d.L = time.UTC, en
+	path := cmpOr(c.path, "/")
+	sc := c.scope
+	d.Frame.Path, d.Frame.Scope, d.Frame.Generated, d.Frame.ServerRead = path, &sc, scopeNow, c.read
+	d.Frame.Machines = c.machines
+	d.Frame.RenderedAt = scopeNow
+	d.Frame.Switch = switchOf(d)
+	body, err := renderPage(set, "overview", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = keepMachines(body, c.machines)
+	raw := string(body)
+	i := strings.Index(raw, `<div class="scopebar">`)
+	j := strings.Index(raw, `<main id="main"`)
+	if i < 0 || j < i {
+		t.Fatalf("no scope line in %.300s", raw)
+	}
+	return parseHTML(t, raw), raw[i:j]
+}
+
+func cmpOr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func TestScopeSwitchStates(t *testing.T) {
+	const addr = "192.168.1.20:18888"
+	base := func(m string, pcs *metrics.PCs) metrics.Scope {
+		return metrics.Scope{Machines: m, Server: addr, ServerOK: true, PCs: pcs}
+	}
+	cases := []struct {
+		name  string
+		fx    scopeFx
+		line  string   // the switch's two halves
+		links []string // the switch's hrefs, in order
+		cur   []string // the links marked aria-current
+		chips []string // the notes after the line, by text
+		which []string // the rows of "Which PCs"; nil: no list
+	}{
+		{name: "this PC with others", fx: scopeFx{scope: base("this", fourPCs())},
+			line: "this PC all PCs on this server (4)", links: []string{"/", "/?machines=all"}, cur: []string{"this PC"}},
+		{name: "all PCs", fx: scopeFx{machines: "all", scope: base("all", fourPCs())},
+			line: "this PC all PCs on this server (4)", links: []string{"/", "/?machines=all", "/system?machines=all#machines"},
+			cur:   []string{"all PCs on this server (4)"},
+			chips: []string{"1 PC: nothing sent for 9 days", "1 document ignored"},
+			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
+				"a07be4d1 macOS · since Oct 10 figures up to Oct 29",
+				"5d21c8e0 Windows · since Oct 28 figures up to Oct 29",
+				"c84e1f39 Linux · since Jul 18 nothing sent for 9 days: its figures stop on Oct 20"}},
+		{name: "all PCs with a project filter", fx: scopeFx{path: "/?project=backsight", machines: "all", scope: func() metrics.Scope {
+			s := base("all", fourPCs())
+			s.Project, s.OthersUnfiltered = "backsight", true
+			return s
+		}()},
+			line: "this PC all PCs on this server (4)", links: []string{"/?project=backsight", "/?project=backsight&machines=all", "/system?machines=all#machines"},
+			cur:   []string{"all PCs on this server (4)"},
+			chips: []string{"other PCs: not filtered", "1 PC: nothing sent for 9 days", "1 document ignored"},
+			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
+				"a07be4d1 macOS · since Oct 10 figures up to Oct 29",
+				"5d21c8e0 Windows · since Oct 28 figures up to Oct 29",
+				"c84e1f39 Linux · since Jul 18 nothing sent for 9 days: its figures stop on Oct 20"}},
+		{name: "sharing off", fx: scopeFx{scope: base("this", &metrics.PCs{List: []metrics.PCRow{}})},
+			line: "this PC all PCs: sharing is off here", links: []string{"/", "/system#machines"}, cur: []string{"this PC"}},
+		{name: "sharing off behind a kept link", fx: scopeFx{machines: "all", scope: base("this", &metrics.PCs{List: []metrics.PCRow{}})},
+			line: "this PC all PCs: sharing is off here", links: []string{"/", "/system?machines=all#machines"}, cur: []string{"this PC"}},
+		{name: "server not answering", fx: scopeFx{machines: "all", scope: base("all", func() *metrics.PCs {
+			p := fourPCs()
+			f := time.Date(2026, 10, 30, 7, 40, 0, 0, time.UTC)
+			p.FetchedAt = &f
+			return p
+		}()), read: &metrics.ServerState{OK: false, LastOK: func() *time.Time { x := time.Date(2026, 10, 30, 9, 12, 0, 0, time.UTC); return &x }()}},
+			line: "this PC all PCs on this server (4)", links: []string{"/", "/?machines=all", "/system?machines=all#machines"},
+			cur:   []string{"all PCs on this server (4)"},
+			chips: []string{"1 PC: nothing sent for 9 days", "1 document ignored", "other PCs as fetched at 07:40"},
+			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
+				"a07be4d1 macOS · since Oct 10 figures up to Oct 29",
+				"5d21c8e0 Windows · since Oct 28 figures up to Oct 29",
+				"c84e1f39 Linux · since Jul 18 nothing sent for 9 days: its figures stop on Oct 20"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc, raw := scopeBar(t, c.fx)
+			bar := doc.first(".scopebar")
+			sw := bar.first(".mscope")
+			if sw == nil {
+				t.Fatalf("no switch in %s", raw)
+			}
+			// The line sits in the scope line under the top bar, which stays at
+			// 900 px: the top bar's tools fold into the Menu, the scope line does not.
+			if len(doc.find("header .mscope")) != 0 || bar.first(".wrap.scope .mscope") == nil {
+				t.Errorf("the switch is not in the scope line, outside the top bar: %s", raw)
+			}
+			if got := sw.first("nav.mseg").text(); got != c.line {
+				t.Errorf("switch %q, want %q", got, c.line)
+			}
+			if got := linksIn(sw, ""); !slices.Equal(got, c.links) {
+				t.Errorf("links %q, want %q", got, c.links)
+			}
+			if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, c.cur) {
+				t.Errorf("aria-current %q, want %q", got, c.cur)
+			}
+			var chips []string
+			for _, n := range bar.find(".wrap.scope > .chip") {
+				if txt := n.text(); !strings.HasPrefix(txt, "Updated over") && txt != "" {
+					chips = append(chips, txt)
+				}
+			}
+			for _, n := range bar.find(".wrap.scope > a") {
+				if txt := n.text(); !strings.HasPrefix(txt, "Updated over") && !slices.Contains(chips, txt) {
+					chips = append(chips, txt)
+				}
+			}
+			slices.Sort(chips)
+			want := slices.Clone(c.chips)
+			slices.Sort(want)
+			if !slices.Equal(chips, want) {
+				t.Errorf("notes %q, want %q", chips, want)
+			}
+			var rows []string
+			for _, li := range sw.find("details.pcs li") {
+				rows = append(rows, li.text())
+			}
+			if !slices.Equal(rows, c.which) {
+				t.Errorf("Which PCs %q, want %q", rows, c.which)
+			}
+			if (len(c.which) > 0) != (sw.first("details.pcs") != nil) {
+				t.Errorf("the list is shown: %t, want %t", sw.first("details.pcs") != nil, len(c.which) > 0)
+			}
+			if off := sw.first("a.seg-off"); (off != nil) != strings.Contains(c.line, "sharing is off") {
+				t.Errorf("seg-off %v for %q", off, c.line)
+			} else if off != nil && off.attr("aria-current") != "" {
+				t.Errorf("the sharing-off half is marked current")
+			}
+		})
+	}
+
+	t.Run("the stale PC is amber and says the word, the others do not", func(t *testing.T) {
+		doc, _ := scopeBar(t, scopeFx{machines: "all", scope: base("all", fourPCs())})
+		var stale []string
+		for _, li := range doc.find("details.pcs li") {
+			if st := li.first(".pcl-st"); strings.Contains(st.attr("class"), "st-watch") {
+				stale = append(stale, li.first(".idc").text())
+			}
+		}
+		if !slices.Equal(stale, []string{"c84e1f39"}) {
+			t.Errorf("rows in watch %q, want only c84e1f39", stale)
+		}
+		if n := doc.find("details.pcs .pcl-note"); len(n) != 3 || n[0].text() != "1 document did not pass the checks and is left out. What it holds is not shown." ||
+			n[2].text() != "Other PCs’ figures were fetched 2 h ago; they are fetched every 6 h." {
+			t.Errorf("notes %v", n)
+		}
+	})
+	t.Run("at 900 px the switch takes its own line and keeps its touch size", func(t *testing.T) {
+		css := dashboardCSS(t)
+		i := strings.Index(css, "@container page (max-width: 899px) {\n  .mscope")
+		if i < 0 {
+			t.Fatal("no narrow rule for the switch")
+		}
+		block := css[i : i+strings.Index(css[i:], "\n}")]
+		for _, want := range []string{".mscope { flex-basis: 100%; }", ".scope .mseg a { min-height: var(--touch); }", ".scope details.pcs { flex-basis: 100%; }"} {
+			if !strings.Contains(block, want) {
+				t.Errorf("the narrow block lacks %q", want)
+			}
+		}
+	})
+}
+
+// With no other PC sharing the line is the one block 5 shipped, byte for
+// byte; a link that asks for all PCs still reads "(1)".
+func TestNoSwitchWithoutOtherPCs(t *testing.T) {
+	one := &metrics.PCs{Sharing: true, Count: 1, Active: 1, List: []metrics.PCRow{{Machine: "3f9c2a17", This: true, OS: "linux"}}}
+	sc := metrics.Scope{Machines: "this", Server: "192.168.1.20:18888", ServerOK: true, PCs: one}
+	_, raw := scopeBar(t, scopeFx{scope: sc})
+	const shipped = `<div class="scopebar"><div class="wrap scope">
+<span>Activity on <b>this PC</b></span>
+<span class="dot">memory on <b>192.168.1.20:18888</b></span>
+<span class="dot">updated <time datetime="2026-10-30T15:42:00Z" title="2026-10-30 15:42 UTC">just now</time></span>
+<a class="chip chip-stale" href="/"><span class="i i-sm i-clock"></span>Updated over 5 min ago. Refresh.</a>
+</div></div>
+`
+	if raw != shipped {
+		t.Errorf("scope line\n%s\nwant\n%s", raw, shipped)
+	}
+	// Nothing on the page says "all PCs" either.
+	if strings.Contains(raw, "machines") || strings.Contains(raw, "all PCs") {
+		t.Errorf("the line mentions all PCs: %s", raw)
+	}
+
+	// A kept link: "(1)", the figures are this PC's and the list says so.
+	sc.Machines = "all"
+	doc, _ := scopeBar(t, scopeFx{machines: "all", scope: sc})
+	sw := doc.first(".mscope")
+	if sw == nil || sw.first("nav.mseg").text() != "this PC all PCs on this server (1)" {
+		t.Fatalf("?machines=all: %v", sw)
+	}
+	if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{"all PCs on this server (1)"}) {
+		t.Errorf("current %q", got)
+	}
+	// No server set up and sharing off: the line is the shipped one too, since
+	// there is no server whose PCs could be counted.
+	off := metrics.Scope{Machines: "this", PCs: &metrics.PCs{List: []metrics.PCRow{}}}
+	if doc, _ := scopeBar(t, scopeFx{scope: off}); doc.first(".mscope") != nil {
+		t.Error("a switch with no memory server and sharing off")
+	}
+}
+
+// The scope line names the address as "<address>, this PC" when the server
+// is on this machine, and only with the switch shown.
+func TestHostScopeLine(t *testing.T) {
+	for _, c := range []struct {
+		name, server string
+		pcs          *metrics.PCs
+		want         string
+	}{
+		{"loopback with the switch", "127.0.0.1:8888", fourPCs(), "memory on 127.0.0.1:8888, this PC"},
+		{"IPv6 loopback", "[::1]:8888", fourPCs(), "memory on [::1]:8888, this PC"},
+		{"localhost", "localhost:8888", fourPCs(), "memory on localhost:8888, this PC"},
+		{"a remote server", "192.168.1.20:8888", fourPCs(), "memory on 192.168.1.20:8888"},
+		{"loopback without the switch", "127.0.0.1:8888", &metrics.PCs{Sharing: true, Count: 1, List: []metrics.PCRow{{This: true}}}, "memory on 127.0.0.1:8888"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			doc, raw := scopeBar(t, scopeFx{scope: metrics.Scope{Machines: "this", Server: c.server, ServerOK: true, PCs: c.pcs}})
+			var got string
+			for _, d := range doc.find(".scope .dot") {
+				if strings.HasPrefix(d.text(), "memory on") {
+					got = d.text()
+				}
+			}
+			if got != c.want {
+				t.Errorf("%q, want %q in %s", got, c.want, raw)
+			}
+		})
+	}
+	// "holds the memory server" in the list, on the host only.
+	doc, _ := scopeBar(t, scopeFx{machines: "all", scope: metrics.Scope{Machines: "all", Server: "127.0.0.1:8888", ServerOK: true, PCs: fourPCs()}})
+	if li := doc.first("details.pcs li"); li == nil || li.text() != "3f9c2a17 Linux · since Sep 2 · this PC, holds the memory server its own figures, live" {
+		t.Errorf("host row %v", li)
+	}
+}
+
+// othersHarness is a dashboard whose index holds three other PCs' figures,
+// one of them stale, and one ignored document (4 PCs counted, this one included).
+func othersHarness(t *testing.T) *harness {
+	t.Helper()
+	old := dataSpec
+	dataSpec.OtherPCs = 3
+	t.Cleanup(func() { dataSpec = old })
+	return dataHarness(t)
+}
+
+// cliOf maps each card or tile of a page to the command its CLI disclosure
+// shows, by the id of its heading.
+func cliOf(doc *node) map[string]string {
+	out := map[string]string{}
+	for _, c := range doc.find("details.cli") {
+		id := ""
+		for n := c.Parent; n != nil && id == ""; n = n.Parent {
+			if h := n.first("h2"); h != nil && h.attr("id") != "" {
+				id = h.attr("id")
+			} else if h := n.first("h3"); h != nil && h.attr("id") != "" {
+				id = h.attr("id")
+			}
+		}
+		out[id] = c.first("code").text()
+	}
+	return out
+}
+
+// The command a widget shows carries --machines all only when the widget adds
+// the PCs up: the six tiles' commands over the views that do, the Days
+// calendar, the merged cards. "What should I do?", Lately, Helped most, every
+// list and every server widget stay this PC's or the server's, and never do.
+func TestCLIDisclosureFollowsTheSwitch(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	follow := map[string][]string{
+		"/":         {"w-recall-hit_rate", "w-context-per_session", "w-recall-latency", "w-pipeline-flow", "w-calendar"},
+		"/quality":  {"w-used-turn_rate", "w-recall-hit_rate"},
+		"/cost":     {"w-context-per_session", "w-recall-latency"},
+		"/pipeline": {"w-pipeline-flow"},
+		"/bank":     nil, "/system": nil, "/sessions": nil, "/projects": nil, "/memories": nil,
+		"/days": {"w-calendar"}, "/releases": {"w-releases"},
+	}
+	for path, want := range follow {
+		doc := rawPage(t, h, hdr, path+"?machines=all")
+		var got []string
+		for id, cmd := range cliOf(doc) {
+			if strings.Contains(cmd, "--machines") {
+				got = append(got, id)
+				if !strings.HasSuffix(cmd, " --machines all") {
+					t.Errorf("%s %s: %q does not end with --machines all", path, id, cmd)
+				}
+			}
+		}
+		slices.Sort(got)
+		w := slices.Clone(want)
+		slices.Sort(w)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s with all: widgets with the flag %q, want %q", path, got, w)
+		}
+	}
+	// The ones the design names, one by one, with the command they show.
+	over := cliOf(rawPage(t, h, hdr, "/?machines=all"))
+	for id, want := range map[string]string{
+		"w-recall-hit_rate": "backsight stats quality --machines all", // Found
+		"w-attention":       "backsight stats overview",               // What should I do?
+		"w-lately":          "backsight stats sessions --limit 5",
+		"w-helped":          "backsight stats overview",
+		"w-glance":          "backsight stats bank",
+		"w-verdict":         "backsight stats overview --days 7",
+	} {
+		if over[id] != want {
+			t.Errorf("/ %s: %q, want %q", id, over[id], want)
+		}
+	}
+	pipe := cliOf(rawPage(t, h, hdr, "/pipeline?machines=all"))
+	for _, id := range []string{"w-server-queue", "w-server-extraction_delay"} {
+		if c, ok := pipe[id]; !ok || strings.Contains(c, "--machines") {
+			t.Errorf("/pipeline server widget %s: %q (present %t)", id, c, ok)
+		}
+	}
+	// With this PC selected, whatever the way it is asked, none does.
+	for path := range follow {
+		for _, q := range []string{"", "?machines=this", "?days=30&project=backsight"} {
+			for id, cmd := range cliOf(rawPage(t, h, hdr, path+q)) {
+				if strings.Contains(cmd, "--machines") {
+					t.Errorf("%s%s %s: %q carries the flag with this PC selected", path, q, id, cmd)
+				}
+			}
+		}
+	}
+	// Sharing off: a kept link answers this PC's figures, and the commands say so.
+	off := newDataHarness(t, withIndex(), withServer(), withDoctor(), func(_ *harness, c *Config) { c.Source.Config.Feedback.ShareLedger = false })
+	doc := rawPage(t, off, cookieHdr(off.login()), "/?machines=all")
+	for id, cmd := range cliOf(doc) {
+		if strings.Contains(cmd, "--machines") {
+			t.Errorf("sharing off, %s: %q carries the flag", id, cmd)
+		}
+	}
+	if sw := doc.first(".scopebar .mscope a.seg-off"); sw == nil || sw.attr("href") != "/system?machines=all#machines" {
+		t.Errorf("sharing off behind a kept link: second half %v", sw)
+	}
+}
+
+// internalLinks are the hrefs of n that stay in the dashboard and that the
+// parameter must follow: not the preferences (which carry the page to come
+// back to), not the assets, not an anchor on the page.
+func internalLinks(n *node) []*node {
+	var out []*node
+	for _, a := range n.find("a") {
+		href := a.attr("href")
+		if !strings.HasPrefix(href, "/") || strings.HasPrefix(href, "//") || strings.HasPrefix(href, "/prefs") || strings.HasPrefix(href, "/assets/") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// On every page asked with machines=all, every link inside the dashboard
+// carries it but the preferences, the assets and the "this PC" half of the
+// switch, which drops it; every form carries it as a hidden input. Asked
+// without, nothing but the switch's own link mentions it.
+func TestEveryLinkKeepsMachines(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	var ids struct{ proj, sess, mem, day string }
+	if p := apiPath(t, h, "/api/v1/projects").Tables.Projects; len(p) > 0 {
+		ids.proj = p[0].Project
+	}
+	if s := apiPath(t, h, "/api/v1/sessions").Tables.Sessions; len(s) > 0 {
+		ids.sess = s[0].ID
+	}
+	if m := apiPath(t, h, "/api/v1/memories").Tables.Memories; len(m) > 0 {
+		ids.mem = m[0].ID
+	}
+	if d := apiPath(t, h, "/api/v1/days").Tables.Days; len(d) > 0 {
+		ids.day = d[0].Day
+	}
+	if ids.proj == "" || ids.sess == "" || ids.mem == "" || ids.day == "" {
+		t.Fatalf("history lacks an item: %+v", ids)
+	}
+	var paths []string
+	for _, r := range routes {
+		if r.Kind != "page" {
+			continue
+		}
+		p := r.Sample
+		switch r.Page {
+		case "project":
+			p = "/projects/" + url.PathEscape(ids.proj)
+		case "session":
+			p = "/sessions/" + url.PathEscape(ids.sess)
+		case "memory":
+			p = "/memories/" + url.PathEscape(ids.mem)
+		case "day":
+			p = "/days/" + ids.day
+		}
+		paths = append(paths, p)
+	}
+	paths = append(paths, "/releases?compare=v0.1.17,v0.1.18", "/sessions/zzzzzzzz", "/quality?days=0")
+	sep := func(p string) string {
+		if strings.Contains(p, "?") {
+			return "&"
+		}
+		return "?"
+	}
+	seen := 0
+	for _, p := range paths {
+		for _, extra := range []string{"", "days=30&project=" + url.QueryEscape(ids.proj) + "&dev=1"} {
+			all := p + sep(p) + "machines=all"
+			if extra != "" {
+				all += "&" + extra
+			}
+			r := h.do("GET", all, hdr...)
+			if r.StatusCode != 200 && r.StatusCode != 404 && r.StatusCode != 400 {
+				t.Errorf("GET %s: %d", all, r.StatusCode)
+				continue
+			}
+			doc := parseHTML(t, body(t, r))
+			links := internalLinks(doc)
+			if len(links) == 0 {
+				t.Errorf("%s: no internal link at all", all)
+			}
+			for _, a := range links {
+				href := a.attr("href")
+				seen++
+				if a.attr("data-machines") == "this" {
+					if strings.Contains(href, "machines") {
+						t.Errorf("%s: the this-PC half %q keeps machines", all, href)
+					}
+					continue
+				}
+				if !strings.Contains(href, "machines=all") {
+					t.Errorf("%s: link %q (%s) drops machines=all", all, href, a.text())
+				}
+			}
+			if n := len(doc.find(".scopebar a[data-machines=this]")); n != 1 && r.StatusCode == 200 && !strings.HasPrefix(p, "/defs") {
+				// the this-PC half is on every framed page that has a scope line
+				t.Errorf("%s: %d this-PC halves", all, n)
+			}
+			for _, f := range doc.find("form") {
+				in := f.first("input[name=machines]")
+				if in == nil || in.attr("type") != "hidden" || in.attr("value") != "all" {
+					t.Errorf("%s: form %q lacks a hidden machines=all (%v)", all, f.attr("action"), in)
+				}
+			}
+			// Without the parameter: nothing mentions it but the switch's all half.
+			plain := strings.Replace(all, "machines=all&", "", 1)
+			plain = strings.TrimSuffix(strings.TrimSuffix(plain, "?machines=all"), "&machines=all")
+			r = h.do("GET", plain, hdr...)
+			if r.StatusCode == 200 {
+				doc = parseHTML(t, body(t, r))
+				for _, a := range doc.find("a") {
+					if h := a.attr("href"); strings.Contains(h, "machines") && a.first(".mscope") == nil && a.Parent.attr("aria-label") != "Whose activity" {
+						t.Errorf("%s: link %q mentions machines with this PC selected", plain, h)
+					}
+				}
+			}
+		}
+	}
+	if seen < 200 {
+		t.Errorf("only %d links checked", seen)
 	}
 }

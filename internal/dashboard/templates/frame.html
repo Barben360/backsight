@@ -2,7 +2,7 @@
 {{/*
   The frame every page shares. Fields read: .Frame (Title, Path, Version,
   HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
-  Prefs, Scope, Generated, Window, Custom, CustomMenu, RenderedAt, RenderMS) and .Loc. No Windows (the text page): no window
+  Prefs, Scope, Switch, Machines, Generated, Window, Custom, CustomMenu, RenderedAt, RenderMS) and .Loc. No Windows (the text page): no window
   links and no project filter. Nav is sliced by position: 0-5 the
   questions, 5-8 Browse, 8-9 System, 9- the developer pair.
 */}}
@@ -129,19 +129,49 @@
 {{define "choice"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="check">{{if .Current}}✓{{end}}</span>{{.Label}}</a>{{end}}
 
 {{/*
-  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt, Project), .Frame.ServerRead
+  scope: reads .Frame.Switch (nil: the line as shipped), .Frame.Scope (Server, ServerOK, ServerOKAt, Project), .Frame.ServerRead
   (OK, LastOK; set when the page's own view read the server), .Frame.Generated,
   .Frame.RenderedAt, .Frame.Path, .Frame.Catching, .Loc.
 */}}
 {{define "scope"}}{{with .Frame.Scope}}<div class="scopebar"><div class="wrap scope">
-<span>Activity on <b>this PC</b></span>
-{{if not .Server}}<span class="dot">no memory server set up</span>{{else}}<span class="dot">memory on <b>{{.Server}}</b></span>{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}}<span class="st st-watch">not answering{{with $.Frame.ServerRead.LastOK}} since {{clock $.Frame.Generated . $.Loc}}{{end}}</span>{{end}}{{else if and .ServerOKAt (not .ServerOK)}}<span class="st st-watch">not answering since {{clock $.Frame.Generated .ServerOKAt $.Loc}}</span>{{end}}{{end}}
+{{with $.Frame.Switch}}{{template "mscope" .}}{{else}}<span>Activity on <b>this PC</b></span>{{end}}
+{{if not .Server}}<span class="dot">no memory server set up</span>{{else}}<span class="dot">memory on <b>{{.Server}}</b>{{with $.Frame.Switch}}{{if .Host}}, this PC{{end}}{{end}}</span>{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}}<span class="st st-watch">not answering{{with $.Frame.ServerRead.LastOK}} since {{clock $.Frame.Generated . $.Loc}}{{end}}</span>{{end}}{{else if and .ServerOKAt (not .ServerOK)}}<span class="st st-watch">not answering since {{clock $.Frame.Generated .ServerOKAt $.Loc}}</span>{{end}}{{end}}
 <span class="dot">updated {{with rel $.Frame.RenderedAt $.Frame.Generated $.Loc}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}</span>
 <a class="chip chip-stale" href="{{$.Frame.Path}}"><span class="i i-sm i-clock"></span>Updated over 5 min ago. Refresh.</a>
 {{with .Project}}<span class="dot">project <b>{{clip .}}</b></span>
 {{end}}{{with $.Frame.Catching}}<span class="chip"><span class="i i-sm i-clock"></span>{{.}}</span>
-{{end}}</div></div>
+{{end}}{{with $.Frame.Switch}}{{range .Chips}}{{template "pcchip" .}}
+{{end}}{{end}}</div></div>
 {{end}}{{end}}
+
+{{/*
+  mscope: the switch of the scope line (a Switch): two links, the one the figures follow
+  marked, and with all PCs the "Which PCs" list. A PC with sharing off gets a link to
+  Machines in place of the second half. pcchip: a note after the line (a PCChip).
+*/}}
+{{define "mscope"}}<span class="mscope">Activity on
+<nav class="seg mseg" aria-label="Whose activity"><a href="{{.ThisHref}}" data-machines="this"{{if not .AllSelected}} aria-current="true"{{end}}>this PC</a>
+{{if .Off}}<a class="seg-off" href="{{.OffHref}}" title="{{.OffTitle}}">all PCs: sharing is off here</a>{{else}}<a href="{{.AllHref}}"{{if .AllSelected}} aria-current="true"{{end}}>all PCs on this server ({{.N}})</a>{{end}}</nav>
+{{with .Which}}<details class="menu pcs">
+<summary class="chip" aria-label="Which PCs are counted in all PCs"><span class="i i-sm i-pcs"></span>Which PCs <span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop wider pcs-pop">
+<span class="grp">{{.Title}}</span>
+<ul class="pcl">
+{{range .Rows}}<li>{{if .ID}}<span class="idc" title="Short machine id">{{.ID}}</span>{{else}}<span class="idc" title="This PC has no machine id yet">—</span>{{end}}
+<span>{{.Label}}</span>
+<span class="pcl-st{{if .Stale}} st st-watch{{end}}">{{.State}}</span></li>
+{{end}}</ul>
+{{with .Ignored}}<span class="grp">Not counted</span>
+<p class="pcl-note">{{.}}</p>
+{{end}}<hr>
+<p class="pcl-note">A PC with sharing off (<code>feedback.share_ledger</code>) sends nothing, so it is not here.</p>
+<p class="pcl-note">{{.Fetched}}</p>
+<a href="{{.SystemHref}}">Machines on System →</a>
+</div>
+</details>
+{{end}}</span>{{end}}
+
+{{define "pcchip"}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}"{{with .Title}} title="{{.}}"{{end}}>{{with .Icon}}<span class="i i-sm {{.}}"></span>{{end}}{{.Text}}</a>{{else}}<span class="{{.Class}}"{{with .Title}} title="{{.}}"{{end}}>{{with .Icon}}<span class="i i-sm {{.}}"></span>{{end}}{{.Text}}</span>{{end}}{{end}}
 
 {{define "foot"}}</main>
 <footer class="foot">
