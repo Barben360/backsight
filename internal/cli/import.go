@@ -88,7 +88,7 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 		return &output.Error{Code: output.Usage, Message: folder + " is not a folder"}
 	}
 	capGiven := cmd.Flags().Changed("max-cost") || cmd.Flags().Changed("max-tokens")
-	prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	prices := retain.PricesForLLM(cfg.LLM)
 	if !fl.plan {
 		if cfg.LLM.Provider == "claude-code" && !fl.allowSubscription {
 			return &output.Error{Code: output.Usage, Message: "the server extracts with your Claude subscription: importing would send many files unattended, the automated use its terms restrict; rerun with --allow-subscription to accept"}

@@ -643,7 +643,7 @@ func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, s
 	fl := estimateFlusher(d, home, cfg, since, idx)
 	fl.NoCursors = fresh
 	model := cfg.LLM.Model
-	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	prices := retain.PricesForLLM(cfg.LLM)
 	files, _ := filepath.Glob(filepath.Join(projectsDir, "*", "*.jsonl"))
 	_, plan, err := surveyAll(fl, files, backfillFlags{}, prices)
 	if err != nil {
@@ -712,7 +712,7 @@ func (s *setupEnv) scanImport(path, model string) importEst {
 	if len(scan.Files) == 0 {
 		return importEst{err: fmt.Errorf("no Markdown or text file to import in it (backsight import %s --plan lists what it skips)", scan.Root)}
 	}
-	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	prices := retain.PricesForLLM(cfg.LLM)
 	plan := fileimport.BuildPlan(scan, nil, "", "", prices)
 	maxCost, maxTokens := importCap(filesImportFlags{}, plan.Total, prices)
 	work := importDuration(plan.Total.Duration) + " of extraction"

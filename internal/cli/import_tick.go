@@ -124,7 +124,7 @@ func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg
 		return r, err
 	}
 	r.Left = 0
-	prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	prices := retain.PricesForLLM(cfg.LLM)
 	bank, tombs := cfg.Server.Bank, st.TombstonesOf(cfg.Server.Bank)
 	machineID := retain.ReadMachineID(d.State)
 	budget := tickImportLimit

@@ -261,8 +261,7 @@ func extractionRows(e env, w Window) ([]ExtractionRow, error) {
 	}
 	buckets := w.Buckets()
 	_, allDays, _ := inWindow(all, w.Since, w.Until, w.Loc, buckets)
-	cfg := e.src.Config.LLM
-	prices := retain.PricesFor(cfg.Model, cfg.PriceInput, cfg.PriceCached, cfg.PriceOutput, cfg.Currency)
+	prices := retain.PricesForLLM(e.src.Config.LLM)
 	byOp := map[string][]tokens{}
 	named := map[string]tokens{}
 	for _, op := range extractionOps {

@@ -154,7 +154,7 @@ func runResendFailed(ctx context.Context, f resendFailedFlags) (resendFailedResu
 		res.Action = "refused"
 		return res, &output.Error{Code: output.Blocked, Message: failing + "; nothing was changed: fix it first (backsight doctor)"}
 	}
-	prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	prices := retain.PricesForLLM(cfg.LLM)
 	plan := func() (retain.FailedPlan, error) {
 		named, err := failedSessions(ctx, fl, d.TelemetryDir(), since, &res)
 		if err != nil {

@@ -364,7 +364,7 @@ func extractionOver(cmd *cobra.Command, from, to time.Time) extraction {
 		thoughts += t.Thoughts
 	}
 	x.Output += thoughts // billed as output
-	if p := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency); p.Known() {
+	if p := retain.PricesForLLM(cfg.LLM); p.Known() {
 		x.Cost, x.Currency = p.Cost(x.Input, x.Cached, x.Output, 0), p.Currency
 	}
 	return x

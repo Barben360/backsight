@@ -103,7 +103,7 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 					return &output.Error{Code: output.Partial, Message: f.Hold + "; rerun backsight retain backfill"}
 				}
 			}
-			prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+			prices := retain.PricesForLLM(cfg.LLM)
 			files := transcripts(home)
 			if fl.dir != "" {
 				files, _ = filepath.Glob(filepath.Join(fl.dir, "*", "*.jsonl"))

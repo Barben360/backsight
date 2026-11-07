@@ -520,8 +520,7 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		fail(ReasonNoEvents)
 		return nil
 	}
-	cfg := e.src.Config.LLM
-	prices := retain.PricesFor(cfg.Model, cfg.PriceInput, cfg.PriceCached, cfg.PriceOutput, cfg.Currency)
+	prices := retain.PricesForLLM(e.src.Config.LLM)
 	ops := byOperation(named, total, prices, failedOps == 0)
 
 	tm := Metric{Value: ptr(float64(total.total())),

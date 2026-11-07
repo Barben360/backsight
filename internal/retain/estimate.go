@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/config"
 )
 
 // Prices per million tokens. Write is the price of an input token written to
@@ -49,6 +51,12 @@ var priceTable = map[string]Prices{
 	"claude-sonnet-5-5": {Input: 2, Write: 2.5, Cached: 0.10, Output: 10, Currency: "USD"},
 	"claude-opus-5-5":   {Input: 4, Write: 5, Cached: 0.20, Output: 20, Currency: "USD"},
 	"claude-fable-5-1":  {Input: 10, Write: 12.5, Cached: 0.25, Output: 50, Currency: "USD"},
+}
+
+// PricesForLLM is PricesFor with [llm]'s model and prices: the one way
+// commands and metrics get the prices they charge.
+func PricesForLLM(l config.LLM) Prices {
+	return PricesFor(l.Model, l.PriceInput, l.PriceCached, l.PriceOutput, l.Currency)
 }
 
 // PricesFor returns the configured prices, else the table's for model.
