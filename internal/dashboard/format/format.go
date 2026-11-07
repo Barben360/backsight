@@ -156,6 +156,28 @@ func (l Locale) Duration(ms float64) string {
 	return n + " " + u
 }
 
+// Range writes a latency bucket (lo, hi] in ms as "250–500 ms", "500 ms–1,0 s"
+// or "over 5,0 s": views.RangeText with the locale's marks. The unit the two
+// edges share is written once.
+func (l Locale) Range(lo int64, hi *int64) string {
+	edge := func(ms int64) string {
+		if ms < 1000 && ms > -1000 {
+			return l.Fixed(float64(ms), 0) + " ms"
+		}
+		return l.Fixed(float64(ms)/1000, 1) + " s"
+	}
+	a := edge(lo)
+	if hi == nil {
+		return "over " + a
+	}
+	b := edge(*hi)
+	au, bu := a[strings.LastIndex(a, " "):], b[strings.LastIndex(b, " "):]
+	if au == bu {
+		a = strings.TrimSuffix(a, au)
+	}
+	return a + "–" + b
+}
+
 // Money writes v with two decimals and the currency's mark.
 func (l Locale) Money(v float64, currency string) string {
 	if bad(v) {

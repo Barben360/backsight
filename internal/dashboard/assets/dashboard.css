@@ -797,3 +797,7 @@ dialog.keys:not([open]) { display: none; }
   .chart .bkt-own { stroke: CanvasText; }
   .seg a.seg-off { color: GrayText; }
 }
+
+/* Several PCs: a tile's delta wraps inside the tile (the arrow stays with the first word through a no-break space), and a tile head that carries the "all PCs" chip wraps rather than push the info button out. */
+.tile-st .delta { white-space: normal; }
+.tile-top:has(.i-pcs) { flex-wrap: wrap; }

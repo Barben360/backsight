@@ -575,7 +575,7 @@ func (d PageData) allPCsFig(f *Fig, r *metrics.Result, v MetricView, hasP50 bool
 	case v.ID == "recall.latency" && slices.Contains(v.M.Tags, "approximate"):
 		f.Delta = bucketDelta(r, v.M)
 		if lo, hi, ok := views.RangeMS(v.M, "range_ms"); ok {
-			f.Value = views.RangeText(lo, hi)
+			f.Value = l.Range(lo, hi)
 		}
 		f.Sub, f.SubApprox = "slowest 1 in 20, all PCs", true
 	case v.ID == "context.per_prompt" && hasP50:

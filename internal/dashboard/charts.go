@@ -249,7 +249,7 @@ func latencyOf(l format.Locale, more string, vs ...MetricView) template.HTML {
 func latencyRangesOf(l format.Locale, more string, v MetricView, after string) (template.HTML, bool) {
 	c := chart.RangeBars{Label: "Slowest 1 in 20 prompts per day, all PCs, as bucket ranges", NName: "prompts", NOne: "prompt",
 		Fmt: l.Duration, More: more, After: after, Empty: "No days to draw in this window.",
-		LegendBucket: "slowest 1 in 20, all PCs: between two bucket edges", Say: bucketWords}
+		LegendBucket: "slowest 1 in 20, all PCs: between two bucket edges", Say: bucketWordsIn(l)}
 	if d, ok := metrics.DefOf("recall.latency"); ok {
 		if d.Absolute.Watch != nil {
 			c.WatchMS = *d.Absolute.Watch
@@ -269,19 +269,21 @@ func latencyRangesOf(l format.Locale, more string, v MetricView, after string) (
 	return c.HTML(), true
 }
 
-// bucketWords says a latency bucket (lo, hi] in a sentence ("between 1.0 and
+// bucketWordsIn says, in the page's locale, a latency bucket (lo, hi] in a sentence ("between 1.0 and
 // 2.0 s", "over 5.0 s") and in a table cell ("1.0–2.0 s").
-func bucketWords(lo float64, hi *float64) (between, cell string) {
-	var h *int64
-	if hi != nil {
-		x := int64(*hi)
-		h = &x
+func bucketWordsIn(l format.Locale) func(lo float64, hi *float64) (between, cell string) {
+	return func(lo float64, hi *float64) (between, cell string) {
+		var h *int64
+		if hi != nil {
+			x := int64(*hi)
+			h = &x
+		}
+		cell = l.Range(int64(lo), h)
+		if h == nil {
+			return cell, cell // "over 5.0 s", the words the table and the CLI use
+		}
+		return "between " + strings.Replace(cell, "–", " and ", 1), cell
 	}
-	cell = views.RangeText(int64(lo), h)
-	if h == nil {
-		return cell, cell // "over 5.0 s", the words the table and the CLI use
-	}
-	return "between " + strings.Replace(cell, "–", " and ", 1), cell
 }
 
 // byPCOf is the By PC disclosure: one row per counted PC, this PC first, with
@@ -294,7 +296,7 @@ func byPCOf(l format.Locale, rows []metrics.ByPCRow) string {
 		if r == nil || r[0] == nil {
 			return dash
 		}
-		return views.RangeText(*r[0], r[1])
+		return l.Range(*r[0], r[1])
 	}
 	exact := func(v *float64) string {
 		if v == nil {

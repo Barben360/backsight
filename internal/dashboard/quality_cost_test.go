@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"regexp"
 	"slices"
 	"strings"
@@ -1462,7 +1463,7 @@ func TestBucketWordsAreTheTablesAndTheCLIs(t *testing.T) {
 		{250, f(500), "between 250 and 500 ms"},
 		{5000, nil, "over 5.0 s"},
 	} {
-		between, cell := bucketWords(c.lo, c.hi)
+		between, cell := bucketWordsIn(format.Locale{})(c.lo, c.hi)
 		var hi *int64
 		if c.hi != nil {
 			hi = i(int64(*c.hi))
@@ -1473,5 +1474,52 @@ func TestBucketWordsAreTheTablesAndTheCLIs(t *testing.T) {
 		if between != c.between {
 			t.Errorf("hover %q, want %q", between, c.between)
 		}
+	}
+}
+
+// Under a comma locale the buckets keep the page's marks, the open one and the
+// shared unit included, in the tile, the chart's words and the By PC table:
+// "over 5,0 s", never "over 5.0 s" beside "limit 2,5 s".
+func TestRangeTextsFollowThePagesLocale(t *testing.T) {
+	fr := format.FromAcceptLanguage("fr")
+	if got := fr.Range(500, i64p(1000)); got != "500 ms–1,0 s" {
+		t.Errorf("range %q", got)
+	}
+	if got := fr.Range(5000, nil); got != "over 5,0 s" {
+		t.Errorf("open range %q", got)
+	}
+	if got := fr.Range(1000, i64p(2000)); got != "1,0–2,0 s" {
+		t.Errorf("shared unit %q", got)
+	}
+	if got, en := fr.Range(250, i64p(500)), (format.Locale{}).Range(250, i64p(500)); got != "250–500 ms" || got != en {
+		t.Errorf("ms range %q, English %q", got, en)
+	}
+	f := func(v float64) *float64 { return &v }
+	between, cell := bucketWordsIn(fr)(1000, f(2000))
+	if between != "between 1,0 and 2,0 s" || cell != "1,0–2,0 s" {
+		t.Errorf("chart words %q, %q", between, cell)
+	}
+
+	// The overview with all PCs, in French: the Speed tile and its typical range.
+	own := scenarioNamed(t, "healthy")
+	r := allPCsOverview(t)
+	speedAs(r, metrics.StatusBad, 5000, 2000, 5000, nil, []any{500.0, 1000.0})
+	var tl Tile
+	for _, g := range tilesOf(r, allPCsPage, fr, r.Window.Loc, false, own) {
+		for _, x := range g.Tiles {
+			if x.Name == "Speed" {
+				tl = x
+			}
+		}
+	}
+	if tl.Big != "over 5,0" || tl.Unit != "s" || !strings.Contains(tl.Sub, "typical 500 ms–1,0 s") || !strings.Contains(tl.Sub, "limit 2,5 s") {
+		t.Errorf("Speed tile %q %q, sub %q", tl.Big, tl.Unit, tl.Sub)
+	}
+	art := renderAllPCsIn(t, fr, r, own, nil, allPCsPage).find("article.tile")[4]
+	if big := art.first("span.big").text(); big != "over 5,0" {
+		t.Errorf("drawn value %q", big)
+	}
+	if !strings.Contains(art.text(), "typical 500 ms–1,0 s") {
+		t.Errorf("drawn tile %q", art.text())
 	}
 }

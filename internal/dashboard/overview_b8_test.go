@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"net/url"
 	"strings"
 	"testing"
@@ -68,6 +69,12 @@ func allPCsOverview(t *testing.T) *metrics.Result {
 // days when given), with all PCs' own answer own.
 func renderAllPCs(t *testing.T, r, own, days *metrics.Result, p views.Params) *node {
 	t.Helper()
+	return renderAllPCsIn(t, en, r, own, days, p)
+}
+
+// renderAllPCsIn is renderAllPCs for a page written in l.
+func renderAllPCsIn(t *testing.T, l format.Locale, r, own, days *metrics.Result, p views.Params) *node {
+	t.Helper()
 	tpls, specs, err := loadPages(Templates())
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +85,7 @@ func renderAllPCs(t *testing.T, r, own, days *metrics.Result, p views.Params) *n
 	if days != nil {
 		d.V["days"] = days
 	}
-	d.Loc, d.L, d.P, d.Own = r.Window.Loc, en, p, own
+	d.Loc, d.L, d.P, d.Own = r.Window.Loc, l, p, own
 	d.Frame.Window, d.Frame.Windows = b8Window, windowsFor("/", url.Values{})
 	d.Frame.Scope, d.Frame.Generated = &r.Scope, r.GeneratedAt
 	d.CLI = "backsight stats overview"

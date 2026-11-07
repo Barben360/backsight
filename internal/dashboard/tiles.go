@@ -457,7 +457,7 @@ func thisPCLink(own *metrics.Result, s tileSpec, l format.Locale) string {
 // 1 in 20 as a range, labelled approximate, and the typical one.
 func speedRange(t *Tile, m metrics.Metric, l format.Locale) {
 	if lo, hi, ok := views.RangeMS(m, "range_ms"); ok {
-		text := views.RangeText(lo, hi)
+		text := l.Range(lo, hi)
 		if i := strings.LastIndex(text, " "); i > 0 {
 			t.Big, t.Unit = text[:i], text[i+1:]
 		}
@@ -468,7 +468,7 @@ func speedRange(t *Tile, m metrics.Metric, l format.Locale) {
 	}
 	t.Sub = "slowest 1 in 20, from the PCs’ time buckets"
 	if lo, hi, ok := views.RangeMS(m, "p50_range_ms"); ok {
-		t.Sub += " · typical " + views.RangeText(lo, hi)
+		t.Sub += " · typical " + l.Range(lo, hi)
 	}
 	if bad := latencyLimit(); bad != nil && (m.Status == metrics.StatusWatch || m.Status == metrics.StatusBad) {
 		t.Sub += " · limit " + l.Duration(*bad)

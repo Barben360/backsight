@@ -217,7 +217,7 @@ func mergedCostLine(r *metrics.Result, l format.Locale, name string) string {
 	if name == "Speed" {
 		m := r.Metrics["recall.latency"]
 		if lo, hi, ok := views.RangeMS(m, "range_ms"); ok && slices.Contains(m.Tags, "approximate") {
-			text := views.RangeText(lo, hi)
+			text := l.Range(lo, hi)
 			if hi == nil {
 				return "slowest 1 in 20 " + text + " (approximate), all PCs"
 			}

@@ -69,3 +69,5 @@ details.never[open] > summary { margin-bottom: var(--sp-2);
 @container page (max-width: 899px) { details.never > summary { min-height: var(--touch); padding-block: 8px; box-sizing: border-box;
 input[type="text"] { min-height: var(--touch); box-sizing: border-box;
 dialog.keys:not([open]) { display: none;
+.tile-st .delta { white-space: normal;
+.tile-top:has(.i-pcs) { flex-wrap: wrap;

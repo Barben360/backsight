@@ -317,7 +317,7 @@
 {{end}}<p class="tile-q">{{.Question}}</p>
 <div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{if .CI}}<span class="ci{{if .Approx}} approx{{end}}">{{.CI}}</span>{{end}}</div>
 {{with .Sub}}<p class="tile-sub">{{.}}</p>
-{{end}}<div class="tile-st"><span class="st {{.WordClass}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}</div>
+{{end}}<div class="tile-st"><span class="st {{.WordClass}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span>&nbsp;{{.Text}}</span>{{end}}</div>
 {{with .Note}}<p class="tile-note">{{.}}</p>
 {{end}}{{.Spark}}
 <div class="tile-foot">{{if .Link}}<a href="{{.Link}}">{{.LinkText}}</a>{{end}}<span class="spacer"></span>{{template "cli" .Head}}</div>
