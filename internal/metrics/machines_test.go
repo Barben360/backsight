@@ -1477,6 +1477,28 @@ func TestReleasesUnionOfVersions(t *testing.T) {
 	}
 }
 
+// This PC's "figures up to" is the day its last publish ended on (Self.Until),
+// and none before it ever published.
+func TestSystemMachinesThisPCUntil(t *testing.T) {
+	for _, until := range []string{"2026-10-29", ""} {
+		x := newFx(t, fxNow)
+		x.prompts("alpha", "p", fxNow, 3, nil)
+		src := x.source()
+		src.Self = func() SelfPC { return SelfPC{Machine: pcThis, OS: "linux", Until: until} }
+		r, err := Run(context.Background(), "system", src, x.query(7))
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := r.Tables.Machines.Rows[0]
+		if !row.This {
+			t.Fatalf("first row %+v is not this PC", row)
+		}
+		if until == "" && row.Until != nil || until != "" && (row.Until == nil || *row.Until != until) {
+			t.Errorf("self until %q: row until %v", until, row.Until)
+		}
+	}
+}
+
 func TestSystemMachines(t *testing.T) {
 	setup := func(x *fx) {
 		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")

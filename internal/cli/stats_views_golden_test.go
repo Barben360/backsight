@@ -981,7 +981,7 @@ func TestViewTextAllPCs(t *testing.T) {
 	sys := text("system", "--machines", "all")
 	wantLines(t, "system", sys,
 		"PCs (fetched 2026-10-08 13:00)",
-		"3f9c2a17 (this PC) linux 2026-09-15 2026-10-08 09:00 dev — active",
+		"3f9c2a17 (this PC) linux 2026-09-15 2026-10-08 09:00 dev 2026-10-07 active",
 		"11111111 darwin 2026-09-20 2026-10-08 11:00 v0.1.18 2026-10-07 active",
 		"22222222 windows 2026-09-25 2026-10-05 14:00 v0.1.17 2026-10-04 stopped sending",
 		"deadbeef written by a newer backsight: update this PC")

@@ -66,7 +66,10 @@ type Source struct {
 // publish record leaves FirstSeen "" and LastSent zero, with no error.
 type SelfPC struct {
 	Machine, OS, FirstSeen, BinaryVersion string
-	LastSent                              time.Time
+	// Until is the last day of the figures this PC last published
+	// (published.json), empty when it never did.
+	Until    string
+	LastSent time.Time
 }
 
 // now is the source's clock, the wall clock when it has none.

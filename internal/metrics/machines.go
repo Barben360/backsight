@@ -823,6 +823,10 @@ func machinesTable(e env) (*Machines, error) {
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}
+		if self.Until != "" {
+			u := self.Until
+			row.Until = &u
+		}
 		active, err := thisActive(e)
 		if err != nil {
 			return nil, err

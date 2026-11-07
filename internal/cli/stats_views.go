@@ -214,7 +214,7 @@ func viewServer(d paths.Dirs, home string) (metrics.Source, error) {
 	src.Self = func() metrics.SelfPC {
 		self := metrics.SelfPC{Machine: retain.ReadMachineID(d.State), OS: machines.OS(viewGOOS), BinaryVersion: buildinfo.Version}
 		if rec, ok := machines.LoadPublished(d.MetricsDir()); ok {
-			self.FirstSeen, self.LastSent = rec.FirstSeen, rec.At
+			self.FirstSeen, self.LastSent, self.Until = rec.FirstSeen, rec.At, rec.Until
 		}
 		return self
 	}
