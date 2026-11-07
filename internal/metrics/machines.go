@@ -591,62 +591,30 @@ func scopePCs(e env) (*PCs, bool, error) {
 	}
 	thisCounts := !e.src.Config.ServerOnly()
 
-	type other struct {
-		machine, os, first string
-		at                 int64
-		until              sql.NullString
-	}
-	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT machine, COALESCE(os, ''), COALESCE(first_seen, ''), at, until_day FROM pc_docs
-WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
-		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
+	others, err := readCounted(e)
 	if err != nil {
 		return nil, false, err
 	}
-	var others []other
-	for rows.Next() {
-		var o other
-		if err := rows.Scan(&o.machine, &o.os, &o.first, &o.at, &o.until); err != nil {
-			_ = rows.Close()
-			return nil, false, err
-		}
-		others = append(others, o)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, false, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
 
-	var ids []string
-	if thisCounts && self.Machine != "" {
-		ids = append(ids, self.Machine)
-	}
-	for _, o := range others {
-		ids = append(ids, o.machine)
-	}
+	ids := shortIDs(self, thisCounts, others)
 
-	w := e.q.Window
 	if thisCounts {
 		row := PCRow{Machine: "", This: true, OS: self.OS, FirstSeen: self.FirstSeen}
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}
 		p.List = append(p.List, row)
-		var n int
-		if err := e.tx.QueryRowContext(e.ctx, `
-SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine')`,
-			w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n); err != nil {
+		active, err := thisActive(e)
+		if err != nil {
 			return nil, false, err
 		}
-		if n > 0 {
+		if active {
 			p.Active++
 		}
 	}
 	for _, o := range others {
 		row := PCRow{Machine: short(o.machine, ids), OS: o.os, FirstSeen: o.first,
-			Stale: time.UnixMilli(o.at).Before(e.now.Add(-machines.StaleAfter))}
+			Stale: isStale(e, o.at)}
 		if o.until.Valid && o.until.String != "" {
 			u := o.until.String
 			row.Until = &u
@@ -657,13 +625,11 @@ SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR 
 		if row.Stale {
 			p.Stale++
 		}
-		var n int
-		if err := e.tx.QueryRowContext(e.ctx, `
-SELECT COUNT(*) FROM pc_days WHERE machine = ? AND version = '' AND prompts > 0 AND noon >= ? AND noon < ?`,
-			o.machine, w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n); err != nil {
+		active, err := otherActive(e, o.machine)
+		if err != nil {
 			return nil, false, err
 		}
-		if n > 0 {
+		if active {
 			p.Active++
 		}
 		p.List = append(p.List, row)
@@ -791,13 +757,14 @@ GROUP BY d.version ORDER BY d.version`,
 	return out, rows.Err()
 }
 
-// countedPCs reads the other counted PCs' documents (M9), by first seen.
+// countedPC is one of the other counted PCs' documents (M9), by first seen.
 type countedPC struct {
 	machine, os, first, version string
 	at                          int64
 	until                       sql.NullString
 }
 
+// readCounted reads the other counted PCs' documents (M9), by first seen.
 func readCounted(e env) ([]countedPC, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT machine, COALESCE(os, ''), COALESCE(first_seen, ''), at, COALESCE(binary_version, ''), until_day FROM pc_docs
@@ -835,45 +802,34 @@ func machinesTable(e env) (*Machines, error) {
 		}
 	}
 	thisCounts := !m.Sharing || !e.src.Config.ServerOnly()
-	var ids []string
-	if thisCounts && self.Machine != "" {
-		ids = append(ids, self.Machine)
-	}
-	for _, o := range others {
-		ids = append(ids, o.machine)
-	}
+	ids := shortIDs(self, thisCounts, others)
 	loc := viewLoc(e)
-	w := e.q.Window
 	if thisCounts {
 		row := MachineRow{This: true, OS: self.OS, FirstSeen: self.FirstSeen, BinaryVersion: self.BinaryVersion,
 			LastSent: timeIn(self.LastSent, loc)}
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}
-		var n int
-		if err := e.tx.QueryRowContext(e.ctx, `
-SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine')`,
-			w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n); err != nil {
+		active, err := thisActive(e)
+		if err != nil {
 			return nil, err
 		}
-		row.Active = n > 0
+		row.Active = active
 		m.Rows = append(m.Rows, row)
 	}
 	for _, o := range others {
 		at := time.UnixMilli(o.at).In(loc)
 		row := MachineRow{Machine: short(o.machine, ids), OS: o.os, FirstSeen: o.first, BinaryVersion: o.version,
-			LastSent: &at, Stale: time.UnixMilli(o.at).Before(e.now.Add(-machines.StaleAfter))}
+			LastSent: &at, Stale: isStale(e, o.at)}
 		if o.until.Valid && o.until.String != "" {
 			u := o.until.String
 			row.Until = &u
 		}
-		var n int
-		if err := e.tx.QueryRowContext(e.ctx, `
-SELECT COUNT(*) FROM pc_days WHERE machine = ? AND version = '' AND prompts > 0 AND noon >= ? AND noon < ?`,
-			o.machine, w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n); err != nil {
+		active, err := otherActive(e, o.machine)
+		if err != nil {
 			return nil, err
 		}
-		row.Active = n > 0
+		row.Active = active
 		m.Rows = append(m.Rows, row)
 	}
 	if !m.Sharing {
@@ -954,4 +910,42 @@ func countsOf(used, ignored float64) Counts {
 		c.Rate = ptr(used / n)
 	}
 	return c
+}
+
+// shortIDs are the ids short() compares: this PC's (when it counts and has
+// one) and every counted other's.
+func shortIDs(self SelfPC, thisCounts bool, others []countedPC) []string {
+	var ids []string
+	if thisCounts && self.Machine != "" {
+		ids = append(ids, self.Machine)
+	}
+	for _, o := range others {
+		ids = append(ids, o.machine)
+	}
+	return ids
+}
+
+// thisActive: this PC typed a prompt in the window.
+func thisActive(e env) (bool, error) {
+	w := e.q.Window
+	var n int
+	err := e.tx.QueryRowContext(e.ctx, `
+SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine')`,
+		w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n)
+	return n > 0, err
+}
+
+// otherActive: another PC sent a day with prompts in the window.
+func otherActive(e env, machine string) (bool, error) {
+	w := e.q.Window
+	var n int
+	err := e.tx.QueryRowContext(e.ctx, `
+SELECT COUNT(*) FROM pc_days WHERE machine = ? AND version = '' AND prompts > 0 AND noon >= ? AND noon < ?`,
+		machine, w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n)
+	return n > 0, err
+}
+
+// isStale: a document sent at atMS (ms) is older than the stale age.
+func isStale(e env, atMS int64) bool {
+	return time.UnixMilli(atMS).Before(e.now.Add(-machines.StaleAfter))
 }

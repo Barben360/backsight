@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -1587,6 +1588,29 @@ func TestMemorySharedCounts(t *testing.T) {
 	}
 }
 
+// TestMemorySharedDecay: counts 30 days old are read at now under the
+// config's half-lives, on both sides alike.
+func TestMemorySharedDecay(t *testing.T) {
+	x := newFx(t, fxNow)
+	old := fxNow.Add(-30 * 24 * time.Hour)
+	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"m1": {Shown: 9, Credits: 8, CreditsAt: old, Misses: 4, MissesAt: old}}})
+	calls := 0
+	seam := combinedSeam(t, fxNow, feedback.Remote{"m1": {Credits: 4, CreditsAt: old, Misses: 2, MissesAt: old}}, &calls)
+	s := readShared(t, x, seam)
+	cfg := x.source().Config.Feedback
+	cf := math.Exp2(-30 / float64(cfg.CreditHalfLifeDays))
+	mf := math.Exp2(-30 / float64(cfg.MissHalfLifeDays))
+	if cf > 0.99 || mf > 0.99 {
+		t.Fatalf("half-lives too long to show decay: %v %v", cf, mf)
+	}
+	near(t, "this.used", s.This.Used, 8*cf, 1e-6)
+	near(t, "this.ignored", s.This.Ignored, 4*mf, 1e-6)
+	near(t, "others.used", s.Others.Used, 4*cf, 1e-6)
+	near(t, "others.ignored", s.Others.Ignored, 2*mf, 1e-6)
+	near(t, "all.used", s.All.Used, 12*cf, 1e-6)
+	near(t, "all.ignored", s.All.Ignored, 6*mf, 1e-6)
+}
+
 func TestMemorySharedStates(t *testing.T) {
 	base := func() *fx {
 		x := newFx(t, fxNow)
@@ -1622,6 +1646,13 @@ func TestMemorySharedStates(t *testing.T) {
 	t.Run("no seam", func(t *testing.T) {
 		if s := readShared(t, base(), nil); s.State != "unavailable" {
 			t.Errorf("state %q", s.State)
+		}
+	})
+	t.Run("29 days old is still counted", func(t *testing.T) {
+		calls := 0
+		seam := combinedSeam(t, fxNow.Add(-29*24*time.Hour), feedback.Remote{"m1": {Credits: 4, CreditsAt: fxNow}}, &calls)
+		if s := readShared(t, base(), seam); s.State != "counted" || s.Others.Used != 4 {
+			t.Errorf("shared %+v", s)
 		}
 	})
 	t.Run("older than 30 days", func(t *testing.T) {
