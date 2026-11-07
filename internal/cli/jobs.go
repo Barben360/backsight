@@ -148,6 +148,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if publishFigures && f != nil && otherServer(d, cfg) == nil && f.StartedOver() == nil {
 					res.applyMetrics(publishMetrics(cmd.Context(), f.Client, d, home, cfg, f.MachineID, now()))
 					// Also on a server-only host, which publishes nothing.
+					// On a publish day the publish's own catch-up already
+					// ran (res.metricsIndex): this fetch is ingested one tick
+					// late, by design (one catch-up per tick).
 					res.applyFetch(fetchMetrics(cmd.Context(), f.Client, listing, d, cfg, f.MachineID, now()))
 				}
 				if res.MetricsIndex = res.metricsIndex; res.MetricsIndex == "" {

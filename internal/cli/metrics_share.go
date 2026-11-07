@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -326,12 +327,31 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 		if now.Sub(doc.At) > machines.DropAfter {
 			continue
 		}
-		good = append(good, kept{it.ID, raw, doc.At})
+		// The canonical form, not the metadata as fetched: unknown fields
+		// (which Parse ignores) must not reach the cache, where JSON escaping
+		// can multiply them by six.
+		canon, merr := doc.Marshal()
+		if merr != nil {
+			continue
+		}
+		// min(at, now): a document dated ahead (Parse allows 24 h) must not
+		// outrank the PCs that really sent lately.
+		at := doc.At
+		if at.After(now) {
+			at = now
+		}
+		good = append(good, kept{it.ID, canon, at})
 	}
 	slices.SortStableFunc(good, func(a, b kept) int { // newest first
 		return b.at.Compare(a.at)
 	})
 	good = good[:min(len(good), machines.MaxDocs)]
+	good, over := withinCacheBudget(good, func(g kept) machines.CachedDoc { return machines.CachedDoc{Name: g.name, Raw: g.raw} }, cacheDocsBudget)
+	for _, g := range over {
+		if len(fresh.Ignored) < machines.MaxDocs {
+			fresh.Ignored = append(fresh.Ignored, machines.Ignored{Machine: machines.Short(g.name), Reason: machines.TooLarge})
+		}
+	}
 	slices.SortFunc(good, func(a, b kept) int { return cmp.Compare(a.name, b.name) })
 	for _, g := range good {
 		fresh.Docs = append(fresh.Docs, machines.CachedDoc{Name: g.name, Raw: g.raw})
@@ -342,11 +362,38 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 	return len(fresh.Docs), len(fresh.Ignored), nil
 }
 
+// cacheDocsBudget is what the cached documents may take once JSON-escaped,
+// MaxCacheBytes less room for the rest of machines.json.
+const cacheDocsBudget = machines.MaxCacheBytes - 1<<20
+
+// withinCacheBudget keeps the leading items whose escaped JSON, summed, stays
+// within budget; the others (in order) are returned as over. A running total,
+// so a document that would not fit does not stop a later, smaller one.
+func withinCacheBudget[T any](items []T, doc func(T) machines.CachedDoc, budget int) (kept, over []T) {
+	total := 0
+	for _, it := range items {
+		b, err := json.Marshal(doc(it))
+		if err != nil || total+len(b)+1 > budget {
+			over = append(over, it)
+			continue
+		}
+		total += len(b) + 1
+		kept = append(kept, it)
+	}
+	return kept, over
+}
+
 var errCacheWrite = errors.New("the cache could not be written")
 
 // fetchMetrics is the tick's fetch of the other PCs' daily figures, within
 // metricsShareBudget; the failure is a class, never an error's text.
 func fetchMetrics(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time) (fetched, ignored int, class string) {
+	// Its own budget, apart from the publish's: a tick that publishes and
+	// fetches takes at most 2 x metricsShareBudget (60 s) for the daily
+	// figures, on top of the shared counts' own shareTickBudget. Acceptable:
+	// it is a background tick, and a miss only delays the next attempt. A
+	// listing the shared counts already cached as failed is reported as budget
+	// here even if this budget was not spent.
 	ctx, cancel := context.WithTimeout(ctx, metricsShareBudget)
 	defer cancel()
 	fetched, ignored, err := refreshMetricsDocs(ctx, cl, l, d, cfg, machine, now)

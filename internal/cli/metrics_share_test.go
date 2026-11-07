@@ -1037,3 +1037,94 @@ func TestOneListingPerTick(t *testing.T) {
 		t.Errorf("only the counts due: %d walk(s) in all, %d machine(s) counted", walks(), n)
 	}
 }
+
+// padded is a valid document made as large as a reader accepts with an unknown
+// field full of characters JSON escapes to six bytes.
+func padded(t *testing.T, id string, at time.Time) string {
+	t.Helper()
+	meta := otherDoc(t, id, at)
+	pad := machines.MaxBytes - len(meta) - len(`,"z":""`)
+	padded := meta[:len(meta)-1] + `,"z":"` + strings.Repeat("<", pad) + `"}`
+	if _, err := machines.Parse(machines.DocPrefix+id, padded, at); err != nil {
+		t.Fatalf("the padded document must be valid: %v", err)
+	}
+	return padded
+}
+
+// Valid documents padded with an unknown field, which JSON escaping would
+// multiply by six, must not make the cache unloadable.
+func TestFetchCacheStaysLoadableWithPaddedDocuments(t *testing.T) {
+	m := newShareMachine(t)
+	const n = 20 // 20 MiB on the wire, 120 MiB escaped when cached as fetched
+	// The listing is handed over: the test server escapes the padding too, and
+	// the client would refuse its page; a real server need not.
+	l := &controlListing{done: true}
+	for i := range n {
+		l.items = append(l.items, hindsight.DocumentItem{ID: machines.DocPrefix + otherPC(i),
+			Metadata: map[string]string{machines.MetaKey: padded(t, otherPC(i), pubT0.Add(-time.Duration(i)*time.Minute))}})
+	}
+	f, _, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != n {
+		t.Fatalf("%d fetched, %v", f, err)
+	}
+	c, err := machines.LoadCache(m.d.MetricsDir())
+	if err != nil {
+		t.Fatalf("the cache must load: %v", err)
+	}
+	if len(c.Docs) != n {
+		t.Fatalf("%d documents cached, want %d", len(c.Docs), n)
+	}
+	for _, d := range c.Docs {
+		if len(d.Raw) > 4096 || strings.Contains(d.Raw, "<") {
+			t.Errorf("%s: the cache holds more than the known fields (%d bytes)", d.Name, len(d.Raw))
+		}
+	}
+}
+
+func TestWithinCacheBudget(t *testing.T) {
+	mk := func(name string, n int) machines.CachedDoc { return machines.CachedDoc{Name: name, Raw: strings.Repeat("a", n)} }
+	docs := []machines.CachedDoc{mk("a", 100), mk("b", 100), mk("c", 10), mk("d", 100)}
+	kept, over := withinCacheBudget(docs, func(d machines.CachedDoc) machines.CachedDoc { return d }, 260)
+	names := func(l []machines.CachedDoc) (s string) {
+		for _, d := range l {
+			s += d.Name
+		}
+		return s
+	}
+	// a and b (about 124 bytes each) fit; c would push past 260, and d too
+	if names(kept) != "ab" || names(over) != "cd" {
+		t.Errorf("kept %q, over %q", names(kept), names(over))
+	}
+	kept, over = withinCacheBudget(docs, func(d machines.CachedDoc) machines.CachedDoc { return d }, 1<<20)
+	if len(kept) != 4 || len(over) != 0 {
+		t.Errorf("within a large budget: kept %d, over %d", len(kept), len(over))
+	}
+}
+
+// A document dated ahead (Parse allows 24 h) counts as sent now, so it cannot
+// outrank a real PC: with every real PC sent at now, it ties and loses (its
+// name sorts last), where its own date would have put it first.
+func TestFetchFutureDateDoesNotEvictARealPC(t *testing.T) {
+	m := newShareMachine(t)
+	for n := range machines.MaxDocs {
+		m.putMetrics(otherPC(n), otherDoc(t, otherPC(n), pubT0))
+	}
+	liar := "ffffffff-9999-4000-8000-000000000000" // sorts after every real PC
+	m.putMetrics(liar, otherDoc(t, liar, pubT0.Add(23*time.Hour)))
+	f, _, err := m.fetch(pubT0)
+	if err != nil || f != machines.MaxDocs {
+		t.Fatalf("%d fetched, %v", f, err)
+	}
+	have := map[string]bool{}
+	for _, d := range m.machinesCache().Docs {
+		have[d.Name] = true
+	}
+	if have[machines.DocPrefix+liar] {
+		t.Errorf("the future-dated document was kept")
+	}
+	for n := range machines.MaxDocs {
+		if !have[machines.DocPrefix+otherPC(n)] {
+			t.Errorf("real PC %d was evicted", n)
+		}
+	}
+}
