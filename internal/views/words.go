@@ -388,9 +388,9 @@ var DayStatusWords = map[string]string{"ok": "ok", "watch": "warning", "bad": "p
 
 // IgnoredWords say why another PC's document was set aside.
 var IgnoredWords = map[string]string{
-	"too_large":       "too large to read",
+	"too_large":       "over the 1 MiB cap",
 	"unknown_version": "written by a newer backsight: update this PC",
-	"not_valid":       "not a valid document",
+	"not_valid":       "not valid",
 }
 
 // Word is the word of k in m, k itself when it has none.

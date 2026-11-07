@@ -120,8 +120,13 @@ func flagshipCell(l format.Locale, d metrics.Def, row map[string]metrics.Metric)
 func releasesOf(d PageData) ReleasesPage {
 	r := d.resultOf("releases")
 	l := d.L
-	p := ReleasesPage{Observational: observational, Head: fixedHead("releases", "Per version", "machine", d.CLI)}
+	p := ReleasesPage{Observational: observational, Head: fixedHead("releases", "Per version", "machine", d.cliAll())}
 	p.Head.Chip = "developer"
+	// Per version adds the PCs up on all PCs (their documents carry the
+	// binary version), so the card says so in place of "this PC".
+	if p.Head.PCs = allPCsChip(r.Scope); p.Head.PCs != nil {
+		p.Head.OthersNF = r.Scope.OthersUnfiltered
+	}
 	p.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
 	for _, row := range r.Tables.Releases {
 		ln := ReleaseLine{
@@ -269,4 +274,13 @@ func defsOf(d PageData) DefsPage {
 		p.Note = NoData{Text: "No metric is defined."}
 	}
 	return p
+}
+
+// cliAll is the page's command with --machines all when the figures it shows
+// add up the PCs (the widgets that follow the switch; the others use d.CLI).
+func (d PageData) cliAll() string {
+	if d.P.Machines == "all" {
+		return withMachines(d.CLI)
+	}
+	return d.CLI
 }

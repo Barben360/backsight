@@ -14,6 +14,9 @@ type Query struct {
 	Limit, Offset int
 	// Dev adds the developer-only metrics; Text asks for a memory's text.
 	Dev, Text bool
+	// WithOwn asks a merged run (Machines "all") to carry this PC's own answer too (Result.ThisPC): what
+	// `--machines this` gives for the same query, from the same read. Unset, the CLI pays nothing for it.
+	WithOwn bool
 	// Compare and Measure serve the releases view: the two versions to
 	// compare and the measure (used.turn_rate when empty).
 	Compare [2]string

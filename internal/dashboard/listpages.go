@@ -480,7 +480,7 @@ func projectOf(d PageData) ProjectPage {
 		name = t.Project
 	}
 	pg.Name = d.projectLink(name)
-	pg.Tiles = tilesOf(r, tileParamsProject(d.P, name), d.L, d.Loc, d.Frame.Prefs.Dev)
+	pg.Tiles = tilesOf(r, tileParamsProject(d.P, name), d.L, d.Loc, d.Frame.Prefs.Dev, nil)
 
 	pg.Sessions = SessionsCard{Head: fixedHead("project-sessions", "Sessions of this project", "machine", d.CLI)}
 	pg.Sessions.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
@@ -590,7 +590,7 @@ func dayOf(d PageData) DayPage {
 			pg.Next = Ref{Text: at.AddDate(0, 0, 1).Format("Jan 2") + " →", Href: "/days/" + at.AddDate(0, 0, 1).Format("2006-01-02") + tz}
 		}
 	}
-	pg.Tiles = tilesOf(r, p, d.L, d.Loc, d.Frame.Prefs.Dev)
+	pg.Tiles = tilesOf(r, p, d.L, d.Loc, d.Frame.Prefs.Dev, d.Own)
 	if t != nil {
 		pg.Markers = d.markersOf(t.Markers)
 	}

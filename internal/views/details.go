@@ -83,16 +83,22 @@ func extraCounts(m metrics.Metric, key string, words map[string]string) []string
 // MetricDetails are the indented lines under a metric: what the number does
 // not say by itself (a lower bound, a partial total, a split).
 func MetricDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string {
-	return details(d, m, loc, false)
+	return details(d, m, loc, false, RangeText)
 }
 
 // PageDetails are the same lines for a page, which names the skip reasons
 // and the hook failure kinds in words.
 func PageDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string {
-	return details(d, m, loc, true)
+	return details(d, m, loc, true, RangeText)
 }
 
-func details(d metrics.Def, m metrics.Metric, loc *time.Location, page bool) []string {
+// PageDetailsIn is PageDetails with the bucket ranges written by rng, so a
+// page can follow its locale; the command line keeps RangeText.
+func PageDetailsIn(d metrics.Def, m metrics.Metric, loc *time.Location, rng func(lo int64, hi *int64) string) []string {
+	return details(d, m, loc, true, rng)
+}
+
+func details(d metrics.Def, m metrics.Metric, loc *time.Location, page bool, rng func(lo int64, hi *int64) string) []string {
 	var skipWords, failureWords map[string]string
 	if page {
 		skipWords, failureWords = SkipWords, FailureKindWords
@@ -119,7 +125,7 @@ func details(d metrics.Def, m metrics.Metric, loc *time.Location, page bool) []s
 		p95, ok95 := extraFloat(m, "p95")
 		merged := slices.Contains(m.Tags, "approximate") || slices.Contains(m.Tags, "average")
 		if lo, hi, ok := RangeMS(m, "p50_range_ms"); ok && slices.Contains(m.Tags, "approximate") {
-			add("all PCs: typical %s", RangeText(lo, hi))
+			add("all PCs: typical %s", rng(lo, hi))
 		}
 		if ok50 && ok95 {
 			// merged, these two stay this PC's exact figures: say so

@@ -47,13 +47,20 @@ func TestStylesheetIsTheDesigns(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(string(ref), "\n")
-	if len(lines) < 478 || !strings.HasPrefix(lines[477], "/* A simulation of a forced-colors theme") {
-		t.Fatalf("reference/dashboard.css: the canvas-only simulation no longer starts at L478")
+	sim := -1 // where the canvas-only simulation starts
+	for i, l := range lines {
+		if strings.HasPrefix(l, "/* A simulation of a forced-colors theme") {
+			sim = i
+			break
+		}
 	}
-	// Before L478, only a comment names fc-preview: drop that line (it
+	if sim < 400 {
+		t.Fatalf("reference/dashboard.css: the canvas-only simulation is not where it was (line %d)", sim+1)
+	}
+	// Before the simulation, only a comment names fc-preview: drop that line (it
 	// points at the block the stylesheet leaves out).
 	var kept []string
-	for _, l := range lines[:477] {
+	for _, l := range lines[:sim] {
 		if !canvasOnly.MatchString(l) {
 			kept = append(kept, l)
 		}
@@ -81,11 +88,13 @@ func TestStylesheetIsTheDesigns(t *testing.T) {
 		if skip || strings.HasPrefix(l, ".keys-shade ") {
 			continue
 		}
-		// Two comments name the block: the pages say no block number, so the
+		// Four comments name a block: the pages say no block number, so the
 		// shipped sheet words them without it (G-public).
 		l = strings.NewReplacer(
 			"Block 6 additions (draft). Every rule below", "Additions: calendar, density, shortcuts, markers. Every rule below",
 			"narrow: block 6 parts under", "narrow: the added parts under",
+			"Block 8 additions (draft). Every rule below", "Additions: several PCs. Every rule below",
+			"checked in blocks 3 and 6", "checked earlier",
 		).Replace(l)
 		kept = append(kept, l)
 	}
@@ -109,6 +118,50 @@ func TestStylesheetIsTheDesigns(t *testing.T) {
 	if n < 150 {
 		t.Errorf("only %d rules compared", n)
 	}
+	// And the other way: the shipped sheet holds no rule the reference lacks, so a rule added while building is
+	// added to the reference too (the design is the authority). The rules the pages' first blocks added to the
+	// shipped sheet without a place in the reference are pinned in testdata, and no new one may join them.
+	have := map[string]bool{}
+	for _, r := range ruleTexts(string(ref)) {
+		have[r] = true
+	}
+	if len(have) < 150 {
+		t.Errorf("only %d rules read from the reference", len(have))
+	}
+	pinned, err := os.ReadFile("testdata/css-rules-beyond-the-design.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beyond := map[string]bool{}
+	for _, r := range strings.Split(strings.TrimSpace(string(pinned)), "\n") {
+		if have[r] {
+			t.Errorf("testdata/css-rules-beyond-the-design.txt pins a rule the reference has: %s", r)
+		}
+		beyond[r] = true
+	}
+	shipped := map[string]bool{}
+	for _, r := range ruleTexts(css) {
+		shipped[r] = true
+		if !have[r] && !beyond[r] {
+			t.Errorf("assets/dashboard.css holds a rule that design/reference/dashboard.css lacks (add it there, in its place):\n%s}", r)
+		}
+	}
+	for r := range beyond {
+		if !shipped[r] {
+			t.Errorf("testdata/css-rules-beyond-the-design.txt pins a rule the shipped sheet no longer has: %s", r)
+		}
+	}
+}
+
+// ruleTexts are a sheet's rules, comments out and white space collapsed, split at each closing brace.
+func ruleTexts(css string) []string {
+	var out []string
+	for _, r := range strings.Split(cssComment.ReplaceAllString(css, ""), "}") {
+		if r = strings.Join(strings.Fields(r), " "); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func TestCopyScriptBudget(t *testing.T) {

@@ -9,7 +9,7 @@ Turns where Claude used memory               6 of 12                  (n=12, too
 Memories reported wrong or out of date       1 of 12                  (n=12, too few, 8 more needed)
 
 Cost
-Context added per session                    —                        (n=3 sessions, status on this PC: too few, 97 more needed)
+Context added per session                    1,533 chars on average   (n=3 sessions, status on this PC: too few, 97 more needed)
 Time memory adds to a prompt                 —                        (approximate, n=82, too few, 18 more needed)
   all PCs: typical 500 ms–1.0 s
 

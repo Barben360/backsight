@@ -1,10 +1,10 @@
 {{/* views: overview, days */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}{{$days := index .V "days"}}{{$txt := summarytext $r $.P $.Loc $.Frame.Window $.Frame.Version}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}{{$days := index .V "days"}}{{$txt := summarytext $r $.P $.Loc $.Frame.Window $.Frame.Version $.Own}}
 
-{{/* widget: verdict banner. Reads the verdict and metrics through banner (Banner: Title, Class, Icon, Axes, Reasons, Head). */}}
-{{with banner $r $.L $.Loc $.P}}<section class="verdict {{.Class}}" aria-labelledby="{{.Head.ID}}">
-<div class="v-head"><span class="v-ico {{.Icon}}" aria-hidden="true"></span><h2 class="v-title" id="{{.Head.ID}}">{{.Title}} <span class="v-when">(last 7 days)</span></h2>
+{{/* widget: verdict banner. Reads the verdict and metrics through banner (Banner: Title, Class, Icon, Axes, Reasons, Head, ThisPC). */}}
+{{with banner (thispc $r $.Own) $.L $.Loc $.P}}<section class="verdict {{.Class}}" aria-labelledby="{{.Head.ID}}">
+<div class="v-head"><span class="v-ico {{.Icon}}" aria-hidden="true"></span><h2 class="v-title" id="{{.Head.ID}}">{{.Title}} <span class="v-when">(last 7 days{{if .ThisPC}}, this PC{{end}})</span></h2>
 {{template "info" .Head}}{{template "cli" .Head}}</div>
 {{if .Axes}}<ul class="axes">
 {{range .Axes}}<li class="axis"><span class="axis-name">{{.Name}}</span> <span class="st {{.Class}}">{{.Word}}</span> <span class="axis-note">{{.Note}}</span></li>
@@ -18,12 +18,13 @@
 {{end}}
 {{/* widget: summary line and Copy summary. Reads .V.overview.Summary through summaryline (Prompts, Turns, Tokens, Cost, Scope); the button copies the text summarytext writes, which sits in the disclosure at the foot. */}}
 <div class="summary-row">
-{{with summaryline $r $.L $.Frame.Window}}<p class="summary">{{.When}}: <b>{{.Prompts}}</b> {{.PromptsNoun}} got memory, Claude used it in <b>{{.Turns}}</b> {{.TurnsNoun}}, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
+{{with summaryline $r $.L $.Frame.Window}}<p class="summary">{{.When}}{{.Who}}: <b>{{.Prompts}}</b> {{.PromptsNoun}} got memory, Claude used it in <b>{{.Turns}}</b> {{.TurnsNoun}}, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
 {{end}}<button class="copy" type="button" hidden data-copy="{{$txt}}" aria-label="Copy summary: the numbers on this page as plain text, without any memory text"><span class="i i-sm i-copy"></span>Copy summary</button>
 </div>
 
-{{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow through tiles (TileGroup: Name, Tiles; Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev). */}}
-{{template "tilegroups" tiles $r $.P $.L $.Loc $d}}
+{{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow through tiles (TileGroup: Name, Tiles; Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev, Approx). */}}
+{{$none := nopcactivity $r $days $.Frame.Window $.Frame.Windows}}{{if $none.Text}}<section class="card" aria-label="Activity on all PCs">{{template "nodata" $none}}</section>
+{{end}}{{template "tilegroups" tiles $r $.P $.L $.Loc $d $.Own}}
 
 {{/* widget: What should I do?. Reads .V.overview.Attention and .AttentionMore through attention (AttentionCard: Head, Count, Items, Whys, Calm, More, MoreHref). */}}
 <div class="grid-main">
@@ -40,7 +41,7 @@
 {{end}}{{template "card-close" .Head}}{{end}}
 
 {{/* widget: lately. Reads .V.overview.Tables.Lately (ID, Project, Last, Shown, Used, Wrong) and GeneratedAt (the times are told against it). */}}
-{{with latelyhead}}{{template "card-open" .}}{{end}}
+{{with latelyhead $r}}{{template "card-open" .}}{{end}}
 {{if $r.Tables.Lately}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
 <tbody>
@@ -50,7 +51,7 @@
 <td class="r">{{n .Shown}}</td><td class="r">{{n .Used}}</td><td class="r">{{if gt .Wrong 0}}<span class="st st-watch">{{n .Wrong}}</span>{{else}}{{n .Wrong}}{{end}}</td></tr>
 {{end}}</tbody></table></div>
 {{else}}<div class="empty"><span>No sessions in this window.</span></div>
-{{end}}{{with latelyhead}}{{template "card-close" .}}{{end}}
+{{end}}{{with latelyhead $r}}{{template "card-close" .}}{{end}}
 </div>
 
 {{/* widget: memory at a glance. Reads the metrics bank.size (extras observation, world, experience, documents), bank.growth and .V.overview.Info through glance (Glance: Head, Total, Growth, Kinds, Aria, Down, Badges, Nothing). */}}
@@ -72,7 +73,8 @@
 {{end}}</div>
 {{end}}{{if .Nothing}}<span class="small sub">Nothing to review.</span>{{end}}</div>
 </div>
-</section>
+{{with .Head.Note}}<p class="xs muted">{{.}}</p>
+{{end}}</section>
 {{end}}
 
 {{/* widget: Helped most. Reads .V.overview.Tables.Helped (Memory, Project, FactType, Used, Shown) through helped (Helped: Head, Intro, Down, Rows, Few, None, Foot). */}}

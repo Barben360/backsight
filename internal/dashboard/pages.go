@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -145,6 +146,10 @@ type PageData struct {
 	CLI   string                     // the command that prints the page's first view
 	State *StateView                 // the state pages' words; nil elsewhere
 	HM    string                     // the Overview's calendar colouring (got, used or sessions); "" the default
+	// Own is this PC's answer to the page's first view, carried by the merged
+	// result of the Overview, Cost and day page on all PCs (Result.ThisPC): the
+	// links that count events are this PC's. Nil everywhere else.
+	Own *metrics.Result
 }
 
 // Frame is what every page shows around its content.
@@ -166,6 +171,8 @@ type Frame struct {
 	Catching                               string    // catchingOf the first view's freshness; "" when the history is read
 	Custom                                 *Custom   // the custom window picker; nil on a page without window links
 	CustomMenu                             *Custom   // its copy in the Menu
+	Machines                               string    // "all" when the URL asks for all PCs: every link and form keeps it; "" this PC
+	Switch                                 *Switch   // the scope line's this PC / all PCs switch; nil: the line as shipped
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -426,17 +433,24 @@ func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 			keep = append(keep, [2]string{k, v})
 		}
 	}
+	// All PCs is a URL parameter like the project filter, never a preference:
+	// the forms carry it, the links get it from keepMachines.
+	machines := ""
+	if q.Get("machines") == "all" {
+		machines = "all"
+		keep = append(keep, [2]string{"machines", "all"})
+	}
 	f := Frame{
 		Title: title, Path: path, Version: s.cfg.Version, HelpURL: helpURL,
 		Nav: navFor(path, p.Dev), Prefs: p, Windows: windowsFor(path, q),
 		AllProjects: without(path, "project"), ProjectInput: q.Get("project"), Keep: keep,
-		PrefMenu: prefMenu(path, p),
+		PrefMenu: prefMenu(path, p), Machines: machines,
 	}
 	// The text page takes no parameter: it offers no window or filter. It
 	// never refreshes on its own: each reading of the text is a click. The
 	// menu still shows the preference as set.
 	if kindOf[r.Pattern] == "text" {
-		f.Windows, f.Keep = nil, nil
+		f.Windows, f.Keep, f.Machines = nil, nil, ""
 		f.Prefs.Refresh = false
 	}
 	return f
@@ -493,12 +507,6 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			if err == nil {
 				p, err = views.FromValues(first, q)
 			}
-			// TEMPORARY, PR 3 removes this guard: until the pages label the
-			// other PCs' figures, a page URL reads this PC only (the JSON API
-			// keeps machines=all). The refusal is the bad-parameter path.
-			if err == nil && p.Machines != "" && p.Machines != "this" {
-				err = views.Usage("--machines: this (the pages show this PC only for now)")
-			}
 			// A comparison the view would refuse (the same version twice) is
 			// refused here, not redirected to.
 			if err == nil && picked {
@@ -528,9 +536,11 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		data := s.pageData(r, title, prefs, started)
 		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
 		data.HM = measureOf(hm).key
-		data.CLI = cliFor(first, id, p)
+		// The page's command is this PC's: the widgets that follow the switch
+		// add the flag themselves (headOf, tileHead, the calendar).
+		data.CLI = cliFor(first, id, p.ThisPC())
 		if spec.Name == "session" || spec.Name == "memory" {
-			data.CLI = cliFor(first, id, allTimeParams(p))
+			data.CLI = cliFor(first, id, allTimeParams(p.ThisPC()))
 		}
 		if spec.Name == "defs" { // the catalog is read whole: its axis links are anchors on one page
 			p.Limit, p.Offset = metrics.MaxLimit, 0
@@ -549,6 +559,11 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		}
 		head := data.V[first]
 		s.withResult(&data, head)
+		// What the figures count, not what the URL asked for: sharing off, or a
+		// page that is always this PC's, answers this PC and says so.
+		data.P.Machines = head.Scope.Machines
+		// The merged views carry this PC's own answer (nil when sharing is off: the figures are this PC's).
+		data.Own = head.ThisPC()
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)
 			if spec.Name == "day" {
@@ -577,13 +592,16 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				data.Frame.Custom, data.Frame.CustomMenu = &c, c.inMenu()
 			}
 		}
+		if kindOf[r.Pattern] != "text" {
+			data.Frame.Switch = switchOf(data, head.View)
+		}
 		body, err := renderPage(s.tpl, spec.Name, data)
 		if err != nil {
 			refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(body)
+		_, _ = w.Write(keepMachines(body, data.Frame.Machines))
 		if r.Method == http.MethodGet {
 			s.served.Add(1)
 		}
@@ -736,5 +754,351 @@ func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, k
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(keepMachines(buf.Bytes(), data.Frame.Machines))
+}
+
+// Switch is the scope line's choice between this PC and all PCs on this
+// server, and what goes with it: the "Which PCs" list and the chips that say
+// what the all-PCs figures leave out. Nil on a page without it (one PC shares
+// on the server, or no server is set up): the line is then the shipped one.
+type Switch struct {
+	ThisHref, AllHref string // the "this PC" half drops machines; the other adds it
+	N                 int    // the PCs all PCs counts, this one included
+	AllSelected       bool   // all PCs is what the figures count
+	Off               bool   // this PC's sharing is off: the second half is a link to Machines
+	OffHref           string // (keepMachines adds the parameter a kept link carries)
+	OffTitle          string
+	NoneTitle         string
+	AllNone           bool // the page is always this PC's: the second half is text, not a link
+	Host              bool // the server is on this machine: the address says so
+	Which             *WhichPCs
+	Chips             []PCChip
+}
+
+// WhichPCs is the "Which PCs" list: who is counted in all PCs.
+type WhichPCs struct {
+	Title, Ignored, Fetched, SystemHref string
+	Rows                                []PCItem
+}
+
+// PCItem is a PC of that list: its short id, what it runs and since when,
+// and how fresh its figures are.
+type PCItem struct {
+	ID, Label, State string
+	Stale            bool
+}
+
+// PCChip is a note after the scope line: what all PCs leaves out or reads
+// from the cache. Href is "" for a note that links nowhere.
+type PCChip struct {
+	Class, Icon, Text, Title, Href string
+}
+
+const (
+	machinesHref   = "/system#machines"
+	thisOnlyHint   = "Projects, sessions and memories are this PC’s: other PCs send none"
+	sharingOffHint = "This PC does not share its activity (feedback.share_ledger is off), so it does not read the other PCs’ either. See Machines on System."
+)
+
+// osWords name the operating systems a PC sends (R28).
+var osWords = map[string]string{"linux": "Linux", "darwin": "macOS", "windows": "Windows"}
+
+// osWord is the word for os; "" when this PC has not said (no document yet).
+func osWord(os string) string {
+	if os == "" {
+		return ""
+	}
+	if w, ok := osWords[os]; ok {
+		return w
+	}
+	return "Other"
+}
+
+// isLoopbackHost says host:port is this machine's own address.
+func isLoopbackHost(hostport string) bool {
+	h, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		h = hostport
+	}
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// addMachines is path with machines=all added (before its fragment).
+func addMachines(path string) string {
+	path, frag, hasFrag := strings.Cut(without(path, "machines"), "#")
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	path += sep + "machines=all"
+	if hasFrag {
+		path += "#" + frag
+	}
+	return path
+}
+
+// switchOf is the switch of the page d: nil when the scope line is the
+// shipped one. It is shown when other PCs share (N > 1), when the URL asks
+// for all PCs (a kept link keeps working and says what it counts) and, with
+// a memory server set up, when this PC's sharing is off (to say why all PCs
+// is not offered).
+func switchOf(d PageData, view string) *Switch {
+	f, sc := d.Frame, d.Frame.Scope
+	if sc == nil || sc.PCs == nil {
+		return nil
+	}
+	pcs, asked := sc.PCs, f.Machines == "all"
+	if pcs.Sharing && pcs.Count <= 1 && !asked || !pcs.Sharing && sc.Server == "" && !asked {
+		return nil
+	}
+	sw := &Switch{
+		ThisHref: without(f.Path, "machines"), AllHref: addMachines(f.Path), N: pcs.Count,
+		AllSelected: sc.Machines == "all", Off: !pcs.Sharing, OffHref: machinesHref, OffTitle: sharingOffHint,
+		Host: isLoopbackHost(sc.Server), AllNone: metrics.ThisOnlyView(view) && pcs.Sharing, NoneTitle: thisOnlyHint,
+	}
+	if !sw.AllSelected {
+		return sw
+	}
+	sw.Which = whichPCs(d, pcs)
+	sw.Chips = pcChips(d, pcs)
+	return sw
+}
+
+// shortDay is a UTC date as "Oct 21", with the year when it is not this one's.
+func shortDay(day string, now time.Time) string {
+	t, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return day
+	}
+	if t.Year() != now.Year() {
+		return t.Format("Jan 2, 2006")
+	}
+	return t.Format("Jan 2")
+}
+
+// A PC's last send is told by ONE rule everywhere (the scope line's Which PCs,
+// the stale chip and System's Machines card), so the same PC never reads 7 d
+// in one place and 8 in another: the time elapsed, cut down to whole minutes,
+// hours (under 48) or days.
+func sentSpan(sent, now time.Time) (n int64, unit string) {
+	d := max(0, now.Sub(sent))
+	switch {
+	case d < time.Minute:
+		return 0, ""
+	case d < time.Hour:
+		return int64(d / time.Minute), "min"
+	case d < 48*time.Hour:
+		return int64(d / time.Hour), "h"
+	}
+	return int64(d / (24 * time.Hour)), "d"
+}
+
+// sentAgo is how long ago a PC sent its document, in the design's compact
+// words: "just now", "12 min ago", "5 h ago", "9 d ago".
+func sentAgo(sent, now time.Time) string {
+	n, unit := sentSpan(sent, now)
+	if unit == "" {
+		return "just now"
+	}
+	return strconv.FormatInt(n, 10) + " " + unit + " ago"
+}
+
+// sentFor is the same span as a length of silence, for "nothing sent for 9
+// days": the same count as sentAgo, spelled out.
+func sentFor(sent, now time.Time) string {
+	n, unit := sentSpan(sent, now)
+	switch unit {
+	case "":
+		return "under 1 min"
+	case "min":
+		return strconv.FormatInt(n, 10) + " min"
+	case "h":
+		return strconv.FormatInt(n, 10) + " h"
+	}
+	return strconv.FormatInt(n, 10) + " days"
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return strconv.Itoa(n) + " " + one
+	}
+	return strconv.Itoa(n) + " " + many
+}
+
+// serverSilent says the memory server did not answer the page's read, or
+// the last one this PC recorded.
+func serverSilent(f Frame) bool {
+	if f.ServerRead != nil {
+		return !f.ServerRead.OK
+	}
+	return f.Scope != nil && f.Scope.ServerOKAt != nil && !f.Scope.ServerOK
+}
+
+func whichPCs(d PageData, pcs *metrics.PCs) *WhichPCs {
+	now := d.Frame.Generated
+	w := &WhichPCs{Title: "Counted in “all PCs” (" + strconv.Itoa(pcs.Count) + ")", SystemHref: machinesHref}
+	for _, r := range pcs.List {
+		it := PCItem{ID: r.Machine, Stale: r.Stale}
+		parts := []string{}
+		if w := osWord(r.OS); w != "" {
+			parts = append(parts, w)
+		}
+		if r.FirstSeen != "" {
+			parts = append(parts, "since "+shortDay(r.FirstSeen, now))
+		}
+		switch {
+		case r.This:
+			this := "this PC"
+			if isLoopbackHost(d.Frame.Scope.Server) {
+				this += ", holds the memory server"
+			}
+			parts = append(parts, this)
+			it.State = "its own figures, live"
+		case r.SentAt == nil: // a counted PC always has a send time
+			it.State = "figures not read yet"
+		case r.Stale && r.Until != nil:
+			it.State = "sent " + sentAgo(*r.SentAt, now) + ": its figures stop on " + shortDay(*r.Until, now)
+		default:
+			it.State = "sent " + sentAgo(*r.SentAt, now)
+			if !r.Active {
+				it.State += " · no activity in this window"
+			}
+		}
+		it.Label = strings.Join(parts, " · ")
+		w.Rows = append(w.Rows, it)
+	}
+	if pcs.Ignored > 0 {
+		if pcs.Ignored == 1 {
+			w.Ignored = "1 document did not pass the checks and is left out. What it holds is not shown."
+		} else {
+			w.Ignored = strconv.Itoa(pcs.Ignored) + " documents did not pass the checks and are left out. What they hold is not shown."
+		}
+	}
+	switch {
+	case pcs.FetchedAt == nil:
+		w.Fetched = "Other PCs’ figures have not been fetched yet; they are fetched every 6 h."
+	case serverSilent(d.Frame):
+		w.Fetched = "Fetched at " + format.Clock(now, *pcs.FetchedAt, d.Loc) + ": the memory server is not answering."
+		if since := serverSince(d.Frame); !since.IsZero() {
+			w.Fetched = "Fetched at " + format.Clock(now, *pcs.FetchedAt, d.Loc) + ": the memory server has not answered since " + format.Clock(now, since, d.Loc) + "."
+		}
+	default:
+		w.Fetched = "Other PCs’ figures were fetched " + views.Age(max(0, now.Sub(*pcs.FetchedAt).Milliseconds())) + " ago; they are fetched every 6 h."
+	}
+	return w
+}
+
+// serverSince is when the server last answered; zero when unknown.
+func serverSince(f Frame) time.Time {
+	switch {
+	case f.ServerRead != nil && f.ServerRead.LastOK != nil:
+		return *f.ServerRead.LastOK
+	case f.ServerRead == nil && f.Scope != nil && f.Scope.ServerOKAt != nil:
+		return *f.Scope.ServerOKAt
+	}
+	return time.Time{}
+}
+
+// pcChips are the notes all PCs adds to the scope line, in order: the
+// project filter that spares the other PCs, the PCs that went quiet, the
+// documents left out and the cache read while the server is silent.
+func pcChips(d PageData, pcs *metrics.PCs) []PCChip {
+	now, sc := d.Frame.Generated, d.Frame.Scope
+	var chips []PCChip
+	if sc.OthersUnfiltered {
+		chips = append(chips, PCChip{Class: "chip chip-nf", Text: "other PCs: not filtered",
+			Title: "The project filter applies to this PC only: other PCs send no project names, so their figures are counted whole."})
+	}
+	if pcs.Stale > 0 {
+		var quiet []metrics.PCRow
+		var oldest *time.Time // the longest silence
+		for _, r := range pcs.List {
+			if r.Stale {
+				quiet = append(quiet, r)
+				if r.SentAt != nil && (oldest == nil || r.SentAt.Before(*oldest)) {
+					oldest = r.SentAt
+				}
+			}
+		}
+		since := "over 2 days"
+		if oldest != nil {
+			since = sentFor(*oldest, now)
+		}
+		// chip st-watch, not chip-stale: the stylesheet hides chip-stale for the
+		// first 300 s (it is the "page is old" chip), which would hide a standing note.
+		c := PCChip{Class: "chip st-watch", Icon: "i-clock", Href: machinesHref,
+			Text: plural(pcs.Stale, "PC", "PCs") + ": nothing sent for " + since}
+		if len(quiet) == 1 && quiet[0].Until != nil {
+			c.Title = quiet[0].Machine + " last sent its figures " + since + " ago: its days after " + shortDay(*quiet[0].Until, now) + " are missing."
+		} else {
+			c.Title = "Their days since they last sent are missing from all PCs."
+		}
+		chips = append(chips, c)
+	}
+	if pcs.Ignored > 0 {
+		text := "1 document ignored"
+		if pcs.Ignored > 1 {
+			text = strconv.Itoa(pcs.Ignored) + " documents ignored"
+		}
+		chips = append(chips, PCChip{Class: "chip", Icon: "i-info", Text: text, Href: machinesHref,
+			Title: "A document from another PC did not pass the checks and is left out. Its content is not shown."})
+	}
+	if pcs.FetchedAt != nil && serverSilent(d.Frame) {
+		chips = append(chips, PCChip{Class: "chip st-watch", Icon: "i-clock",
+			Text: "other PCs as fetched at " + format.Clock(now, *pcs.FetchedAt, d.Loc)})
+	}
+	return chips
+}
+
+// machinesLink matches the opening tag of a link; its href is the one kept.
+var (
+	anchorTag  = regexp.MustCompile(`<a\s[^>]*>`)
+	hrefAttr   = regexp.MustCompile(`\shref="(/[^"]*)"`)
+	machinesIn = regexp.MustCompile(`[?&;]machines=|&amp;machines=`)
+)
+
+// isTextRoute says href is a memory's text page, which takes no parameter at
+// all (it answers 400 to any): its links never carry machines.
+func isTextRoute(href string) bool {
+	path, _, _ := strings.Cut(href, "#")
+	path, _, _ = strings.Cut(path, "?")
+	return strings.HasPrefix(path, "/memories/") && strings.HasSuffix(path, "/text")
+}
+
+// keepMachines is the page body with machines=all on every link inside the
+// dashboard but the preferences (which take the page to come back to), the
+// assets, the memory text pages (no parameters) and the "this PC" half of the switch, which drops it. A link goes
+// where the reader is: the forms carry the parameter as a hidden input. Every
+// page with a reader asking for all PCs goes through here, so no link is
+// forgotten when a page gains one.
+func keepMachines(body []byte, machines string) []byte {
+	if machines != "all" {
+		return body
+	}
+	return anchorTag.ReplaceAllFunc(body, func(tag []byte) []byte {
+		if bytes.Contains(tag, []byte(`data-machines="this"`)) {
+			return tag
+		}
+		return hrefAttr.ReplaceAllFunc(tag, func(attr []byte) []byte {
+			m := hrefAttr.FindSubmatch(attr)
+			href := string(m[1])
+			if strings.HasPrefix(href, "//") || strings.HasPrefix(href, "/prefs") || strings.HasPrefix(href, "/assets/") || isTextRoute(href) || machinesIn.MatchString(href) {
+				return attr
+			}
+			path, frag, hasFrag := strings.Cut(href, "#")
+			sep := "?"
+			if strings.Contains(path, "?") {
+				sep = "&amp;"
+			}
+			path += sep + "machines=all"
+			if hasFrag {
+				path += "#" + frag
+			}
+			return []byte(` href="` + path + `"`)
+		})
+	})
 }

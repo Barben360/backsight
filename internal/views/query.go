@@ -25,6 +25,13 @@ type Params struct {
 	Machines         string // "this" or "all"; empty reads "this"
 }
 
+// ThisPC is p asking for this PC's figures alone: the widgets that stay this
+// PC's in all PCs (and the server's) show the command without the flag.
+func (p Params) ThisPC() Params {
+	p.Machines = ""
+	return p
+}
+
 // Allowed values of the view parameters.
 var (
 	hasValues   = []string{"used", "wrong", "undeclared", "memory", "never_extracted", "contradicted"}

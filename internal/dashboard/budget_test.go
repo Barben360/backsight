@@ -129,6 +129,41 @@ func TestPageBudgets(t *testing.T) {
 		t.Fatal("no other page route measured")
 	}
 
+	// The same pages with the other PCs: the index holds the figures of 8 other PCs, and each page is asked
+	// with machines=all. A page that also reads this PC's own answer (the Overview, Cost and the day page
+	// do, for their "This PC's N" links) pays that read here. Best of 5, every render computes.
+	t.Run("all PCs", func(t *testing.T) {
+		budget := indexgen.Budget
+		budget.OtherPCs = 8
+		dataSpec = budget
+		ha := dataHarness(t)
+		dataSpec = indexgen.Budget
+		cka := cookieHdr(ha.login())
+		day := apiPath(t, ha, "/api/v1/days").Tables.Days[0].Day
+		for _, path := range []string{"/", "/quality", "/cost", "/days", "/releases", "/system", "/pipeline", "/days/" + day} {
+			path += "?machines=all"
+			ask := func() (int, time.Duration, string) {
+				start := time.Now()
+				r := ha.do("GET", path, cka...)
+				d := time.Since(start)
+				return r.StatusCode, d, body(t, r)
+			}
+			status, cold, b := ask()
+			if status != 200 || !strings.Contains(b, "all PCs on this server (9)") {
+				t.Errorf("GET %s: %d, switch on all PCs: %v", path, status, strings.Contains(b, "all PCs on this server (9)"))
+			}
+			best := time.Duration(1<<63 - 1)
+			for range 5 {
+				_, d, _ := ask()
+				best = min(best, d)
+			}
+			t.Logf("%s: first %v, best of 5 %v, %d bytes (limit %v)", path, cold, best, len(b), pageLimit)
+			if best > pageLimit {
+				t.Errorf("%s took %v, limit %v", path, best, pageLimit)
+			}
+		}
+	})
+
 	// The server down: every call blocks until its context ends, at the
 	// real 3 s server timeout; the doctor cache was warmed at start.
 	h.srv.set(func(f *fakeServer) { f.down = true })

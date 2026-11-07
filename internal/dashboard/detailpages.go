@@ -279,6 +279,7 @@ type MemoryDetail struct {
 	DoHead        Head
 	Do            []DoLine
 	Origin        *OriginCard // where the memory came from; nil when the view has none
+	Shared        *SharedCard // its counts on the other PCs; nil when there is nothing to say
 }
 
 // serverClass colours a memory's state on the server.
@@ -357,6 +358,7 @@ func memoryOf(d PageData) MemoryDetail {
 		pg.Kind = "memory of another kind"
 	}
 	pg.Origin = d.originOf(m.Origin)
+	pg.Shared = d.sharedCard(r, m)
 	pg.Created = d.rel(r.GeneratedAt, m.Created)
 	if m.ServerState != "" {
 		pg.Server = Word{wordOr(views.ServerStateWords, m.ServerState, "state not recorded"), serverClass[m.ServerState]}

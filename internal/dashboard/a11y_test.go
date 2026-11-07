@@ -100,6 +100,36 @@ func allA11yPages(t *testing.T) []a11yPage {
 				add(name, body(t, resp))
 			}
 		}
+		// Every page on all the PCs: a history with three other PCs, asked with machines=all (the switch, the
+		// Which PCs list, the merged figures and their table of PCs are on these pages and no others).
+		oldSpec = dataSpec
+		dataSpec.Collection, dataSpec.OtherPCs = true, 3
+		hp := dataHarness(t)
+		dataSpec = oldSpec
+		ckp := cookieHdr(hp.login())
+		for _, r := range routes {
+			if r.Kind != "page" {
+				continue
+			}
+			path := r.Sample
+			switch r.Page {
+			case "project":
+				path = "/projects/" + url.PathEscape(apiPath(t, hp, "/api/v1/projects").Tables.Projects[0].Project)
+			case "session":
+				path = "/sessions/" + url.PathEscape(sid)
+			case "memory":
+				path = "/memories/" + url.PathEscape(mem)
+			case "day":
+				path = "/days/" + day
+			}
+			p := path + "?dev=0&machines=all"
+			resp := hp.do("GET", p, ckp...)
+			if resp.StatusCode != 200 {
+				t.Errorf("GET %s: %d", p, resp.StatusCode)
+				continue
+			}
+			add(p, body(t, resp))
+		}
 		// A list in the middle of its pages has both pager links.
 		for _, p := range []string{"/sessions?limit=1&offset=1", "/memories?limit=1&offset=1"} {
 			resp := h.do("GET", p, ck...)
@@ -171,10 +201,54 @@ func timeoutHarness(t *testing.T) *harness {
 
 func TestPagesParse(t *testing.T) {
 	pages := allA11yPages(t)
-	// 16 page routes dev off and on and with the shortcuts and the compact density, the text page; 2 paged
-	// lists, 2 failures, 5 card states, the 401; the scenarios.
-	if want := 16*3 + 1 + 2 + 2 + 5 + 1 + len(scenarios); len(pages) != want {
+	// 16 page routes dev off and on and with the shortcuts and the compact density, the text page; the 16
+	// routes on all PCs; 2 paged lists, 2 failures, 5 card states, the 401; the scenarios.
+	if want := 16*3 + 1 + 16 + 2 + 2 + 5 + 1 + len(scenarios); len(pages) != want {
 		t.Errorf("%d pages parsed, want %d", len(pages), want)
+	}
+}
+
+// On the pages of all PCs every table is named (a caption, or the label of what holds it), and the tables of PCs
+// (Machines on System, By PC on Cost) scope their column headers. The control is that both are read.
+func TestPCsPagesNameEveryTable(t *testing.T) {
+	read := map[string]int{}
+	for _, p := range allA11yPages(t) {
+		if !strings.HasSuffix(p.Name, "machines=all") {
+			continue
+		}
+		t.Run(p.Name, func(t *testing.T) {
+			for _, tb := range p.Doc.find("table") {
+				named := false
+				if c := tb.first("caption"); c != nil && strings.TrimSpace(c.text()) != "" {
+					named = true
+				}
+				if tb.attr("aria-label") != "" || tb.attr("aria-labelledby") != "" {
+					named = true
+				}
+				for n := tb.Parent; n != nil && !named; n = n.Parent {
+					if n.Name == "section" && n.attr("aria-labelledby") != "" {
+						named = true
+					}
+				}
+				if !named {
+					t.Errorf("table at line %d has no caption, label or labelled card", tb.line)
+				}
+				if !strings.Contains(" "+tb.attr("class")+" ", " mach ") {
+					continue // the tables block 5 and 6 shipped are read by their own tests
+				}
+				read[p.Name]++
+				for _, th := range tb.find("th") {
+					if sc := th.attr("scope"); sc != "col" && sc != "row" {
+						t.Errorf("th %q at line %d has no scope", th.text(), th.line)
+					}
+				}
+			}
+		})
+	}
+	for _, page := range []string{"/system?dev=0&machines=all", "/cost?dev=0&machines=all"} {
+		if read[page] == 0 {
+			t.Errorf("no table of PCs read on %s: the check sees nothing (read %v)", page, read)
+		}
 	}
 }
 

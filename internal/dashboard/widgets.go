@@ -24,11 +24,35 @@ type Head struct {
 	CLI         string
 	Drill       string
 	DrillText   string
-	Aside       string // a short muted note after the spacer, before the ⓘ; "" none
-	Chip        string // a chip after the scope ("developer"); "" none
-	Pill        Word   // the status of the card, a pill after the spacer; zero none
-	Pager       Pager  // the paging of a list card, under its table; zero none
+	Aside       string   // a short muted note after the spacer, before the ⓘ; "" none
+	Chip        string   // a chip after the scope ("developer"); "" none
+	Pill        Word     // the status of the card, a pill after the spacer; zero none
+	Pager       Pager    // the paging of a list card, under its table; zero none
+	PCs         *PCsChip // the figure adds up the PCs: the chip "all PCs (N)" replaces "this PC"; nil none
+	OthersNF    bool     // a project filter spares the other PCs: the chip "other PCs not filtered"
+	Note        string   // a muted line under the card's content (what stays this PC's); "" none
+	FootNote    string   // a muted word beside the drill link, in the card's foot; "" none
+	Anchor      string   // the id of the card's section, a link target; "" none
 }
+
+// PCsChip is the chip "all PCs (N)" a widget carries when its figure adds up
+// the PCs that share their activity on this server.
+type PCsChip struct{ Text, Title string }
+
+// allPCsChip is the chip for the scope pcs; nil when the result does not add
+// the PCs up (this PC's figures, or sharing off).
+func allPCsChip(sc metrics.Scope) *PCsChip {
+	if sc.Machines != "all" || sc.PCs == nil {
+		return nil
+	}
+	n := sc.PCs.Count
+	who := "the " + plural(n, "PC that shares", "PCs that share")
+	return &PCsChip{Text: "all PCs (" + strconv.Itoa(n) + ")", Title: "Added up from " + who + " their activity on this server"}
+}
+
+// othersNotFiltered says the merged metric adds the other PCs' whole figures
+// under a project filter.
+func othersNotFiltered(m metrics.Metric) bool { return slices.Contains(m.Tags, "others_not_filtered") }
 
 // Info is the ⓘ popover of a widget.
 type Info struct {
@@ -36,12 +60,27 @@ type Info struct {
 	What        string
 	Limits      string
 	BasedOn     string
-	Smallest    string // a metric's rows; "" omits one
-	Privacy     string // what is kept and what never is; "" omits the row
+	Smallest    string    // a metric's rows; "" omits one
+	Privacy     string    // what is kept and what never is; "" omits the row
+	Rows        []InfoRow // more rows, after Smallest and before Privacy
 	Paras       []string
 	Term        string // shown in <code class="term">; "" none
 	Href        string
 	HrefText    string
+}
+
+// InfoRow is a row of an ⓘ popover whose text holds code or a link.
+type InfoRow struct {
+	Term string
+	Runs []Run
+}
+
+// Run is a piece of a sentence: plain text, code, a link (Text is its words)
+// or a moment. Only one of Code, Href and Time is set; every value is
+// escaped where it is drawn.
+type Run struct {
+	Text, Code, Href string
+	Time             format.Time
 }
 
 // hooksFailuresWhat is what the ⓘ says for hooks.failures: the catalog's
@@ -72,6 +111,19 @@ func headOf(v MetricView, cli string, l format.Locale, slot string, p views.Para
 			What: what, Limits: limitsText(d, l), BasedOn: basedOn(d, v.M, l), Smallest: smallest(d, v.M, l),
 			Term: d.ID, Href: "/defs#" + d.ID, HrefText: "Definition",
 		},
+	}
+	// A metric the views add up over the PCs shows the command with the flag
+	// in all PCs; every other widget (this PC's, the server's) shows the
+	// page's command, which carries none.
+	if p.Machines == "all" && metrics.MergedMetric(d.ID) {
+		h.CLI = withMachines(cli)
+		// The same predicate draws the chip: a card whose figures are added
+		// up says so, and the CLI above is the command that prints them.
+		if v.Scope != nil {
+			if h.PCs = allPCsChip(*v.Scope); h.PCs != nil {
+				h.OthersNF = othersNotFiltered(v.M)
+			}
+		}
 	}
 	h.NotFiltered = slices.Contains(v.M.Tags, "not_filtered")
 	if h.Drill = drillHref(v.M.Drill, p); h.Drill != "" {
@@ -359,7 +411,20 @@ func cliFor(view, id string, p views.Params) string {
 	flag("has", p.Has)
 	flag("sort", p.Sort)
 	flag("state", p.State)
+	if p.Machines == "all" && metrics.MergingView(view) {
+		b.WriteString(" --machines all")
+	}
 	return b.String()
+}
+
+// withMachines is the command cmd with --machines all, when it is a view
+// that adds the PCs up and does not carry the flag yet.
+func withMachines(cmd string) string {
+	w := strings.Fields(cmd)
+	if len(w) < 3 || w[0] != "backsight" || w[1] != "stats" || !metrics.MergingView(w[2]) || slices.Contains(w, "--machines") {
+		return cmd
+	}
+	return cmd + " --machines all"
 }
 
 // Word is a status word and the class that colours it.
@@ -400,6 +465,7 @@ type Fig struct {
 	Icon                      string // the icon before the label (server, pc, doc); "" none
 	Swatch                    string // the class of a swatch before the label (a kind of memory); "" none
 	WordValue                 bool   // the value is a word: it is set smaller than a number
+	SubApprox                 bool   // Sub starts with the word "approximate", set in italics
 }
 
 // figOf is the figure of metric v; the developer's detail is its id.

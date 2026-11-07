@@ -185,7 +185,7 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 			if !ok || headingOf(d) != fh.Family || (d.Dev && !dev) {
 				continue
 			}
-			lines = append(lines, metricLine(d, m, r.Scope.ServerOK))
+			lines = append(lines, metricLine(d, m, r.Scope.ServerOK, staysThisPC(r.Scope, d)))
 			if m.Status == metrics.StatusNoData {
 				continue
 			}
@@ -210,12 +210,15 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 const handful = 10
 
 // metricLine is `label  value  (n=…, status, delta vs previous)`.
-func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
+func metricLine(d metrics.Def, m metrics.Metric, serverUp, thisPC bool) string {
 	value := formatValue(d, m)
 	if m.Status == metrics.StatusNoData {
 		value = "—"
 	}
 	switch {
+	case m.Status == metrics.StatusTooFew && slices.Contains(m.Tags, "average") && m.Value != nil:
+		// The average over every PC's sessions is a figure of its own: only
+		// the status (judged on this PC's high value) is too few.
 	case m.Status == metrics.StatusTooFew:
 		value = "—"
 		if d.Unit == "ratio" && m.Num != nil && m.Den != nil {
@@ -246,6 +249,9 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 		}
 		parts = append(parts, n)
 	}
+	if thisPC {
+		parts = append(parts, "this PC") // the other PCs send nothing the figure could add up
+	}
 	status := metricStatusText(d, m)
 	if slices.Contains(m.Tags, "status_this_pc") {
 		status = "status on this PC: " + status // the other PCs send no figure the status could use
@@ -269,6 +275,18 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 		parts = append(parts, dl)
 	}
 	return fmt.Sprintf("%-44s %-24s (%s)", labelOf(d), value, strings.Join(parts, ", "))
+}
+
+// thisPCBesideMerged are the figures that sit beside merged ones on the Cost
+// view and stay this PC's: a prompt's context and the search's time. The text
+// marks them as the page's icon does, so a reader does not take them for the
+// all-PCs figures printed on the lines around them.
+var thisPCBesideMerged = []string{"context.per_prompt", "search.latency"}
+
+// staysThisPC says the metric is marked "this PC" in a result that adds the
+// PCs up.
+func staysThisPC(sc metrics.Scope, d metrics.Def) bool {
+	return sc.Machines == "all" && sc.PCs != nil && slices.Contains(thisPCBesideMerged, d.ID)
 }
 
 // countOf is n with its noun, singular for 1.

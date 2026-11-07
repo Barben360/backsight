@@ -100,7 +100,7 @@ func bankOf(d PageData) BankPage {
 		if ld, ok := d.lead(growth, "new memories a day"); ok {
 			b.Growth.Leads = []Lead{ld}
 		}
-		b.Growth.Extras = extrasOf(growth)
+		b.Growth.Extras = extrasOf(d.L, growth)
 		from, _ := extraAs[string](growth.M, "record_from")
 		b.Growth.Charts = []PathChart{{HTML: kindsOf(l, d.more(), growth) + recordBlock(growth.M.Series, from, true)}}
 	}

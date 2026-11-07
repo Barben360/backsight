@@ -21,7 +21,7 @@ Turns where Claude said what it used         84 % (75–90 %)           (n=97, o
 Memories reported wrong or out of date       8 % (4–15 %)             (n=97, ok — close to the line)
 
 Cost
-Context added per session                    —                        (n=24 sessions, status on this PC: too few, 76 more needed)
+Context added per session                    1,533 chars on average   (n=24 sessions, status on this PC: too few, 76 more needed)
 Time memory adds to a prompt                 1.0–2.0 s                (approximate, n=649, ok)
   all PCs: typical 500 ms–1.0 s
 

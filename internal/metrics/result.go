@@ -55,7 +55,15 @@ type Result struct {
 	AttentionMore int               `json:"attention_more"`
 	Info          []InfoItem        `json:"info"`
 	Text          *MemoryText       `json:"text,omitempty"` // memories <id> --text only
+
+	// own is this PC's answer to the same query, set only by a run that merged (Scope.Machines "all") and
+	// was asked for it (Query.WithOwn). Unexported, so no encoder emits it: the view's JSON is unchanged.
+	own *Result
 }
+
+// ThisPC is this PC's own answer to the query a merged result answers: what `--machines this` returns for the
+// same parameters. Nil when the result did not merge, or was not asked to carry it.
+func (r Result) ThisPC() *Result { return r.own }
 
 // Scope says what the numbers cover.
 type Scope struct {
@@ -97,7 +105,12 @@ type PCRow struct {
 	OS        string  `json:"os"`
 	FirstSeen string  `json:"first_seen"`
 	Until     *string `json:"until"`
-	Stale     bool    `json:"stale"`
+	// SentAt is when the PC's document was sent (UTC); null for this PC,
+	// whose figures are live.
+	SentAt *time.Time `json:"sent_at"`
+	Stale  bool       `json:"stale"`
+	// Active: the PC has a prompt in the window.
+	Active bool `json:"active"`
 }
 
 // ServerState is whether the server answered; LastOK is null when unknown.

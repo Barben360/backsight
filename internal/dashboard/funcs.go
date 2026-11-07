@@ -23,6 +23,7 @@ type MetricView struct {
 	Found  bool
 	ShowID bool           // the reader asked for developer detail
 	Loc    *time.Location // the zone the metric's times are shown in
+	Scope  *metrics.Scope // the scope of the result the metric comes from; nil without one
 }
 
 // Tabled is a result's tables with the zone their times are shown in, the
@@ -104,6 +105,8 @@ var funcs = template.FuncMap{
 	"count":       roundInt,
 	"ranks":       rankLines,
 
+	"thispc":       thisPC,
+	"nopcactivity": noPCActivity,
 	"banner":       bannerOf,
 	"summaryline":  summaryPage,
 	"attention":    attentionPage,
@@ -221,6 +224,7 @@ func metricOf(r *metrics.Result, id string) (MetricView, error) {
 	v := MetricView{ID: id, Def: d}
 	if r != nil {
 		v.M, v.Found = r.Metrics[id]
+		v.Scope = &r.Scope
 	}
 	return v, nil
 }
@@ -291,13 +295,16 @@ func foundLines(v MetricView, f func(metrics.Def, metrics.Metric) []string) []st
 }
 
 // detailsOf are the lines under a metric that its number does not say.
-func detailsOf(v MetricView) []string {
+func detailsOf(v MetricView) []string { return detailsIn(format.Locale{}, v) }
+
+// detailsIn is detailsOf with the bucket ranges written in the page's locale.
+func detailsIn(l format.Locale, v MetricView) []string {
 	return foundLines(v, func(d metrics.Def, m metrics.Metric) []string {
 		loc := v.Loc
 		if loc == nil {
 			loc = time.UTC
 		}
-		return views.PageDetails(d, m, loc)
+		return views.PageDetailsIn(d, m, loc, l.Range)
 	})
 }
 

@@ -1105,3 +1105,45 @@ func TestDayLinksKeepTheScope(t *testing.T) {
 		t.Errorf("day navigation %q, want %q", hrefs, want)
 	}
 }
+
+// The links of the lists and the calendar keep the all-PCs parameter with the
+// window's: a day, a project, a session and a memory open on the same scope,
+// and the calendar's squares are links like the rest.
+func TestListLinksKeepMachines(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	for _, c := range []struct{ path, prefix string }{
+		{"/days?days=30&machines=all", "/days/"},
+		{"/projects?days=30&machines=all", "/projects/"},
+		{"/sessions?days=30&machines=all", "/sessions/"},
+		{"/memories?machines=all", "/memories/"},
+		{"/?days=30&machines=all", "/days/"}, // the Overview's calendar squares
+	} {
+		doc := rawPage(t, h, hdr, c.path)
+		n := 0
+		for _, a := range doc.find("main a") {
+			href := a.attr("href")
+			if !strings.HasPrefix(href, c.prefix) {
+				continue
+			}
+			n++
+			if !strings.Contains(href, "machines=all") {
+				t.Errorf("%s: %q drops machines=all", c.path, href)
+			}
+			if strings.HasPrefix(c.prefix, "/projects/") && !strings.Contains(href, "days=30") {
+				t.Errorf("%s: %q drops the window", c.path, href)
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s: no %s link", c.path, c.prefix)
+		}
+	}
+	// Without it, none of those links mentions it.
+	for _, p := range []string{"/days?days=30", "/projects?days=30", "/"} {
+		for _, a := range rawPage(t, h, hdr, p).find("main a") {
+			if strings.Contains(a.attr("href"), "machines") {
+				t.Errorf("%s: %q mentions machines with this PC selected", p, a.attr("href"))
+			}
+		}
+	}
+}

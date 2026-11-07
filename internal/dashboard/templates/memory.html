@@ -1,7 +1,7 @@
 {{/* views: memories */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the page of one memory through memorypage (MemoryDetail: Found, ID, FullID, Project, Kind, Swatch, Created, Server, ServerMissing, State, StateIcon, Origin, Figs, TextHref, TextHead, Strip, RankHead, Rank, DoHead, Do; Strip: Head, HTML, AllShows; Do: Label, Command; Origin: Head, Rows: Label, Session, Project, Pre, Post, Time, then Text and Note). Reads .V.memories.Tables.Memory (Row, Kind, ServerState, Created, Shows, Retirements, RankHistogram, Origin, Commands) and .Page. The memory's text is on its text page only. */}}
+{{/* widgets: the page of one memory through memorypage (MemoryDetail: Found, ID, FullID, Project, Kind, Swatch, Created, Server, ServerMissing, State, StateIcon, Origin, Figs, TextHref, TextHead, Strip, RankHead, Rank, DoHead, Do; Strip: Head, HTML, AllShows; Do: Label, Command; Origin: Head, Rows: Label, Session, Project, Pre, Post, Time, then Text and Note; Shared: Head, Notice, Cmd, Table, Text and Foot). Reads .V.memories.Tables.Memory (Row, Kind, ServerState, Created, Shows, Retirements, RankHistogram, Origin, Commands, Shared) and .Page. The memory's text is on its text page only. */}}
 {{with memorypage .}}{{$pg := .}}<nav class="small muted" aria-label="Breadcrumb"><a href="/memories">Memories</a> / <span class="mono" title="{{.ID.Full}}">{{.ID.Text}}</span> <button class="copy" type="button" hidden data-copy="{{.FullID}}" aria-label="Copy the memory id"><span class="i i-sm i-copy"></span>Copy id</button></nav>
 {{if .Found}}<div class="row small muted memory-meta">{{template "projlink" .Project}}{{with .Kind}} · {{with $pg.Swatch}}<i class="sw {{.}}"></i> {{end}}{{.}}{{end}}{{if .Created.Datetime}} · created {{template "reltime" .Created}}{{end}}{{if .Server.Word}}<span class="pill st {{.Server.Class}}">{{.Server.Word}}</span>{{end}}</div>
 {{if .ServerMissing}}<p class="small muted">Kind, creation and state on the server are not available: the server did not answer.</p>
@@ -19,6 +19,18 @@
 {{end}}{{if $pg.State.Word}}<div class="state {{$pg.State.Class}}"><span class="i i-{{$pg.StateIcon}}"></span><span>{{$pg.State.Word}}</span></div>
 {{end}}{{template "card-close" .}}{{end}}
 </div>
+{{with .Shared}}{{template "card-open" .Head}}
+{{with .Notice}}<div class="state {{.Class}}"><span class="i i-{{.Icon}}"></span><span>{{if .Runs}}{{template "runs" .Runs}}{{else}}{{.Text}}{{end}}</span></div>
+{{end}}{{with .Cmd}}{{template "cmd" .}}
+{{end}}{{with .Table}}<div class="tbl-wrap">
+<table class="tbl cmp">
+<thead><tr><th>Recent-weighted counts</th><th class="r">This PC</th><th class="r">{{.Others}}</th><th class="r">All PCs</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{with .Swatch}}<i class="sw {{.}}"></i> {{end}}{{.Label}}</td><td class="r">{{.This}}</td><td class="r">{{.Others}}</td><td class="r"><b>{{.All}}</b></td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{if .Text}}<p class="small">{{template "runs" .Text}}</p>
+{{end}}{{if .Foot}}<p class="xs muted">{{template "runs" .Foot}}</p>
+{{end}}{{template "card-close" .Head}}{{end}}
 {{with .Strip}}{{template "card-open" .Head}}
 {{.HTML}}
 {{with .AllShows}}<p class="small"><a href="{{.}}">Show all shows</a></p>

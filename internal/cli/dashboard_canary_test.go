@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +17,8 @@ import (
 	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/index/indexgen"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/paths"
 )
@@ -324,4 +327,92 @@ func dayWithPrompts(t *testing.T) string {
 	}
 	t.Fatalf("no day with a prompt: %s", v.raw)
 	return ""
+}
+
+// hostileOtherPCs is the cache of the views' canary test (an unknown field, a <script> version key, an
+// oversize document, a document name and an ignored entry that each hold a canary) beside a valid document of
+// a third PC, in this PC's metrics directory: it counts this PC, the first and the third.
+func hostileOtherPCs(t *testing.T) {
+	t.Helper()
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const third = "33333333-cccc-4ccc-8ccc-cccccccccccc"
+	sent := goldenNow.Add(-3 * time.Hour)
+	cache := indexgen.HostileCache(t,
+		fixturePC(otherPCFresh, "darwin", "2026-09-20", sent, "2026-10-03", "2026-10-07", "v0.1.18"),
+		fixturePC(otherPCStale, "windows", "2026-09-25", sent, "2026-10-02", "2026-10-04", "v0.1.29"), goldenNow.Add(-time.Hour))
+	raw, err := fixturePC(third, "linux", "2026-09-22", sent, "2026-10-05", "2026-10-07", "v0.1.18").Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.Docs = append(cache.Docs, machines.CachedDoc{Name: machines.DocPrefix + third, Raw: raw})
+	if err := os.MkdirAll(d.MetricsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := machines.SaveCache(d.MetricsDir(), cache); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Free text in the other PCs' documents stays out of every page: the hostile cache beside a valid document of
+// a third PC, the pages that show the PCs (the Overview, Cost, System, Releases in developer mode, a memory
+// page and the others), each asked for this PC and with machines=all. No canary in any body, and the
+// <script> version key appears nowhere, escaped or not. The controls: the valid documents are counted and
+// shown, and the others are set aside as counts.
+func TestPagesHoldNoCanaryFromOtherPCs(t *testing.T) {
+	base, c := parityDashboardWith(t, true, hostileOtherPCs)
+	pages := []string{"/", "/cost", "/system", "/releases?dev=1", "/?dev=1", "/cost?dev=1", "/system?dev=1", "/memories/mem-long-1", "/quality", "/pipeline", "/bank", "/days",
+		"/days/2026-10-07", "/projects/p1", "/sessions/sess-long-1", "/memories", "/defs", "/releases"}
+	scanned := 0
+	for _, scope := range []string{"", "machines=all"} {
+		for _, p := range pages {
+			q := "tz=UTC"
+			if scope != "" {
+				q += "&" + scope
+			}
+			path := p + map[bool]string{true: "&", false: "?"}[strings.Contains(p, "?")] + q
+			status, body := dashGet(t, base, c, path)
+			if status != http.StatusOK {
+				t.Errorf("GET %s: %d: %.200s", path, status, body)
+				continue
+			}
+			scanned++
+			for _, canary := range append(slices.Clone(indexgen.HostileCanaries), "CANARY") {
+				if strings.Contains(body, canary) {
+					t.Errorf("%q in the page %s", canary, path)
+				}
+			}
+			// The page's own script is the copy script, a tag with a source: a bare <script> is the version key.
+			for _, bad := range []string{"<script>", "&lt;script", "\\u003cscript", "%3Cscript", "%3cscript"} {
+				if strings.Contains(body, bad) {
+					t.Errorf("%q in the page %s", bad, path)
+				}
+			}
+		}
+	}
+	if scanned != 2*len(pages) {
+		t.Fatalf("%d pages scanned, want %d", scanned, 2*len(pages))
+	}
+
+	// The controls. The valid documents are in the figures (this PC's 7 days and the two others' 5 and 3 days of
+	// 36), the page says 3 PCs and 4 documents set aside, and System shows the third PC by its short id.
+	_, raw := dashGet(t, base, c, "/api/v1/overview?machines=all&tz=UTC")
+	api := decodeEnvelope(t, "overview", raw)
+	if n, ign := at(map[string]any(api), "data", "scope", "pcs", "count"), at(map[string]any(api), "data", "scope", "pcs", "ignored"); n != float64(3) || ign != float64(4) {
+		t.Fatalf("scope.pcs counts %v PCs and %v ignored, want 3 and 4", n, ign)
+	}
+	_, all := dashGet(t, base, c, "/?machines=all&tz=UTC")
+	if !strings.Contains(visibleText(all), "all PCs on this server (3)") {
+		t.Errorf("the Overview does not say 3 PCs")
+	}
+	_, sys := dashGet(t, base, c, "/system?machines=all&tz=UTC")
+	text := visibleText(sys)
+	if !strings.Contains(text, "33333333") || !strings.Contains(text, "11111111") {
+		t.Errorf("System does not show the valid PCs by their short ids: %.600s", text)
+	}
+	if !strings.Contains(text, "over the 1 MiB cap") || !strings.Contains(text, "not valid") {
+		t.Errorf("System does not say why documents were set aside: %.600s", text)
+	}
 }

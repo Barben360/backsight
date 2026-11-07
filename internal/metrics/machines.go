@@ -29,6 +29,50 @@ var thisOnlyViews = []string{"projects", "sessions", "memories"}
 // on and the ledger shared).
 func sharingOn(c config.Config) bool { return c.Feedback.Enabled && c.Feedback.ShareLedger }
 
+// The settings that can be off when sharing is: feedback.enabled, the
+// feedback.share_ledger, or both.
+const (
+	OffFeedback = "feedback"
+	OffLedger   = "share_ledger"
+	OffBoth     = "both"
+)
+
+// sharingOffBy says which setting turns sharing off: "" when it is on.
+func sharingOffBy(c config.Config) string {
+	switch {
+	case sharingOn(c):
+		return ""
+	case !c.Feedback.Enabled && !c.Feedback.ShareLedger:
+		return OffBoth
+	case !c.Feedback.Enabled:
+		return OffFeedback
+	}
+	return OffLedger
+}
+
+// MergingView says whether view's figures add up the other PCs' with
+// --machines all (the CLI and the pages carry the flag only for these).
+func MergingView(view string) bool { return slices.Contains(mergingViews, view) }
+
+// ThisOnlyView says whether view always answers this PC's figures (projects,
+// sessions and memories: other PCs send none), whatever --machines says.
+func ThisOnlyView(view string) bool { return slices.Contains(thisOnlyViews, view) }
+
+// MergedMetric says whether the metric id is one the views add up over the
+// PCs (M2-M5): the ratio rates, context per session, speed and flow.
+func MergedMetric(id string) bool {
+	switch id {
+	case "context.per_session", "recall.latency", "pipeline.flow":
+		return true
+	}
+	for _, r := range rates {
+		if r.id == id {
+			return true
+		}
+	}
+	return false
+}
+
 // machines is the env's switch, "this" when unset.
 func (e env) machines() string {
 	if e.q.Machines == "all" {
@@ -536,6 +580,10 @@ WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
 	var out []ByPCRow
 	if thisCounts {
 		row := ByPCRow{This: true, OS: self.OS}
+		if self.Until != "" { // the last day this PC published, as System's table reads it
+			u := self.Until
+			row.Until = &u
+		}
 		var typed int64
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
@@ -613,10 +661,13 @@ func scopePCs(e env) (*PCs, bool, error) {
 
 	if thisCounts {
 		row := PCRow{Machine: "", This: true, OS: self.OS, FirstSeen: self.FirstSeen}
+		if self.Until != "" {
+			u := self.Until
+			row.Until = &u
+		}
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}
-		p.List = append(p.List, row)
 		active, err := thisActive(e)
 		if err != nil {
 			return nil, false, err
@@ -624,6 +675,8 @@ func scopePCs(e env) (*PCs, bool, error) {
 		if active {
 			p.Active++
 		}
+		row.Active = active
+		p.List = append(p.List, row)
 	}
 	for _, o := range others {
 		row := PCRow{Machine: short(o.machine, ids), OS: o.os, FirstSeen: o.first,
@@ -635,6 +688,8 @@ func scopePCs(e env) (*PCs, bool, error) {
 				p.Until = &u
 			}
 		}
+		sent := time.UnixMilli(o.at).UTC()
+		row.SentAt = &sent
 		if row.Stale {
 			p.Stale++
 		}
@@ -645,6 +700,7 @@ func scopePCs(e env) (*PCs, bool, error) {
 		if active {
 			p.Active++
 		}
+		row.Active = active
 		p.List = append(p.List, row)
 	}
 	p.Count = len(p.List)
@@ -802,7 +858,7 @@ WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
 // "all": this PC first (from Source.Self), then the counted others by first
 // seen, and the documents set aside. With sharing off it holds this PC alone.
 func machinesTable(e env) (*Machines, error) {
-	m := &Machines{Sharing: sharingOn(e.src.Config), Rows: []MachineRow{}, Ignored: []IgnoredRow{}}
+	m := &Machines{Sharing: sharingOn(e.src.Config), Off: sharingOffBy(e.src.Config), Rows: []MachineRow{}, Ignored: []IgnoredRow{}}
 	var self SelfPC
 	if e.src.Self != nil {
 		self = e.src.Self()
@@ -887,7 +943,7 @@ func memoryShared(e env, id string, entry feedback.Entry) (*SharedCounts, error)
 	s := &SharedCounts{This: countsOf(d.Credits, d.Misses)}
 	s.Others, s.All = Counts{}, s.This
 	if !sharingOn(e.src.Config) {
-		s.State = sharedOff
+		s.State, s.Off = sharedOff, sharingOffBy(e.src.Config)
 		return s, nil
 	}
 	s.State = sharedUnavail

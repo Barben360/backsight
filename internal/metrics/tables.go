@@ -550,6 +550,7 @@ type SettingDiff struct {
 // first, then the others by first seen, and the documents set aside.
 type Machines struct {
 	Sharing   bool         `json:"sharing"`
+	Off       string       `json:"off,omitempty"` // with sharing off: feedback, share_ledger or both, the setting that is off
 	FetchedAt *time.Time   `json:"fetched_at"`
 	Rows      []MachineRow `json:"rows"`
 	Ignored   []IgnoredRow `json:"ignored"`
@@ -588,6 +589,7 @@ const (
 // other PCs and together, recent-weighted at now (M10).
 type SharedCounts struct {
 	State           string     `json:"state"`
+	Off             string     `json:"off,omitempty"` // with state sharing_off: the setting that is off (see Machines.Off)
 	Machines        int        `json:"machines"`
 	CombinedAt      *time.Time `json:"combined_at"`
 	This            Counts     `json:"this"`

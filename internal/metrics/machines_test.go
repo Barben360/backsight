@@ -105,9 +105,9 @@ func TestScopePCs(t *testing.T) {
 			t.Errorf("fetched_at %v with no pc_fetch row", p.FetchedAt)
 		}
 		want := []PCRow{
-			{Machine: "aaaaaaaa", This: true, OS: "linux", FirstSeen: "2026-09-01"},
-			{Machine: "cccccccc", OS: "linux", FirstSeen: "2026-09-05", Until: ptr("2026-10-27"), Stale: true},
-			{Machine: "bbbbbbbb", OS: "linux", FirstSeen: "2026-09-10", Until: ptr("2026-10-29")},
+			{Machine: "aaaaaaaa", This: true, OS: "linux", FirstSeen: "2026-09-01", Active: true},
+			{Machine: "cccccccc", OS: "linux", FirstSeen: "2026-09-05", Until: ptr("2026-10-27"), SentAt: sentUTC(fxNow.Add(-72 * time.Hour)), Stale: true},
+			{Machine: "bbbbbbbb", OS: "linux", FirstSeen: "2026-09-10", Until: ptr("2026-10-29"), SentAt: sentUTC(fxNow.Add(-time.Hour)), Active: true},
 		}
 		if !reflect.DeepEqual(p.List, want) {
 			t.Errorf("list\n got %+v\nwant %+v", p.List, want)
@@ -1576,6 +1576,22 @@ func TestSystemMachines(t *testing.T) {
 		if got.Sharing || len(got.Rows) != 1 || !got.Rows[0].This || got.Rows[0].Machine != "aaaaaaaa" || len(got.Ignored) != 0 {
 			t.Errorf("machines %+v", got)
 		}
+		if got.Off != OffLedger {
+			t.Errorf("off %q, want %q", got.Off, OffLedger)
+		}
+	})
+	t.Run("which setting is off", func(t *testing.T) {
+		for _, c := range []struct {
+			enabled, ledger bool
+			want            string
+		}{{true, true, ""}, {true, false, OffLedger}, {false, true, OffFeedback}, {false, false, OffBoth}} {
+			x := newFx(t, fxNow)
+			x.cfg = func(cf *config.Config) { cf.Feedback.Enabled, cf.Feedback.ShareLedger = c.enabled, c.ledger }
+			setup(x)
+			if got := run(x, "this"); got.Off != c.want {
+				t.Errorf("enabled %v, share_ledger %v: off %q, want %q", c.enabled, c.ledger, got.Off, c.want)
+			}
+		}
 	})
 	t.Run("short ids that collide show 13 characters", func(t *testing.T) {
 		x := newFx(t, fxNow)
@@ -1684,7 +1700,7 @@ func TestMemorySharedStates(t *testing.T) {
 		calls := 0
 		seam := combinedSeam(t, fxNow, feedback.Remote{"m1": {Credits: 4, CreditsAt: fxNow}}, &calls)
 		s := readShared(t, x, seam)
-		if s.State != "sharing_off" || calls != 0 || s.Others.Used != 0 || s.CombinedAt != nil {
+		if s.State != "sharing_off" || s.Off != OffLedger || calls != 0 || s.Others.Used != 0 || s.CombinedAt != nil {
 			t.Errorf("shared %+v after %d reads", s, calls)
 		}
 	})
@@ -1748,4 +1764,247 @@ func TestMemorySharedStates(t *testing.T) {
 			})
 		}
 	})
+}
+
+// This PC's "until" in By PC and in scope.pcs is the day its last publish
+// ended on (Self.Until), as System's table reads it; null before it ever
+// published.
+func TestThisPCUntilInByPCAndScope(t *testing.T) {
+	for _, until := range []string{"2026-10-29", ""} {
+		x := newFx(t, fxNow)
+		x.prompts("alpha", "p", fxNow, 3, nil)
+		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-28")
+		src := x.source()
+		src.Self = func() SelfPC { return SelfPC{Machine: pcThis, OS: "linux", Until: until} }
+		check := func(what string, got *string) {
+			t.Helper()
+			if until == "" && got != nil || until != "" && (got == nil || *got != until) {
+				t.Errorf("self until %q: %s until %v", until, what, got)
+			}
+		}
+		all := x.allQuery()
+		cost, err := Run(context.Background(), "cost", src, all)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cost.Tables.ByPC[0].This {
+			t.Fatalf("first By PC row %+v is not this PC", cost.Tables.ByPC[0])
+		}
+		check("by_pc", cost.Tables.ByPC[0].Until)
+		for _, q := range []Query{x.query(7), all} {
+			r, err := Run(context.Background(), "overview", src, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := r.Scope.PCs.List[0]
+			if !row.This {
+				t.Fatalf("first scope row %+v is not this PC", row)
+			}
+			check("scope.pcs ("+q.Machines+")", row.Until)
+			// The scope's oldest until stays the others' (D2/M9).
+			if r.Scope.PCs.Until == nil || *r.Scope.PCs.Until != "2026-10-28" {
+				t.Errorf("scope.pcs.until %v, want the other PC's 2026-10-28", r.Scope.PCs.Until)
+			}
+		}
+	}
+}
+
+// sentUTC is t as scope.pcs.list writes a document's send time: UTC, to the ms.
+func sentUTC(t time.Time) *time.Time { u := time.UnixMilli(t.UnixMilli()).UTC(); return &u }
+
+// A row says when its PC sent (UTC, null for this PC) and whether it typed a
+// prompt in the window (this PC's own typed prompts included), in both modes,
+// and the JSON writes sent_at as RFC 3339 UTC.
+func TestScopePCsRowsSentAndActive(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "p", fxNow, 3, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-5*time.Hour), "2026-10-29")
+	x.pcDoc(pcOther2, "2026-09-05", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcDay(pcOther1, "2026-10-28", 5, 1, 5)
+	for _, mode := range []string{"this", "all"} {
+		q := x.query(7)
+		q.Machines = mode
+		list := x.runAs("overview", q).Scope.PCs.List
+		by := map[string]PCRow{}
+		for _, r := range list {
+			by[r.Machine] = r
+		}
+		this, busy, idle := by["aaaaaaaa"], by["bbbbbbbb"], by["cccccccc"]
+		if !this.This || this.SentAt != nil || !this.Active {
+			t.Errorf("%s: this PC %+v, want active and no sent_at", mode, this)
+		}
+		if busy.SentAt == nil || !busy.SentAt.Equal(fxNow.Add(-5*time.Hour)) || busy.SentAt.Location() != time.UTC || !busy.Active {
+			t.Errorf("%s: busy PC %+v, want sent 5 h ago (UTC) and active", mode, busy)
+		}
+		if idle.SentAt == nil || !idle.SentAt.Equal(fxNow.Add(-time.Hour)) || idle.Active {
+			t.Errorf("%s: idle PC %+v, want sent 1 h ago and not active", mode, idle)
+		}
+	}
+	raw, err := json.Marshal(x.runAs("overview", x.query(7)).Scope.PCs.List)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"sent_at":"` + fxNow.Add(-5*time.Hour).UTC().Format("2006-01-02T15:04:05Z") + `"`
+	if !strings.Contains(string(raw), want) || !strings.Contains(string(raw), `"sent_at":null`) || !strings.Contains(string(raw), `"active":false`) {
+		t.Errorf("json %s lacks %s, a null sent_at and an inactive PC", raw, want)
+	}
+}
+
+// The views and metrics --machines all adds up are the ones MergingView and
+// MergedMetric say (the pages and the CLI read those two to decide where the
+// flag goes): with another PC's figures in the window, a metric differs from
+// this PC's own exactly when MergedMetric says it merges, and a view's figures
+// differ exactly when MergingView says it merges. A new merged metric or view
+// that is not added to the lists turns this red.
+func TestMergedMetricAndViewListsMatchTheMerge(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "p", fxNow, 40, func(i int, p *telemetry.Prompt) { p.Injected = i % 2; p.MS = 400 })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	full := machines.Figures{Prompts: 30, Hit: machines.Pair{10, 30}, Used: machines.Pair{6, 12}, Coverage: machines.Pair{12, 20},
+		Wrong: machines.Pair{2, 12}, Context: machines.Pair{40000, 4}, Latency: [9]int64{0, 2, 5, 10, 8, 3, 2, 0, 0}}
+	for d := 1; d <= 5; d++ {
+		day := fxNow.AddDate(0, 0, -d).UTC().Format("2006-01-02")
+		half := machines.Figures{Prompts: 15, Hit: machines.Pair{5, 15}, Used: machines.Pair{3, 6}, Coverage: machines.Pair{6, 10}, Wrong: machines.Pair{1, 6}, Context: machines.Pair{20000, 2}}
+		x.pcRows(pcRow{machine: pcOther1, day: day, f: full, flow: machines.Pair{9, 10}},
+			pcRow{machine: pcOther1, day: day, version: "0.1.30", f: half})
+	}
+	this, all := x.query(7), x.allQuery()
+	this.Dev, all.Dev = true, true // the developer metrics are views' too
+	differs := map[string]bool{}
+	present := map[string]bool{}
+	for _, view := range Views {
+		a, b := x.runAs(view, this), x.runAs(view, all)
+		viewDiffers := false
+		for id, m := range a.Metrics {
+			present[id] = true
+			if !reflect.DeepEqual(m, b.Metrics[id]) {
+				differs[id] = true
+				viewDiffers = true
+			}
+		}
+		if len(a.Metrics) != len(b.Metrics) {
+			t.Errorf("%s: %d metrics with this, %d with all", view, len(a.Metrics), len(b.Metrics))
+		}
+		ta, tb := a.Tables, b.Tables
+		ta.ByPC, tb.ByPC = nil, nil // only listed with all, in a view that merges
+		if !reflect.DeepEqual(ta, tb) {
+			viewDiffers = true
+		}
+		if viewDiffers != MergingView(view) {
+			t.Errorf("view %s: its figures differ with all: %t, MergingView: %t", view, viewDiffers, MergingView(view))
+		}
+	}
+	for id := range present {
+		if differs[id] != MergedMetric(id) {
+			t.Errorf("metric %s: differs with all: %t, MergedMetric: %t", id, differs[id], MergedMetric(id))
+		}
+	}
+	for _, id := range []string{"recall.hit_rate", "used.turn_rate", "declare.coverage", "verdict.wrong_rate", "context.per_session", "recall.latency", "pipeline.flow"} {
+		if !present[id] || !differs[id] {
+			t.Errorf("metric %s: present %t, differs %t: the fixture does not exercise it", id, present[id], differs[id])
+		}
+	}
+}
+
+// The versions the binaries really write differ in shape (a release build has
+// no "v": 0.1.27-m7; make build gives git describe's v0.1.30-m7): each is a
+// valid name and a row of its own. With all PCs, the other PC's versions are
+// listed beside this PC's, after them when their first day is older than this
+// PC's first prompt (the table is newest first), so a short page can hide them:
+// the count says how many there are.
+func TestReleasesListOtherPCsVersionsOfEveryShape(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.27-m7"
+	x.prompts("alpha", "a", fxNow.Add(-24*time.Hour), 3, injecting(1))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-23", version: "v0.1.29", f: machines.Figures{Prompts: 6, Hit: machines.Pair{3, 6}}},
+		pcRow{machine: pcOther1, day: "2026-10-24", version: "v0.1.30-m7", f: machines.Figures{Prompts: 9, Hit: machines.Pair{4, 9}}},
+	)
+	r := x.runAs("releases", x.allQuery())
+	by := releaseByVersion(r)
+	for v, n := range map[string]int64{"0.1.27-m7": 3, "v0.1.29": 6, "v0.1.30-m7": 9} {
+		if row, ok := by[v]; !ok || row.N != n {
+			t.Errorf("%s: row %+v (present %t), want n %d", v, row, ok, n)
+		}
+	}
+	if len(r.Tables.Releases) != 3 || r.Tables.Page.Total != 3 {
+		t.Fatalf("%d rows, total %d, want 3", len(r.Tables.Releases), r.Tables.Page.Total)
+	}
+	if got := r.Tables.Releases[0].Version; got != "0.1.27-m7" {
+		t.Errorf("first row %s: this PC's newest version comes first, the others' older days after it", got)
+	}
+	if this := releaseByVersion(x.runAs("releases", x.query(7))); len(this) != 1 {
+		t.Errorf("this PC alone lists %d versions, want 1", len(this))
+	}
+}
+
+// The views whose figures add up the other PCs' are exactly the six of the
+// design's "what follows the switch" (R20): a view added to the list, or left
+// out of it, changes what --machines all means for every page and command.
+func TestMergingViewsAreTheSixOfTheDesign(t *testing.T) {
+	want := []string{"overview", "quality", "cost", "pipeline", "days", "releases"}
+	if !slices.Equal(mergingViews, want) {
+		t.Errorf("mergingViews = %q, want %q", mergingViews, want)
+	}
+	for _, v := range []string{"overview", "quality", "cost", "pipeline", "days", "releases"} {
+		if !MergingView(v) || ThisOnlyView(v) {
+			t.Errorf("%s: merging %t, this-only %t", v, MergingView(v), ThisOnlyView(v))
+		}
+	}
+	for _, v := range []string{"bank", "system", "defs", "projects", "sessions", "memories", ""} {
+		if MergingView(v) {
+			t.Errorf("%s is not a merging view", v)
+		}
+	}
+}
+
+// A merged run asked for it carries this PC's own answer, equal to what the same query on this PC gives (JSON,
+// as `stats <view> --json` prints it), while the merged JSON stays what it was: the field is never encoded, and
+// a run not asked, one on this PC, or one that did not merge (sharing off) carries none.
+func TestMergedRunCarriesThisPCsOwnAnswer(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 70, Hit: machines.Pair{26, 70}}})
+	enc := func(r Result) string {
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, view := range []string{"overview", "cost"} {
+		plain := x.runAs(view, x.allQuery())
+		asked := x.allQuery()
+		asked.WithOwn = true
+		with := x.runAs(view, asked)
+		this := x.runAs(view, x.query(7))
+		if plain.ThisPC() != nil || this.ThisPC() != nil {
+			t.Errorf("%s: a run not asked, or on this PC, carries an own answer", view)
+		}
+		if enc(with) != enc(plain) {
+			t.Errorf("%s: asking for the own answer changed the merged JSON", view)
+		}
+		own := with.ThisPC()
+		if own == nil {
+			t.Fatalf("%s: no own answer on a merged run", view)
+		}
+		if enc(*own) != enc(this) {
+			t.Errorf("%s: own answer differs from --machines this:\n%s\n%s", view, enc(*own), enc(this))
+		}
+		if own.Scope.Machines != "this" || with.Scope.Machines != "all" {
+			t.Errorf("%s: scopes own %q merged %q", view, own.Scope.Machines, with.Scope.Machines)
+		}
+	}
+	asked := x.allQuery()
+	asked.WithOwn = true
+	// The own answer is not the merged one: the merged figures add the other PC's 70 prompts.
+	if r := x.runAs("quality", asked); r.ThisPC() == nil || enc(*r.ThisPC()) == enc(r) {
+		t.Error("the own answer is the merged one")
+	}
+	x.cfg = func(c *config.Config) { c.Feedback.ShareLedger = false }
+	if r := x.runAs("overview", asked); r.Scope.Machines != "this" || r.ThisPC() != nil {
+		t.Errorf("sharing off: scope %q, own %v", r.Scope.Machines, r.ThisPC())
+	}
 }

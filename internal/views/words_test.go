@@ -112,3 +112,21 @@ func TestRangeMSReadsBothForms(t *testing.T) {
 		}
 	}
 }
+
+// A document set aside reads the design's two words, and the one the design
+// has no word for says what to do: the pages and the CLI share this map.
+func TestIgnoredWordsAreTheDesigns(t *testing.T) {
+	want := map[string]string{
+		"too_large":       "over the 1 MiB cap",
+		"not_valid":       "not valid",
+		"unknown_version": "written by a newer backsight: update this PC",
+	}
+	if len(IgnoredWords) != len(want) {
+		t.Errorf("IgnoredWords has %d words, want %d: %v", len(IgnoredWords), len(want), IgnoredWords)
+	}
+	for k, w := range want {
+		if got := IgnoredWords[k]; got != w {
+			t.Errorf("%s reads %q, want %q", k, got, w)
+		}
+	}
+}

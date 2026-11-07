@@ -2,6 +2,8 @@ package dashboard
 
 import (
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -245,5 +247,47 @@ func TestKeysAttribute(t *testing.T) {
 	}
 	if !strings.Contains(body(t, h.do("GET", "/cost", cookieHdr(ck)...)), "g then a letter opens a page; press ? to list them all.") {
 		t.Error("keys hint missing")
+	}
+}
+
+// All PCs is a URL parameter, never a preference (A2): a link back to a page
+// that carries it keeps it in the URL, the cookie holds nothing about it, and
+// the next page without the parameter is this PC's.
+func TestPrefsNeverKeepMachines(t *testing.T) {
+	old := dataSpec
+	dataSpec.OtherPCs = 3
+	t.Cleanup(func() { dataSpec = old })
+	h := dataHarness(t)
+	ck := h.login()
+	r := h.do("GET", "/prefs?theme=dark&back="+url.QueryEscape("/cost?machines=all"), cookieHdr(ck)...)
+	const want = "backsight_prefs=v1.dark.0.0.comfortable.0; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict"
+	if r.StatusCode != 303 || r.Header.Get("Set-Cookie") != want {
+		t.Fatalf("%d, cookie %q, want 303 and %q", r.StatusCode, r.Header["Set-Cookie"], want)
+	}
+	if loc := r.Header.Get("Location"); loc != "/cost?machines=all" {
+		t.Errorf("Location %q, the page to come back to keeps its parameter", loc)
+	}
+	// The preferences links on an all-PCs page are the page's own, with the
+	// parameter inside back, and never a machines key of their own.
+	doc := rawPage(t, h, cookieHdr(ck), "/cost?machines=all")
+	for _, a := range doc.find("header a") {
+		href := a.attr("href")
+		if !strings.HasPrefix(href, "/prefs?") {
+			continue
+		}
+		u, err := url.Parse(href)
+		if err != nil || u.Query().Has("machines") || u.Query().Get("back") != "/cost?machines=all" {
+			t.Errorf("preferences link %q: machines key %v, back %q", href, u.Query().Has("machines"), u.Query().Get("back"))
+		}
+	}
+	// With the cookie just set, the next page without the parameter is this PC's.
+	hdr := []string{"Cookie", ck.Name + "=" + ck.Value + "; backsight_prefs=v1.dark.0.0.comfortable.0"}
+	doc = rawPage(t, h, hdr, "/")
+	sw := doc.first(".scopebar .mscope")
+	if sw == nil {
+		t.Fatal("no switch")
+	}
+	if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{"this PC"}) || sw.first("details.pcs") != nil {
+		t.Errorf("next page: selected %q, list %v; want this PC and no list", got, sw.first("details.pcs"))
 	}
 }

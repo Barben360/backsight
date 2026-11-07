@@ -101,15 +101,16 @@ func TestPageParams(t *testing.T) {
 		{"/quality?has=used", 400, "Unknown parameter"},
 		{"/quality?days=1;x", 400, "The query string is malformed."},
 		{"/sessions?has=used", 200, ""},
-		{"/quality?machines=all", 400, "--machines: this"},
+		{"/quality?machines=all", 200, "all PCs on this server"},
 		{"/quality?machines=this", 200, ""},
+		{"/quality?machines=both", 400, "--machines: this or all"},
 	} {
 		r, b := pageGet(t, h, ck, c.path)
 		if r.StatusCode != c.status || !strings.Contains(b, c.want) {
 			t.Errorf("GET %s: %d, want %d with %q in %q", c.path, r.StatusCode, c.status, c.want, b)
 		}
 	}
-	// The guard is the pages' only: the JSON API takes machines=all.
+	// The API takes machines=all too.
 	if r, m := apiGet(t, h, ck, "/api/v1/quality?machines=all"); r.StatusCode != 200 || dig(t, m, "data.scope.machines") != "all" {
 		t.Errorf("API machines=all: %d, scope.machines %v, want 200 and all", r.StatusCode, dig(t, m, "data.scope.machines"))
 	}
@@ -375,5 +376,37 @@ func TestAssetFunc(t *testing.T) {
 	tpl := template.Must(template.New("x").Funcs(funcs).Parse(`{{asset "logo-lite.svg"}}`))
 	if err := tpl.Execute(io.Discard, nil); err == nil {
 		t.Error("a typo in an asset name does not fail the page")
+	}
+}
+
+// A page takes machines=all and draws the all-PCs scope: the switch reads
+// "(N)" with the second half marked, and the page's figures are those the view
+// answers for all PCs. (A page used to refuse it.)
+func TestPageAcceptsMachinesAll(t *testing.T) {
+	old := dataSpec
+	dataSpec.OtherPCs = 3
+	t.Cleanup(func() { dataSpec = old })
+	h := dataHarness(t)
+	ck := cookieHdr(h.login())
+	doc := rawPage(t, h, ck, "/quality?machines=all")
+	sw := doc.first(".scopebar .mscope")
+	if sw == nil {
+		t.Fatal("no switch in the scope line")
+	}
+	if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{"all PCs on this server (4)"}) {
+		t.Errorf("selected half %q, want all PCs on this server (4)", got)
+	}
+	if sw.first("details.pcs") == nil {
+		t.Error("no Which PCs list with all PCs")
+	}
+	// The page and the API count the same PCs.
+	api := apiPath(t, h, "/api/v1/quality?machines=all")
+	if api.Scope.Machines != "all" || api.Scope.PCs == nil || api.Scope.PCs.Count != 4 {
+		t.Fatalf("API scope %+v", api.Scope)
+	}
+	// This PC is the default: the same URL without the parameter selects it.
+	doc = rawPage(t, h, ck, "/quality")
+	if got := current(doc.first(".scopebar .mscope"), "nav.mseg", "true"); !slices.Equal(got, []string{"this PC"}) {
+		t.Errorf("default half %q, want this PC", got)
 	}
 }

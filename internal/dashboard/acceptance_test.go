@@ -207,6 +207,11 @@ func allAcceptancePages(t *testing.T) []accPage {
 				}
 			}
 		}
+		// Every page on all the PCs: a second history whose index holds 8 other PCs' figures (one gone
+		// quiet, one document set aside), asked with machines=all at 90 days (the developer menu on
+		// where it changes the page) and, for the four pages the longest window costs most, at the
+		// longest custom window.
+		accPCs(t, long, hot)
 		// The framed failure pages, which carry a class of their kind.
 		for _, c := range []struct {
 			path string
@@ -244,6 +249,84 @@ func allAcceptancePages(t *testing.T) []accPage {
 	return accPages
 }
 
+// pcsOthers is the number of other PCs of the "pcs" sets; the switch counts this PC too.
+const pcsOthers = 8
+
+// pcsLong are the pages asked with machines=all at the longest window.
+var pcsLong = map[string]bool{"overview": true, "quality": true, "cost": true, "system": true}
+
+// accPCs adds the "pcs" and "pcslong" pages to the set. The long session and the hot memory are appended to
+// this history as to the first one, so their pages read the same ids.
+func accPCs(t *testing.T, long, hot string) {
+	t.Helper()
+	spec := dataSpec
+	dataSpec.OtherPCs = pcsOthers
+	h := dataHarness(t)
+	dataSpec = spec
+	if got := indexgen.AppendLongSession(t, h.dirs.State, longTurns); got != long {
+		t.Fatalf("the long session of the PCs history is %q, want %q", got, long)
+	}
+	if got := indexgen.AppendHotMemory(t, h.dirs.State, hotShows); got != hot {
+		t.Fatalf("the hot memory of the PCs history is %q, want %q", got, hot)
+	}
+	ck0 := h.login()
+	ck := cookieHdr(ck0)
+	proj, day := "", ""
+	var most int64
+	for _, p := range apiPath(t, h, "/api/v1/projects").Tables.Projects {
+		if p.Sessions > most {
+			proj, most = p.Project, p.Sessions
+		}
+	}
+	most = 0
+	for _, d := range apiPath(t, h, "/api/v1/days").Tables.Days {
+		if d.Sessions > most {
+			day, most = d.Day, d.Sessions
+		}
+	}
+	for _, r := range routes {
+		if r.Kind != "page" {
+			continue
+		}
+		path := r.Sample
+		switch r.Page {
+		case "project":
+			path = "/projects/" + url.PathEscape(proj)
+		case "session":
+			path = "/sessions/" + url.PathEscape(long)
+		case "memory":
+			path = "/memories/" + url.PathEscape(hot)
+		case "day":
+			path = "/days/" + day
+		}
+		ask := func(q, set string, dev bool, hdr ...string) {
+			if len(hdr) == 0 {
+				hdr = ck
+			}
+			resp := h.do("GET", path+"?"+q, hdr...)
+			b := body(t, resp)
+			if resp.StatusCode != 200 {
+				accFail = append(accFail, fmt.Sprintf("GET %s?%s: %d, want 200", path, q, resp.StatusCode))
+				return
+			}
+			accPages = append(accPages, accPage{Name: path + "?" + q, Kind: r.Page, Dev: dev, Set: set, Body: b})
+		}
+		for _, dev := range []bool{false, true} {
+			if dev && !devPages[r.Page] {
+				continue
+			}
+			ask(sweepWindow90+"&machines=all&dev="+map[bool]string{false: "0", true: "1"}[dev], "pcs", dev)
+		}
+		if pcsLong[r.Page] {
+			// The developer menu on as well: its extra cards are the worst case of the size cap.
+			for _, dev := range []bool{false, true} {
+				ask("since="+longSince+"&until="+longUntil+"&machines=all&dev="+map[bool]string{false: "0", true: "1"}[dev], "pcslong", dev,
+					withPrefs(ck0, "v1.system.0.0.comfortable.1")...)
+			}
+		}
+	}
+}
+
 // eachAcceptancePage runs f as a subtest on each page keep accepts.
 func eachAcceptancePage(t *testing.T, keep func(accPage) bool, f func(t *testing.T, p accPage)) {
 	t.Helper()
@@ -275,9 +358,11 @@ func pageOf(t *testing.T, kind, set string, dev bool) accPage {
 // wantPages is the size of the set: 16 routes at 90 days, dev on for the pages that change with it;
 // the charting pages at 365 days (dev on for three); the 16 routes at the longest window, dev on for the
 // pages that change with it; Overview and System at the defaults; the memory with limit=500; a
-// comparison; the text page; two failure pages, /prefs and the sign-in page; the scenarios.
+// comparison; the text page; two failure pages, /prefs and the sign-in page; the scenarios; then the 16 routes
+// on all PCs at 90 days (dev on for the pages that change with it) and four of them at the longest window (dev off and on).
 func wantPages() int {
-	return 16 + len(devPages) + len(charted) + len(devCharts) + 16 + len(devPages) + len(defaultPages) + 1 + 1 + 1 + 1 + 2 + 2 + len(scenarios)
+	return 16 + len(devPages) + len(charted) + len(devCharts) + 16 + len(devPages) + len(defaultPages) + 1 + 1 + 1 + 1 + 2 + 2 + len(scenarios) +
+		16 + len(devPages) + 2*len(pcsLong)
 }
 
 func TestAcceptancePageSet(t *testing.T) {
@@ -296,6 +381,137 @@ func TestAcceptancePageSet(t *testing.T) {
 		t.Error("no outcomes card on the quality page over 365 days")
 	} else if n := len(card.find("figure.chart rect.seg")); n < 365 {
 		t.Errorf("the outcomes chart over 365 days draws %d bars", n)
+	}
+}
+
+// thisOnlyKinds are the pages whose figures are always this PC's (the other PCs send no project, session or
+// memory); the view each reads is what metrics.ThisOnlyView says it is.
+var thisOnlyKinds = map[string]string{"projects": "projects", "project": "projects", "sessions": "sessions", "session": "sessions",
+	"memories": "memories", "memory": "memories"}
+
+// On every page of the "pcs" sets the switch counts this PC and the 8 others: on a page that merges them it
+// reads all PCs and lists them, and on a this-PC-only page it stays on this PC, with the second half as plain
+// text that says why. A page that dropped the parameter would fall back to this PC's, and fail here.
+func TestAcceptancePCsPagesAreOnAllPCs(t *testing.T) {
+	want := fmt.Sprintf("all PCs on this server (%d)", pcsOthers+1)
+	var merged, alone int
+	eachAcceptancePage(t, func(p accPage) bool { return p.Set == "pcs" || p.Set == "pcslong" }, func(t *testing.T, p accPage) {
+		doc := parseHTML(t, p.Body)
+		sw := doc.first(".scopebar .mscope")
+		if sw == nil {
+			t.Fatal("no switch in the scope line")
+		}
+		if view, only := thisOnlyKinds[p.Kind]; only {
+			alone++
+			if !metrics.ThisOnlyView(view) {
+				t.Errorf("%s is not a this-PC-only view", view)
+			}
+			span := sw.first("nav.mseg span[aria-disabled]")
+			if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{"this PC"}) || span == nil || span.text() != want+": "+thisOnlyHint ||
+				span.attr("title") != thisOnlyHint || sw.first("details.pcs") != nil {
+				t.Errorf("selected %q, disabled half %v, list %v: want this PC, and %q as text", got, span, sw.first("details.pcs") != nil, want)
+			}
+			return
+		}
+		merged++
+		if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{want}) {
+			t.Errorf("selected half %q, want %q", got, want)
+		}
+		if sw.first("details.pcs") == nil {
+			t.Error("no Which PCs list")
+		}
+		if got := len(sw.find("details.pcs li")); got != pcsOthers+1 {
+			t.Errorf("%d PCs listed, want %d", got, pcsOthers+1)
+		}
+	})
+	if merged < 10 || alone < 5 {
+		t.Errorf("%d merged pages and %d this-PC-only pages swept: the check sees too little", merged, alone)
+	}
+}
+
+// Nothing on the pages of all PCs shows only when the pointer rests on it: each chart whose marks carry a hover
+// sentence holds the same figures in its table, a bucket range's included. The control is that a chart of
+// bucket ranges is among the charts read.
+func TestAcceptancePCsPagesHaveNoHoverOnlyContent(t *testing.T) {
+	charts, ranges := 0, 0
+	eachAcceptancePage(t, func(p accPage) bool { return p.Set == "pcs" || p.Set == "pcslong" }, func(t *testing.T, p accPage) {
+		doc := parseHTML(t, p.Body)
+		for i, f := range doc.find("figure.chart") {
+			if len(f.find("title")) == 0 {
+				continue
+			}
+			charts++
+			ranges += len(f.find("rect.bkt"))
+			if tbl := f.first("details.tblfb table"); tbl == nil || len(tbl.find("tbody tr")) == 0 {
+				t.Errorf("chart %d has hover sentences and no table with the same figures", i)
+			}
+		}
+	})
+	if charts == 0 || ranges == 0 {
+		t.Errorf("%d charts and %d bucket ranges read: the check sees nothing", charts, ranges)
+	}
+}
+
+// With 63 other PCs (64 counted, one document set aside) the pages that list them stay under the size cap at the
+// longest window: Machines on System has 65 rows, By PC on Cost 64 and Which PCs in the scope line 64.
+func TestPagesWithManyPCsStayUnderSizeCap(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the page sweep runs without -race (make test)")
+	}
+	old, oldTimeout := dataSpec, renderTimeout
+	t.Cleanup(func() { dataSpec, renderTimeout = old, oldTimeout })
+	dataSpec, renderTimeout = acceptanceSpec, time.Minute
+	dataSpec.OtherPCs = 63
+	h := dataHarness(t)
+	dataSpec = old
+	ck := withPrefs(h.login(), "v1.system.0.0.comfortable.1")
+	for _, dev := range []string{"0", "1"} { // developer mode adds cards (Quality is the largest page with it on)
+		win := "since=" + longSince + "&until=" + longUntil + "&machines=all&dev=" + dev
+		for _, c := range []struct {
+			path string
+			rows func(*node) []*node // the rows of the page's table of PCs; nil when it has none
+			want int
+		}{
+			{"/system?" + win, func(d *node) []*node { return cardOf(t, d, "w-machines").find("table.mach tbody tr") }, 65},
+			{"/cost?" + win, func(d *node) []*node { return d.find("details.tblfb table.mach tbody tr") }, 64},
+			{"/?" + win, nil, 0},
+			{"/quality?" + win, nil, 0},
+			{"/releases?" + win, nil, 0},
+		} {
+			sizeCapCase(t, h, ck, c.path, c.rows, c.want)
+		}
+	}
+}
+
+// sizeCapCase asks one page and checks its size, the PCs it lists and the rows
+// of its table of PCs (nil rows: it has none).
+func sizeCapCase(t *testing.T, h *harness, ck []string, path string, rows func(*node) []*node, want int) {
+	t.Helper()
+	c := struct {
+		path string
+		rows func(*node) []*node
+		want int
+	}{path, rows, want}
+	{
+		resp := h.do("GET", c.path, ck...)
+		b := body(t, resp)
+		if resp.StatusCode != 200 {
+			t.Errorf("GET %s: %d", c.path, resp.StatusCode)
+			return
+		}
+		t.Logf("%s: %d bytes", c.path, len(b))
+		if len(b) > sizeCap {
+			t.Errorf("%s: %d bytes, cap %d", c.path, len(b), sizeCap)
+		}
+		doc := parseHTML(t, b)
+		if got := len(doc.find(".scopebar details.pcs li")); got != 64 {
+			t.Errorf("%s: %d PCs in Which PCs, want 64", c.path, got)
+		}
+		if c.rows != nil {
+			if got := len(c.rows(doc)); got != c.want {
+				t.Errorf("%s: %d rows in its table of PCs, want %d", c.path, got, c.want)
+			}
+		}
 	}
 }
 
@@ -487,7 +703,7 @@ func TestPagesUnderSizeCap(t *testing.T) {
 	}
 	var all []sized
 	eachAcceptancePage(t, func(p accPage) bool {
-		return p.Set == "90" || p.Set == "365" || p.Set == "all" || p.Set == "long" || p.Set == "compare" || p.Set == "markers"
+		return p.Set == "90" || p.Set == "365" || p.Set == "all" || p.Set == "long" || p.Set == "compare" || p.Set == "markers" || p.Set == "pcs" || p.Set == "pcslong"
 	}, func(t *testing.T, p accPage) {
 		all = append(all, sized{p.Name, len(p.Body)})
 		if len(p.Body) > sizeCap {
@@ -499,7 +715,8 @@ func TestPagesUnderSizeCap(t *testing.T) {
 		t.Logf("%7d bytes  %s", s.n, s.name)
 	}
 	// The pages the cap is for are in the set.
-	for _, c := range []struct{ kind, set string }{{"memory", "all"}, {"session", "90"}, {"quality", "90"}, {"overview", "long"}, {"system", "long"}, {"cost", "long"}, {"releases", "compare"}, {"day", "markers"}} {
+	for _, c := range []struct{ kind, set string }{{"memory", "all"}, {"session", "90"}, {"quality", "90"}, {"overview", "long"}, {"system", "long"}, {"cost", "long"}, {"releases", "compare"}, {"day", "markers"},
+		{"overview", "pcs"}, {"cost", "pcs"}, {"system", "pcs"}, {"memory", "pcs"}, {"cost", "pcslong"}, {"overview", "pcslong"}} {
 		pageOf(t, c.kind, c.set, false)
 	}
 	// The Overview and Days pages hold the 13 months of the calendar whatever their window: a week a column,

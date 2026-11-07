@@ -219,6 +219,7 @@ func (c Line) HTML() template.HTML {
 		for _, v := range ns {
 			nmax = max(nmax, v)
 		}
+		var nbars rectPaths
 		bw := math.Max(step*0.6, 0.5)
 		for j, v := range ns {
 			h := 0.0
@@ -229,8 +230,13 @@ func (c Line) HTML() template.HTML {
 				continue // a day of none draws nothing: on a long window those are a quarter of the page
 			}
 			bx0, bx1 := math.Max(left, x(j)-bw/2), math.Min(right, x(j)+bw/2)
+			if m > HoverMax { // a long window: one path for all the bars
+				nbars.add("nb", bx0, plotBase-h, bx1-bx0, h)
+				continue
+			}
 			b.WriteString(`<rect class="nb" x="` + f(bx0) + `" y="` + f(plotBase-h) + `" width="` + f(bx1-bx0) + `" height="` + f(h) + `"></rect>`)
 		}
+		nbars.write(&b)
 	}
 	for s, ser := range c.Series {
 		if ser.Band {

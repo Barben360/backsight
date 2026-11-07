@@ -115,3 +115,51 @@ func daysOfLabel(label string) int {
 	}
 	return 0
 }
+
+// thisPC is the result the verdict banner reads: this PC's own answer when
+// the page adds up all PCs (the verdict stays this PC's, so do the numbers
+// its axes quote), else the page's result.
+func thisPC(r, own *metrics.Result) *metrics.Result {
+	if own != nil {
+		return own
+	}
+	return r
+}
+
+// noPCActivity is the state of the Overview on all PCs when no PC had a
+// prompt in the window: how many PCs it counted, when the latest activity
+// was (read from the days calendar) and the longer windows. The zero NoData
+// (no Text) says there is nothing to tell.
+func noPCActivity(r, days *metrics.Result, window string, windows []Choice) NoData {
+	pcs := r.Scope.PCs
+	if r.Scope.Machines != "all" || pcs == nil || pcs.Count < 2 || pcs.Active > 0 {
+		return NoData{}
+	}
+	in := "in the window"
+	switch {
+	case strings.HasPrefix(window, "last "):
+		in = "in the " + window
+	case window != "":
+		in = "from " + window
+	}
+	n := NoData{Text: "No activity on any of the " + strconv.Itoa(pcs.Count) + " PCs " + in + "."}
+	if days != nil {
+		for i := len(days.Tables.Calendar) - 1; i >= 0; i-- {
+			if row := days.Tables.Calendar[i]; row.Prompts > 0 {
+				n.Text += " The latest was " + shortDay(row.Day, r.GeneratedAt) + "."
+				break
+			}
+		}
+	}
+	if cur := windowDaysOf(window); cur > 0 && cur < 90 {
+		for _, w := range windows {
+			if daysOfLabel(w.Label) > cur {
+				n.Links = append(n.Links, w)
+			}
+		}
+		if len(n.Links) > 0 {
+			n.Pick = "Pick a longer window"
+		}
+	}
+	return n
+}

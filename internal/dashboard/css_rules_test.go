@@ -381,11 +381,12 @@ func TestForcedColors(t *testing.T) {
 			t.Errorf("forced-colors: %q lacks %s: %s", c[0], c[1], c[2])
 		}
 	}
-	// A chart is the only thing whose colours must not be forced.
+	// A chart is the only thing whose colours must not be forced (its marks
+	// included: the latency bucket bars of the all-PCs view).
 	for _, r := range rules {
 		if r.At == "@media (forced-colors: active)" && r.declStarts("forced-color-adjust", "none") && !r.declStarts("background", "CanvasText") {
 			for _, s := range r.Sel {
-				if !strings.HasPrefix(s, ".chart svg") && s != ".hm-c" && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
+				if !strings.HasPrefix(s, ".chart svg") && s != ".chart .bkt" && s != ".hm-c" && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
 					t.Errorf("forced-colors: %q switches forced colours off", s)
 				}
 			}

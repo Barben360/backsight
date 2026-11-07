@@ -66,7 +66,7 @@ func serverDown(r *metrics.Result) (down bool, lastOK *time.Time) {
 
 // helpedHead is the card's frame, its ⓘ and the command that prints the rows.
 func helpedHead(p views.Params) Head {
-	h := fixedHead("helped", "Which memories helped most?", "machine", cliFor("overview", "", p))
+	h := fixedHead("helped", "Which memories helped most?", "machine", cliFor("overview", "", p.ThisPC())) // stays this PC's: no flag
 	h.Info = Info{
 		Label: "About helped most", Name: "Which memories helped most?",
 		What:  "The 3 memories Claude said it used most often in the window, with how often each was shown.",

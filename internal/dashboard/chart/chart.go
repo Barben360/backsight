@@ -7,6 +7,7 @@ package chart
 import (
 	"html"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -59,6 +60,7 @@ var Classes = []string{
 	"q0", "q1", "q2", "q3", "q4", "none", "pad", "today", "inwin", "hm-old", "hm-legend", "ramp", "lbl", "sw-dash", "mk", "sr-only",
 	"rel-mk", "cfg-mk", "mk-t", "sw-rel", "sw-cfg", "gap-band", "src-mk", "inc", "muted",
 	"rng", "rng-p50", "ci-ln", "ci-pt", "ci-pool", "zero", "few-t",
+	"bkt", "bkt-own", "sw-bkt",
 }
 
 // known keeps the tokens of a caller's class list that Classes defines.
@@ -112,7 +114,14 @@ type tableData struct {
 	more string // the command listing every row, shown under a capped table
 	text bool   // every column is text: none is right-aligned
 	foot string // a sentence under the table; "" none
+	// left lists the columns, besides the first, that are text: they are not right-aligned.
+	left []int
+	// after is markup the caller wrote and escaped, closing the figure: a second disclosure.
+	after string
 }
+
+// isLeft says column i is left-aligned.
+func (t tableData) isLeft(i int) bool { return i == 0 || t.text || slices.Contains(t.left, i) }
 
 // figure wraps a plot, its legend and its table fallback. Only the plot
 // scrolls sideways, so the legend and the table stay in view.
@@ -149,7 +158,7 @@ func figureLegend(label string, sz Size, focusable bool, svg string, legend stri
 	}
 	b.WriteString(`<details class="tblfb"><summary>Show as a table</summary><div class="tbl-wrap"><table class="tbl"><caption class="sr-only">` + esc(label) + `</caption><thead><tr>`)
 	for i, h := range t.head {
-		if i == 0 || t.text {
+		if t.isLeft(i) {
 			b.WriteString(`<th scope="col">` + esc(h) + `</th>`)
 		} else {
 			b.WriteString(`<th class="r" scope="col">` + esc(h) + `</th>`)
@@ -163,7 +172,7 @@ func figureLegend(label string, sz Size, focusable bool, svg string, legend stri
 	for _, r := range rows {
 		b.WriteString(`<tr>`)
 		for i, c := range r {
-			if i == 0 || t.text {
+			if t.isLeft(i) {
 				b.WriteString(`<td>` + esc(c) + `</td>`)
 			} else {
 				b.WriteString(`<td class="r">` + esc(c) + `</td>`)
@@ -183,7 +192,7 @@ func figureLegend(label string, sz Size, focusable bool, svg string, legend stri
 		}
 		b.WriteString(`</p>`)
 	}
-	b.WriteString(`</details></figure>`)
+	b.WriteString(`</details>` + t.after + `</figure>`)
 	return b.String()
 }
 

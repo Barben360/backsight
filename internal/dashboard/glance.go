@@ -198,12 +198,21 @@ func glanceFor(r *metrics.Result, l format.Locale, loc *time.Location, p views.P
 
 // glancePage is glanceOf with the page's own flags on its CLI.
 func glancePage(r *metrics.Result, l format.Locale, loc *time.Location, p views.Params) Glance {
-	return glanceFor(r, l, loc, p)
+	g := glanceFor(r, l, loc, p)
+	if r.Scope.Machines == "all" {
+		g.Head.Note = "The memory is the server’s: the same with this PC or all PCs."
+	}
+	return g
 }
 
 // latelyHead is the frame of "What happened lately?".
-func latelyHead() Head {
+//
+// On all PCs (r adds them up) it says whose sessions the list holds.
+func latelyHead(r *metrics.Result) Head {
 	h := fixedHead("lately", "What happened lately?", "machine", "backsight stats sessions --limit 5")
 	h.Drill, h.DrillText = "/sessions", "All sessions →"
+	if r != nil && r.Scope.Machines == "all" {
+		h.Note = "Sessions and projects never leave the PC they ran on: this list is this PC’s."
+	}
 	return h
 }
