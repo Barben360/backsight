@@ -318,7 +318,11 @@ func accPCs(t *testing.T, long, hot string) {
 			ask(sweepWindow90+"&machines=all&dev="+map[bool]string{false: "0", true: "1"}[dev], "pcs", dev)
 		}
 		if pcsLong[r.Page] {
-			ask("since="+longSince+"&until="+longUntil+"&machines=all&dev=0", "pcslong", false, withPrefs(ck0, "v1.system.0.0.comfortable.1")...)
+			// The developer menu on as well: its extra cards are the worst case of the size cap.
+			for _, dev := range []bool{false, true} {
+				ask("since="+longSince+"&until="+longUntil+"&machines=all&dev="+map[bool]string{false: "0", true: "1"}[dev], "pcslong", dev,
+					withPrefs(ck0, "v1.system.0.0.comfortable.1")...)
+			}
 		}
 	}
 }
@@ -355,10 +359,10 @@ func pageOf(t *testing.T, kind, set string, dev bool) accPage {
 // the charting pages at 365 days (dev on for three); the 16 routes at the longest window, dev on for the
 // pages that change with it; Overview and System at the defaults; the memory with limit=500; a
 // comparison; the text page; two failure pages, /prefs and the sign-in page; the scenarios; then the 16 routes
-// on all PCs at 90 days (dev on for the pages that change with it) and four of them at the longest window.
+// on all PCs at 90 days (dev on for the pages that change with it) and four of them at the longest window (dev off and on).
 func wantPages() int {
 	return 16 + len(devPages) + len(charted) + len(devCharts) + 16 + len(devPages) + len(defaultPages) + 1 + 1 + 1 + 1 + 2 + 2 + len(scenarios) +
-		16 + len(devPages) + len(pcsLong)
+		16 + len(devPages) + 2*len(pcsLong)
 }
 
 func TestAcceptancePageSet(t *testing.T) {

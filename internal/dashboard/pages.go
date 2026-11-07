@@ -546,7 +546,28 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p.Limit, p.Offset = metrics.MaxLimit, 0
 			data.P = p
 		}
+		// The Overview, Cost and the day page on all PCs also read this PC's own answer (for their "This PC's N"
+		// links): it is a read of its own, so it runs beside the merged views and not after them.
+		ownKind := spec.Name == "overview" || spec.Name == "cost" || spec.Name == "day"
+		type ownRead struct {
+			res metrics.Result
+			st  indexState
+			err error
+		}
+		var ownCh chan ownRead
+		if ownKind && p.Machines == "all" {
+			ownCh = make(chan ownRead, 1)
+			go func() {
+				res, st, err := s.data.result(r.Context(), first, viewParams(spec, first, p.ThisPC()), id)
+				ownCh <- ownRead{res, st, err}
+			}()
+		}
 		outs := s.readViews(r.Context(), spec, p, id)
+		defer func() { // never leave the read running past the request
+			if ownCh != nil {
+				<-ownCh
+			}
+		}()
 		if bad, ok := firstProblem(outs); ok {
 			if s.notReadyPage(w, r, bad.st, prefs) {
 				return
@@ -562,10 +583,11 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// What the figures count, not what the URL asked for: sharing off, or a
 		// page that is always this PC's, answers this PC and says so.
 		data.P.Machines = head.Scope.Machines
-		if (spec.Name == "overview" || spec.Name == "cost" || spec.Name == "day") && head.Scope.Machines == "all" {
-			if res, st, err := s.data.result(r.Context(), first, viewParams(spec, first, p.ThisPC()), id); st == stateReady && err == nil {
-				data.Own = &res
+		if ownCh != nil && head.Scope.Machines == "all" { // sharing off answers this PC: the read is not needed
+			if o := <-ownCh; o.st == stateReady && o.err == nil {
+				data.Own = &o.res
 			}
+			ownCh = nil
 		}
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)

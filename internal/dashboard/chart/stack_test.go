@@ -37,6 +37,23 @@ func outcomes(x []string, used, ignored []float64) Stack {
 
 var segRect = regexp.MustCompile(`<rect class="seg ([^"]*)" x="([^"]*)" y="([^"]*)" width="([^"]*)" height="([^"]*)"></rect>`)
 
+var (
+	segPath  = regexp.MustCompile(`<path class="seg ([^"]*)" d="([^"]*)"></path>`)
+	pathRect = regexp.MustCompile(`M ([-\d.]+) ([-\d.]+)h([-\d.]+)v([-\d.]+)h-([-\d.]+)z`)
+)
+
+// segMarks is every segment of a stack, drawn as a rect or as a rectangle of a path (a long window draws its
+// thin bars that way), in the shape segRect matches have: the match, the classes, x, y, width and height.
+func segMarks(out string) [][]string {
+	marks := segRect.FindAllStringSubmatch(out, -1)
+	for _, m := range segPath.FindAllStringSubmatch(out, -1) {
+		for _, r := range pathRect.FindAllStringSubmatch(m[2], -1) {
+			marks = append(marks, []string{r[0], m[1], r[1], r[2], r[3], r[4]})
+		}
+	}
+	return marks
+}
+
 func TestBarsStackBottomUp(t *testing.T) {
 	c := outcomes([]string{"Oct 24", "Oct 25"}, []float64{3, 0}, []float64{1, 2})
 	out := kept(string(c.Bars()))
@@ -378,7 +395,7 @@ func TestThinPartsStayVisible(t *testing.T) {
 		wide := outcomes(x, big, small)
 		wide.Size = sz
 		out = kept(string(wide.Bars()))
-		segs = segRect.FindAllStringSubmatch(out, -1)
+		segs = segMarks(out)
 		if len(segs) != 2*n {
 			t.Fatalf("segments = %d, want %d", len(segs), 2*n)
 		}
@@ -559,5 +576,48 @@ func TestStackMarkersBandsAndSource(t *testing.T) {
 		if strings.Contains(plainOut, s) {
 			t.Errorf("a stack without markers holds %q", s)
 		}
+	}
+}
+
+// Past HoverMax positions the thin bars of a stack share one path for each fill, and not a rect each; up to
+// HoverMax they stay rects. Both draw the same rectangles, and the hatched part is never merged.
+func TestLongStackDrawsThinBarsAsPaths(t *testing.T) {
+	mk := func(n int) string {
+		x, big, small := make([]string, n), make([]float64, n), make([]float64, n)
+		for i := range x {
+			x[i], big[i], small[i] = fmt.Sprintf("d%d", i), 120, 1
+		}
+		return string(outcomes(x, big, small).Bars())
+	}
+	short, long := mk(HoverMax), mk(HoverMax+1)
+	if got := len(segRect.FindAllString(short, -1)); got != 2*HoverMax || strings.Contains(short, `<path class="seg`) {
+		t.Errorf("at HoverMax: %d rects, want %d and no path", got, 2*HoverMax)
+	}
+	if strings.Contains(long, `<rect class="seg`) {
+		t.Error("a thin bar of a long window is still a rect")
+	}
+	if got := len(segPath.FindAllString(long, -1)); got != 2 {
+		t.Errorf("%d paths, want one for each of the 2 fills", got)
+	}
+	marks := segMarks(long)
+	if len(marks) != 2*(HoverMax+1) {
+		t.Fatalf("%d rectangles, want %d", len(marks), 2*(HoverMax+1))
+	}
+	for _, m := range marks {
+		if !strings.HasPrefix(m[1], "seg-fine ") {
+			t.Errorf("a merged rectangle without seg-fine: %v", m)
+		}
+		if w, _ := strconv.ParseFloat(m[4], 64); w < 1 {
+			t.Errorf("a merged rectangle %s wide", m[4])
+		}
+	}
+	if len(long) >= len(short) {
+		t.Errorf("a long window is %d bytes, the short one %d: the merge saves nothing", len(long), len(short))
+	}
+	// A hatched part keeps its rects (the hatch lines follow each one).
+	c := outcomes([]string{"a"}, []float64{1}, []float64{1})
+	c.Hatch = "f-ignored"
+	if strings.Contains(string(c.Bars()), "<path class=\"seg") {
+		t.Error("a hatched part is a path")
 	}
 }

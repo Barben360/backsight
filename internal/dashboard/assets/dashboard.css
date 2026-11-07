@@ -520,6 +520,9 @@ rect.seg.f-pending { fill: none; stroke: var(--c-shown); }
 /* ---------- stacked bars: thin segments keep their fill ---------- */
 rect.seg.seg-fine { stroke: none; }
 rect.seg.seg-fine.f-pending { stroke: var(--c-shown); }
+/* a long window draws its thin bars as one path for each fill, not a rect each */
+.chart path.seg.seg-fine { stroke: none; }
+.chart path.seg.seg-fine.f-pending { fill: none; stroke: var(--c-shown); stroke-width: 1; }
 
 /* ---------- histograms and strip timelines: focusable marks ---------- */
 .chart rect:focus-visible, .chart path.mkp:focus-visible, .chart line.thr-w:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

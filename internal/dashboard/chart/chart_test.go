@@ -883,7 +883,7 @@ func TestHoverStopsPastHoverMax(t *testing.T) {
 		if got := strings.Count(line, "<polyline"); got == 0 {
 			t.Errorf("line at %d positions: no line", n)
 		}
-		if got := len(segRect.FindAllString(stack, -1)); got != 2*n {
+		if got := len(segMarks(stack)); got != 2*n {
 			t.Errorf("stack at %d positions: %d bars, want %d", n, got, 2*n)
 		}
 	}
@@ -1009,5 +1009,32 @@ func TestLineMarkerLabelsStayInsideAndApart(t *testing.T) {
 	}
 	if !first {
 		t.Errorf("the label of the marker on the first day was dropped: %v", boxes)
+	}
+}
+
+// Past HoverMax positions the faint count bars of a line are one path; up to HoverMax each is a rect.
+func TestLongLineDrawsItsCountBarsAsOnePath(t *testing.T) {
+	mk := func(n int) string {
+		c := many(n)
+		c.N, c.NName = make([]int64, n), "turns"
+		for i := range c.N {
+			c.N[i] = int64(1 + i%7)
+		}
+		return string(c.HTML())
+	}
+	if out := mk(HoverMax); strings.Count(out, `<rect class="nb"`) != HoverMax || strings.Contains(out, `<path class="nb"`) {
+		t.Errorf("at HoverMax the bars are not %d rects", HoverMax)
+	}
+	out := mk(HoverMax + 1)
+	if strings.Contains(out, `<rect class="nb"`) || strings.Count(out, `<path class="nb"`) != 1 {
+		t.Fatalf("a long line's bars are not one path")
+	}
+	d := regexp.MustCompile(`<path class="nb" d="([^"]*)"`).FindStringSubmatch(out)[1]
+	if got := strings.Count(d, "M "); got != HoverMax+1 {
+		t.Errorf("%d bars in the path, want %d", got, HoverMax+1)
+	}
+	// the tallest day (7) reaches 30 % of the 188-unit plot, 56.4 (as in the short chart test)
+	if !strings.Contains(d, "v56.4") {
+		t.Errorf("no bar as tall as the tallest count: %.80s", d)
 	}
 }

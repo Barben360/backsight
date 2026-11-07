@@ -171,6 +171,7 @@ func (c Stack) Bars() template.HTML {
 		var vj []int
 		var vt []string
 		var vy []float64
+		var fine rectPaths
 		for j := 0; j < m; j++ {
 			x := left + slot*float64(j) + (slot-bw)/2
 			var acc float64
@@ -190,6 +191,10 @@ func (c Stack) Bars() template.HTML {
 				if rw < fineBelow || rh < fineBelow {
 					// the 2 px surface stroke would eat a thin rect whole: it is drawn without one.
 					cls = "seg-fine " + cls
+					if m > HoverMax && (c.Hatch == "" || part.Class != c.Hatch) { // a long window: thin bars share a path
+						fine.add("seg "+cls, rx, ry, rw, rh)
+						continue
+					}
 				}
 				b.WriteString(`<rect class="seg ` + cls + `" x="` + f(rx) + `" y="` + f(ry) + `" width="` + f(rw) + `" height="` + f(rh) + `"></rect>`)
 				if c.Hatch != "" && part.Class == c.Hatch && rw >= minHatchWidth {
@@ -205,6 +210,7 @@ func (c Stack) Bars() template.HTML {
 				}
 			}
 		}
+		fine.write(b)
 		// the count labels are thinned like the x labels so none overlaps or clips.
 		for _, l := range pickLabels(vt, func(i int) float64 { return left + slot*(float64(vj[i])+0.5) }, W) {
 			b.WriteString(`<text class="val ta-m" x="` + f(l.x) + `" y="` + f(vy[l.j]) + `">` + esc(vt[l.j]) + `</text>`)
