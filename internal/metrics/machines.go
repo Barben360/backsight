@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/machines"
 )
 
@@ -788,4 +789,169 @@ GROUP BY d.version ORDER BY d.version`,
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// countedPCs reads the other counted PCs' documents (M9), by first seen.
+type countedPC struct {
+	machine, os, first, version string
+	at                          int64
+	until                       sql.NullString
+}
+
+func readCounted(e env) ([]countedPC, error) {
+	rows, err := e.tx.QueryContext(e.ctx, `
+SELECT machine, COALESCE(os, ''), COALESCE(first_seen, ''), at, COALESCE(binary_version, ''), until_day FROM pc_docs
+WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
+		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []countedPC
+	for rows.Next() {
+		var p countedPC
+		if err := rows.Scan(&p.machine, &p.os, &p.first, &p.at, &p.version, &p.until); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// machinesTable is System's table of the PCs (R22), the same with "this" and
+// "all": this PC first (from Source.Self), then the counted others by first
+// seen, and the documents set aside. With sharing off it holds this PC alone.
+func machinesTable(e env) (*Machines, error) {
+	m := &Machines{Sharing: sharingOn(e.src.Config), Rows: []MachineRow{}, Ignored: []IgnoredRow{}}
+	var self SelfPC
+	if e.src.Self != nil {
+		self = e.src.Self()
+	}
+	var others []countedPC
+	if m.Sharing {
+		var err error
+		if others, err = readCounted(e); err != nil {
+			return nil, err
+		}
+	}
+	thisCounts := !m.Sharing || !e.src.Config.ServerOnly()
+	var ids []string
+	if thisCounts && self.Machine != "" {
+		ids = append(ids, self.Machine)
+	}
+	for _, o := range others {
+		ids = append(ids, o.machine)
+	}
+	loc := viewLoc(e)
+	w := e.q.Window
+	if thisCounts {
+		row := MachineRow{This: true, OS: self.OS, FirstSeen: self.FirstSeen, BinaryVersion: self.BinaryVersion,
+			LastSent: timeIn(self.LastSent, loc)}
+		if self.Machine != "" {
+			row.Machine = short(self.Machine, ids)
+		}
+		var n int
+		if err := e.tx.QueryRowContext(e.ctx, `
+SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine')`,
+			w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n); err != nil {
+			return nil, err
+		}
+		row.Active = n > 0
+		m.Rows = append(m.Rows, row)
+	}
+	for _, o := range others {
+		at := time.UnixMilli(o.at).In(loc)
+		row := MachineRow{Machine: short(o.machine, ids), OS: o.os, FirstSeen: o.first, BinaryVersion: o.version,
+			LastSent: &at, Stale: time.UnixMilli(o.at).Before(e.now.Add(-machines.StaleAfter))}
+		if o.until.Valid && o.until.String != "" {
+			u := o.until.String
+			row.Until = &u
+		}
+		var n int
+		if err := e.tx.QueryRowContext(e.ctx, `
+SELECT COUNT(*) FROM pc_days WHERE machine = ? AND version = '' AND prompts > 0 AND noon >= ? AND noon < ?`,
+			o.machine, w.Since.UnixMilli(), w.Until.UnixMilli()).Scan(&n); err != nil {
+			return nil, err
+		}
+		row.Active = n > 0
+		m.Rows = append(m.Rows, row)
+	}
+	if !m.Sharing {
+		return m, nil
+	}
+	rows, err := e.tx.QueryContext(e.ctx, `SELECT COALESCE(machine, ''), COALESCE(reason, '') FROM pc_ignored ORDER BY pos`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var g IgnoredRow
+		if err := rows.Scan(&g.Machine, &g.Reason); err != nil {
+			return nil, err
+		}
+		m.Ignored = append(m.Ignored, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var fetched sql.NullInt64
+	switch err := e.tx.QueryRowContext(e.ctx, `SELECT fetched_at FROM pc_fetch WHERE id = 1`).Scan(&fetched); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return nil, err
+	case fetched.Valid:
+		t := time.UnixMilli(fetched.Int64).In(loc)
+		m.FetchedAt = &t
+	}
+	return m, nil
+}
+
+// memoryShared is memory id's counts on this PC and the other PCs (M10), the
+// others' read from the combined view; entry is this PC's ledger entry.
+func memoryShared(e env, id string, entry feedback.Entry) (*SharedCounts, error) {
+	p := ledgerParams(e.src.Config)
+	d := entry.DecayedTo(e.now, p)
+	s := &SharedCounts{This: countsOf(d.Credits, d.Misses)}
+	s.Others, s.All = Counts{}, s.This
+	if !sharingOn(e.src.Config) {
+		s.State = sharedOff
+		return s, nil
+	}
+	s.State = sharedUnavail
+	if e.src.SharedCombined == nil {
+		return s, nil
+	}
+	c, err := e.src.SharedCombined(e.now)
+	if err != nil {
+		return s, nil
+	}
+	at := c.At().In(viewLoc(e))
+	s.CombinedAt = &at
+	pcs, err := readCounted(e)
+	if err != nil {
+		return nil, err
+	}
+	s.Machines = len(pcs)
+	s.State = sharedNotCounted
+	se, ok := c.Get(id)
+	if !ok {
+		return s, nil
+	}
+	s.State = sharedCounted
+	o := feedback.Entry{}.WithRemote(se, p, e.now)
+	s.Others = countsOf(o.Credits, o.Misses)
+	all := entry.WithRemote(se, p, e.now)
+	s.All = countsOf(all.Credits, all.Misses)
+	if entry.Hidden == nil && all.Hidden != nil {
+		s.HiddenElsewhere = timeIn(all.Hidden.Since, viewLoc(e))
+	}
+	return s, nil
+}
+
+func countsOf(used, ignored float64) Counts {
+	c := Counts{Used: used, Ignored: ignored}
+	if n := used + ignored; n > 0 {
+		c.Rate = ptr(used / n)
+	}
+	return c
 }

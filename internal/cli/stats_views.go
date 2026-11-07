@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/machines"
@@ -207,6 +208,9 @@ func viewServer(d paths.Dirs, home string) (metrics.Source, error) {
 		}
 	}
 	src.Doctor = func(ctx context.Context) ([]metrics.DoctorCheck, error) { return runDoctorChecks(ctx, d, home) }
+	src.SharedCombined = func(now time.Time) (feedback.Combined, error) {
+		return feedback.LoadSharedCombined(d.FeedbackDir(), now)
+	}
 	src.Self = func() metrics.SelfPC {
 		self := metrics.SelfPC{Machine: retain.ReadMachineID(d.State), OS: machines.OS(viewGOOS), BinaryVersion: buildinfo.Version}
 		if rec, ok := machines.LoadPublished(d.MetricsDir()); ok {

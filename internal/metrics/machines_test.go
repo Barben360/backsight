@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -1442,4 +1443,225 @@ func TestReleasesUnionOfVersions(t *testing.T) {
 	if !reflect.DeepEqual(r.Tables.Markers, x.runAs("releases", x.query(7)).Tables.Markers) {
 		t.Errorf("markers changed by all")
 	}
+}
+
+func TestSystemMachines(t *testing.T) {
+	setup := func(x *fx) {
+		x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+		x.pcDoc(pcOther2, "2026-09-05", fxNow.Add(-72*time.Hour), "2026-10-27")
+		x.pcDay(pcOther1, "2026-10-28", 5, 1, 5)
+		x.pcIgnored(0, "deadbeef", "not_valid")
+		x.pcIgnored(1, "", "unreadable")
+		x.prompts("alpha", "p", fxNow, 3, nil)
+	}
+	sent := fxNow.Add(-2 * time.Hour)
+	run := func(x *fx, machines string) *Machines {
+		src := x.source()
+		src.Self = func() SelfPC {
+			return SelfPC{Machine: pcThis, OS: "linux", FirstSeen: "2026-09-01", BinaryVersion: "0.1.31", LastSent: sent}
+		}
+		q := x.query(7)
+		q.Machines = machines
+		r, err := Run(context.Background(), "system", src, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Tables.Machines == nil {
+			t.Fatal("no tables.machines")
+		}
+		return r.Tables.Machines
+	}
+	x := newFx(t, fxNow)
+	setup(x)
+	got := run(x, "this")
+	if !got.Sharing || got.FetchedAt != nil {
+		t.Errorf("sharing %v fetched_at %v", got.Sharing, got.FetchedAt)
+	}
+	want := []MachineRow{
+		{Machine: "aaaaaaaa", This: true, OS: "linux", FirstSeen: "2026-09-01", LastSent: &sent, BinaryVersion: "0.1.31", Active: true},
+		{Machine: "cccccccc", OS: "linux", FirstSeen: "2026-09-05", LastSent: ptr(fxNow.Add(-72 * time.Hour)), BinaryVersion: "0.1.30", Until: ptr("2026-10-27"), Stale: true},
+		{Machine: "bbbbbbbb", OS: "linux", FirstSeen: "2026-09-10", LastSent: ptr(fxNow.Add(-time.Hour)), BinaryVersion: "0.1.30", Until: ptr("2026-10-29"), Active: true},
+	}
+	if len(got.Rows) != len(want) {
+		t.Fatalf("rows %+v", got.Rows)
+	}
+	for i, w := range want {
+		g := got.Rows[i]
+		if !g.LastSent.Equal(*w.LastSent) {
+			t.Errorf("row %d last_sent %v, want %v", i, g.LastSent, w.LastSent)
+		}
+		g.LastSent, w.LastSent = nil, nil
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("row %d\n got %+v\nwant %+v", i, g, w)
+		}
+	}
+	if wantIgn := []IgnoredRow{{"deadbeef", "not_valid"}, {"", "unreadable"}}; !reflect.DeepEqual(got.Ignored, wantIgn) {
+		t.Errorf("ignored %+v", got.Ignored)
+	}
+	if all := run(x, "all"); !reflect.DeepEqual(all, got) {
+		t.Errorf("all differs from this:\n%+v\n%+v", all, got)
+	}
+
+	t.Run("this PC has not published", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		src := x.source()
+		src.Self = func() SelfPC { return SelfPC{Machine: pcThis, OS: "linux"} }
+		r, err := Run(context.Background(), "system", src, x.query(7))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row := r.Tables.Machines.Rows[0]; row.LastSent != nil || row.Active {
+			t.Errorf("row %+v", row)
+		}
+	})
+	t.Run("sharing off lists this PC alone", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.cfg = func(c *config.Config) { c.Feedback.ShareLedger = false }
+		setup(x)
+		got := run(x, "all")
+		if got.Sharing || len(got.Rows) != 1 || !got.Rows[0].This || got.Rows[0].Machine != "aaaaaaaa" || len(got.Ignored) != 0 {
+			t.Errorf("machines %+v", got)
+		}
+	})
+	t.Run("short ids that collide show 13 characters", func(t *testing.T) {
+		x := newFx(t, fxNow)
+		x.pcDoc("aaaaaaaa-1111-4000-8000-000000000009", "2026-09-10", fxNow, "")
+		got := run(x, "this")
+		if got.Rows[0].Machine != "aaaaaaaa-0000" || got.Rows[1].Machine != "aaaaaaaa-1111" {
+			t.Errorf("rows %+v", got.Rows)
+		}
+	})
+}
+
+// combinedAt writes a shared-combined view of r under dir and returns the
+// source seam reading it, counting its calls.
+func combinedSeam(t *testing.T, at time.Time, r feedback.Remote, calls *int) func(time.Time) (feedback.Combined, error) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := feedback.SaveSharedCombined(dir, at, r, feedback.CombinedBasis{}); err != nil {
+		t.Fatal(err)
+	}
+	return func(now time.Time) (feedback.Combined, error) {
+		*calls++
+		return feedback.LoadSharedCombined(dir, now)
+	}
+}
+
+func readShared(t *testing.T, x *fx, seam func(time.Time) (feedback.Combined, error)) *SharedCounts {
+	t.Helper()
+	src := x.source()
+	src.SharedCombined = seam
+	r, err := Run(context.Background(), "memories", src, Query{Window: x.window(7), Machines: "this", ID: "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tables.Memory == nil || r.Tables.Memory.Shared == nil {
+		t.Fatalf("no tables.memory.shared: %+v", r.Tables.Memory)
+	}
+	return r.Tables.Memory.Shared
+}
+
+func TestMemorySharedCounts(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"m1": {Shown: 9, Credits: 8.6, CreditsAt: fxNow, Misses: 5.1, MissesAt: fxNow}}})
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcDoc(pcOther2, "2026-09-05", fxNow.Add(-72*time.Hour), "")
+	calls := 0
+	seam := combinedSeam(t, fxNow.Add(-time.Hour), feedback.Remote{"m1": {Credits: 4.2, CreditsAt: fxNow, Misses: 1.8, MissesAt: fxNow}}, &calls)
+	s := readShared(t, x, seam)
+	if s.State != "counted" || s.Machines != 2 || s.CombinedAt == nil || !s.CombinedAt.Equal(fxNow.Add(-time.Hour)) || s.HiddenElsewhere != nil {
+		t.Fatalf("shared %+v", s)
+	}
+	for _, c := range []struct {
+		name      string
+		got       Counts
+		used, ign float64
+		rate      float64
+	}{{"this", s.This, 8.6, 5.1, 0.63}, {"others", s.Others, 4.2, 1.8, 0.70}, {"all", s.All, 12.8, 6.9, 0.65}} {
+		near(t, c.name+".used", c.got.Used, c.used, 0.005)
+		near(t, c.name+".ignored", c.got.Ignored, c.ign, 0.005)
+		if c.got.Rate == nil {
+			t.Fatalf("%s rate nil", c.name)
+		}
+		near(t, c.name+".rate", *c.got.Rate, c.rate, 0.005)
+	}
+}
+
+func TestMemorySharedStates(t *testing.T) {
+	base := func() *fx {
+		x := newFx(t, fxNow)
+		x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"m1": {Shown: 1, Credits: 1, CreditsAt: fxNow}}})
+		return x
+	}
+	t.Run("no line for it", func(t *testing.T) {
+		calls := 0
+		seam := combinedSeam(t, fxNow, feedback.Remote{"other": {Credits: 1, CreditsAt: fxNow}}, &calls)
+		s := readShared(t, base(), seam)
+		if s.State != "not_counted" || s.Others.Used != 0 || s.Others.Rate != nil || s.All.Used != 1 || s.This.Rate == nil || *s.This.Rate != 1 {
+			t.Errorf("shared %+v", s)
+		}
+	})
+	t.Run("sharing off reads nothing", func(t *testing.T) {
+		x := base()
+		x.cfg = func(c *config.Config) { c.Feedback.ShareLedger = false }
+		calls := 0
+		seam := combinedSeam(t, fxNow, feedback.Remote{"m1": {Credits: 4, CreditsAt: fxNow}}, &calls)
+		s := readShared(t, x, seam)
+		if s.State != "sharing_off" || calls != 0 || s.Others.Used != 0 || s.CombinedAt != nil {
+			t.Errorf("shared %+v after %d reads", s, calls)
+		}
+	})
+	t.Run("file missing", func(t *testing.T) {
+		s := readShared(t, base(), func(now time.Time) (feedback.Combined, error) {
+			return feedback.LoadSharedCombined(t.TempDir(), now)
+		})
+		if s.State != "unavailable" {
+			t.Errorf("state %q", s.State)
+		}
+	})
+	t.Run("no seam", func(t *testing.T) {
+		if s := readShared(t, base(), nil); s.State != "unavailable" {
+			t.Errorf("state %q", s.State)
+		}
+	})
+	t.Run("older than 30 days", func(t *testing.T) {
+		calls := 0
+		seam := combinedSeam(t, fxNow.Add(-31*24*time.Hour), feedback.Remote{"m1": {Credits: 4, CreditsAt: fxNow}}, &calls)
+		s := readShared(t, base(), seam)
+		if s.State != "unavailable" || s.Others.Used != 0 {
+			t.Errorf("shared %+v", s)
+		}
+	})
+	t.Run("hidden elsewhere", func(t *testing.T) {
+		hid := fxNow.Add(-2 * time.Hour)
+		for _, c := range []struct {
+			name string
+			unh  time.Time
+			hide bool
+			want bool
+		}{
+			{"another PC hid it after the last unhide", fxNow.Add(-5 * time.Hour), false, true},
+			{"this PC restored it later", fxNow.Add(-time.Hour), false, false},
+			{"this PC hides it itself", time.Time{}, true, false},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				x := newFx(t, fxNow)
+				e := feedback.Entry{Shown: 1, Credits: 1, CreditsAt: fxNow, UnhiddenAt: c.unh}
+				if c.hide {
+					e.Hidden = &feedback.Hidden{Since: fxNow.Add(-time.Minute)}
+				}
+				x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"m1": e}})
+				calls := 0
+				seam := combinedSeam(t, fxNow, feedback.Remote{"m1": {Credits: 1, CreditsAt: fxNow, HiddenSince: hid}}, &calls)
+				s := readShared(t, x, seam)
+				if c.want {
+					if s.HiddenElsewhere == nil || !s.HiddenElsewhere.Equal(hid) {
+						t.Errorf("hidden_elsewhere %v, want %v", s.HiddenElsewhere, hid)
+					}
+				} else if s.HiddenElsewhere != nil {
+					t.Errorf("hidden_elsewhere %v, want null", s.HiddenElsewhere)
+				}
+			})
+		}
+	})
 }

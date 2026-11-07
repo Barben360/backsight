@@ -207,6 +207,24 @@
           "lag_seconds": 0,
           "partial": false
         }
+      },
+      "machines": {
+        "sharing": true,
+        "fetched_at": null,
+        "rows": [
+          {
+            "machine": "",
+            "this": true,
+            "os": "linux",
+            "first_seen": "",
+            "last_sent": null,
+            "binary_version": "dev",
+            "until": null,
+            "stale": false,
+            "active": true
+          }
+        ],
+        "ignored": []
       }
     },
     "attention": [],

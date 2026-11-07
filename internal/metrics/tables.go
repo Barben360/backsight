@@ -38,6 +38,7 @@ type Tables struct {
 	Compare          *Comparison         `json:"compare,omitzero"`
 	Defs             []DefRow            `json:"defs,omitzero"`
 	ByPC             []ByPCRow           `json:"by_pc,omitzero"`
+	Machines         *Machines           `json:"machines,omitzero"`
 	Note             string              `json:"note,omitzero"`
 }
 
@@ -332,6 +333,7 @@ type MemoryPage struct {
 	RankHistogram map[string]int64 `json:"rank_histogram"`
 	Origin        *Origin          `json:"origin"`
 	Commands      []string         `json:"commands"`
+	Shared        *SharedCounts    `json:"shared"`
 }
 
 // Origin says where a memory came from, from the record of the day lists
@@ -541,4 +543,62 @@ type SettingDiff struct {
 	A         *float64   `json:"a"`
 	B         *float64   `json:"b"`
 	ChangedAt *time.Time `json:"changed_at"`
+}
+
+// Machines is System's table of the PCs (R22): every counted PC, this one
+// first, then the others by first seen, and the documents set aside.
+type Machines struct {
+	Sharing   bool         `json:"sharing"`
+	FetchedAt *time.Time   `json:"fetched_at"`
+	Rows      []MachineRow `json:"rows"`
+	Ignored   []IgnoredRow `json:"ignored"`
+}
+
+// MachineRow is one PC; Machine is its short id (R47). LastSent is null for
+// this PC until it has published.
+type MachineRow struct {
+	Machine       string     `json:"machine"`
+	This          bool       `json:"this"`
+	OS            string     `json:"os"`
+	FirstSeen     string     `json:"first_seen"`
+	LastSent      *time.Time `json:"last_sent"`
+	BinaryVersion string     `json:"binary_version"`
+	Until         *string    `json:"until"`
+	Stale         bool       `json:"stale"`
+	Active        bool       `json:"active"`
+}
+
+// IgnoredRow is a document set aside: its sender's short id ("" when it
+// does not read) and why.
+type IgnoredRow struct {
+	Machine string `json:"machine"`
+	Reason  string `json:"reason"`
+}
+
+// The states of a memory's counts on the other PCs (M10).
+const (
+	sharedCounted    = "counted"
+	sharedNotCounted = "not_counted"
+	sharedOff        = "sharing_off"
+	sharedUnavail    = "unavailable"
+)
+
+// SharedCounts is one memory's used and ignored counts on this PC, on the
+// other PCs and together, recent-weighted at now (M10).
+type SharedCounts struct {
+	State           string     `json:"state"`
+	Machines        int        `json:"machines"`
+	CombinedAt      *time.Time `json:"combined_at"`
+	This            Counts     `json:"this"`
+	Others          Counts     `json:"others"`
+	All             Counts     `json:"all"`
+	HiddenElsewhere *time.Time `json:"hidden_elsewhere"`
+}
+
+// Counts are used and ignored counts and the share used; the rate is null
+// when both are 0.
+type Counts struct {
+	Used    float64  `json:"used"`
+	Ignored float64  `json:"ignored"`
+	Rate    *float64 `json:"rate"`
 }

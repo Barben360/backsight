@@ -224,6 +224,11 @@ func System(ctx context.Context, s Source, q Query) (Result, error) {
 			return err
 		}
 		r.Tables.System = &info
+		mt, err := machinesTable(e)
+		if err != nil {
+			return err
+		}
+		r.Tables.Machines = mt
 		return nil
 	})
 }
