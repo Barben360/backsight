@@ -1068,9 +1068,17 @@ var (
 	machinesIn = regexp.MustCompile(`[?&;]machines=|&amp;machines=`)
 )
 
+// isTextRoute says href is a memory's text page, which takes no parameter at
+// all (it answers 400 to any): its links never carry machines.
+func isTextRoute(href string) bool {
+	path, _, _ := strings.Cut(href, "#")
+	path, _, _ = strings.Cut(path, "?")
+	return strings.HasPrefix(path, "/memories/") && strings.HasSuffix(path, "/text")
+}
+
 // keepMachines is the page body with machines=all on every link inside the
 // dashboard but the preferences (which take the page to come back to), the
-// assets and the "this PC" half of the switch, which drops it. A link goes
+// assets, the memory text pages (no parameters) and the "this PC" half of the switch, which drops it. A link goes
 // where the reader is: the forms carry the parameter as a hidden input. Every
 // page with a reader asking for all PCs goes through here, so no link is
 // forgotten when a page gains one.
@@ -1085,7 +1093,7 @@ func keepMachines(body []byte, machines string) []byte {
 		return hrefAttr.ReplaceAllFunc(tag, func(attr []byte) []byte {
 			m := hrefAttr.FindSubmatch(attr)
 			href := string(m[1])
-			if strings.HasPrefix(href, "//") || strings.HasPrefix(href, "/prefs") || strings.HasPrefix(href, "/assets/") || machinesIn.MatchString(href) {
+			if strings.HasPrefix(href, "//") || strings.HasPrefix(href, "/prefs") || strings.HasPrefix(href, "/assets/") || isTextRoute(href) || machinesIn.MatchString(href) {
 				return attr
 			}
 			path, frag, hasFrag := strings.Cut(href, "#")

@@ -465,21 +465,39 @@ func TestPagesWithManyPCsStayUnderSizeCap(t *testing.T) {
 	h := dataHarness(t)
 	dataSpec = old
 	ck := withPrefs(h.login(), "v1.system.0.0.comfortable.1")
-	win := "since=" + longSince + "&until=" + longUntil + "&machines=all&dev=0"
-	for _, c := range []struct {
+	for _, dev := range []string{"0", "1"} { // developer mode adds cards (Quality is the largest page with it on)
+		win := "since=" + longSince + "&until=" + longUntil + "&machines=all&dev=" + dev
+		for _, c := range []struct {
+			path string
+			rows func(*node) []*node // the rows of the page's table of PCs; nil when it has none
+			want int
+		}{
+			{"/system?" + win, func(d *node) []*node { return cardOf(t, d, "w-machines").find("table.mach tbody tr") }, 65},
+			{"/cost?" + win, func(d *node) []*node { return d.find("details.tblfb table.mach tbody tr") }, 64},
+			{"/?" + win, nil, 0},
+			{"/quality?" + win, nil, 0},
+			{"/releases?" + win, nil, 0},
+		} {
+			sizeCapCase(t, h, ck, c.path, c.rows, c.want)
+		}
+	}
+}
+
+// sizeCapCase asks one page and checks its size, the PCs it lists and the rows
+// of its table of PCs (nil rows: it has none).
+func sizeCapCase(t *testing.T, h *harness, ck []string, path string, rows func(*node) []*node, want int) {
+	t.Helper()
+	c := struct {
 		path string
-		rows func(*node) []*node // the rows of the page's table of PCs; nil when it has none
+		rows func(*node) []*node
 		want int
-	}{
-		{"/system?" + win, func(d *node) []*node { return cardOf(t, d, "w-machines").find("table.mach tbody tr") }, 65},
-		{"/cost?" + win, func(d *node) []*node { return d.find("details.tblfb table.mach tbody tr") }, 64},
-		{"/?" + win, nil, 0},
-	} {
+	}{path, rows, want}
+	{
 		resp := h.do("GET", c.path, ck...)
 		b := body(t, resp)
 		if resp.StatusCode != 200 {
 			t.Errorf("GET %s: %d", c.path, resp.StatusCode)
-			continue
+			return
 		}
 		t.Logf("%s: %d bytes", c.path, len(b))
 		if len(b) > sizeCap {

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"html"
 	"net/url"
 	"slices"
 	"strings"
@@ -656,7 +657,7 @@ func TestCLIDisclosureFollowsTheSwitch(t *testing.T) {
 	h := othersHarness(t)
 	hdr := cookieHdr(h.login())
 	follow := map[string][]string{
-		"/":         {"w-recall-hit_rate", "w-context-per_session", "w-recall-latency", "w-pipeline-flow", "w-calendar"},
+		"/":         {"w-recall-hit_rate", "w-used-turn_rate", "w-verdict-wrong_rate", "w-context-per_session", "w-recall-latency", "w-pipeline-flow", "w-calendar"},
 		"/quality":  {"w-used-turn_rate", "w-recall-hit_rate"},
 		"/cost":     {"w-recall-latency"}, // the context card's chart is this PC's: the design's command has no flag
 		"/pipeline": {"w-pipeline-flow"},
@@ -684,12 +685,14 @@ func TestCLIDisclosureFollowsTheSwitch(t *testing.T) {
 	// The ones the design names, one by one, with the command they show.
 	over := cliOf(rawPage(t, h, hdr, "/?machines=all"))
 	for id, want := range map[string]string{
-		"w-recall-hit_rate": "backsight stats quality --machines all", // Found
-		"w-attention":       "backsight stats overview",               // What should I do?
-		"w-lately":          "backsight stats sessions --limit 5",
-		"w-helped":          "backsight stats overview",
-		"w-glance":          "backsight stats bank",
-		"w-verdict":         "backsight stats overview --days 7",
+		"w-recall-hit_rate":    "backsight stats quality --machines all", // Found
+		"w-used-turn_rate":     "backsight stats sessions --has used --machines all",
+		"w-verdict-wrong_rate": "backsight stats sessions --has wrong --machines all",
+		"w-attention":          "backsight stats overview", // What should I do?
+		"w-lately":             "backsight stats sessions --limit 5",
+		"w-helped":             "backsight stats overview",
+		"w-glance":             "backsight stats bank",
+		"w-verdict":            "backsight stats overview --days 7",
 	} {
 		if over[id] != want {
 			t.Errorf("/ %s: %q, want %q", id, over[id], want)
@@ -739,14 +742,10 @@ func internalLinks(n *node) []*node {
 	return out
 }
 
-// On every page asked with machines=all, every link inside the dashboard
-// carries it but the preferences, the assets and the "this PC" half of the
-// switch, which drops it; every form carries it as a hidden input. Asked
-// without, nothing but the switch's own link mentions it.
-func TestEveryLinkKeepsMachines(t *testing.T) {
-	h := othersHarness(t)
-	hdr := cookieHdr(h.login())
-	var ids struct{ proj, sess, mem, day string }
+// pagePaths is a path for every page route (one sample item each of the
+// history's projects, sessions, memories and days), plus three edge pages.
+func pagePaths(t *testing.T, h *harness) (paths []string, ids struct{ proj, sess, mem, day string }) {
+	t.Helper()
 	if p := apiPath(t, h, "/api/v1/projects").Tables.Projects; len(p) > 0 {
 		ids.proj = p[0].Project
 	}
@@ -762,7 +761,6 @@ func TestEveryLinkKeepsMachines(t *testing.T) {
 	if ids.proj == "" || ids.sess == "" || ids.mem == "" || ids.day == "" {
 		t.Fatalf("history lacks an item: %+v", ids)
 	}
-	var paths []string
 	for _, r := range routes {
 		if r.Kind != "page" {
 			continue
@@ -781,6 +779,18 @@ func TestEveryLinkKeepsMachines(t *testing.T) {
 		paths = append(paths, p)
 	}
 	paths = append(paths, "/releases?compare=v0.1.17,v0.1.18", "/sessions/zzzzzzzz", "/quality?days=0")
+	return paths, ids
+}
+
+// On every page asked with machines=all, every link inside the dashboard
+// carries it but the preferences, the assets, the memory text pages (which
+// take no parameter) and the "this PC" half of the
+// switch, which drops it; every form carries it as a hidden input. Asked
+// without, nothing but the switch's own link mentions it.
+func TestEveryLinkKeepsMachines(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	paths, ids := pagePaths(t, h)
 	sep := func(p string) string {
 		if strings.Contains(p, "?") {
 			return "&"
@@ -810,6 +820,12 @@ func TestEveryLinkKeepsMachines(t *testing.T) {
 				if a.attr("data-machines") == "this" {
 					if strings.Contains(href, "machines") {
 						t.Errorf("%s: the this-PC half %q keeps machines", all, href)
+					}
+					continue
+				}
+				if isTextRoute(href) { // the text page takes no parameter at all: it answers 400
+					if strings.Contains(href, "machines") {
+						t.Errorf("%s: text link %q carries machines", all, href)
 					}
 					continue
 				}
@@ -902,4 +918,124 @@ func mustCopyJS(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// Every internal link of every page asked with machines=all answers 200: a
+// rewrite that adds a parameter a route refuses is caught here, not by the
+// reader.
+func TestEveryLinkOnAllPCsPagesAnswers200(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	paths, ids := pagePaths(t, h)
+	paths = paths[:len(paths)-2] // the two pages that are 404 and edge on purpose
+	asked := map[string]bool{}
+	text := 0
+	for _, p := range paths {
+		sep := "?"
+		if strings.Contains(p, "?") {
+			sep = "&"
+		}
+		for _, extra := range []string{"", "&days=30&project=" + url.QueryEscape(ids.proj) + "&dev=1"} {
+			r := h.do("GET", p+sep+"machines=all"+extra, hdr...)
+			if r.StatusCode != 200 {
+				t.Errorf("GET %s: %d", p, r.StatusCode)
+				continue
+			}
+			for _, a := range internalLinks(parseHTML(t, body(t, r))) {
+				href := html.UnescapeString(a.attr("href"))
+				if asked[href] {
+					continue
+				}
+				asked[href] = true
+				if isTextRoute(href) {
+					text++
+				}
+				if got := h.do("GET", href, hdr...); got.StatusCode != 200 {
+					t.Errorf("link %q on %s answers %d", href, p, got.StatusCode)
+				}
+			}
+		}
+	}
+	if len(asked) < 100 || text == 0 {
+		t.Errorf("crawl too thin: %d distinct links, %d text links", len(asked), text)
+	}
+}
+
+// chipsOf maps each card or tile of a page, by the id of its heading, to the
+// text of its chips (the scope chips, "not filtered" and "other PCs not
+// filtered").
+func chipsOf(doc *node) map[string][]string {
+	out := map[string][]string{}
+	for _, c := range doc.find("details.cli") {
+		id := ""
+		var box *node
+		for n := c.Parent; n != nil && id == ""; n = n.Parent {
+			if h := n.first("h2"); h != nil && h.attr("id") != "" {
+				id, box = h.attr("id"), n
+			} else if h := n.first("h3"); h != nil && h.attr("id") != "" {
+				id, box = h.attr("id"), n
+			}
+		}
+		for _, ch := range box.find("span.chip") {
+			out[id] = append(out[id], ch.text())
+		}
+	}
+	return out
+}
+
+// A card or tile whose command carries --machines all adds the PCs up, and
+// wears the chip "all PCs (N)" (with "other PCs not filtered" under a project
+// filter); every other one keeps its own chip and never says "all PCs". Both
+// are the same predicate, so they cannot drift apart.
+func TestMergedCardsWearTheAllPCsChip(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	proj := apiPath(t, h, "/api/v1/projects").Tables.Projects[0].Project
+	merged := 0
+	for _, path := range []string{"/", "/quality", "/cost", "/pipeline", "/days", "/releases", "/system", "/bank"} {
+		for _, q := range []string{"machines=all&dev=1", "machines=all&dev=1&days=30&project=" + url.QueryEscape(proj)} {
+			filtered := strings.Contains(q, "project=")
+			doc := rawPage(t, h, hdr, path+"?"+q)
+			chips := chipsOf(doc)
+			for id, cmd := range cliOf(doc) {
+				has := func(want string) bool { return slices.Contains(chips[id], want) }
+				flag := strings.Contains(cmd, " --machines all")
+				if flag {
+					merged++
+				}
+				if got := has("all PCs (4)"); got != flag {
+					t.Errorf("%s?%s %s: command %q, chips %q: all-PCs chip is %t", path, q, id, cmd, chips[id], got)
+				}
+				if flag && has("this PC") {
+					t.Errorf("%s?%s %s adds the PCs up and still says this PC: %q", path, q, id, chips[id])
+				}
+				if flag && filtered && !has("other PCs not filtered") {
+					t.Errorf("%s?%s %s: no \"other PCs not filtered\" in %q", path, q, id, chips[id])
+				}
+				if !flag && has("other PCs not filtered") {
+					t.Errorf("%s?%s %s: says other PCs not filtered without adding them up", path, q, id)
+				}
+			}
+		}
+	}
+	if merged < 20 {
+		t.Errorf("only %d merged cards seen", merged)
+	}
+	// This PC: no card says all PCs.
+	for _, path := range []string{"/", "/quality", "/pipeline", "/releases?dev=1"} {
+		for id, c := range chipsOf(rawPage(t, h, hdr, path+sepOf(path)+"machines=this")) {
+			for _, ch := range c {
+				if strings.Contains(ch, "all PCs") {
+					t.Errorf("%s with this PC, %s: chip %q", path, id, ch)
+				}
+			}
+		}
+	}
+}
+
+func sepOf(p string) string {
+	if strings.Contains(p, "?") {
+		return "&"
+	}
+	return "?"
 }

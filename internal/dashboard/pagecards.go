@@ -411,6 +411,7 @@ func costOf(d PageData) CostPage {
 		// The chart and its numbers are this PC's: other PCs send a total and a
 		// count, not sizes. The command is the page's, with no flag.
 		c.Context.Head.CLI = d.CLI
+		c.Context.Head.PCs, c.Context.Head.OthersNF = nil, false // so it keeps "this PC"
 		c.Context.State = d.contextState(perSession, average)
 		if d.Own != nil {
 			if om, ok := d.Own.Metrics[perSession.ID]; ok && om.Den != nil {

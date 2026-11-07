@@ -206,6 +206,12 @@ func tileHead(v MetricView, s tileSpec, p views.Params, l format.Locale) Head {
 	}
 	cmd += strings.TrimPrefix(cliFor(s.view, "", q), "backsight stats "+s.view)
 	h := headOf(v, cmd, l, "", p)
+	// The design draws the flag on all six tiles, also the two whose command
+	// lists sessions (a view that adds nothing up): it is the tile's own
+	// number that adds the PCs up, and the flag says so.
+	if p.Machines == "all" && metrics.MergedMetric(v.ID) && !strings.Contains(h.CLI, "--machines") {
+		h.CLI += " --machines all"
+	}
 	h.Level = 3
 	h.Drill, h.DrillText = "", ""
 	h.Info.Label, h.Info.Name = "About "+s.name, s.name+": "+v.Def.Question

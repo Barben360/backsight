@@ -117,6 +117,13 @@ func headOf(v MetricView, cli string, l format.Locale, slot string, p views.Para
 	// page's command, which carries none.
 	if p.Machines == "all" && metrics.MergedMetric(d.ID) {
 		h.CLI = withMachines(cli)
+		// The same predicate draws the chip: a card whose figures are added
+		// up says so, and the CLI above is the command that prints them.
+		if v.Scope != nil {
+			if h.PCs = allPCsChip(*v.Scope); h.PCs != nil {
+				h.OthersNF = othersNotFiltered(v.M)
+			}
+		}
 	}
 	h.NotFiltered = slices.Contains(v.M.Tags, "not_filtered")
 	if h.Drill = drillHref(v.M.Drill, p); h.Drill != "" {

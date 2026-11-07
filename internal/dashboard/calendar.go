@@ -105,6 +105,7 @@ func calendarOf(r *metrics.Result, win metrics.Window, p views.Params, hm, path,
 		rows = r.Tables.Calendar
 		if c.Head.PCs = allPCsChip(r.Scope); c.Head.PCs != nil {
 			c.Note = calendarAllPCs
+			c.Head.OthersNF = r.Scope.OthersUnfiltered
 		}
 	}
 	loc := zoneOr(win.Loc)

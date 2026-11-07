@@ -23,6 +23,7 @@ type MetricView struct {
 	Found  bool
 	ShowID bool           // the reader asked for developer detail
 	Loc    *time.Location // the zone the metric's times are shown in
+	Scope  *metrics.Scope // the scope of the result the metric comes from; nil without one
 }
 
 // Tabled is a result's tables with the zone their times are shown in, the
@@ -223,6 +224,7 @@ func metricOf(r *metrics.Result, id string) (MetricView, error) {
 	v := MetricView{ID: id, Def: d}
 	if r != nil {
 		v.M, v.Found = r.Metrics[id]
+		v.Scope = &r.Scope
 	}
 	return v, nil
 }

@@ -122,6 +122,11 @@ func releasesOf(d PageData) ReleasesPage {
 	l := d.L
 	p := ReleasesPage{Observational: observational, Head: fixedHead("releases", "Per version", "machine", d.cliAll())}
 	p.Head.Chip = "developer"
+	// Per version adds the PCs up on all PCs (their documents carry the
+	// binary version), so the card says so in place of "this PC".
+	if p.Head.PCs = allPCsChip(r.Scope); p.Head.PCs != nil {
+		p.Head.OthersNF = r.Scope.OthersUnfiltered
+	}
 	p.Head.Pager = pagerOf(d.Frame.Path, r.Tables.Page)
 	for _, row := range r.Tables.Releases {
 		ln := ReleaseLine{
