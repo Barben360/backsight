@@ -1,9 +1,12 @@
 package retain
 
 import (
+	"maps"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/config"
 )
 
 // Prices per million tokens. Write is the price of an input token written to
@@ -18,7 +21,8 @@ type Prices struct {
 func (p Prices) Known() bool { return p.Input > 0 || p.Output > 0 }
 
 // priceTable holds defaults for models whose prices were checked
-// (decision 0051); config values override them.
+// (decision 0051); config values override them. A weekly workflow
+// (price-drift.yml) opens an issue when LiteLLM's list differs from it.
 //
 // DeepSeek bills half price off-peak and double at peak (01:00-04:00 and
 // 06:00-10:00 UTC on weekdays). Nothing here models the time of day, and
@@ -49,6 +53,17 @@ var priceTable = map[string]Prices{
 	"claude-sonnet-5-5": {Input: 2, Write: 2.5, Cached: 0.10, Output: 10, Currency: "USD"},
 	"claude-opus-5-5":   {Input: 4, Write: 5, Cached: 0.20, Output: 20, Currency: "USD"},
 	"claude-fable-5-1":  {Input: 10, Write: 12.5, Cached: 0.25, Output: 50, Currency: "USD"},
+}
+
+// TablePrices is a copy of the built-in table, by lower-case model name,
+// for the CI check that compares it with a public price list
+// (scripts/pricedrift).
+func TablePrices() map[string]Prices { return maps.Clone(priceTable) }
+
+// PricesForLLM is PricesFor with [llm]'s model and prices: the one way
+// commands and metrics get the prices they charge.
+func PricesForLLM(l config.LLM) Prices {
+	return PricesFor(l.Model, l.PriceInput, l.PriceCached, l.PriceOutput, l.Currency)
 }
 
 // PricesFor returns the configured prices, else the table's for model.

@@ -3,6 +3,8 @@ package retain
 import (
 	"math"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/config"
 )
 
 func TestEstimatedFactsMatchesEstimateSession(t *testing.T) {
@@ -80,5 +82,20 @@ func TestAnthropicEstimateInputIs25PercentHigher(t *testing.T) {
 	plain := EstimateSession(30000, Prices{Input: 2, Output: 10})
 	if diff, want := e.Cost-plain.Cost, float64(in)*0.5/1e6; math.Abs(diff-want) > 1e-12 {
 		t.Errorf("surcharge %v, want %v", diff, want)
+	}
+}
+
+// PricesForLLM maps each [llm] field to its price, and falls back to the
+// table for the configured model.
+func TestPricesForLLM(t *testing.T) {
+	got := PricesForLLM(config.LLM{Model: "claude-sonnet-5-5", PriceInput: 3, PriceCached: 0.3, PriceOutput: 15, Currency: "EUR"})
+	if want := (Prices{Input: 3, Cached: 0.3, Output: 15, Currency: "EUR"}); got != want {
+		t.Errorf("configured: got %+v, want %+v", got, want)
+	}
+	if got, want := PricesForLLM(config.LLM{Model: "claude-sonnet-5-5", Currency: "USD"}), priceTable["claude-sonnet-5-5"]; got != want {
+		t.Errorf("table: got %+v, want %+v", got, want)
+	}
+	if PricesForLLM(config.LLM{Model: "some-local-model", Currency: "USD"}).Known() {
+		t.Error("an unknown model has no price")
 	}
 }

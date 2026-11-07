@@ -158,7 +158,7 @@ func reattribute(ctx context.Context, f reattributeFlags, opt reattributeOptions
 			return res, &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
 		}
 	}
-	prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	prices := retain.PricesForLLM(cfg.LLM)
 	plan := func() (retain.ReattributionPlan, map[string][]string, error) {
 		docs, err := fl.Client.ListDocuments(ctx, cfg.Server.Bank)
 		if err != nil {

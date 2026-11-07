@@ -87,6 +87,8 @@ Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) 
 
 CI runs its jobs side by side: the race-detector tests in four slices (`make test-shard`), the Windows tests in three (in PowerShell: Git Bash would let Go read past a deny ACE) with their time budgets apart, and the `testhooks` run, the time budgets and the cross-compilation in jobs of their own; the required check `test` passes once all of the Linux ones have. A pull request that changes only documentation (the Markdown of `docs/` and of the repository's root, `scripts/ci-docs-only.sh`) skips the Windows tests, the M6 chain and the native chains; the sandbox tests and the fresh-install chain still run, as they search the embedded docs. A newer push to a pull request cancels its older run.
 
+Every Monday, `.github/workflows/price-drift.yml` compares the binary's price table (`internal/retain/estimate.go`) with LiteLLM's public list (`scripts/pricedrift`) and opens an issue, or updates the open one, when a price differs. Check the price on the provider's own pricing page before changing the table: LiteLLM is a community list, and its numbers never reach the binary on their own.
+
 ## Tests
 
 - Each test must fail when the behaviour it guards is missing or wrong: assert the observable outcome (exit code, output, files written), not the implementation.

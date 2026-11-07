@@ -230,6 +230,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkWrites(env))
 	add(checkReach(env, tg, srv))
 	add(checkBackfill(env.Dirs))
+	add(checkPrice(cfg.LLM, env.Dirs.ConfigFile(), cfgErr))
 	now := nowFn
 	add(checkSplit(env.Dirs))
 	add(checkReplaceUnconfirmed(env.Dirs.TelemetryDir(), now()))

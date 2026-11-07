@@ -97,7 +97,7 @@ var doctorNames = map[string]string{
 	"native-dlls": "native runtime libraries", "native-private": "private files", "path-length": "install path length",
 	"shim-copies": "earlier program copies", "git-bash": "Git Bash for Claude Code",
 	"noise-headless": "background sessions", "noise-subagent": "helper agents",
-	"noise-transverse": "shared notes", "notes": "notes", "own-owners": "file owners", "pending-restore": "pending restore",
+	"noise-transverse": "shared notes", "notes": "notes", "own-owners": "file owners", "pending-restore": "pending restore", "price": "model prices",
 	"purged-documents": "removed sessions",
 	"reattribution":    "project re-tagging", "recall": "recall", "reference": "older server copy", "reference-server": "older server copy check",
 	"remotes": "other PCs", "replace-unconfirmed": "unconfirmed replacement", "restore": "restore", "restore-epoch": "restore state",

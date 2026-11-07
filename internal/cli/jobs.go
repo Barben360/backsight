@@ -270,7 +270,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" && f.Hold == "" &&
 				(cfg.LLM.Provider != "claude-code" || st.Backfill.AllowSubscription) {
-				prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+				prices := retain.PricesForLLM(cfg.LLM)
 				if release, err := acquireBackfill(d); err != nil {
 					res.Backfill = "skipped: another backfill is running"
 				} else {
