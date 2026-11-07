@@ -867,9 +867,13 @@ func TestJobsTickHoldsSendsWhileTheProviderRejectsTheKey(t *testing.T) {
 // jobs maintain records the numeric settings once a local day, and again
 // the same day when a setting changed; the index reads them.
 func TestMaintainEmitsConfig(t *testing.T) {
-	oldLocal := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = oldLocal })
+	// UTC-11: 13:00 local is already the next UTC day, so a UTC date where
+	// a local one is due shows. The zone is swapped, never written to
+	// time.Local (issue #204).
+	zone := time.FixedZone("UTC-11", -11*3600)
+	old := localZone
+	localZone = func() *time.Location { return zone }
+	t.Cleanup(func() { localZone = old })
 	home := devInstall(t, true)
 	cfgPath := pathsOf(home).ConfigFile()
 	raw, _ := os.ReadFile(cfgPath)
@@ -882,11 +886,11 @@ func TestMaintainEmitsConfig(t *testing.T) {
 			t.Fatalf("exit %d\n%s", code, out)
 		}
 	}
-	maintain(time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC))
+	maintain(time.Date(2026, 10, 25, 10, 0, 0, 0, zone))
 	if n := configs(); n != 1 {
 		t.Fatalf("%d config events after the first run, want 1", n)
 	}
-	maintain(time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC))
+	maintain(time.Date(2026, 10, 25, 11, 0, 0, 0, zone))
 	if n := configs(); n != 1 {
 		t.Errorf("%d config events after a second run the same day, want 1", n)
 	}
@@ -926,16 +930,16 @@ func TestMaintainEmitsConfig(t *testing.T) {
 	// A setting changed: one more, the same day.
 	raw, _ = os.ReadFile(cfgPath)
 	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[recall]\nprompt_hits = 7\n")...), 0o600)
-	maintain(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC))
+	maintain(time.Date(2026, 10, 25, 12, 0, 0, 0, zone))
 	if n := configs(); n != 2 {
 		t.Errorf("%d config events after a change, want 2", n)
 	}
-	maintain(time.Date(2026, 10, 25, 13, 0, 0, 0, time.UTC))
+	maintain(time.Date(2026, 10, 25, 13, 0, 0, 0, zone)) // 2026-10-26 in UTC
 	if n := configs(); n != 2 {
-		t.Errorf("%d config events after an unchanged run, want 2", n)
+		t.Errorf("%d config events after an unchanged run the same local day, want 2", n)
 	}
 	// The next local day: one more, the previous month's file included.
-	maintain(time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC))
+	maintain(time.Date(2026, 10, 26, 10, 0, 0, 0, zone))
 	if n := configs(); n != 3 {
 		t.Errorf("%d config events the next day, want 3", n)
 	}
