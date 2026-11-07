@@ -6,16 +6,16 @@ import (
 )
 
 // ZoneName names loc for the views' "tz" field. A named zone is its own
-// name ("UTC" for time.UTC). The process-local zone (time.Local, whose own
-// name is "Local") is named by the TZ variable when it loads, else by the
-// target of /etc/localtime (the part after "zoneinfo/"), else by its
-// abbreviation (for example "CET"). getenv and readlink are parameters so
-// tests pin each source.
-func ZoneName(loc *time.Location, getenv func(string) string, readlink func(string) (string, error)) string {
+// name ("UTC" for time.UTC). The process-local zone (local, time.Local in
+// production, whose own name is "Local") is named by the TZ variable when it
+// loads, else by the target of /etc/localtime (the part after "zoneinfo/"),
+// else by its abbreviation (for example "CET"). local, getenv and readlink
+// are parameters so tests pin each source without writing process globals.
+func ZoneName(loc, local *time.Location, getenv func(string) string, readlink func(string) (string, error)) string {
 	if loc == nil || loc == time.UTC {
 		return "UTC"
 	}
-	if loc != time.Local {
+	if loc != local {
 		return loc.String()
 	}
 	if tz := strings.TrimPrefix(getenv("TZ"), ":"); tz != "" {

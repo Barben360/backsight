@@ -164,5 +164,5 @@ func zone(tz string) (*time.Location, string, error) {
 			return nil, "", Usage("--tz: unknown zone %q (a name such as Europe/Paris or UTC)", tz)
 		}
 	}
-	return loc, metrics.ZoneName(loc, os.Getenv, os.Readlink), nil
+	return loc, metrics.ZoneName(loc, time.Local, os.Getenv, os.Readlink), nil
 }
