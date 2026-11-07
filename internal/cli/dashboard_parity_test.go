@@ -31,10 +31,20 @@ import (
 // cookie.
 func parityDashboard(t *testing.T, browse bool) (string, *http.Cookie) {
 	t.Helper()
+	return parityDashboardWith(t, browse, nil)
+}
+
+// parityDashboardWith is parityDashboard with setup run on the fixture
+// before the index is built (the other PCs' cache, for one).
+func parityDashboardWith(t *testing.T, browse bool, setup func(*testing.T)) (string, *http.Cookie) {
+	t.Helper()
 	viewsFixture(t)
 	fixedDoctor(t)
 	if browse {
 		browseFixture(t)
+	}
+	if setup != nil {
+		setup(t)
 	}
 	buildIndex(t)
 	base, _, first, _, _, _ := serveDashboard(t)
@@ -354,6 +364,71 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 			t.Errorf("CLI exit %d, want %d", code, output.Usage)
 		}
 	})
+}
+
+// The same with the other PCs: for the views that merge them and the pages'
+// ids, the API's body with machines=all and `stats <view> --machines all
+// --json` are deep-equal, on a fixture with two other PCs (one gone quiet)
+// and one document set aside. The scope and the merged figures differ from
+// this PC's alone, so a side that drops the parameter cannot pass.
+func TestAPIEqualsTheCLIAllPCs(t *testing.T) {
+	base, c := parityDashboardWith(t, true, otherPCsFixture)
+	all := pair{"machines", "all"}
+	var bodies = map[string]string{}
+	for _, s := range []struct {
+		name, view, id string
+		q              []pair
+		this           bool // a view that always answers this PC's figures
+	}{
+		{"overview", "overview", "", nil, false},
+		{"quality", "quality", "", nil, false},
+		{"cost", "cost", "", nil, false},
+		{"days", "days", "", nil, false},
+		{"days/2026-10-07", "days", "2026-10-07", nil, false},
+		{"releases", "releases", "", nil, false},
+		{"system", "system", "", nil, false},
+		{"memories/mem-long-1", "memories", "mem-long-1", nil, true},
+		{"overview, a project", "overview", "", []pair{{"project", "p1"}}, false},
+		{"cost, a month", "cost", "", []pair{{"days", "30"}}, false},
+		{"overview, a day by the hour", "overview", "", []pair{{"days", "1"}}, false},
+	} {
+		t.Run(s.name, func(t *testing.T) {
+			q := append(slices.Clone(s.q), all)
+			status, raw := dashGet(t, base, c, apiPath(s.view, s.id, q))
+			cli := runView(t, cliArgs(s.view, s.id, q)...)
+			if status != http.StatusOK || cli.code != output.OK {
+				t.Fatalf("API %d, CLI exit %d\nAPI: %.300s\nCLI: %.300s", status, cli.code, raw, cli.raw)
+			}
+			api, cliEnv := decodeEnvelope(t, "API", raw), decodeEnvelope(t, "CLI", cli.raw)
+			if d := firstDiff("", api.withoutIndex(), cliEnv.withoutIndex()); d != "" {
+				t.Errorf("the API and the CLI differ at %s", d)
+			}
+			bodies[s.name] = raw
+			want := "all"
+			if s.this {
+				want = "this" // a browse view and an id page: this PC's figures, and the scope says so
+			}
+			if got := at(map[string]any(api), "data", "scope", "machines"); got != want {
+				t.Errorf("the API answered scope.machines %v, not %s", got, want)
+			}
+			// the parameter changes the answer: this PC alone reads another scope
+			if _, alone := dashGet(t, base, c, apiPath(s.view, s.id, s.q)); alone == raw && !s.this {
+				t.Errorf("machines=all answers what this PC alone does")
+			}
+		})
+	}
+	if len(bodies) == 0 {
+		t.Fatal("no case ran")
+	}
+	// the figures are the merged ones: the overview's rate counts the
+	// other PCs' prompts (288 of the fixture's 8 days of 36, on this PC's 7)
+	api := decodeEnvelope(t, "overview", bodies["overview"])
+	if den := at(map[string]any(api), "data", "metrics", "recall.hit_rate", "den"); den != float64(295) {
+		t.Errorf("recall.hit_rate den = %v, want 295", den)
+	}
+	if n := at(map[string]any(api), "data", "scope", "pcs", "count"); n != float64(3) {
+		t.Errorf("scope.pcs.count = %v, want 3", n)
+	}
 }
 
 // An index that cannot be opened because an update is being applied is

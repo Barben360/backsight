@@ -34,4 +34,8 @@ Backup          none yet
 Updates         none newer (never checked)
 Activity index  ingested 2026-10-08 14:00, 0 s behind
 
+PCs (never fetched)
+PC                         OS     First seen  Last sent  Version  Figures up to  State
+(not yet named) (this PC)  linux              never      dev      —              active
+
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

@@ -22,6 +22,7 @@ type Params struct {
 	Has, Sort, State string
 	Text             bool   // CLI only: the API never sets it
 	Compare, Measure string // releases: the two versions "A,B" and the measure
+	Machines         string // "this" or "all"; empty reads "this"
 }
 
 // Allowed values of the view parameters.
@@ -103,6 +104,14 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 			return metrics.Query{}, Usage("--%s: one of %s", c.name, strings.Join(c.allowed, ", "))
 		}
 	}
+	machines := p.Machines
+	switch machines {
+	case "":
+		machines = "this"
+	case "this", "all":
+	default:
+		return metrics.Query{}, Usage("--machines: this or all")
+	}
 	cmp, err := compareOf(p)
 	if err != nil {
 		return metrics.Query{}, err
@@ -112,7 +121,7 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 	}
 	return metrics.Query{Window: w, Project: p.Project, Path: p.Path, ID: id, Limit: p.Limit, Offset: p.Offset,
 		Has: p.Has, Sort: p.Sort, State: p.State, Dev: p.Dev, Text: p.Text,
-		Compare: cmp, Measure: p.Measure}, nil
+		Compare: cmp, Measure: p.Measure, Machines: machines}, nil
 }
 
 // compareOf reads --compare A,B and --measure: two different, non-empty

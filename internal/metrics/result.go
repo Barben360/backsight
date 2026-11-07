@@ -68,6 +68,36 @@ type Scope struct {
 	// server, whose answer is as of generated_at.
 	ServerOKAt *time.Time `json:"server_ok_at,omitempty"`
 	Project    string     `json:"project,omitempty"`
+	// PCs says which PCs the figures count (every view, both modes).
+	PCs *PCs `json:"pcs,omitempty"`
+	// OthersUnfiltered: machines "all" under a project filter with at least
+	// one other PC, whose whole figures are added (they send no project).
+	OthersUnfiltered bool `json:"others_unfiltered,omitempty"`
+}
+
+// PCs is the scope of the PCs: who is counted, who went quiet, what was
+// ignored. Count is N of "all PCs on this server (N)": this PC when it
+// shares and is not a server-only host, plus every counted other PC.
+type PCs struct {
+	Sharing   bool       `json:"sharing"`
+	Count     int        `json:"count"`
+	Active    int        `json:"active"`
+	Stale     int        `json:"stale"`
+	Ignored   int        `json:"ignored"`
+	FetchedAt *time.Time `json:"fetched_at"`
+	Until     *string    `json:"until"`
+	List      []PCRow    `json:"list"`
+}
+
+// PCRow is one counted PC; Machine is its short id (8 characters, 13 when
+// two counted PCs share their first 8).
+type PCRow struct {
+	Machine   string  `json:"machine"`
+	This      bool    `json:"this"`
+	OS        string  `json:"os"`
+	FirstSeen string  `json:"first_seen"`
+	Until     *string `json:"until"`
+	Stale     bool    `json:"stale"`
 }
 
 // ServerState is whether the server answered; LastOK is null when unknown.
@@ -77,7 +107,14 @@ type ServerState struct {
 	LastOK *time.Time `json:"last_ok"`
 }
 
-// Metric is one number with its judgement.
+// Metric is one number with its judgement. Its tags: unreliable,
+// not_filtered, judged_28d, partial, old_scan, and on all PCs (--machines
+// all): others_not_filtered (a project filter: the other PCs' whole figures
+// are added), series_this_pc (a window drawn by the hour: the totals add the
+// other PCs' days, the series stay this PC's) and status_this_pc
+// (pipeline.flow and context.per_session: the status is this PC's rule),
+// average (context.per_session) and approximate (recall.latency: a range
+// from the merged buckets).
 type Metric struct {
 	Value       *float64       `json:"value"`
 	Num         *int64         `json:"num"`
@@ -87,7 +124,7 @@ type Metric struct {
 	Status      Status         `json:"status"`
 	Reason      string         `json:"reason,omitempty"`
 	Borderline  bool           `json:"borderline"`
-	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial, old_scan
+	Tags        []string       `json:"tags"` // see Metric
 	CI          *[2]float64    `json:"ci"`
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`
@@ -95,20 +132,32 @@ type Metric struct {
 	Drill       string         `json:"drill"`
 	Series      []Point        `json:"series,omitempty"`
 	Extra       map[string]any `json:"extra,omitempty"` // keys declared in the catalog
+
+	// chars is this PC's characters added in the window (context.per_session)
+	// and buckets its samples by latency bucket (a latency metric): what a
+	// merge over several PCs adds to. Never in the JSON.
+	chars   int64
+	buckets [9]int64
 }
 
 // Point is one day, hour or week of a series.
 type Point struct {
-	Day   string           `json:"day,omitempty"`
-	Hour  string           `json:"hour,omitempty"`
-	Week  string           `json:"week,omitempty"`
-	Value *float64         `json:"value"`
-	Num   *int64           `json:"num,omitempty"`
-	Den   *int64           `json:"den,omitempty"`
-	N     *int64           `json:"n,omitempty"`
-	P50   *float64         `json:"p50,omitempty"`
-	P95   *float64         `json:"p95,omitempty"`
-	Parts map[string]int64 `json:"parts,omitempty"`
+	Day   string   `json:"day,omitempty"`
+	Hour  string   `json:"hour,omitempty"`
+	Week  string   `json:"week,omitempty"`
+	Value *float64 `json:"value"`
+	Num   *int64   `json:"num,omitempty"`
+	Den   *int64   `json:"den,omitempty"`
+	N     *int64   `json:"n,omitempty"`
+	P50   *float64 `json:"p50,omitempty"`
+	P95   *float64 `json:"p95,omitempty"`
+	// Lo and Hi: the day's p95 bucket of the PCs together, (Lo, Hi] in
+	// milliseconds (Hi left out for the open bucket), on all PCs; ThisP95:
+	// this PC's exact p95 of the day, then.
+	Lo      *float64         `json:"lo,omitempty"`
+	Hi      *float64         `json:"hi,omitempty"`
+	ThisP95 *float64         `json:"this_p95,omitempty"`
+	Parts   map[string]int64 `json:"parts,omitempty"`
 	// Source: where a day's or week's server figures came from: "server"
 	// (its live series), "record" (the days this PC recorded) or "none".
 	Source string `json:"source,omitempty"`
@@ -123,6 +172,10 @@ type Point struct {
 	// Partial: the window covers only part of this day or hour (its first
 	// or last), so its counts are not a dip.
 	Partial bool `json:"partial,omitempty"`
+
+	// buckets: this PC's samples of the point by latency bucket, never in
+	// the JSON.
+	buckets [9]int64
 }
 
 // Item is one entry of the attention list.

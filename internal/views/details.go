@@ -117,8 +117,14 @@ func details(d metrics.Def, m metrics.Metric, loc *time.Location, page bool) []s
 	case "context.per_session", "context.per_prompt", "recall.latency", "search.latency":
 		p50, ok50 := extraFloat(m, "p50")
 		p95, ok95 := extraFloat(m, "p95")
+		merged := slices.Contains(m.Tags, "approximate") || slices.Contains(m.Tags, "average")
+		if lo, hi, ok := RangeMS(m, "p50_range_ms"); ok && slices.Contains(m.Tags, "approximate") {
+			add("all PCs: typical %s", RangeText(lo, hi))
+		}
 		if ok50 && ok95 {
-			add("typical %s, %s %s", ValueIn(d.Unit, p50, m), map[bool]string{true: "slowest 1 in 20", false: "high"}[d.Unit == "ms"], ValueIn(d.Unit, p95, m))
+			// merged, these two stay this PC's exact figures: say so
+			add("%stypical %s, %s %s", map[bool]string{true: "this PC alone: ", false: ""}[merged], ValueIn(d.Unit, p50, m),
+				map[bool]string{true: "slowest 1 in 20", false: "high"}[d.Unit == "ms"], ValueIn(d.Unit, p95, m))
 		}
 	case "extraction.tokens", "extraction.cost":
 		if d.ID == "extraction.cost" && m.Value == nil {

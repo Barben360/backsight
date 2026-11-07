@@ -104,7 +104,7 @@ func (ix *Index) catchUp(ctx context.Context, budget time.Duration) (Freshness, 
 }
 
 // refresh is a catch-up started at start: the month files until deadline
-// (zero: none), the ledger, the local status. With yield, a write
+// (zero: none), the ledger, the local status, the other PCs' cache. With yield, a write
 // transaction that finds the write lock held past the busy timeout
 // (errOtherWriter: another process is catching up) ends the run without
 // an error: what this run committed stays, the rest is that process's,
@@ -137,6 +137,11 @@ func (ix *Index) refresh(ctx context.Context, start, deadline time.Time, yield b
 	}
 	if !yielded {
 		if err := step("local status", ix.refreshLocal(ctx)); err != nil {
+			return Freshness{}, st, err
+		}
+	}
+	if !yielded {
+		if err := step("other PCs", ix.refreshMachines(ctx)); err != nil {
 			return Freshness{}, st, err
 		}
 	}

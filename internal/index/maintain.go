@@ -236,15 +236,16 @@ func (ix *Index) dropCursorIfEmpty(ctx context.Context, rel string) error {
 
 // pruneOrphanErrors removes the ingest errors of the files gone that have
 // no cursor (a file unreadable until it was deleted: no ingest visits it
-// again). The ledger's and the local status's rows stay: those sources
-// may be absent for a while, and their next good read clears them.
+// again). The ledger's, the local status's and the machines cache's rows
+// stay: those sources may be absent for a while, and their next good read
+// clears them.
 func (ix *Index) pruneOrphanErrors(ctx context.Context) (int64, error) {
 	var rels []string
 	err := ix.ReadTx(ctx, func(tx *sql.Tx) error {
 		var err error
 		rels, err = scanStrings(ctx, tx, `SELECT DISTINCT source_file FROM ingest_errors
-			WHERE source_file NOT IN (?, ?) AND source_file NOT IN (SELECT source_file FROM cursors) ORDER BY source_file`,
-			ledgerSource, stateSource)
+			WHERE source_file NOT IN (?, ?, ?) AND source_file NOT IN (SELECT source_file FROM cursors) ORDER BY source_file`,
+			ledgerSource, stateSource, machinesSource)
 		return err
 	})
 	if err != nil {

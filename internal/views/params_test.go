@@ -36,9 +36,9 @@ func TestFromValues(t *testing.T) {
 		{"dev true", "overview", "dev=true", Params{Dev: true, DevSet: true, Limit: 50}, ""},
 		{"dev 0 is given", "overview", "dev=0", Params{DevSet: true, Limit: 50}, ""},
 		{"a view's own key on another view", "overview", "has=used", Params{},
-			`unknown parameter "has" for overview: one of days, since, until, tz, project, path, dev, limit, offset`},
+			`unknown parameter "has" for overview: one of days, since, until, tz, project, path, dev, limit, offset, machines`},
 		{"text is CLI only", "memories", "text=1", Params{}, `unknown parameter "text" for memories`},
-		{"machines", "overview", "machines=all", Params{}, `unknown parameter "machines" for overview`},
+		{"machines", "overview", "machines=all", Params{Machines: "all", Limit: 50}, ""},
 		{"code", "overview", "code=x", Params{}, `unknown parameter "code" for overview`},
 		{"twice", "overview", "days=1&days=2", Params{}, "give days once"},
 		{"days not a number", "overview", "days=abc", Params{}, "--days: a whole number from 1 to 365"},
@@ -124,5 +124,47 @@ func TestTakesID(t *testing.T) {
 		if TakesID(v) != want {
 			t.Errorf("TakesID(%q) = %v, want %v", v, !want, want)
 		}
+	}
+}
+
+// machines=all is a parameter of every view; anything but this or all, and a
+// repeated key, is a usage error.
+func TestMachinesParam(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	for _, view := range metrics.Views {
+		v, err := url.ParseQuery("machines=all")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := FromValues(view, v)
+		if err != nil {
+			t.Fatalf("%s: machines=all: %v", view, err)
+		}
+		q, err := Query(view, p, "", now)
+		if err != nil || q.Machines != "all" {
+			t.Errorf("%s: machines=all gave %q, %v", view, q.Machines, err)
+		}
+	}
+	for _, c := range []struct{ query, want string }{{"", "this"}, {"machines=this", "this"}, {"machines=", "this"}} {
+		v, _ := url.ParseQuery(c.query)
+		p, err := FromValues("overview", v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q, err := Query("overview", p, "", now); err != nil || q.Machines != c.want {
+			t.Errorf("%q: machines %q, %v, want %q", c.query, q.Machines, err, c.want)
+		}
+	}
+	v, _ := url.ParseQuery("machines=both")
+	p, err := FromValues("overview", v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Query("overview", p, "", now)
+	if err == nil || err.Error() != "--machines: this or all" || codeOf(t, err) != output.Usage {
+		t.Errorf("machines=both: %v", err)
+	}
+	if _, err := FromValues("overview", url.Values{"machines": {"this", "all"}}); err == nil || err.Error() != "give machines once" {
+		t.Errorf("machines twice: %v", err)
 	}
 }

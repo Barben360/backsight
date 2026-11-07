@@ -110,6 +110,24 @@ backsight server install --ssh user@host
 
 No ssh access to the host? `backsight server install --print-commands` prints the same steps as commands to run yourself, on the host then on this PC. Every refusal and its fix: [server install --ssh stopped](troubleshooting.md#server-install---ssh-stopped).
 
+## See all your PCs' activity
+
+Each PC that shares (`feedback` and `feedback.share_ledger` on, the default) puts its daily figures on the server, and reads the others' ([what is in them](privacy.md#what-your-pcs-share-with-each-other)): counts per UTC day, no text, no project, no session. `backsight stats` then reads them together:
+
+```sh
+backsight stats overview --machines all
+backsight stats cost --machines all --days 30
+```
+
+- **What is added up**: prompts that got memory, turns where Claude used memory, the declaring coverage, wrong reports, the write flow, the days of the calendar and the releases. The context a session adds is an average over the sessions of every PC, and the time memory adds to a prompt a range read from the PCs' buckets (`1.0–2.0 s`, marked approximate), with this PC's exact figures beside it.
+- **The scope line**: the last line of every view says `Activity on all PCs on this server (3)`, how far the other PCs' figures reach (`other PCs up to 2026-10-29`, the oldest of them), how many documents were set aside, and `other PCs not filtered` under `--project`, since the other PCs send no project: their whole figures are added. `--json` has the same in `scope.pcs`, with each PC.
+- **Gone quiet and dropped**: a PC that sent nothing for 2 days is marked as stopped sending (`stale`) but still counted; one that sent nothing for 30 days is left out. A PC counts in a window by the noon (UTC) of each of its days, so a window of a day or less holds the days whose noon falls in it.
+- **What stays this PC's**: the verdict, the statuses of the write flow and of the context a session adds (`status on this PC`), the sessions, memories and projects lists (`--machines all` answers this PC's there, and `scope.machines` says so), the day-by-day table of `stats days` (the calendar adds the other PCs' prompts), and everything the other PCs do not send: sessions, projects, memory ids, the server and doctor checks.
+- **Where the PCs are listed**: `backsight stats system` has a table of them: system, first day, last send, backsight version, how far their figures reach, and the documents set aside with why. A document is set aside when it cannot be read, is over 1 MiB or is not in the expected format; one that says `written by a newer backsight` was published by a backsight with format `v` 2 or later: update this PC. The other PCs' own pages in the dashboard are not there yet.
+- **One PC, one id**: a state folder copied to another PC copies its machine id, so the two PCs overwrite one document and each skips the other. Give the copy its own: remove `machine_id` from its state folder, and the next `backsight jobs tick` makes a new one. A plain state wipe or reinstall also creates a new machine id: the old document stays on the server and is counted as another PC until it is dropped after 30 days; `backsight uninstall --purge-local` deletes it.
+- **How fresh**: the other PCs' figures are fetched every 6 hours and each PC sends its own once a UTC day, up to the day before.
+- **Sharing off** (`feedback` or `feedback.share_ledger` off): nothing is sent or read, and `--machines all` answers this PC's.
+
 ## Away from home
 
 With a tailnet address, a laptop reaches the host from anywhere Tailscale is up; with a LAN address, only at home. A laptop that cannot reach the host, or a host that is off, costs you recall, not data:

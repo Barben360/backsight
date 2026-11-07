@@ -19,7 +19,26 @@
     "scope": {
       "machines": "this",
       "server": "127.0.0.1:PORT",
-      "server_ok": false
+      "server_ok": false,
+      "pcs": {
+        "sharing": true,
+        "count": 1,
+        "active": 1,
+        "stale": 0,
+        "ignored": 0,
+        "fetched_at": null,
+        "until": null,
+        "list": [
+          {
+            "machine": "",
+            "this": true,
+            "os": "linux",
+            "first_seen": "",
+            "until": null,
+            "stale": false
+          }
+        ]
+      }
     },
     "index": {
       "ingested_at": "2026-10-08T14:00:00+02:00",
@@ -103,7 +122,28 @@
           "backsight read mem-long-1",
           "backsight forget mem-long-1",
           "backsight forget --restore mem-long-1"
-        ]
+        ],
+        "shared": {
+          "state": "unavailable",
+          "machines": 0,
+          "combined_at": null,
+          "this": {
+            "used": 1.4989341507460414,
+            "ignored": 0,
+            "rate": 1
+          },
+          "others": {
+            "used": 0,
+            "ignored": 0,
+            "rate": null
+          },
+          "all": {
+            "used": 1.4989341507460414,
+            "ignored": 0,
+            "rate": 1
+          },
+          "hidden_elsewhere": null
+        }
       }
     },
     "attention": [],

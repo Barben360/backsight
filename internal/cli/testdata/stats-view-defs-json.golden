@@ -19,7 +19,26 @@
     "scope": {
       "machines": "this",
       "server": "127.0.0.1:PORT",
-      "server_ok": false
+      "server_ok": false,
+      "pcs": {
+        "sharing": true,
+        "count": 1,
+        "active": 1,
+        "stale": 0,
+        "ignored": 0,
+        "fetched_at": null,
+        "until": null,
+        "list": [
+          {
+            "machine": "",
+            "this": true,
+            "os": "linux",
+            "first_seen": "",
+            "until": null,
+            "stale": false
+          }
+        ]
+      }
     },
     "index": {
       "ingested_at": "2026-10-08T14:00:00+02:00",
@@ -524,7 +543,8 @@
             "p95",
             "tokens_p50",
             "tokens_p95",
-            "histogram"
+            "histogram",
+            "average"
           ],
           "drill": "backsight stats sessions",
           "n": 0,
@@ -586,7 +606,10 @@
           "series": "daily",
           "extra": [
             "p50",
-            "p95"
+            "p95",
+            "range_ms",
+            "p50_range_ms",
+            "buckets"
           ],
           "drill": "backsight stats days",
           "n": 0,

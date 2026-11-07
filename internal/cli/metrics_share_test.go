@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
@@ -674,5 +677,456 @@ func TestPublishWritesNothingThatDoesNotParse(t *testing.T) {
 				t.Errorf("recorded failure %q, want %q", got, failCompute)
 			}
 		})
+	}
+}
+
+// otherPC is a machine id for the fetch tests: n makes it distinct, its
+// first 8 characters are n repeated.
+func otherPC(n int) string {
+	h := strings.Repeat(strconv.FormatInt(int64(n)%16, 16), 8)
+	return h[:8] + "-" + strconv.Itoa(1000+n) + "-4000-8000-000000000000"
+}
+
+// otherDoc is another PC's valid document metadata, sent at at.
+func otherDoc(t *testing.T, id string, at time.Time) string {
+	t.Helper()
+	until := at.UTC().AddDate(0, 0, -1).Format(time.DateOnly)
+	meta, err := machines.Doc{Machine: id, At: at, OS: "linux", FirstSeen: "2026-10-01", BinaryVersion: "0.1.28", Until: until,
+		Days: []machines.Day{figures(until)}}.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return meta
+}
+
+// putMetrics stores a metrics document on the server as a PC's tick would.
+func (m *shareMachine) putMetrics(id, meta string) {
+	m.t.Helper()
+	if err := retain.WriteControlDocument(context.Background(), m.cl, m.cfg.Server.Bank, machines.DocPrefix+id, "x", map[string]string{machines.MetaKey: meta}); err != nil {
+		m.t.Fatal(err)
+	}
+}
+
+// walks counts the full listings of the control bank from now on.
+func watchWalks(t *testing.T) func() int {
+	t.Helper()
+	n := 0
+	fakeHook = func(r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "-control/documents") && r.URL.Query().Get("offset") == "0" {
+			n++
+		}
+	}
+	t.Cleanup(func() { fakeHook = nil })
+	return func() int { return n }
+}
+
+// fetch is one tick's fetch, with its own listing.
+func (m *shareMachine) fetch(at time.Time) (int, int, error) {
+	m.t.Helper()
+	return refreshMetricsDocs(context.Background(), m.cl, &controlListing{}, m.d, m.cfg, pubID, at)
+}
+
+func (m *shareMachine) machinesCache() machines.Cache {
+	m.t.Helper()
+	c, err := machines.LoadCache(m.d.MetricsDir())
+	if err != nil {
+		m.t.Fatal(err)
+	}
+	return c
+}
+
+func TestFetchEvery6h(t *testing.T) {
+	m := newShareMachine(t)
+	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
+	walks := watchWalks(t)
+	if f, _, err := m.fetch(pubT0); err != nil || f != 1 || walks() != 1 {
+		t.Fatalf("first fetch: %d, %v, %d walks", f, err, walks())
+	}
+	if f, i, err := m.fetch(pubT0.Add(5 * time.Hour)); err != nil || f != 0 || i != 0 || walks() != 1 {
+		t.Errorf("5 h later: %d, %d, %v, %d walks (the cache is fresh)", f, i, err, walks())
+	}
+	if f, _, err := m.fetch(pubT0.Add(6 * time.Hour)); err != nil || f != 1 || walks() != 2 {
+		t.Errorf("6 h later: %d, %v, %d walks", f, err, walks())
+	}
+	// A cache dated ahead of now (the clock stepped back) is fetched again.
+	c := m.machinesCache()
+	c.FetchedAt = pubT0.Add(30 * time.Hour)
+	if err := machines.SaveCache(m.d.MetricsDir(), c); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.fetch(pubT0.Add(7 * time.Hour)); err != nil || walks() != 3 {
+		t.Errorf("a cache dated ahead: %v, %d walks", err, walks())
+	}
+	// An unreadable cache too.
+	if err := os.WriteFile(machines.CacheFile(m.d.MetricsDir()), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if f, _, err := m.fetch(pubT0.Add(7 * time.Hour)); err != nil || f != 1 || walks() != 4 {
+		t.Errorf("an unreadable cache: %d, %v, %d walks", f, err, walks())
+	}
+}
+
+func TestFetchKeepsValidDocumentsOnly(t *testing.T) {
+	m := newShareMachine(t)
+	good, big, v2, liar := otherPC(1), otherPC(2), otherPC(3), otherPC(4)
+	m.putMetrics(good, otherDoc(t, good, pubT0))
+	m.putMetrics(big, strings.Repeat("x", machines.MaxBytes+1))
+	newer := strings.Replace(otherDoc(t, v2, pubT0), `"v":1`, `"v":2`, 1)
+	if !strings.Contains(newer, `"v":2`) {
+		t.Fatalf("no version field to change: %s", newer)
+	}
+	m.putMetrics(v2, newer)
+	m.putMetrics(liar, otherDoc(t, otherPC(9), pubT0)) // valid, under another machine's name
+
+	fetched, ignored, err := m.fetch(pubT0)
+	if err != nil || fetched != 1 || ignored != 3 {
+		t.Fatalf("%d fetched, %d ignored, %v", fetched, ignored, err)
+	}
+	c := m.machinesCache()
+	if len(c.Docs) != 1 || c.Docs[0].Name != machines.DocPrefix+good || c.Docs[0].Raw != otherDoc(t, good, pubT0) {
+		t.Errorf("docs %+v", c.Docs)
+	}
+	want := []machines.Ignored{{Machine: big[:8], Reason: machines.TooLarge}, {Machine: v2[:8], Reason: machines.UnknownVersion}, {Machine: liar[:8], Reason: machines.NotValid}}
+	if !slices.Equal(c.Ignored, want) {
+		t.Errorf("ignored %+v, want %+v", c.Ignored, want)
+	}
+	if !c.FetchedAt.Equal(pubT0) {
+		t.Errorf("fetched_at %s", c.FetchedAt)
+	}
+}
+
+// A document under a name that holds no machine id is recorded without a
+// short id, and nothing of its text reaches the cache's ignored list.
+func TestFetchIgnoredHoldsNoNameWithoutAMachineId(t *testing.T) {
+	m := newShareMachine(t)
+	m.putMetrics("my-secret-host", "{}")
+	if _, i, err := m.fetch(pubT0); err != nil || i != 1 {
+		t.Fatalf("%d, %v", i, err)
+	}
+	c := m.machinesCache()
+	if len(c.Ignored) != 1 || c.Ignored[0].Machine != "" || c.Ignored[0].Reason != machines.NotValid {
+		t.Errorf("ignored %+v", c.Ignored)
+	}
+	raw, _ := os.ReadFile(machines.CacheFile(m.d.MetricsDir()))
+	if strings.Contains(string(raw), "secret") {
+		t.Errorf("a name reached the cache: %s", raw)
+	}
+}
+
+func TestFetchLeavesOutOwnAndOld(t *testing.T) {
+	m := newShareMachine(t)
+	m.putMetrics(pubID, otherDoc(t, pubID, pubT0))
+	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0.Add(-31*24*time.Hour)))
+	m.putMetrics(otherPC(2), otherDoc(t, otherPC(2), pubT0.Add(-29*24*time.Hour)))
+	f, i, err := m.fetch(pubT0)
+	if err != nil || f != 1 || i != 0 {
+		t.Fatalf("%d fetched, %d ignored, %v", f, i, err)
+	}
+	if c := m.machinesCache(); len(c.Docs) != 1 || c.Docs[0].Name != machines.DocPrefix+otherPC(2) || len(c.Ignored) != 0 {
+		t.Errorf("%+v", c)
+	}
+}
+
+func TestFetchKeeps64Newest(t *testing.T) {
+	m := newShareMachine(t)
+	const total = 70
+	for n := range total { // PC n sent n hours ago
+		m.putMetrics(otherPC(n), otherDoc(t, otherPC(n), pubT0.Add(-time.Duration(n)*time.Hour)))
+	}
+	f, _, err := m.fetch(pubT0)
+	if err != nil || f != machines.MaxDocs {
+		t.Fatalf("%d fetched, %v", f, err)
+	}
+	have := map[string]bool{}
+	for _, d := range m.machinesCache().Docs {
+		have[d.Name] = true
+	}
+	for n := range total {
+		if want := n < machines.MaxDocs; have[machines.DocPrefix+otherPC(n)] != want {
+			t.Errorf("PC %d (sent %d h ago) cached: %v, want %v", n, n, !want, want)
+		}
+	}
+}
+
+func TestFetchFailureKeepsTheCache(t *testing.T) {
+	m := newShareMachine(t)
+	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
+	if _, _, err := m.fetch(pubT0); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(machines.CacheFile(m.d.MetricsDir()))
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(broken.Close)
+	cl, err := hindsight.New(broken.URL, "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, i, err := refreshMetricsDocs(context.Background(), cl, &controlListing{}, m.d, m.cfg, pubID, pubT0.Add(7*time.Hour))
+	if err == nil || f != 0 || i != 0 {
+		t.Errorf("%d, %d, %v: a failed listing must be an error", f, i, err)
+	}
+	if after, _ := os.ReadFile(machines.CacheFile(m.d.MetricsDir())); !bytes.Equal(before, after) {
+		t.Errorf("the cache changed:\n%s\n%s", before, after)
+	}
+	// The class never carries the error's text.
+	if _, _, class := fetchMetrics(context.Background(), cl, &controlListing{}, m.d, m.cfg, pubID, pubT0.Add(7*time.Hour)); class != fetchServer {
+		t.Errorf("class %q", class)
+	}
+}
+
+func TestFetchWithoutSharing(t *testing.T) {
+	for name, mutate := range map[string]func(*shareMachine) string{
+		"share_ledger off": func(m *shareMachine) string { m.cfg.Feedback.ShareLedger = false; return pubID },
+		"feedback off":     func(m *shareMachine) string { m.cfg.Feedback.Enabled = false; return pubID },
+		"no machine id":    func(*shareMachine) string { return "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newShareMachine(t)
+			m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
+			walks := watchWalks(t)
+			machine := mutate(m)
+			f, i, err := refreshMetricsDocs(context.Background(), m.cl, &controlListing{}, m.d, m.cfg, machine, pubT0)
+			if f != 0 || i != 0 || err != nil || walks() != 0 {
+				t.Errorf("%d, %d, %v, %d walks", f, i, err, walks())
+			}
+			if _, err := os.Stat(machines.CacheFile(m.d.MetricsDir())); err == nil {
+				t.Error("a cache was written")
+			}
+		})
+	}
+	// An existing cache stays as it is.
+	m := newShareMachine(t)
+	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
+	if _, _, err := m.fetch(pubT0); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(machines.CacheFile(m.d.MetricsDir()))
+	m.cfg.Feedback.ShareLedger = false
+	m.putMetrics(otherPC(2), otherDoc(t, otherPC(2), pubT0))
+	if _, _, err := m.fetch(pubT0.Add(24 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(machines.CacheFile(m.d.MetricsDir())); !bytes.Equal(before, after) {
+		t.Error("the cache changed with sharing off")
+	}
+}
+
+// A server-only host publishes nothing and fetches the others', through the
+// tick.
+func TestServerOnlyHostFetches(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	d := pathsOf(home)
+	raw, _ := os.ReadFile(d.ConfigFile())
+	if err := os.WriteFile(d.ConfigFile(), bytes.Replace(raw, []byte("[server]\n"), []byte("[server]\nrole = \"server\"\n"), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default(d, home)
+	other := otherPC(1)
+	withClock(t, pubT0)
+	if err := retain.WriteControlDocument(context.Background(), cl, cfg.Server.Bank, machines.DocPrefix+other, "x", map[string]string{machines.MetaKey: otherDoc(t, other, pubT0)}); err != nil {
+		t.Fatal(err)
+	}
+	writes := watchMetricsWrites(t)
+	calls := stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+
+	r := tickOf(t)
+	if r.MetricsFetched != 1 || r.MetricsFetchError != "" {
+		t.Fatalf("%+v", r)
+	}
+	if r.MetricsUp || len(writes()) != 0 || *calls != 0 {
+		t.Errorf("a server-only host published: %+v, %d writes", r, len(writes()))
+	}
+	if _, ok := machines.LoadPublished(d.MetricsDir()); ok {
+		t.Error("a publish record was written")
+	}
+	c, err := machines.LoadCache(d.MetricsDir())
+	if err != nil || len(c.Docs) != 1 || c.Docs[0].Name != machines.DocPrefix+other {
+		t.Errorf("%+v, %v", c, err)
+	}
+}
+
+// The tick reports the fetch in its line, envelope and job event; a failing
+// server never fails the tick nor puts text in the event.
+func TestTickFetchesAndReports(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	d := pathsOf(home)
+	withClock(t, pubT0)
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	cl, err := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &shareMachine{t: t, d: d, cfg: config.Default(d, home), cl: cl}
+	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
+	m.putMetrics(otherPC(2), "{}")
+
+	code, out, _ := run(t, "jobs", "tick")
+	if code != output.OK || !strings.Contains(out, "daily figures of 1 other PC(s) fetched, 1 document(s) ignored") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	raw, _ := filepath.Glob(filepath.Join(d.TelemetryDir(), "events-*.jsonl"))
+	var details map[string]any
+	for _, f := range raw {
+		b, _ := os.ReadFile(f)
+		for _, line := range strings.Split(string(b), "\n") {
+			var ev struct {
+				Event, Name string
+				Details     map[string]any
+			}
+			if json.Unmarshal([]byte(line), &ev) == nil && ev.Event == "job" && ev.Name == "tick" {
+				details = ev.Details
+			}
+		}
+	}
+	if details["metrics_fetched"] != float64(1) || details["metrics_ignored"] != float64(1) || details["metrics_fetch_error"] != "" {
+		t.Errorf("job event details %v", details)
+	}
+	// Five hours later nothing is fetched and the line says nothing of it.
+	withClock(t, pubT0.Add(5*time.Hour))
+	if r := tickOf(t); r.MetricsFetched != 0 || r.fetchText() != "" {
+		t.Errorf("%+v", r)
+	}
+}
+
+// The shared counts and the daily figures share the tick's one listing.
+func TestOneListingPerTick(t *testing.T) {
+	m := newShareMachine(t)
+	m.put(shareM1, sharedMeta(t, shareM1, pubT0, map[string]feedback.SharedEntry{}))
+	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
+	walks := watchWalks(t)
+	tick := func(at time.Time) (machinesN int) {
+		l := &controlListing{}
+		n, _, err := refreshShared(context.Background(), m.cl, l, m.d, m.cfg.Server.Bank, pubID, at, feedbackParams(m.cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, at); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := tick(pubT0); walks() != 1 || n != 1 {
+		t.Errorf("both due: %d walk(s), %d machine(s) counted", walks(), n)
+	}
+	if c := m.machinesCache(); len(c.Docs) != 1 {
+		t.Errorf("the daily figures were not cached: %+v", c)
+	}
+	if n := tick(pubT0.Add(time.Hour)); walks() != 1 || n != 1 {
+		t.Errorf("neither due: %d walk(s) in all, %d machine(s) counted", walks(), n)
+	}
+	// Only the daily figures due.
+	if err := os.Remove(machines.CacheFile(m.d.MetricsDir())); err != nil {
+		t.Fatal(err)
+	}
+	if n := tick(pubT0.Add(2 * time.Hour)); walks() != 2 || n != 1 {
+		t.Errorf("only the figures due: %d walk(s) in all, %d machine(s) counted", walks(), n)
+	}
+	// Only the shared counts due.
+	if err := os.Remove(filepath.Join(m.d.FeedbackDir(), "shared.json")); err != nil {
+		t.Fatal(err)
+	}
+	if n := tick(pubT0.Add(3 * time.Hour)); walks() != 3 || n != 1 {
+		t.Errorf("only the counts due: %d walk(s) in all, %d machine(s) counted", walks(), n)
+	}
+}
+
+// padded is a valid document made as large as a reader accepts with an unknown
+// field full of characters JSON escapes to six bytes.
+func padded(t *testing.T, id string, at time.Time) string {
+	t.Helper()
+	meta := otherDoc(t, id, at)
+	pad := machines.MaxBytes - len(meta) - len(`,"z":""`)
+	padded := meta[:len(meta)-1] + `,"z":"` + strings.Repeat("<", pad) + `"}`
+	if _, err := machines.Parse(machines.DocPrefix+id, padded, at); err != nil {
+		t.Fatalf("the padded document must be valid: %v", err)
+	}
+	return padded
+}
+
+// Valid documents padded with an unknown field, which JSON escaping would
+// multiply by six, must not make the cache unloadable.
+func TestFetchCacheStaysLoadableWithPaddedDocuments(t *testing.T) {
+	m := newShareMachine(t)
+	const n = 20 // 20 MiB on the wire, 120 MiB escaped when cached as fetched
+	// The listing is handed over: the test server escapes the padding too, and
+	// the client would refuse its page; a real server need not.
+	l := &controlListing{done: true}
+	for i := range n {
+		l.items = append(l.items, hindsight.DocumentItem{ID: machines.DocPrefix + otherPC(i),
+			Metadata: map[string]string{machines.MetaKey: padded(t, otherPC(i), pubT0.Add(-time.Duration(i)*time.Minute))}})
+	}
+	f, _, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != n {
+		t.Fatalf("%d fetched, %v", f, err)
+	}
+	c, err := machines.LoadCache(m.d.MetricsDir())
+	if err != nil {
+		t.Fatalf("the cache must load: %v", err)
+	}
+	if len(c.Docs) != n {
+		t.Fatalf("%d documents cached, want %d", len(c.Docs), n)
+	}
+	for _, d := range c.Docs {
+		if len(d.Raw) > 4096 || strings.Contains(d.Raw, "<") {
+			t.Errorf("%s: the cache holds more than the known fields (%d bytes)", d.Name, len(d.Raw))
+		}
+	}
+}
+
+func TestWithinCacheBudget(t *testing.T) {
+	mk := func(name string, n int) machines.CachedDoc {
+		return machines.CachedDoc{Name: name, Raw: strings.Repeat("a", n)}
+	}
+	docs := []machines.CachedDoc{mk("a", 100), mk("b", 100), mk("c", 10), mk("d", 100)}
+	kept, over := withinCacheBudget(docs, func(d machines.CachedDoc) machines.CachedDoc { return d }, 260)
+	names := func(l []machines.CachedDoc) (s string) {
+		for _, d := range l {
+			s += d.Name
+		}
+		return s
+	}
+	// a and b (about 124 bytes each) fit; c would push past 260, and d too
+	if names(kept) != "ab" || names(over) != "cd" {
+		t.Errorf("kept %q, over %q", names(kept), names(over))
+	}
+	kept, over = withinCacheBudget(docs, func(d machines.CachedDoc) machines.CachedDoc { return d }, 1<<20)
+	if len(kept) != 4 || len(over) != 0 {
+		t.Errorf("within a large budget: kept %d, over %d", len(kept), len(over))
+	}
+}
+
+// A document dated ahead (Parse allows 24 h) counts as sent now, so it cannot
+// outrank a real PC: with every real PC sent at now, it ties and loses (its
+// name sorts last), where its own date would have put it first.
+func TestFetchFutureDateDoesNotEvictARealPC(t *testing.T) {
+	m := newShareMachine(t)
+	for n := range machines.MaxDocs {
+		m.putMetrics(otherPC(n), otherDoc(t, otherPC(n), pubT0))
+	}
+	liar := "ffffffff-9999-4000-8000-000000000000" // sorts after every real PC
+	m.putMetrics(liar, otherDoc(t, liar, pubT0.Add(23*time.Hour)))
+	f, _, err := m.fetch(pubT0)
+	if err != nil || f != machines.MaxDocs {
+		t.Fatalf("%d fetched, %v", f, err)
+	}
+	have := map[string]bool{}
+	for _, d := range m.machinesCache().Docs {
+		have[d.Name] = true
+	}
+	if have[machines.DocPrefix+liar] {
+		t.Errorf("the future-dated document was kept")
+	}
+	for n := range machines.MaxDocs {
+		if !have[machines.DocPrefix+otherPC(n)] {
+			t.Errorf("real PC %d was evicted", n)
+		}
 	}
 }

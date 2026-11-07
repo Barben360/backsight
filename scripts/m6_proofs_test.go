@@ -1767,3 +1767,124 @@ printf '{"ok":true,"data":{"results":[{"session":"%s","status":"%s"}]}}\n' "$sid
 		})
 	}
 }
+
+// several-pcs judges the merged figures, not what the PCs say of
+// themselves: A and B type prompts the previous UTC day, publish (the
+// publish record of today's earlier tick removed, or the tick sends
+// nothing), fetch (the cache removed first, or the tick reads nothing
+// new), and then A's merged hit-rate denominator for that day must be A's
+// own plus B's published one, each client must list the other and the
+// server host both. The fake backsight publishes and fetches as the real
+// tick does: a tick publishes only without a publish record, and keeps
+// the fetch cache it finds.
+func TestM6SeveralPCsJudgesTheMergedFigures(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
+	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	const fake = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+st=$HOME/state/metrics
+case "$*" in
+  "paths --json") printf '{"ok":true,"data":{"config_file":"%s/config.toml","secrets_file":"%s/secrets.toml","state":"%s/state"}}\n' "$HOME" "$HOME" "$HOME" ;;
+  "jobs tick --json")
+    mkdir -p "$st"
+    up=true
+    if [ -e "$st/published.json" ] || [ -e "$t/noup-$WHO" ]; then up=false; else echo '{}' > "$st/published.json"; fi
+    fetched=absent
+    [ ! -e "$st/machines.json" ] || fetched=kept
+    echo "tick $WHO up=$up cache=$fetched" >> "$t/calls"
+    [ "$fetched" = kept ] || echo '{}' > "$st/machines.json"
+    printf '{"ok":true,"data":{"status":"done","metrics_up":%s}}\n' "$up" ;;
+  "stats overview --machines all "*) cat "$t/stats-all-$WHO" ;;
+  "stats overview --machines this "*) cat "$t/stats-this-$WHO" ;;
+  *) echo '{"ok":false}'; exit 1 ;;
+esac
+`
+	const (
+		idA = "aaaaaaaa-0000-4000-8000-000000000001"
+		idB = "bbbbbbbb-0000-4000-8000-000000000002"
+	)
+	stats := func(den int, others ...string) string {
+		list := `{"machine":"self","this":true}`
+		for _, o := range others {
+			list += `,{"machine":"` + o + `","this":false}`
+		}
+		return `{"ok":true,"data":{"scope":{"machines":"all","pcs":{"list":[` + list + `]}},"metrics":{"recall.hit_rate":{"den":` + strconv.Itoa(den) + `}}}}`
+	}
+	type setup struct {
+		allA, allB, allSrv string // the overviews with --machines all
+		bDen               int    // B's published hit denominator of the day
+		noup               string // a PC whose tick sends nothing
+		ownA               int    // A's own denominator
+	}
+	good := setup{allA: stats(6, "bbbbbbbb"), allB: stats(6, "aaaaaaaa"), allSrv: stats(0, "aaaaaaaa", "bbbbbbbb"), bDen: 2, ownA: 4}
+	run := func(s setup, preseed bool) (stdout, stderr, calls string) {
+		dir := t.TempDir()
+		m6Lib(t, dir, m6TestDriver+`m6_doc() { cat "$T/doc-${1#backsight:metrics:}"; }`, "true")
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), fake)
+		for who, id := range map[string]string{"a": idA, "b": idB, "srv": "cccccccc-0000-4000-8000-000000000003"} {
+			state := filepath.Join(dir, who, "state")
+			if err := os.MkdirAll(filepath.Join(state, "metrics"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeLines(t, filepath.Join(state, "machine_id"), id)
+			if preseed && who != "srv" { // two-clients ticked them today: published already
+				writeLines(t, filepath.Join(state, "metrics", "published.json"), `{"at":"today"}`)
+			}
+			writeLines(t, filepath.Join(state, "metrics", "machines.json"), `{"stale":"cache"}`)
+		}
+		writeLines(t, filepath.Join(dir, "stats-all-a"), s.allA)
+		writeLines(t, filepath.Join(dir, "stats-all-b"), s.allB)
+		writeLines(t, filepath.Join(dir, "stats-all-srv"), s.allSrv)
+		writeLines(t, filepath.Join(dir, "stats-this-a"), stats(s.ownA))
+		metrics := `{"v":1,"days":[{"day":"` + day + `","hit":[1,` + strconv.Itoa(s.bDen) + `]},{"day":"2020-01-01","hit":[9,9]}]}`
+		meta, _ := json.Marshal(map[string]any{"document_metadata": map[string]string{"metrics": metrics}})
+		writeLines(t, filepath.Join(dir, "doc-"+idB), string(meta))
+		if s.noup != "" {
+			writeLines(t, filepath.Join(dir, "noup-"+s.noup), "x")
+		}
+		stdout, stderr, _ = m6Lib(t, dir, m6TestDriver+`m6_doc() { cat "$T/doc-${1#backsight:metrics:}"; }`,
+			`m6_check several-pcs m6_check_several_pcs < /dev/null`, "M6_TICK_EVERY=0")
+		raw, _ := os.ReadFile(filepath.Join(dir, "calls"))
+		return stdout, stderr, string(raw)
+	}
+	t.Run("the merged figures are A's plus B's", func(t *testing.T) {
+		stdout, stderr, calls := run(good, true)
+		if !strings.Contains(stdout, "bs-m6 several-pcs: PASS") || !strings.Contains(stdout, "merged recall.hit_rate den 6 = own 4 + B's 2") {
+			t.Fatalf("stdout %q, stderr:\n%s", stdout, stderr)
+		}
+		// the publish ticks found no record of today and sent; the fetch
+		// ticks, run after, found no cache (the stale one was removed first)
+		for _, want := range []string{"tick a up=true cache=kept", "tick b up=true cache=kept",
+			"tick a up=false cache=absent", "tick b up=false cache=absent", "tick srv up=true cache=absent"} {
+			if !strings.Contains(calls, want) {
+				t.Errorf("no %q in the ticks:\n%s", want, calls)
+			}
+		}
+		// the figures on a day B did not type on are not B's of that day
+		if strings.Contains(stdout, "merged recall.hit_rate den 15") {
+			t.Errorf("another day's figures were summed: %s", stdout)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		s    setup
+		want string
+	}{
+		{"B is missing from A's list", setup{allA: stats(6), allB: good.allB, allSrv: good.allSrv, bDen: 2, ownA: 4}, "a's scope.pcs.list names []"},
+		{"A is missing from B's list", setup{allA: good.allA, allB: stats(6), allSrv: good.allSrv, bDen: 2, ownA: 4}, "b's scope.pcs.list names []"},
+		{"a client is missing from the server host's list", setup{allA: good.allA, allB: good.allB, allSrv: stats(0, "aaaaaaaa"), bDen: 2, ownA: 4}, "the server host's scope.pcs.list names"},
+		{"the sum is one too many", setup{allA: stats(7, "bbbbbbbb"), allB: good.allB, allSrv: good.allSrv, bDen: 2, ownA: 4}, "merged recall.hit_rate den for " + day + " is 7, want A's own 4 plus B's published 2 (6)"},
+		{"the sum is only A's own", setup{allA: stats(4, "bbbbbbbb"), allB: good.allB, allSrv: good.allSrv, bDen: 2, ownA: 4}, "is 4, want A's own 4 plus B's published 2 (6)"},
+		{"B published no prompt of the day", setup{allA: good.allA, allB: good.allB, allSrv: good.allSrv, bDen: 0, ownA: 4}, "B published no prompts for " + day},
+		{"A typed no prompt", setup{allA: stats(2, "bbbbbbbb"), allB: good.allB, allSrv: good.allSrv, bDen: 2, ownA: 0}, "A's own hit denominator for " + day + " is '0'"},
+		{"A's tick sends nothing", setup{allA: good.allA, allB: good.allB, allSrv: good.allSrv, bDen: 2, ownA: 4, noup: "a"}, "the tick on a sent no daily figures"},
+		{"B's tick sends nothing", setup{allA: good.allA, allB: good.allB, allSrv: good.allSrv, bDen: 2, ownA: 4, noup: "b"}, "the tick on b sent no daily figures"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, _ := run(tc.s, true)
+			if strings.Contains(stdout, "several-pcs: PASS") || !strings.Contains(stdout, "several-pcs: FAIL") || !strings.Contains(stdout+stderr, tc.want) {
+				t.Errorf("want FAIL naming %q; stdout %q, stderr:\n%s", tc.want, stdout, stderr)
+			}
+		})
+	}
+}

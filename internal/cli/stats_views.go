@@ -7,19 +7,24 @@ import (
 	"io"
 	"io/fs"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -39,6 +44,7 @@ type viewFlags struct {
 	has, sort, state string
 	text             bool
 	compare, measure string
+	machines         string
 }
 
 // Allowed values of the view flags.
@@ -50,7 +56,7 @@ var (
 
 // viewFlagNames are the flags that only a view takes, which the legacy
 // report and `stats index` refuse.
-var viewFlagNames = []string{"tz", "project", "path", "dev", "limit", "offset"}
+var viewFlagNames = []string{"tz", "project", "path", "dev", "limit", "offset", "machines"}
 
 // addViewFlags declares the persistent flags of `stats`.
 func addViewFlags(cmd *cobra.Command, f *viewFlags) {
@@ -64,6 +70,7 @@ func addViewFlags(cmd *cobra.Command, f *viewFlags) {
 	p.BoolVar(&f.dev, "dev", false, "views: add the developer metrics")
 	p.IntVar(&f.limit, "limit", metrics.DefaultLimit, "views: rows per page, 1 to 500")
 	p.IntVar(&f.offset, "offset", 0, "views: rows to skip")
+	p.StringVar(&f.machines, "machines", "", "views: this (this PC's figures, default) or all (merged with the other PCs sharing this server)")
 }
 
 // refuseViewFlags is the usage error for a view-only flag given to the
@@ -160,7 +167,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 func (f viewFlags) params() views.Params {
 	return views.Params{Days: f.days, DaysSet: f.daysSet, Since: f.since, Until: f.until, TZ: f.tz,
 		Project: f.project, Path: f.path, Dev: f.dev, Limit: f.limit, Offset: f.offset,
-		Has: f.has, Sort: f.sort, State: f.state, Text: f.text, Compare: f.compare, Measure: f.measure}
+		Has: f.has, Sort: f.sort, State: f.state, Text: f.text, Compare: f.compare, Measure: f.measure, Machines: f.machines}
 }
 
 // viewQuery maps the flags and the id of a view to its Query.
@@ -170,6 +177,9 @@ func viewQuery(f viewFlags, id string, now time.Time) (metrics.Query, error) {
 
 // viewError maps a metrics error to the command's.
 func viewError(err error) error { return views.Error(err) }
+
+// viewGOOS is the OS this PC reports in scope.pcs (a var for the goldens).
+var viewGOOS = runtime.GOOS
 
 // viewServer is what a view reads besides the index: the configuration, the
 // server through a GET-only client and the doctor.
@@ -198,6 +208,16 @@ func viewServer(d paths.Dirs, home string) (metrics.Source, error) {
 		}
 	}
 	src.Doctor = func(ctx context.Context) ([]metrics.DoctorCheck, error) { return runDoctorChecks(ctx, d, home) }
+	src.SharedCombined = func(now time.Time) (feedback.Combined, error) {
+		return feedback.LoadSharedCombined(d.FeedbackDir(), now)
+	}
+	src.Self = func() metrics.SelfPC {
+		self := metrics.SelfPC{Machine: retain.ReadMachineID(d.State), OS: machines.OS(viewGOOS), BinaryVersion: buildinfo.Version}
+		if rec, ok := machines.LoadPublished(d.MetricsDir()); ok {
+			self.FirstSeen, self.LastSent, self.Until = rec.FirstSeen, rec.At, rec.Until
+		}
+		return self
+	}
 	return src, nil
 }
 

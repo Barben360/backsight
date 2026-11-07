@@ -1,0 +1,47 @@
+Is the service up? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Flowing
+Waiting on this PC                           0                        (ok)
+Memory server answering                      yes                      (ok, no change vs previous)
+Health checks                                1 failed                 (watch)
+  1 failed, 1 with a warning
+Background jobs                              —                        (no data: nothing recorded yet)
+Possible secrets in memory                   1                        (watch)
+  last scan 2026-10-06 14:00, 2 days ago (3 pages read)
+Health checks over time                      3                        (n=3, ok)
+  3 runs in the window, 5 days without a run
+
+Background jobs
+none
+
+Health checks
+Check          Status  Fix
+settings       ok
+memory server  ok
+backup         warn    backsight backup create
+memory         error   backsight doctor
+
+Health checks over time
+Check     Now      Days ok  Days with a warning  Days with a problem  Last change
+backup    warning  1        2                    0                    2026-10-07, ok → warning
+memory    problem  2        0                    1                    2026-10-08, ok → problem
+settings  ok       3        0                    0                    —
+
+System
+Memory server   version 1.1.0, running in docker, mode local
+Reach           no answer recorded yet
+Backup          none yet
+Updates         none newer (never checked)
+Activity index  ingested 2026-10-08 14:00, 0 s behind
+
+PCs (fetched 2026-10-08 13:00)
+PC                  OS       First seen  Last sent         Version  Figures up to  State
+3f9c2a17 (this PC)  linux    2026-09-15  2026-10-08 09:00  dev      2026-10-07     active
+11111111            darwin   2026-09-20  2026-10-08 11:00  v0.1.18  2026-10-07     active
+22222222            windows  2026-09-25  2026-10-05 14:00  v0.1.17  2026-10-04     stopped sending
+
+Documents ignored
+PC        Why
+deadbeef  written by a newer backsight: update this PC
+
+Activity on all PCs on this server (3) · other PCs up to 2026-10-04 · 1 document ignored · memory on 127.0.0.1:PORT · --json for every field

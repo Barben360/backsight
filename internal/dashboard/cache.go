@@ -52,8 +52,8 @@ func fresh(now, at time.Time, ttl time.Duration) bool {
 // quoted so no two sets of values read alike. It holds no time: a window
 // of days is keyed by its length, not by the instants it spans.
 func cacheKey(view, id string, p views.Params) string {
-	return fmt.Sprintf("%q %q days=%d/%t since=%q until=%q tz=%q project=%q path=%q dev=%t limit=%d offset=%d has=%q sort=%q state=%q compare=%q measure=%q",
-		view, id, p.Days, p.DaysSet, p.Since, p.Until, p.TZ, p.Project, p.Path, p.Dev, p.Limit, p.Offset, p.Has, p.Sort, p.State, p.Compare, p.Measure)
+	return fmt.Sprintf("%q %q days=%d/%t since=%q until=%q tz=%q project=%q path=%q dev=%t limit=%d offset=%d has=%q sort=%q state=%q compare=%q measure=%q machines=%q",
+		view, id, p.Days, p.DaysSet, p.Since, p.Until, p.TZ, p.Project, p.Path, p.Dev, p.Limit, p.Offset, p.Has, p.Sort, p.State, p.Compare, p.Measure, p.Machines)
 }
 
 // resultCache keeps each view's result resultTTL and shares a computation

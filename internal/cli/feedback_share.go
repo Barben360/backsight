@@ -39,6 +39,34 @@ const (
 	shareMaxDocs = 64
 )
 
+// controlListing is the tick's one listing of the control bank, shared by
+// the shared counts and the daily figures: whichever needs it first lists
+// (every document under "backsight:"), the other filters the same result,
+// a failure included (it is not tried twice in a tick).
+type controlListing struct {
+	done  bool
+	items []hindsight.DocumentItem
+	err   error
+}
+
+// docs is the listed documents whose id starts with prefix.
+func (l *controlListing) docs(ctx context.Context, cl *hindsight.Client, bank, prefix string) ([]hindsight.DocumentItem, error) {
+	if !l.done {
+		l.items, l.err = retain.ControlDocuments(ctx, cl, bank, "backsight:")
+		l.done = true
+	}
+	if l.err != nil {
+		return nil, l.err
+	}
+	var out []hindsight.DocumentItem
+	for _, it := range l.items {
+		if strings.HasPrefix(it.ID, prefix) {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
 // shareTickBudget bounds the tick's sharing step, send and fetch.
 var shareTickBudget = 10 * time.Second
 
@@ -51,11 +79,17 @@ var shareTickBudget = 10 * time.Second
 // not parse. A failure keeps the cache and the upload record as they
 // were; the caller never fails for it.
 func shareLedger(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg config.Config, machine string, now time.Time) (uploaded bool, machines, skipped int, err error) {
+	return shareLedgerListed(ctx, cl, &controlListing{}, d, cfg, machine, now)
+}
+
+// shareLedgerListed is shareLedger reading the control bank through the
+// tick's one listing l.
+func shareLedgerListed(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time) (uploaded bool, machines, skipped int, err error) {
 	if !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger || machine == "" {
 		return false, 0, 0, nil
 	}
 	uploaded, uerr := uploadShared(ctx, cl, d, cfg, machine, now)
-	machines, skipped, rerr := refreshShared(ctx, cl, d, cfg.Server.Bank, machine, now, feedbackParams(cfg))
+	machines, skipped, rerr := refreshShared(ctx, cl, l, d, cfg.Server.Bank, machine, now, feedbackParams(cfg))
 	return uploaded, machines, skipped, errors.Join(uerr, rerr)
 }
 
@@ -120,7 +154,7 @@ func shareTarget(d paths.Dirs, cfg config.Config) string {
 // under p into shared-combined, which recall reads (combineShared),
 // also when only that file is missing or unreadable. machines is counted
 // from the cache as it stands after.
-func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank, machine string, now time.Time, p feedback.Params) (machines, skipped int, err error) {
+func refreshShared(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, bank, machine string, now time.Time, p feedback.Params) (machines, skipped int, err error) {
 	dir := d.FeedbackDir()
 	cache, cerr := feedback.LoadSharedCache(dir)
 	count := func(c feedback.SharedCache) int {
@@ -133,7 +167,7 @@ func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank
 		}
 		return count(cache), 0, nil
 	}
-	items, err := retain.ControlDocuments(ctx, cl, bank, sharedDocPrefix)
+	items, err := l.docs(ctx, cl, bank, sharedDocPrefix)
 	if err != nil {
 		return count(cache), 0, err
 	}

@@ -164,11 +164,62 @@ func FormatValue(d metrics.Def, m metrics.Metric) string {
 		}
 		return "—"
 	}
+	if d.ID == "recall.latency" && slices.Contains(m.Tags, "approximate") {
+		// merged from the PCs' buckets: the range holding the slowest 1 in 20
+		if lo, hi, ok := RangeMS(m, "range_ms"); ok {
+			return RangeText(lo, hi)
+		}
+	}
 	s := ValueIn(d.Unit, *m.Value, m)
+	if d.ID == "context.per_session" && slices.Contains(m.Tags, "average") {
+		s += " on average"
+	}
 	if d.Unit == "ratio" && m.CI != nil {
 		s = fmt.Sprintf("%s (%s–%s %%)", s, Percent(m.CI[0]), Percent(m.CI[1]))
 	}
 	return s
+}
+
+// RangeMS reads the bucket range stored under key of m's extras: the
+// range as the view computes it, or as it decodes from JSON ([lo, hi] with
+// hi null for the open bucket).
+func RangeMS(m metrics.Metric, key string) (lo int64, hi *int64, ok bool) {
+	switch v := m.Extra[key].(type) {
+	case *[2]*int64:
+		if v != nil && v[0] != nil {
+			return *v[0], v[1], true
+		}
+	case []any:
+		if len(v) == 2 {
+			l, lok := v[0].(float64)
+			if !lok {
+				return 0, nil, false
+			}
+			if h, hok := v[1].(float64); hok {
+				hv := int64(h)
+				return int64(l), &hv, true
+			}
+			if v[1] == nil {
+				return int64(l), nil, true
+			}
+		}
+	}
+	return 0, nil, false
+}
+
+// RangeText prints a latency bucket (lo, hi] as "250–500 ms", "500 ms–1.0 s"
+// or "1.0–2.0 s", and the open one as "over 5.0 s".
+func RangeText(lo int64, hi *int64) string {
+	l := ValueIn("ms", float64(lo), metrics.Metric{})
+	if hi == nil {
+		return "over " + l
+	}
+	h := ValueIn("ms", float64(*hi), metrics.Metric{})
+	lu, hu := l[strings.LastIndex(l, " "):], h[strings.LastIndex(h, " "):]
+	if lu == hu {
+		l = strings.TrimSuffix(l, lu)
+	}
+	return l + "–" + h
 }
 
 // ValueIn is v in unit; the currency of a money value is in m's extras.
@@ -334,6 +385,13 @@ var TagWords = map[string]string{"old_scan": "the last scan is more than 30 days
 
 // DayStatusWords name a doctor check's status on a day of its history.
 var DayStatusWords = map[string]string{"ok": "ok", "watch": "warning", "bad": "problem", "none": "no run"}
+
+// IgnoredWords say why another PC's document was set aside.
+var IgnoredWords = map[string]string{
+	"too_large":       "too large to read",
+	"unknown_version": "written by a newer backsight: update this PC",
+	"not_valid":       "not a valid document",
+}
 
 // Word is the word of k in m, k itself when it has none.
 func Word(m map[string]string, k string) string {

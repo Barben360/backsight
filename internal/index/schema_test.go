@@ -36,6 +36,7 @@ func embeddedHead(t *testing.T) int {
 var released = map[string]string{
 	"0001-initial":    "37f78317d2a3e98e9bf642e31337171222f525d2ecb7c6bf1b1d115097a9d331",
 	"0002-collection": "71de9e2b47e97357ff58bd793ef4214e6a5b2aff71999383539b5b74278c9500",
+	"0003-machines":   "56ecc20ae3dc7e45e6d287313addffac6f277b8fe741019da27a000167f766ef",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -92,6 +93,10 @@ var schemaTables = []struct{ name, cols string }{
 	{"doc_ops", rowKey + "ts operation_id document session status created_at updated_at retries units no_units"},
 	{"scans", rowKey + "ts count live forgotten pages ms"},
 	{"metrics_other", rowKey + "ts family kind"},
+	{"pc_fetch", "id fetched_at size mtime sha256 ingested_at"},
+	{"pc_docs", "machine os first_seen at binary_version until_day"},
+	{"pc_days", "machine day version noon prompts hit_n hit_d used_n used_d cov_n cov_d wrong_n wrong_d ctx_chars ctx_sessions flow_n flow_d lat0 lat1 lat2 lat3 lat4 lat5 lat6 lat7 lat8"},
+	{"pc_ignored", "pos machine reason"},
 }
 
 var schemaViews = []string{"turn_final_stop", "document_status", "memory_doc", "memory_day", "memory_coverage", "doc_op", "server_day"}
@@ -109,8 +114,8 @@ func TestReleasedMigrationsArePinned(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
 	defer mustClose(t, ix)
-	if ix.Schema() != 2 {
-		t.Fatalf("schema %d, want 2", ix.Schema())
+	if ix.Schema() != 3 {
+		t.Fatalf("schema %d, want 3", ix.Schema())
 	}
 	for _, tc := range schemaTables {
 		got := columnsOf(t, ix.sh.w, tc.name)
@@ -175,13 +180,22 @@ var (
 		"updated_at": "INTEGER", "retries": "INTEGER", "units": "INTEGER", "no_units": "INTEGER", "count": "INTEGER",
 		"forgotten": "INTEGER",
 
+		"os": "TEXT", "first_seen": "TEXT", "until_day": "TEXT", "version": "TEXT", "mtime": "INTEGER",
+		"fetched_at": "INTEGER", "noon": "INTEGER", "prompts": "INTEGER",
+		"hit_n": "INTEGER", "hit_d": "INTEGER", "used_d": "INTEGER", "cov_n": "INTEGER",
+		"cov_d": "INTEGER", "wrong_n": "INTEGER", "wrong_d": "INTEGER", "ctx_chars": "INTEGER",
+		"ctx_sessions": "INTEGER", "flow_n": "INTEGER", "flow_d": "INTEGER",
+		"lat0": "INTEGER", "lat1": "INTEGER", "lat2": "INTEGER", "lat3": "INTEGER", "lat4": "INTEGER",
+		"lat5": "INTEGER", "lat6": "INTEGER", "lat7": "INTEGER", "lat8": "INTEGER",
+
 		"top": "REAL", "reranker": "REAL", "boost": "REAL", "score_without_boost": "REAL",
 		"imported_credits": "REAL",
 	}
 	typeOf = map[string]string{
 		"ledger.credits": "REAL", "ledger.misses": "REAL", // decayed weights
 		"tel_config_values.value": "REAL", "meta.value": "TEXT",
-		"scans.live": "INTEGER", // a count there, an enum in tel_tool
+		"scans.live":      "INTEGER",                                                       // a count there, an enum in tel_tool
+		"pc_docs.machine": "TEXT", "pc_days.machine": "TEXT", "pc_ignored.machine": "TEXT", // an id, not turns' flag
 	}
 )
 
@@ -269,6 +283,9 @@ func TestSchemaConstraints(t *testing.T) {
 		`INSERT INTO stops(source_file, "offset") VALUES (NULL, 0)`,
 		`INSERT INTO cursors(source_file, kind) VALUES ('f', 'other')`,
 		`INSERT INTO local_status(id) VALUES (2)`,
+		`INSERT INTO pc_fetch(id) VALUES (2)`,
+		`INSERT INTO pc_docs(machine) VALUES ('m')`,
+		`INSERT INTO pc_days(machine, day, version) VALUES ('m', 'd', '')`,
 		`INSERT INTO ingest_errors(source_file, "offset", reason) VALUES ('f', 0, NULL)`,
 		`INSERT INTO tel_ids(source_file, "offset", ts, kind, pos, memory_id) VALUES ('f', 0, 1, 'prompt', 0, NULL)`,
 	}
@@ -297,7 +314,7 @@ func TestNullTimeRefused(t *testing.T) {
 		switch tc.name {
 		case "settles":
 			col = "settle_ts"
-		case "ledger", "local_status", "cursors", "ingest_errors", "meta":
+		case "ledger", "local_status", "cursors", "ingest_errors", "meta", "pc_fetch", "pc_docs", "pc_days", "pc_ignored":
 			continue
 		}
 		cols, vals := `source_file, "offset", `+col, `'f', 0, NULL`
@@ -444,7 +461,7 @@ func onePerTable(t *testing.T, w *sql.DB) {
 			switch {
 			case n == "kind" && tc.name == "cursors":
 				vals = append(vals, `'journal'`)
-			case n == "id" && tc.name == "local_status":
+			case n == "id" && (tc.name == "local_status" || tc.name == "pc_fetch"):
 				vals = append(vals, "1")
 			case ty == "INTEGER":
 				vals = append(vals, "1")

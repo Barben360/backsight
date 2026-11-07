@@ -17,6 +17,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -35,6 +36,15 @@ type Options struct {
 	Ledger feedback.LedgerReader
 	// LocalStatus reads the local_status row; nil: not refreshed.
 	LocalStatus func() (LocalStatus, error)
+	// Machines reads the other PCs' cache (metrics/machines.json); nil:
+	// the pc_* tables are not refreshed. It is called only when the file's
+	// size or modification time differ from the last ingest's. A missing
+	// file (fs.ErrNotExist) is an empty cache.
+	Machines func() (machines.Cache, error)
+	// MachinesOff reports that sharing is off: the cache then reads as
+	// empty without the file being looked at (and Machines not called);
+	// nil: never.
+	MachinesOff func() bool
 	// Progress receives a long catch-up's progress (CLI callers pass
 	// stderr); nil: silent.
 	Progress io.Writer

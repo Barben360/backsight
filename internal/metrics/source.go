@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 )
@@ -53,6 +54,22 @@ type Source struct {
 	Server     ServerReader // nil: none configured
 	ServerHost string       // host:port of server.url
 	Doctor     func(ctx context.Context) ([]DoctorCheck, error)
+	// Self is this PC's identity for the scope of the other PCs; nil: this
+	// PC's row shows no id.
+	Self func() SelfPC
+	// SharedCombined reads the other PCs' combined counts of the memories
+	// at now; nil: unknown, the memory page says unavailable.
+	SharedCombined func(now time.Time) (feedback.Combined, error)
+}
+
+// SelfPC is what this PC says of itself in scope.pcs. A missing or corrupt
+// publish record leaves FirstSeen "" and LastSent zero, with no error.
+type SelfPC struct {
+	Machine, OS, FirstSeen, BinaryVersion string
+	// Until is the last day of the figures this PC last published
+	// (published.json), empty when it never did.
+	Until    string
+	LastSent time.Time
 }
 
 // now is the source's clock, the wall clock when it has none.

@@ -162,6 +162,7 @@ When the user asks whether memory works or is worth it, run `backsight stats ove
 - `too_few` means not enough data yet and `no_data` means nothing to count: neither is a failure. Say so rather than calling it a problem.
 - `backsight stats releases --compare A,B` compares two versions; it is observational (weeks, projects and settings differ), so report its reading (`differs`, `no clear difference`, `too few to compare`) and never say a version is better or worse.
 - Put flags after the view word: `backsight stats overview --days 30`, `--project <name>`.
+- When the user asks about all their PCs, run `backsight stats overview --machines all --json` and read `data.scope.pcs` first: `count` (the PCs counted), `list`, `until` (how far the other PCs' figures reach), `stale` (gone quiet) and `ignored` (documents set aside). With `--project`, the other PCs' figures are not filtered (`scope.others_unfiltered`): say so. Rates are the PCs' sums; speed is a range from buckets (`approximate`), and the verdict, the statuses of `pipeline.flow` and `context.per_session`, the sessions, memories and projects lists stay this PC's (`status_this_pc`): report them as this PC's. `projects`, `sessions` and `memories` ignore `--machines`; `data.scope.machines` says what you got.
 - Never run `backsight stats index rebuild` without the user: it replaces the local index.
 - Never pass `--text` unless the user asks for a memory's text.
 

@@ -1,0 +1,28 @@
+How did each day go? (2026-10-07 00:00 → 2026-10-08 00:00, Europe/Paris)
+
+Found
+Prompts that got memory                      55 % (40–70 %)           (n=38, ok, -4 pts vs previous)
+
+Right
+Turns where Claude used memory               6 of 12                  (n=12, too few, 8 more needed)
+  worst case, if every turn where Claude did not say counts as unused: 50 %
+Memories reported wrong or out of date       1 of 12                  (n=12, too few, 8 more needed)
+
+Cost
+Context added per session                    —                        (n=3 sessions, status on this PC: too few, 97 more needed)
+Time memory adds to a prompt                 —                        (approximate, n=82, too few, 18 more needed)
+  all PCs: typical 500 ms–1.0 s
+
+Flowing
+Sessions sent                                91 % (62–98 %)           (n=11, status on this PC: ok, -0.8 pts vs previous)
+  sent 1, failed 0, set aside after an error 0, waiting 0
+
+Sessions of 2026-10-07
+Session  Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent
+s1       p1       2026-10-07 08:00  3        1            1      0     0      0              —
+
+What changed on 2026-10-07
+When              What
+2026-10-07 18:00  settings changed: recall.min_score 0.5 → 0.6
+
+Activity on all PCs on this server (3) · other PCs up to 2026-10-04 · 1 document ignored · memory on 127.0.0.1:PORT · --json for every field

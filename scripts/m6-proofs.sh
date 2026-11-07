@@ -826,6 +826,80 @@ m6_check_two_clients() {
     "$(jq -cn --arg id "$ia" '{server_id: $id, records: 6}')"
 }
 
+# several-pcs: A and B each type prompts the previous UTC day and publish
+# their daily figures; after the fetch, A, B and the server host (server
+# role) each list the other PCs in `stats overview --machines all`, and A's
+# merged hit-rate denominator for that day is A's own plus B's published one.
+# two-clients ticked both PCs this UTC day, so the publish record is removed
+# first (the daily publish would otherwise wait for tomorrow), and the
+# fetch's cache is removed so that the next tick reads the documents again.
+m6_check_several_pcs() {
+  local day today month who state mid mid_a mid_b sid n injected i ts tick doc out own merged theirs list
+  day=$(date -u -d yesterday +%Y-%m-%d) today=$(date -u +%Y-%m-%d) month=${day%-*}
+  for who in a b; do
+    state=$(m6_paths "$who" | jq -r .state)
+    case $who in a) n=4 injected=3 ;; *) n=2 injected=1 ;; esac # A: 3 of 4 got memory, B: 1 of 2
+    sid=sp-$who
+    for i in $(seq 1 "$n"); do
+      ts=${day}T10:0$i:00.000Z
+      jq -cn --arg ts "$ts" --arg s "$sid" --argjson inj "$([ "$i" -le "$injected" ] && echo 1 || echo 0)" \
+        '{ts: $ts, event: "prompt", session: $s, project: "bs-m6-several", decision: "recall", n: 1, plen: 80, ms: 600, injected: $inj, ids: [], above: 0, top: 0}'
+    done | m6_sh "$who" "mkdir -p $(m6_q "$state/telemetry") && cat >> $(m6_q "$state/telemetry/events-$month.jsonl")" ||
+      fail "cannot write $who's prompts of $day"
+    m6_sh "$who" "rm -f $(m6_q "$state/metrics/published.json")" || fail "cannot remove $who's publish record"
+  done
+  # The publish: both send their figures, A then B.
+  for who in a b; do
+    tick=$(m6_tick "$who") || exit 1
+    [ "$(jq -r '.data.metrics_up // false' <<<"$tick")" = true ] ||
+      fail "the tick on $who sent no daily figures (metrics_up false: $(jq -c '{metrics_failure: .data.metrics_failure, metrics_up: .data.metrics_up}' <<<"$tick")); a record of today's publish left on $who would explain it"
+  done
+  # The fetch: A, B and the server host read the documents again.
+  for who in a b srv; do
+    state=$(m6_paths "$who" | jq -r .state)
+    m6_sh "$who" "rm -f $(m6_q "$state/metrics/machines.json")" || fail "cannot remove $who's fetch cache"
+    tick=$(m6_tick "$who") || exit 1
+    [ "$(jq -r '.data.metrics_fetch_error // ""' <<<"$tick")" = "" ] ||
+      fail "the tick on $who did not fetch the other PCs' figures ($(jq -r '.data.metrics_fetch_error' <<<"$tick"))"
+  done
+  # The figures the PCs published, and the machine ids behind them.
+  mid_a=$(m6_get a "$(m6_paths a | jq -r .state)/machine_id") mid_b=$(m6_get b "$(m6_paths b | jq -r .state)/machine_id")
+  [ -n "$mid_a" ] && [ -n "$mid_b" ] && [ "$mid_a" != "$mid_b" ] || fail "A and B have no distinct machine ids: the check would prove nothing"
+  doc=$(m6_doc "backsight:metrics:$mid_b" -control) || exit 1
+  [ -n "$doc" ] || fail "the control bank holds no daily figures of B"
+  theirs=$(jq -r --arg d "$day" '.document_metadata.metrics | fromjson | [.days[] | select(.day == $d) | .hit[1]] | add // 0' <<<"$doc" 2> /dev/null) ||
+    fail "B's published figures do not parse: $(jq -c '.document_metadata.metrics // "none"' <<<"$doc" 2> /dev/null | cut -c1-200)"
+  [ "$theirs" -gt 0 ] 2> /dev/null || fail "B published no prompts for $day (hit denominator '$theirs'): the sum would prove nothing"
+  # The views: the day alone (UTC), this PC's then all.
+  for who in a b srv; do
+    case $who in a) mid=$mid_b ;; b) mid=$mid_a ;; srv) mid="" ;; esac
+    out=$(m6_on "$who" stats overview --machines all --tz UTC --since "$day" --until "$today" --json < /dev/null) || fail "stats overview --machines all on $who failed"
+    out=$(m6_json "stats overview --machines all on $who" "$out") || exit 1
+    list=$(jq -c '[.data.scope.pcs.list[]? | select(.this | not) | .machine]' <<<"$out")
+    case $who in
+      a | b)
+        jq -e --arg m "${mid:0:8}" 'any(.[]; startswith($m))' > /dev/null <<<"$list" ||
+          fail "$who's scope.pcs.list names $list, not the other client (${mid:0:8})"
+        ;;
+      srv)
+        jq -e --arg a "${mid_a:0:8}" --arg b "${mid_b:0:8}" 'any(.[]; startswith($a)) and any(.[]; startswith($b))' > /dev/null <<<"$list" ||
+          fail "the server host's scope.pcs.list names $list, not both clients (${mid_a:0:8}, ${mid_b:0:8})"
+        ;;
+    esac
+    [ "$(jq -r '.data.scope.machines' <<<"$out")" = all ] || fail "$who's overview with --machines all reports scope.machines $(jq -r '.data.scope.machines' <<<"$out")"
+    if [ "$who" = a ]; then
+      merged=$(jq -r '.data.metrics["recall.hit_rate"].den // 0' <<<"$out")
+      own=$(m6_on a stats overview --machines this --tz UTC --since "$day" --until "$today" --json < /dev/null | jq -r '.data.metrics["recall.hit_rate"].den // 0') ||
+        fail "stats overview --machines this on A failed"
+      [ "$own" -gt 0 ] 2> /dev/null || fail "A's own hit denominator for $day is '$own': A typed prompts, the sum would prove nothing"
+      [ "$merged" = $((own + theirs)) ] ||
+        fail "A's merged recall.hit_rate den for $day is $merged, want A's own $own plus B's published $theirs ($((own + theirs)))"
+    fi
+  done
+  m6_result several-pcs PASS "A and B published $day (B's hit denominator $theirs); each lists the other in scope.pcs.list, the server host lists both; A's merged recall.hit_rate den $merged = own $own + B's $theirs" \
+    "$(jq -cn --argjson own "$own" --argjson b "$theirs" --argjson merged "$merged" '{own: $own, b: $b, merged: $merged}')"
+}
+
 # ---- Dedup and key rotation (also the CI chain's checks).
 
 # The project of the dedup sessions, and how long the bench PCs have
