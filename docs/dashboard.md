@@ -51,6 +51,8 @@ Each page asks one question, and its cards answer parts of it. Overview, Quality
 | Memories | Which memories were shown? | One row per memory, with an order and a filter and badges for what to review; an id opens that memory ("How has memory ... done?"). | `backsight stats memories` |
 | Days | How did each day go? | A calendar of the last 13 months, then one row per day; a date opens that day ("What happened on Friday, Oct 30?"). | `backsight stats days` |
 
+With other PCs sharing, a switch in the scope line adds them up: see [Several PCs](#several-pcs).
+
 Each card is titled with the question it answers. Its info button says what the number counts, its limits and the smallest change it can show, and its CLI button gives the `backsight stats` command that prints the same numbers.
 
 **Window and project.** Most pages have a window picker (24 h, 7 d, 30 d, 90 d; 7 d by default, or a custom window, see below) and a project filter, where you type a project's name or choose one from the Projects page. The Overview's verdict always judges the last 7 days. The page of one day shows that day and has no picker; the page of one session shows the days the session spans, and the page of one memory reads "all time", neither with a picker.
@@ -97,6 +99,43 @@ These cards come from the daily upkeep's record (see the notes of v0.1.28-m7 in 
 **Releases** (developer mode)
 - **Do two versions differ?** Pick two versions and a measure. The answer is a difference with its 95 % interval, matched by project and by where memory was shown, read as differs, no clear difference or too few, with what is missing and when to look again. It is observational: the two versions ran on different weeks, work and settings, so it never says one is better. When the raw numbers point the other way it says so.
 - **When did Claude use memory?** The share of turns where Claude used memory over time, with a marker at each version switch and settings change recorded on this PC.
+
+## Several PCs
+
+When other PCs use the same memory server and share their activity (`feedback` and `feedback.share_ledger`, both on by default; [what they send](privacy.md#what-your-pcs-share-with-each-other)), the pages can add them up. The same figures are in `backsight stats overview --machines all` and the other views ([several-pcs.md](several-pcs.md#see-all-your-pcs-activity)).
+
+**The switch.** The line under the top bar reads `Activity on` and a choice: **this PC | all PCs on this server (N)**, where N counts this PC and every PC whose figures were read. It appears when another PC shares; with none, the line is the one a single PC always had. Choosing all PCs puts `machines=all` in the address: every link and form on the page keeps it, the **this PC** half removes it, and it is never a preference, so a bookmarked all-PCs address opens on all PCs. Under 900 px the switch stays in this line, on a line of its own, and does not move into the Menu.
+
+- **Which PCs** opens beside the switch once all PCs is chosen. It lists each PC counted by the start of its machine id, with its system, the day it first sent and when it sent (`sent 3 h ago`); a PC that sent nothing for 2 days is amber and says where its figures stop (`its figures stop on Oct 20`), and the PC the memory server runs on says so. Below it: how many documents were set aside, when the figures were fetched, and a link to Machines on System.
+- **Notes after the line** appear only when they apply: `other PCs: not filtered` with a project filter (the other PCs send no project, so their whole figures are added); `1 PC: nothing sent for 9 days`, with the PC and the day its figures stop in the tooltip; `1 document ignored`; and `other PCs as fetched at 07:40` while the memory server does not answer, since the list is then the one fetched earlier.
+- **Sharing off** on this PC: the second half reads `all PCs: sharing is off here` and links to Machines on System, which says which setting is off. A PC that does not share does not read the others' either.
+- **Projects, Sessions, Memories** and the page of one of them are always this PC's: the second half is plain text with the reason in its tooltip (`Projects, sessions and memories are this PC’s: other PCs send none`), and the figures stay this PC's. A page of this PC alone that you reach from a kept link has no `--machines all` in its commands.
+
+**What follows the switch.** With all PCs, a card or tile that adds the PCs up wears the chip `all PCs (N)` in place of `this PC`; its command (CLI button) ends with `--machines all`. Everything else keeps the this-PC chip and its command without the flag.
+
+| Where | Adds up all PCs | Stays this PC's or the server's |
+|---|---|---|
+| Overview | The six tiles: Found, Used, Reported wrong, Context, Speed and Flowing; the calendar of the days memory helped (colour by sessions is this PC's: the others send no sessions) | The verdict, the summary's verdict lines, **What should I do?**, **What happened lately?**, **Which memories helped most?**, **How big is the memory?** (the server's) |
+| Quality | The Found and Used cards | The outcomes, reports, empty reasons, searches and every list |
+| Cost | The time memory adds to a prompt, drawn per day as a range with a **By PC** table; in the figures above, the context per session (an average) and that time | The context card's chart (the other PCs send a total and a count, not sizes), the time of a search, and what the server's model spent (every PC's) |
+| Pipeline | The write flow (how many sends worked) | What waits on this PC and on the server, the jobs, the steps that crashed |
+| Days, one day, Releases | The calendar and the day's tiles; the numbers per version | The day-by-day table, the markers on a day, the comparison of two versions |
+| Bank, System | Nothing | Both are the server's or this PC's. System gains **Which PCs share their activity here?** (below) |
+
+The tiles show **a range** where the PCs' times are only known by bucket:
+
+- **Speed** reads as a range, for example `1.0–2.0 s`, marked `approximate`: the PCs send how many prompts fell in each time bucket, not each time, so the slowest 1 in 20 can only be placed between two bucket edges. This PC's exact value sits beside it. A change from the week before is said in buckets (`same bucket as the week before`, `one bucket slower`), and the tile says `Over 2.0 s for sure` or `Over 2.5 s for sure` when the whole range is past the limit. On Cost each day is a bar from the bucket's lower to its upper edge, with a ring for this PC's exact value, and the By PC table lists the range of each PC.
+- **Context** is an average per session over the sessions of every PC (`average per session, all PCs`), with this PC's high value beside it; the `≈ N tokens` follows the average. It has no change from the week before.
+- **Reported wrong** can say `too few` with this PC alone and enough once the PCs are added up.
+- **Counts in links** stay this PC's: `This PC’s 167 prompts →` opens this PC's list, and Found's subline gives `this PC 46 of 167`.
+
+**The verdict stays this PC's.** On all PCs the banner reads `(last 7 days, this PC)` and says why: it also weighs what only this PC knows, such as what waits to be sent, its health checks and the server's answers. **Copy summary** and **Summary as text** hold the added-up tiles, say `Activity on all PCs on this server (N)`, and name the notes above in one line.
+
+**With no activity.** When none of the PCs had any in the window, the Overview says `No activity on any of the N PCs in the last 7 days` with the day of the latest one and links to a longer window.
+
+**Machines.** System has a card, **Which PCs share their activity here?**, with one row per PC: its machine id's start, system, the day it first sent, when it last sent (`9 d ago` after a week), its backsight version and whether it is counted in all PCs (`counted`, `up to Oct 20` for a PC gone quiet, with its days after that missing). A document set aside is a row of its own with the reason, `over the 1 MiB cap` or `not valid` (or `written by a newer backsight: update this PC`), and nothing else of it. Under the table: when the figures were fetched (every 6 hours), and that a PC that has not sent for 30 days drops off. With sharing off it names the setting to change and the command; when the memory server does not answer it says so and shows the list fetched earlier.
+
+**A memory's page on other PCs.** **Has it helped on your other PCs?** shows how often Claude used the memory, or was shown it and ignored it, on this PC, on the other PCs and together, and whether it is hidden from recall on another PC (with the command that brings it back). It is the counts your PCs share through the memory server, which the learned ranking uses; it needs no switch.
 
 ## Keyboard shortcuts
 

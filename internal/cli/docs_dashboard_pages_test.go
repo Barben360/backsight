@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // The README's dashboard section shows the Overview in both themes: each
@@ -164,4 +165,21 @@ func TestReleaseNotesOfThePages(t *testing.T) {
 	requireInSection(t, notes, "Known limits",
 		"on a day's page and on Releases only", "13 months", "Time to recall needs a few days of history",
 		"Memory yield needs four weeks", "over 200 days", "latest 120 days", "not complete shows no count of new memories")
+}
+
+// The guide's Several PCs section and the release notes quote the words the pages and the CLI print: the
+// switch, the reasons a document is set aside (the same map the pages and `stats system` read), the notes
+// after the scope line. A word changed on a page and not here fails.
+func TestDashboardGuideSeveralPCs(t *testing.T) {
+	words := []string{"this PC | all PCs on this server (N)", "Which PCs", "machines=all", "other PCs: not filtered", "1 document ignored",
+		"all PCs: sharing is off here", "Projects, sessions and memories are this PC’s: other PCs send none", "all PCs (N)", "approximate",
+		"By PC", "Which PCs share their activity here?", "Has it helped on your other PCs?", "stays in this line", "(last 7 days, this PC)",
+		"Activity on all PCs on this server (N)"}
+	for _, reason := range []string{"too_large", "not_valid", "unknown_version"} {
+		words = append(words, views.IgnoredWords[reason])
+	}
+	requireInSection(t, "../../docs/dashboard.md", "Several PCs", words...)
+	requireInSection(t, "../../docs/releases/v0.1.30-m7.md", "What changed", "this PC | all PCs on this server (N)",
+		views.IgnoredWords["too_large"], views.IgnoredWords["not_valid"], "Which PCs share their activity here?", "approximate")
+	requireInSection(t, "../../docs/releases/v0.1.30-m7.md", "Known limits", "Projects, Sessions and Memories stay this PC's", "once a UTC day")
 }

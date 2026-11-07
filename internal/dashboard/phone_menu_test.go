@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -90,6 +91,47 @@ func TestNarrowRulesDoNotHideTheMenuContent(t *testing.T) {
 	}
 	if !hidesTopBar {
 		t.Errorf("none of %q matches a top bar control: the check would be vacuous", sels)
+	}
+}
+
+// Under 900 px the "this PC / all PCs" switch stays in the scope line, in plain view: it is not moved into the
+// Menu, and nothing the narrow block hides is the switch, anything in it or anything it sits in (the scope line
+// and its bar). The narrow block gives it a line of its own.
+func TestSwitchStaysVisibleInTheScopeLineOnAPhone(t *testing.T) {
+	h := othersHarness(t)
+	page := rawPage(t, h, cookieHdr(h.login()), "/quality?machines=all")
+	sw := page.first(".scopebar .scope .mscope")
+	if sw == nil {
+		t.Fatal("the switch is not in the scope line")
+	}
+	if within(sw, "details", "navmenu") || page.first("details.navmenu .mscope") != nil {
+		t.Error("the switch is inside the Menu: it would be shown only after opening it")
+	}
+	if len(sw.find("nav.mseg a")) < 2 {
+		t.Errorf("the switch holds %d links, want both halves", len(sw.find("nav.mseg a")))
+	}
+	var chain []*node // the switch, what it holds and what it sits in
+	for p := sw; p != nil; p = p.Parent {
+		chain = append(chain, p)
+	}
+	walk(sw, func(n *node) { chain = append(chain, n) })
+	sels := narrowDisplayNone(t)
+	matched := 0
+	for _, sel := range sels {
+		for _, n := range page.find(sel) {
+			matched++
+			if slices.Contains(chain, n) {
+				t.Errorf("the narrow block hides %q, which is or holds the switch (<%s class=%q>)", sel, n.Name, n.attr("class"))
+			}
+		}
+	}
+	if matched == 0 {
+		t.Errorf("none of %q matches an element of the page: the check would be vacuous", sels)
+	}
+	css := dashboardCSS(t)
+	i := strings.Index(css, "@container page (max-width: 899px) {\n  .mscope")
+	if i < 0 || !strings.Contains(css[i:i+strings.Index(css[i:], "\n}")], ".mscope { flex-basis: 100%; }") {
+		t.Error("the narrow block gives the switch no line of its own")
 	}
 }
 

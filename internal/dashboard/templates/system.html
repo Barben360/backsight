@@ -21,7 +21,7 @@
 {{template "attitems" .Items}}</ul>
 {{end}}{{if or .Rows .Ignored}}<div class="tbl-wrap">
 <table class="tbl mach">
-<thead><tr><th>PC</th><th>System</th>{{if not .Short}}<th>First seen</th>{{end}}<th>Last sent</th><th>backsight</th>{{if not .Short}}<th>In “all PCs”</th>{{end}}</tr></thead>
+<thead><tr><th scope="col">PC</th><th scope="col">System</th>{{if not .Short}}<th scope="col">First seen</th>{{end}}<th scope="col">Last sent</th><th scope="col">backsight</th>{{if not .Short}}<th scope="col">In “all PCs”</th>{{end}}</tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{with .ID}}<span class="idc" title="Short machine id">{{.}}</span>{{end}}{{if .This}}<b>this PC</b>{{end}}</td><td>{{.System}}</td>{{if not $m.Short}}<td>{{if .First.Datetime}}{{template "reltime" .First}}{{else}}{{dash}}{{end}}</td>{{end}}<td>{{if .Sent.Datetime}}{{if .Quiet}}<span class="st st-watch">{{template "reltime" .Sent}}</span>{{else}}{{template "reltime" .Sent}}{{end}}{{else}}{{dash}}{{end}}</td><td>{{.Version}}</td>{{if not $m.Short}}<td><span class="st {{.Counted.Class}}">{{.Counted.Word}}</span>{{with .Why}} <span class="muted small">{{.}}</span>{{end}}</td>{{end}}</tr>
 {{end}}{{range .Ignored}}<tr class="ign"><td>{{with .ID}}<span class="idc" title="Short machine id, from the document’s name">{{.}}</span>{{else}}<span class="muted">unknown PC</span>{{end}}</td><td>{{dash}}</td><td>{{dash}}</td><td>{{dash}}</td><td>{{dash}}</td><td><span class="st st-few">ignored: {{.Why}}</span></td></tr>

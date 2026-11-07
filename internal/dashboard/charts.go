@@ -306,7 +306,7 @@ func byPCOf(l format.Locale, rows []metrics.ByPCRow) string {
 		return l.Duration(*v)
 	}
 	var b strings.Builder
-	b.WriteString(`<details class="tblfb"><summary>By PC</summary><div class="tbl-wrap"><table class="tbl mach"><thead><tr><th>PC</th><th class="r">Prompts</th><th>Slowest 1 in 20</th><th>Typical</th></tr></thead><tbody>`)
+	b.WriteString(`<details class="tblfb"><summary>By PC</summary><div class="tbl-wrap"><table class="tbl mach"><caption class="sr-only">Speed by PC</caption><thead><tr><th scope="col">PC</th><th scope="col" class="r">Prompts</th><th scope="col">Slowest 1 in 20</th><th scope="col">Typical</th></tr></thead><tbody>`)
 	for _, r := range rows {
 		who := []string{}
 		if w := osWord(r.OS); w != "" {
