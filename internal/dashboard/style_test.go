@@ -81,11 +81,13 @@ func TestStylesheetIsTheDesigns(t *testing.T) {
 		if skip || strings.HasPrefix(l, ".keys-shade ") {
 			continue
 		}
-		// Two comments name the block: the pages say no block number, so the
+		// Four comments name a block: the pages say no block number, so the
 		// shipped sheet words them without it (G-public).
 		l = strings.NewReplacer(
 			"Block 6 additions (draft). Every rule below", "Additions: calendar, density, shortcuts, markers. Every rule below",
 			"narrow: block 6 parts under", "narrow: the added parts under",
+			"Block 8 additions (draft). Every rule below", "Additions: several PCs. Every rule below",
+			"checked in blocks 3 and 6", "checked earlier",
 		).Replace(l)
 		kept = append(kept, l)
 	}
