@@ -52,15 +52,30 @@ func TestPriceNotAskedWhereNothingIsBilledPerToken(t *testing.T) {
 // A model served on this machine or the LAN has no price to set: a warning
 // there could never be cleared honestly.
 func TestPriceNotAskedOfALocalEndpoint(t *testing.T) {
-	for _, u := range []string{"http://localhost:1234/v1", "http://127.0.0.1:8000/v1", "http://host.docker.internal:11434/v1", "http://192.168.1.20:8080/v1", "http://[::1]:8000/v1"} {
+	for u, host := range map[string]string{
+		"http://localhost:1234/v1":                    "localhost",
+		"http://LOCALHOST.:1234/v1":                   "localhost",
+		"http://vllm.localhost:8000/v1":               "vllm.localhost",
+		"http://127.0.0.1:8000/v1":                    "127.0.0.1",
+		"http://host.docker.internal:11434/v1":        "host.docker.internal",
+		"http://192.168.1.20:8080/v1":                 "192.168.1.20",
+		"http://100.101.102.103:8080/v1":              "100.101.102.103",
+		"http://0.0.0.0:8000/v1":                      "0.0.0.0",
+		"http://[::1]:8000/v1":                        "::1",
+		"http://[fd7a:115c:a1e0::1]:8000/v1":          "fd7a:115c:a1e0::1",
+		"http://user:secret@localhost:8000/v1?key=k1": "localhost",
+	} {
 		c := checkPrice(config.LLM{Provider: "openai", Model: "qwen3-8b", BaseURL: u, Currency: "USD"}, "cfg", nil)
-		if c.Status != Info || c.Summary != "not billed per token: a local endpoint ("+u+")" {
+		if c.Status != Info || c.Summary != "not billed per token: a local endpoint ("+host+")" {
 			t.Errorf("%s: %+v", u, c)
 		}
+		if strings.Contains(c.Summary, "secret") || strings.Contains(c.Summary, "k1") {
+			t.Errorf("%s: the summary shows the URL's key: %q", u, c.Summary)
+		}
 	}
-	// A public endpoint stays a warning, and a priced local model is still
-	// reported with its price.
-	for _, u := range []string{"https://api.openai.com/v1", "https://openrouter.ai/api/v1", "", "::bad"} {
+	// A public endpoint, or one that only looks local, stays a warning; a
+	// priced local model is still reported with its price.
+	for _, u := range []string{"https://api.openai.com/v1", "https://openrouter.ai/api/v1", "http://localhost.evil.com/v1", "http://172.32.0.1/v1", "http://100.128.0.1/v1", "", "::bad"} {
 		if c := checkPrice(config.LLM{Provider: "openai", Model: "qwen3-8b", BaseURL: u, Currency: "USD"}, "cfg", nil); c.Status != Warn {
 			t.Errorf("%q: %+v", u, c)
 		}

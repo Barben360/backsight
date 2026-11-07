@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"strings"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/retain"
@@ -26,10 +27,12 @@ func checkPrice(l config.LLM, cfgFile string, cfgErr error) Check {
 		return c
 	}
 	p := retain.PricesForLLM(l)
-	if !p.Known() && localEndpoint(l.BaseURL) {
+	if host, ok := localEndpoint(l.BaseURL); !p.Known() && ok {
 		// LM Studio, vLLM, llama.cpp behind an OpenAI-compatible
-		// provider: a price would be made up.
-		c.Status, c.Summary = Info, "not billed per token: a local endpoint ("+l.BaseURL+")"
+		// provider: a price would be made up. A local proxy to a billed
+		// model reads the same; its prices go in config.toml. Only the
+		// host is shown: a base_url can carry a key.
+		c.Status, c.Summary = Info, "not billed per token: a local endpoint ("+host+")"
 		return c
 	}
 	if !p.Known() {
@@ -48,18 +51,29 @@ func checkPrice(l config.LLM, cfgFile string, cfgErr error) Check {
 	return c
 }
 
-// localEndpoint reports whether baseURL is this machine, its Docker host
-// or a private address: a model there is not billed per token.
-func localEndpoint(baseURL string) bool {
+// tailnet is Tailscale's address range (CGNAT), a private network that
+// netip's IsPrivate leaves out.
+var tailnet = netip.MustParsePrefix("100.64.0.0/10")
+
+// localEndpoint reports whether baseURL is this machine, its Docker host,
+// a private or tailnet address, and returns its host: a model there is not
+// billed per token.
+func localEndpoint(baseURL string) (string, bool) {
 	u, err := url.Parse(baseURL)
-	if err != nil || u.Hostname() == "" {
-		return false
+	if err != nil {
+		return "", false
 	}
-	switch h := u.Hostname(); h {
-	case "localhost", "host.docker.internal":
-		return true
-	default:
-		a, err := netip.ParseAddr(h)
-		return err == nil && (a.IsLoopback() || a.IsPrivate())
+	h := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	switch {
+	case h == "":
+		return "", false
+	case h == "localhost", h == "host.docker.internal", strings.HasSuffix(h, ".localhost"):
+		return h, true
 	}
+	a, err := netip.ParseAddr(h)
+	if err != nil {
+		return "", false
+	}
+	a = a.Unmap()
+	return h, a.IsLoopback() || a.IsPrivate() || a.IsUnspecified() || a.IsLinkLocalUnicast() || tailnet.Contains(a)
 }

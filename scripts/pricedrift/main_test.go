@@ -65,7 +65,7 @@ func TestEachChangedPriceIsADiff(t *testing.T) {
 
 // A price the list leaves out is not compared; a model it leaves out is
 // named apart from the price rows.
-func TestUnlistedIsNotADiff(t *testing.T) {
+func TestUnlistedIsNamedApart(t *testing.T) {
 	list := matching()
 	delete(list, "gpt-6-luna")
 	s := list["anthropic/claude-sonnet-5-5"]
@@ -192,6 +192,25 @@ func TestRunExitStatus(t *testing.T) {
 		}
 		if c.want == 2 && out.Len() > 0 {
 			t.Errorf("%s: a failed run wrote a report: %q", c.name, out.String())
+		}
+	}
+}
+
+// Exactly half the table missing is still a list to report on (exit 1);
+// one more is a broken list (exit 2).
+func TestRunHalfMissingIsADifference(t *testing.T) {
+	four := map[string]retain.Prices{"a": {Input: 1}, "b": {Input: 1}, "c": {Input: 1}, "d": {Input: 1}}
+	for _, c := range []struct {
+		listed []string
+		want   int
+	}{{[]string{"a", "b"}, 1}, {[]string{"a"}, 2}} {
+		list := map[string]entry{}
+		for _, m := range c.listed {
+			list[m] = entry{Input: perToken(1)}
+		}
+		var out, errw bytes.Buffer
+		if got := run(writeList(t, list), four, &out, &errw); got != c.want {
+			t.Errorf("%d of 4 listed: exit %d, want %d (err %q)", len(c.listed), got, c.want, errw.String())
 		}
 	}
 }
