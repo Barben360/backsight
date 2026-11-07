@@ -180,7 +180,11 @@ func TestPublishedDocumentHoldsNoCanary(t *testing.T) {
 	canaryServer(t, home)
 	canaryCollect(t, home)
 	d := pathsOf(home)
-	now := time.Now().UTC()
+	// The publish's clock is pinned well before the fixtures, which are written
+	// relative to the wall clock (now-1h, now-2h and 16 days back): their rows
+	// fall after the window's end, so they never join the canary day, whatever
+	// date or hour the test runs on.
+	now := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
 	yesterday := utcMidnight(now).AddDate(0, 0, -1)
 	month := yesterday.Format("2006-01")
 	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-"+month+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
