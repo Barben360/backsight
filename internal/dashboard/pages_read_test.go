@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,5 +103,44 @@ func TestAViewThatPanicsFailsTheRequestNotTheProcess(t *testing.T) {
 	}
 	if strings.Contains(bad.err.Error(), "secret") {
 		t.Errorf("the panic's value reached the error: %q", bad.err)
+	}
+}
+
+// This PC's own answer is read beside the merged views, and a panic in that read fails the page like a view's:
+// a failure page, not a crashed request, with the panic's value kept out of the body. The control: the same
+// page answers when the read does not panic, and a page of this PC alone never makes the read.
+func TestOwnReadThatPanicsFailsThePageNotTheProcess(t *testing.T) {
+	old, oldSpec := ownReadHook, dataSpec
+	t.Cleanup(func() { ownReadHook, dataSpec = old, oldSpec })
+	dataSpec.OtherPCs = 3
+	calls := 0
+	var mu sync.Mutex
+	ownReadHook = func(context.Context, string, views.Params, string) (metrics.Result, indexState, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		panic("secret path /home/someone/x")
+	}
+	h := dataHarness(t)
+	ck := cookieHdr(h.login())
+	for _, path := range []string{"/?machines=all", "/cost?machines=all"} {
+		resp := h.do("GET", path, ck...)
+		b := body(t, resp)
+		if resp.StatusCode != 500 || strings.Contains(b, "secret") || !strings.Contains(visibleText(b), "The view failed") {
+			t.Errorf("GET %s: %d, %.300s", path, resp.StatusCode, visibleText(b))
+		}
+	}
+	mu.Lock()
+	n := calls
+	mu.Unlock()
+	if n != 2 {
+		t.Errorf("%d own reads, want one for each all-PCs page", n)
+	}
+	if resp := h.do("GET", "/?machines=this", ck...); resp.StatusCode != 200 || func() int { mu.Lock(); defer mu.Unlock(); return calls }() != 2 {
+		t.Errorf("a page of this PC alone: %d, or it read this PC's own answer", resp.StatusCode)
+	}
+	ownReadHook = nil
+	if resp := h.do("GET", "/?machines=all", ck...); resp.StatusCode != 200 {
+		t.Errorf("without the panic the page answers %d", resp.StatusCode)
 	}
 }

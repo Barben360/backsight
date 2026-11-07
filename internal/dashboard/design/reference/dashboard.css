@@ -475,6 +475,10 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
   .tile.is-bad, .tile.is-watch { border-width: 2px; }
 }
 
+/* a long window draws its thin bars as one path for each fill, not a rect each */
+.chart path.seg.seg-fine { stroke: none; }
+.chart path.seg.seg-fine.f-pending { fill: none; stroke: var(--c-shown); stroke-width: 1; }
+
 /* A simulation of a forced-colors theme for the component sheet (not used by pages).
  * Keep in sync with the @media (forced-colors: active) block above: same roles, simulated values. */
 .fc-preview {

@@ -557,9 +557,19 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		var ownCh chan ownRead
 		if ownKind && p.Machines == "all" {
 			ownCh = make(chan ownRead, 1)
+			read := ownReadHook
+			if read == nil {
+				read = s.data.result
+			}
 			go func() {
-				res, st, err := s.data.result(r.Context(), first, viewParams(spec, first, p.ThisPC()), id)
-				ownCh <- ownRead{res, st, err}
+				var o ownRead
+				defer func() {
+					if recover() != nil { // as a view's: the page fails, not the process
+						o = ownRead{st: stateReady, err: errViewFailed}
+					}
+					ownCh <- o
+				}()
+				o.res, o.st, o.err = read(r.Context(), first, viewParams(spec, first, p.ThisPC()), id)
 			}()
 		}
 		outs := s.readViews(r.Context(), spec, p, id)
@@ -584,10 +594,15 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// page that is always this PC's, answers this PC and says so.
 		data.P.Machines = head.Scope.Machines
 		if ownCh != nil && head.Scope.Machines == "all" { // sharing off answers this PC: the read is not needed
-			if o := <-ownCh; o.st == stateReady && o.err == nil {
+			o := <-ownCh
+			ownCh = nil
+			if errors.Is(o.err, errViewFailed) {
+				s.failurePage(w, r, title, prefs, o.err)
+				return
+			}
+			if o.st == stateReady && o.err == nil {
 				data.Own = &o.res
 			}
-			ownCh = nil
 		}
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)
@@ -651,6 +666,10 @@ func (s *Server) readViews(ctx context.Context, spec pageSpec, p views.Params, i
 
 // viewReader reads one view: data.result, or a stand-in in a test.
 type viewReader func(ctx context.Context, view string, p views.Params, id string) (metrics.Result, indexState, error)
+
+// ownReadHook replaces the read of this PC's own answer in a test (nil in the program): set before the server
+// starts.
+var ownReadHook viewReader
 
 // errViewFailed is what a view that panicked reports: the page fails, not
 // the process. The panic's value stays out of it (it may name a path).
