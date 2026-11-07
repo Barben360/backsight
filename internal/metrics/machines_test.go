@@ -1166,19 +1166,27 @@ func TestMergedLatencySkipsRecovery(t *testing.T) {
 	}
 }
 
-// Cost view on all PCs. This PC: 100 prompts of 800 ms (p50 = p95 = 800).
-// bbbbbbbb: 100 prompts [0,0,0,0,60,38,2,0,0] -> rank 95 in bucket 5
+// Cost view on all PCs. This PC: 110 typed prompts, 100 of them recalls of
+// 800 ms (p50 = p95 = 800) and 10 skipped: prompts is the 100 recalls, not the
+// 110 typed. bbbbbbbb: 120 typed prompts of which 100 recalls (hit pair
+// denominator), [0,0,0,0,60,38,2,0,0] -> rank 95 in bucket 5
 // (1000, 2000], rank 50 in bucket 4 (500, 1000]. cccccccc: counted, no day in
 // the window. dddddddd: stale, 5 prompts in bucket 2: below 20 samples, so
 // no range.
 func TestByPCRows(t *testing.T) {
 	x := newFx(t, fxNow)
-	x.prompts("alpha", "b", fxNow, 100, func(i int, p *telemetry.Prompt) { p.MS = 800 })
+	x.prompts("alpha", "b", fxNow, 110, func(i int, p *telemetry.Prompt) {
+		p.MS = 800
+		if i < 10 {
+			p.Decision, p.Reason = "skip", "short"
+		}
+	})
 	d := "dddddddd-0000-4000-8000-000000000004"
 	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
 	x.pcDoc(pcOther2, "2026-09-12", fxNow.Add(-time.Hour), "2026-10-20")
 	x.pcDoc(d, "2026-09-15", fxNow.Add(-72*time.Hour), "2026-10-27")
-	x.pcRows(latRow(pcOther1, "2026-10-29", 100, [9]int64{4: 60, 5: 38, 6: 2}), latRow(d, "2026-10-27", 5, [9]int64{2: 5}))
+	recalls := func(r pcRow, n int64) pcRow { r.f.Hit = machines.Pair{0, n}; return r }
+	x.pcRows(recalls(latRow(pcOther1, "2026-10-29", 120, [9]int64{4: 60, 5: 38, 6: 2}), 100), recalls(latRow(d, "2026-10-27", 5, [9]int64{2: 5}), 3))
 
 	rows := x.runAs("cost", x.allQuery()).Tables.ByPC
 	if len(rows) != 4 {
@@ -1202,7 +1210,7 @@ func TestByPCRows(t *testing.T) {
 	if o2 := rows[2]; o2.Machine != "cccccccc" || o2.Active || o2.Prompts != 0 || o2.P95RangeMS != nil || o2.Stale {
 		t.Errorf("cccccccc row %+v, want idle", o2)
 	}
-	if o3 := rows[3]; o3.Machine != "dddddddd" || !o3.Stale || !o3.Active || o3.Prompts != 5 || o3.P95RangeMS != nil || o3.Until == nil || *o3.Until != "2026-10-27" {
+	if o3 := rows[3]; o3.Machine != "dddddddd" || !o3.Stale || !o3.Active || o3.Prompts != 3 || o3.P95RangeMS != nil || o3.Until == nil || *o3.Until != "2026-10-27" {
 		t.Errorf("dddddddd row %+v, want stale and active with until", o3)
 	}
 
@@ -1264,7 +1272,9 @@ func TestByPCRowFollowsTheProjectFilter(t *testing.T) {
 	x.prompts("alpha", "a", fxNow, 4, nil)
 	x.prompts("beta", "b", fxNow, 3, nil)
 	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
-	x.pcRows(latRow(pcOther1, "2026-10-29", 40, [9]int64{}))
+	other := latRow(pcOther1, "2026-10-29", 40, [9]int64{})
+	other.f.Hit = machines.Pair{0, 40}
+	x.pcRows(other)
 	for _, c := range []struct {
 		project string
 		prompts int64

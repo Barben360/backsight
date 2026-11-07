@@ -536,22 +536,35 @@ WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
 	var out []ByPCRow
 	if thisCounts {
 		row := ByPCRow{This: true, OS: self.OS}
+		var typed int64
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}
 		if err := e.tx.QueryRowContext(e.ctx, `
 SELECT COUNT(*) FROM tel_prompt WHERE ts >= ? AND ts < ? AND (reason IS NULL OR reason <> 'machine') AND `+projectClause+` AND `+versionClause,
-			w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version).Scan(&row.Prompts); err != nil {
+			w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version).Scan(&typed); err != nil {
 			return nil, err
 		}
-		row.Active = row.Prompts > 0
+		row.Active = typed > 0
+		// prompts is the recall prompts (M8), the same figure as the others'
+		// hit pair's denominator: reachPrompts' recall.hit_rate, project and
+		// version filtered; active above stays any typed prompt.
+		if _, none, err := reachAbsent(e, "tel_prompt"); err != nil {
+			return nil, err
+		} else if !none {
+			obs, met := map[string]Observation{}, map[string]Metric{}
+			if err := reachPrompts(e, w, obs, met); err != nil {
+				return nil, err
+			}
+			row.Prompts = obs["recall.hit_rate"].Den
+		}
 		row.P95, _ = m["recall.latency"].Extra["p95"].(*float64)
 		row.P50, _ = m["recall.latency"].Extra["p50"].(*float64)
 		out = append(out, row)
 	}
 	for _, p := range pcs {
 		f := o.byMachine[p.machine]
-		row := ByPCRow{Machine: short(p.machine, ids), OS: p.os, Prompts: f.Prompts, Active: f.Prompts > 0,
+		row := ByPCRow{Machine: short(p.machine, ids), OS: p.os, Prompts: f.Hit[1], Active: f.Prompts > 0,
 			Stale: time.UnixMilli(p.at).Before(e.now.Add(-machines.StaleAfter))}
 		row.P50RangeMS, row.P95RangeMS = bucketRanges(f.Latency)
 		if p.until.Valid && p.until.String != "" {

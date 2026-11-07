@@ -44,7 +44,8 @@ type Tables struct {
 
 // ByPCRow is one counted PC on the cost view with all PCs (M8): this PC's
 // speed is its exact p95 and p50, another PC's the range of its buckets in
-// the window.
+// the window. Prompts are the recall prompts (the n behind the latency
+// columns); Active is any typed prompt.
 type ByPCRow struct {
 	Machine    string     `json:"machine"`
 	This       bool       `json:"this"`
