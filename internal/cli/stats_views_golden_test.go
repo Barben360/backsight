@@ -1019,6 +1019,28 @@ func TestViewTextMergedLines(t *testing.T) {
 		wantLines(t, "context", text, "Context added per session 2,300 chars on average (n=311 sessions, status on this PC: ok)",
 			"this PC alone: typical 2,000 chars, high 5,000 chars")
 	})
+	t.Run("context average shows although this PC's status is too few", func(t *testing.T) {
+		m := metrics.Metric{Value: ptr(20308), Num: i64(9768347), Den: i64(481), Status: metrics.StatusTooFew, Tags: []string{"status_this_pc", "average"},
+			Extra: map[string]any{"average": 20308.0}}
+		wantLines(t, "context", viewText(result("cost", "context.per_session", m), false),
+			"Context added per session 20.3 k chars on average (n=481 sessions, status on this PC: too few)")
+	})
+	t.Run("the figures that stay this PC's say so beside merged ones", func(t *testing.T) {
+		for _, id := range []string{"context.per_prompt", "search.latency"} {
+			m := metrics.Metric{Value: ptr(1087), Den: i64(80), Status: metrics.StatusOK}
+			r := result("cost", id, m)
+			def, _ := metrics.DefOf(id)
+			label := labelOf(def)
+			r.Scope.Machines, r.Scope.PCs = "all", &metrics.PCs{Sharing: true, Count: 3}
+			if l := lineOf(t, viewText(r, false), label); !strings.Contains(l, "(n=80, this PC, ok)") {
+				t.Errorf("%s: line %q does not say this PC", id, l)
+			}
+			r.Scope.Machines, r.Scope.PCs = "this", nil
+			if l := lineOf(t, viewText(r, false), label); strings.Contains(l, "this PC") {
+				t.Errorf("%s with this PC alone: %q", id, l)
+			}
+		}
+	})
 	t.Run("this PC alone keeps its lines", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(2300), Den: i64(311), Status: metrics.StatusOK, Extra: map[string]any{"p50": 2000.0, "p95": 5000.0}}
 		text := viewText(result("cost", "context.per_session", m), false)

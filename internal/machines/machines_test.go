@@ -197,7 +197,8 @@ func TestOS(t *testing.T) {
 }
 
 func TestValidVersionGuard(t *testing.T) {
-	for _, s := range []string{"v0.1.30-m7", "1.2.3+build", "other", "a", strings.Repeat("a", 64)} {
+	for _, s := range []string{"v0.1.30-m7", "1.2.3+build", "other", "a", strings.Repeat("a", 64),
+		"0.1.27-m7", "v0.0.2-m0-93-gfd77ae6", "dev"} { // what a release build, make build and go build write
 		if !ValidVersion(s) {
 			t.Errorf("%q must be valid", s)
 		}

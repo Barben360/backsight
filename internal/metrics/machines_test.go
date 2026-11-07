@@ -1905,3 +1905,56 @@ func TestMergedMetricAndViewListsMatchTheMerge(t *testing.T) {
 		}
 	}
 }
+
+// The versions the binaries really write differ in shape (a release build has
+// no "v": 0.1.27-m7; make build gives git describe's v0.1.30-m7): each is a
+// valid name and a row of its own. With all PCs, the other PC's versions are
+// listed beside this PC's, after them when their first day is older than this
+// PC's first prompt (the table is newest first), so a short page can hide them:
+// the count says how many there are.
+func TestReleasesListOtherPCsVersionsOfEveryShape(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.27-m7"
+	x.prompts("alpha", "a", fxNow.Add(-24*time.Hour), 3, injecting(1))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-23", version: "v0.1.29", f: machines.Figures{Prompts: 6, Hit: machines.Pair{3, 6}}},
+		pcRow{machine: pcOther1, day: "2026-10-24", version: "v0.1.30-m7", f: machines.Figures{Prompts: 9, Hit: machines.Pair{4, 9}}},
+	)
+	r := x.runAs("releases", x.allQuery())
+	by := releaseByVersion(r)
+	for v, n := range map[string]int64{"0.1.27-m7": 3, "v0.1.29": 6, "v0.1.30-m7": 9} {
+		if row, ok := by[v]; !ok || row.N != n {
+			t.Errorf("%s: row %+v (present %t), want n %d", v, row, ok, n)
+		}
+	}
+	if len(r.Tables.Releases) != 3 || r.Tables.Page.Total != 3 {
+		t.Fatalf("%d rows, total %d, want 3", len(r.Tables.Releases), r.Tables.Page.Total)
+	}
+	if got := r.Tables.Releases[0].Version; got != "0.1.27-m7" {
+		t.Errorf("first row %s: this PC's newest version comes first, the others' older days after it", got)
+	}
+	if this := releaseByVersion(x.runAs("releases", x.query(7))); len(this) != 1 {
+		t.Errorf("this PC alone lists %d versions, want 1", len(this))
+	}
+}
+
+// The views whose figures add up the other PCs' are exactly the six of the
+// design's "what follows the switch" (R20): a view added to the list, or left
+// out of it, changes what --machines all means for every page and command.
+func TestMergingViewsAreTheSixOfTheDesign(t *testing.T) {
+	want := []string{"overview", "quality", "cost", "pipeline", "days", "releases"}
+	if !slices.Equal(mergingViews, want) {
+		t.Errorf("mergingViews = %q, want %q", mergingViews, want)
+	}
+	for _, v := range []string{"overview", "quality", "cost", "pipeline", "days", "releases"} {
+		if !MergingView(v) || ThisOnlyView(v) {
+			t.Errorf("%s: merging %t, this-only %t", v, MergingView(v), ThisOnlyView(v))
+		}
+	}
+	for _, v := range []string{"bank", "system", "defs", "projects", "sessions", "memories", ""} {
+		if MergingView(v) {
+			t.Errorf("%s is not a merging view", v)
+		}
+	}
+}
