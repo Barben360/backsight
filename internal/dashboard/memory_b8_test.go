@@ -174,6 +174,27 @@ func TestMemorySharedCardStates(t *testing.T) {
 			t.Error("a card without the view's counts")
 		}
 	})
+	t.Run("the restore command is quoted", func(t *testing.T) {
+		sh := countedShared()
+		since := time.Date(2026, 10, 12, 15, 20, 0, 0, time.UTC)
+		sh.HiddenElsewhere = &since
+		c := sharedCardOf(t, sharedNode(t, sh, answering, func(m *metrics.MemoryPage) { m.Row.ID = "it's; rm -rf" }))
+		var cmds []string
+		for _, code := range c.find("div.cmd code") {
+			cmds = append(cmds, code.Text)
+		}
+		if !slices.Contains(cmds, `backsight forget --restore 'it'\''s; rm -rf'`) {
+			t.Errorf("commands %q", cmds)
+		}
+	})
+	t.Run("sharing off names its setting", func(t *testing.T) {
+		for off, want := range map[string]string{"": "feedback.share_ledger", "share_ledger": "feedback.share_ledger", "feedback": "feedback.enabled", "both": "feedback.enabled and feedback.share_ledger"} {
+			c := sharedCardOf(t, sharedNode(t, &metrics.SharedCounts{State: "sharing_off", Off: off}, answering, nil))
+			if got := allText(c.first("p.small")); !strings.HasPrefix(got, "Sharing is off on this PC ("+want+"): ") {
+				t.Errorf("off %q: %q, want it to name %q", off, got, want)
+			}
+		}
+	})
 	t.Run("sharing off", func(t *testing.T) {
 		c := sharedCardOf(t, sharedNode(t, &metrics.SharedCounts{State: "sharing_off"}, answering, nil))
 		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "sharing off" || !strings.Contains(p.attr("class"), "st-info") {

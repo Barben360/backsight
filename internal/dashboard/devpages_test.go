@@ -295,8 +295,9 @@ func TestReleaseAnchors(t *testing.T) {
 	}
 	pages := append([]string{"/", "/quality", "/cost", "/bank", "/pipeline", "/system", "/releases", "/defs"}, browsePaths(t, h)...)
 	for _, p := range pages {
-		_, body := pageGet(t, h, ck, p)
-		doc := parseHTML(t, body)
+		// The raw body: unescaping it first would turn a literal "<machine_id>" of a
+		// popover into a tag.
+		doc := parseHTML(t, body(t, h.do("GET", p, cookieHdr(ck)...)))
 		// The footer names the running version, which may have no row in the window.
 		foot := releaseLinks(doc, "footer.foot a")
 		if len(foot) != 1 {

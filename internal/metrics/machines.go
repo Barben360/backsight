@@ -29,6 +29,27 @@ var thisOnlyViews = []string{"projects", "sessions", "memories"}
 // on and the ledger shared).
 func sharingOn(c config.Config) bool { return c.Feedback.Enabled && c.Feedback.ShareLedger }
 
+// The settings that can be off when sharing is: feedback.enabled, the
+// feedback.share_ledger, or both.
+const (
+	OffFeedback = "feedback"
+	OffLedger   = "share_ledger"
+	OffBoth     = "both"
+)
+
+// sharingOffBy says which setting turns sharing off: "" when it is on.
+func sharingOffBy(c config.Config) string {
+	switch {
+	case sharingOn(c):
+		return ""
+	case !c.Feedback.Enabled && !c.Feedback.ShareLedger:
+		return OffBoth
+	case !c.Feedback.Enabled:
+		return OffFeedback
+	}
+	return OffLedger
+}
+
 // MergingView says whether view's figures add up the other PCs' with
 // --machines all (the CLI and the pages carry the flag only for these).
 func MergingView(view string) bool { return slices.Contains(mergingViews, view) }
@@ -837,7 +858,7 @@ WHERE at >= ? AND at <= ? ORDER BY first_seen, machine`,
 // "all": this PC first (from Source.Self), then the counted others by first
 // seen, and the documents set aside. With sharing off it holds this PC alone.
 func machinesTable(e env) (*Machines, error) {
-	m := &Machines{Sharing: sharingOn(e.src.Config), Rows: []MachineRow{}, Ignored: []IgnoredRow{}}
+	m := &Machines{Sharing: sharingOn(e.src.Config), Off: sharingOffBy(e.src.Config), Rows: []MachineRow{}, Ignored: []IgnoredRow{}}
 	var self SelfPC
 	if e.src.Self != nil {
 		self = e.src.Self()
@@ -922,7 +943,7 @@ func memoryShared(e env, id string, entry feedback.Entry) (*SharedCounts, error)
 	s := &SharedCounts{This: countsOf(d.Credits, d.Misses)}
 	s.Others, s.All = Counts{}, s.This
 	if !sharingOn(e.src.Config) {
-		s.State = sharedOff
+		s.State, s.Off = sharedOff, sharingOffBy(e.src.Config)
 		return s, nil
 	}
 	s.State = sharedUnavail

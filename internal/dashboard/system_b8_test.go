@@ -90,7 +90,7 @@ func TestMachinesCardStates(t *testing.T) {
 			{"3f9c2a17this PC", "Linux", "Sep 2", "2 h ago", "v0.1.17-m7", "counted its own figures, live"},
 			{"a07be4d1", "macOS", "Oct 10", "5 h ago", "v0.1.17-m7", "counted"},
 			{"5d21c8e0", "Windows", "Oct 28", "1 h ago", "v0.1.17-m7", "counted no activity in this window"},
-			{"c84e1f39", "Linux", "Jul 18", "Oct 21", "v0.1.16-m7", "up to Oct 21"},
+			{"c84e1f39", "Linux", "Jul 18", "9 d ago", "v0.1.16-m7", "up to Oct 21"},
 			{"e19b77a0", "—", "—", "—", "—", "ignored: not valid"},
 		}
 		got := cellsOf(c)
@@ -118,16 +118,17 @@ func TestMachinesCardStates(t *testing.T) {
 		if q := rows[3].find("td")[5].first("span.st-watch"); q == nil {
 			t.Error("the stale PC's state is not a warning")
 		}
-		for _, id := range []string{"3f9c2a17", "e19b77a0"} {
-			if idc := c.first("span.idc[title]"); idc == nil || !strings.Contains(allText(c), id) {
-				t.Errorf("no short id %s", id)
-			}
+		if got, want := texts(c.find("span.idc")), []string{"3f9c2a17", "a07be4d1", "5d21c8e0", "c84e1f39", "e19b77a0"}; !slices.Equal(got, want) {
+			t.Errorf("short ids %q, want %q, one per row in order", got, want)
+		}
+		if tm := rows[3].find("td")[3].first("time"); tm == nil || !strings.HasPrefix(tm.attr("title"), "2026-10-21") {
+			t.Errorf("the date of a quiet PC's last send is not in the title: %v", tm)
 		}
 		info := c.first("details.info")
 		if dts := texts(info.find("dt")); !slices.Equal(dts, []string{"What", "Not here", "Privacy"}) {
 			t.Errorf("popover rows %q", dts)
 		}
-		if !strings.Contains(allText(info), "feedback.share_ledger") || !strings.Contains(allText(info), "backsight:metrics:machine_id") {
+		if !strings.Contains(allText(info), "feedback.share_ledger") || !strings.Contains(allText(info), "backsight:metrics:<machine_id>") {
 			t.Errorf("popover %q", allText(info))
 		}
 		if cmd := c.first("details.cli code"); cmd == nil || cmd.Text != "backsight stats system" {
@@ -286,7 +287,8 @@ func TestSharingOffItemOnSystemOnly(t *testing.T) {
 	if asideOf(look) != asideOf(lookOn) {
 		t.Errorf("a choice is counted: aside %q with sharing off, %q with it on", asideOf(look), asideOf(lookOn))
 	}
-	// The Overview carries the item nowhere, even with the table in hand.
+	// The Overview carries the item nowhere (a guard against a later addition:
+	// no change of this code reddens it today), even with the table in hand.
 	ov := pageNode(t, "overview", false, func(d *PageData) {
 		for _, r := range d.V {
 			r.Tables.Machines = off
@@ -364,3 +366,49 @@ func TestMachinesCardUsesTheSharedWords(t *testing.T) {
 
 // spaced is s with each run of white space as one space.
 func spaced(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// The sharing-off item names the setting that is off, and its remedy sets that
+// one: feedback.enabled, feedback.share_ledger or both.
+func TestSharingOffNamesTheSettingThatIsOff(t *testing.T) {
+	cases := []struct{ off, named, set string }{
+		{metrics.OffLedger, "feedback.share_ledger is off.", "set share_ledger = true under [feedback]"},
+		{metrics.OffFeedback, "feedback.enabled is off.", "set enabled = true under [feedback]"},
+		{metrics.OffBoth, "feedback.enabled and feedback.share_ledger are off.", "set enabled = true and share_ledger = true under [feedback]"},
+	}
+	for _, c := range cases {
+		t.Run(c.off, func(t *testing.T) {
+			n := machinesNode(t, &metrics.Machines{Sharing: false, Off: c.off, Rows: fourMachines().Rows[:1]}, &metrics.ServerState{OK: true})
+			for _, card := range []*node{cardOf(t, n, "w-attention"), machinesCardOf(t, n)} {
+				var body string
+				for _, it := range card.find("li.att-item") {
+					if b := allText(it.first("p")); strings.Contains(b, "does not share") {
+						body = b
+					}
+				}
+				if !strings.Contains(body, c.named) || !strings.Contains(body, c.set) {
+					t.Errorf("the item %q lacks %q or %q", body, c.named, c.set)
+				}
+				if c.off == metrics.OffFeedback && strings.Contains(body, "share_ledger") {
+					t.Errorf("the item blames share_ledger when it is on: %q", body)
+				}
+			}
+		})
+	}
+}
+
+// A host that runs the server only is not a PC of the list: with no other PC
+// sent yet, the card does not say "this PC only".
+func TestMachinesCardServerOnlyHostWithNoPC(t *testing.T) {
+	tab := fourMachines()
+	tab.Rows, tab.Ignored = nil, nil
+	c := machinesCardOf(t, machinesNode(t, tab, &metrics.ServerState{OK: true}))
+	if aside := c.first("div.card-head span.muted.small"); aside == nil || aside.text() != "no PC yet" {
+		t.Errorf("aside %v", aside)
+	}
+	if p := c.first("p.small.sub"); p == nil || !strings.HasPrefix(p.text(), "No PC shares its activity on this server yet. This PC runs the server only") {
+		t.Errorf("sentence %v", p)
+	}
+	if strings.Contains(allText(c), "this PC only") || strings.Contains(allText(c), "Only this PC") || len(c.find("table")) != 0 {
+		t.Errorf("the card says this PC shares, or draws a table of nothing: %q", allText(c))
+	}
+}

@@ -66,9 +66,17 @@ func (d PageData) sharedCard(r *metrics.Result, m *metrics.MemoryPage) *SharedCa
 	switch sh.State {
 	case sharedOff:
 		c.Head.Pill = Word{"sharing off", "st-info"}
-		c.Text = []Run{{Text: "Sharing is off on this PC ("}, {Code: "feedback.share_ledger"},
-			{Text: "): your other PCs’ counts are not read, and the ranking uses this PC’s alone. "},
-			{Text: "Machines on System", Href: machinesHref}, {Text: " says how to turn it on."}}
+		c.Text = []Run{{Text: "Sharing is off on this PC ("}}
+		switch sh.Off {
+		case metrics.OffFeedback:
+			c.Text = append(c.Text, Run{Code: "feedback.enabled"})
+		case metrics.OffBoth:
+			c.Text = append(c.Text, Run{Code: "feedback.enabled"}, Run{Text: " and "}, Run{Code: "feedback.share_ledger"})
+		default:
+			c.Text = append(c.Text, Run{Code: "feedback.share_ledger"})
+		}
+		c.Text = append(c.Text, Run{Text: "): your other PCs’ counts are not read, and the ranking uses this PC’s alone. "},
+			Run{Text: "Machines on System", Href: machinesHref}, Run{Text: " says how to turn it on."})
 		return c
 	case sharedUnavail:
 		if !silent {
@@ -121,7 +129,7 @@ func (d PageData) sharedCard(r *metrics.Result, m *metrics.MemoryPage) *SharedCa
 		c.Head.Pill = Word{"hidden elsewhere", "st-watch"}
 		c.Notice = &Notice{Icon: "watch", Class: "st-watch", Runs: []Run{{Text: "Hidden from recall on one of your other PCs since "}, {Time: since},
 			{Text: ". Recall skips it on this PC too. To use it here again:"}}}
-		c.Cmd = "backsight forget --restore " + m.Row.ID
+		c.Cmd = "backsight forget --restore " + quoteArg(m.Row.ID)
 	}
 	c.Table = &SharedTable{Others: plural(n, "other PC", "other PCs"), Rows: []SharedRow{
 		{Label: "Used by Claude", Swatch: "f-used", This: l.Fixed(sh.This.Used, 1), Others: l.Fixed(sh.Others.Used, 1), All: l.Fixed(sh.All.Used, 1)},

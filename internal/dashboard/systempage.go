@@ -248,7 +248,7 @@ func (d PageData) lookCard(r *metrics.Result, doctor MetricView) LookCard {
 	}
 	// A choice, not a fault: it is told, never counted as a warning.
 	if m := r.Tables.Machines; m != nil && !m.Sharing {
-		c.Items = append(c.Items, sharingOffItem())
+		c.Items = append(c.Items, sharingOffItem(m.Off))
 	}
 	var counts []string
 	if bad > 0 {
@@ -416,18 +416,33 @@ func scanTook(ms float64) string {
 }
 
 // sharingOffItem is what tells a PC that does not share its activity how to
-// turn that on. It is System's alone: sharing off is a choice.
-func sharingOffItem() LookLine {
+// turn that on. It is System's alone: sharing off is a choice. off says which
+// setting is off (metrics.OffFeedback, OffLedger or OffBoth), so the remedy
+// names the one that changes something.
+func sharingOffItem(off string) LookLine {
+	var named, set []Run
+	switch off {
+	case metrics.OffFeedback:
+		named = []Run{{Code: "feedback.enabled"}, {Text: " is off"}}
+		set = []Run{{Text: "set "}, {Code: "enabled = true"}}
+	case metrics.OffBoth:
+		named = []Run{{Code: "feedback.enabled"}, {Text: " and "}, {Code: "feedback.share_ledger"}, {Text: " are off"}}
+		set = []Run{{Text: "set "}, {Code: "enabled = true"}, {Text: " and "}, {Code: "share_ledger = true"}}
+	default:
+		named = []Run{{Code: "feedback.share_ledger"}, {Text: " is off"}}
+		set = []Run{{Text: "set "}, {Code: "share_ledger = true"}}
+	}
+	runs := []Run{{Text: "This PC does not share its activity: "}}
+	runs = append(runs, named...)
+	runs = append(runs, Run{Text: ". Your other PCs do not see it, and “all PCs” is off here. To share, "})
+	runs = append(runs, set...)
+	runs = append(runs, Run{Text: " under "}, Run{Code: "[feedback]"}, Run{Text: " in "}, Run{Code: "config.toml"}, Run{Text: " ("},
+		Run{Code: "backsight paths"}, Run{Text: " shows where it is), then send now:"})
 	return LookLine{
 		Pill: Word{"info", "st-info"},
-		Runs: []Run{
-			{Text: "This PC does not share its activity: "}, {Code: "feedback.share_ledger"},
-			{Text: " is off. Your other PCs do not see it, and “all PCs” is off here. To share, set "}, {Code: "share_ledger = true"},
-			{Text: " under "}, {Code: "[feedback]"}, {Text: " in "}, {Code: "config.toml"}, {Text: " ("}, {Code: "backsight paths"},
-			{Text: " shows where it is), then send now:"},
-		},
-		Cmd: "backsight jobs tick",
-		Why: "Off is a valid choice and nothing is broken. Sharing sends daily totals and which memories Claude used: no project, session, memory text or computer name. The same setting shares the counts that rank memory on all your PCs.",
+		Runs: runs,
+		Cmd:  "backsight jobs tick",
+		Why:  "Off is a valid choice and nothing is broken. Sharing sends daily totals and which memories Claude used: no project, session, memory text or computer name. The same setting shares the counts that rank memory on all your PCs.",
 	}
 }
 
@@ -532,15 +547,15 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 	h.Info = Info{
 		Label: "About Machines", Name: "Machines",
 		What:    "Each PC with sharing on sends, once a day, its daily totals to the memory server; “all PCs” adds them up. A PC is named by the start of its machine id, its system and the day it first sent.",
-		Rows:    []InfoRow{{Term: "Not here", Runs: []Run{{Text: "A PC with sharing off ("}, {Code: "feedback.share_ledger"}, {Text: ") sends nothing, so no one can list it."}}}},
+		Rows:    []InfoRow{{Term: "Not here", Runs: []Run{{Text: "A PC with sharing off ("}, {Code: "feedback.enabled"}, {Text: " or "}, {Code: "feedback.share_ledger"}, {Text: ") sends nothing, so no one can list it."}}}},
 		Privacy: "The totals hold no project name, session, memory id, text or computer name.",
-		Term:    "backsight:metrics:machine_id",
+		Term:    "backsight:metrics:<machine_id>",
 	}
 	c := &MachinesCard{Card: Card{Head: h}}
 	if !m.Sharing {
 		c.Head.Info, c.Head.CLI, c.Head.Scope = Info{}, "", ""
 		c.Head.Pill = Word{"sharing off", "st-info"}
-		c.Items = []LookLine{sharingOffItem()}
+		c.Items = []LookLine{sharingOffItem(m.Off)}
 		c.Head.Note = "The same item shows in “What needs a look here?”, never in “What should I do?”: it is a choice, not a fault."
 		return c
 	}
@@ -557,7 +572,7 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 			ln.First = format.Time{Text: shortDay(row.FirstSeen, now), Datetime: row.FirstSeen, Title: row.FirstSeen}
 		}
 		if row.LastSent != nil {
-			ln.Sent = format.Rel(now, *row.LastSent, d.Loc)
+			ln.Sent = sentAt(now, *row.LastSent, d.Loc)
 		}
 		switch {
 		case row.This:
@@ -579,9 +594,12 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 	for _, g := range m.Ignored {
 		c.Ignored = append(c.Ignored, IgnoredLine{ID: shortMachineID(g.Machine), Why: wordOr(views.IgnoredWords, g.Reason, views.IgnoredWords["not_valid"])})
 	}
-	only := len(m.Rows) <= 1
+	only := len(m.Rows) == 1
 	aside := views.CountOf(int64(len(m.Rows)), "PC", "PCs")
-	if only {
+	switch len(m.Rows) {
+	case 0:
+		aside = "no PC yet" // this PC runs the server only and no other has sent
+	case 1:
 		aside = "this PC only"
 	}
 	if n := len(m.Ignored); n > 0 {
@@ -589,7 +607,7 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 	}
 	c.Head.Aside = aside
 	silent := serverSilent(d.Frame)
-	c.Short = (only || silent) && len(c.Ignored) == 0 && !stale
+	c.Short = (only || silent) && len(m.Rows) > 0 && len(c.Ignored) == 0 && !stale
 	switch {
 	case silent:
 		c.Head.Pill = Word{"not answering", "st-watch"}
@@ -606,6 +624,11 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 		c.Notice = &Notice{Icon: "server", Class: "st-watch", Text: text}
 		c.Foot = []Run{{Text: "This PC’s figures wait and are sent once the server answers; nothing is lost."}}
 		return c
+	case len(m.Rows) == 0:
+		c.Sub = "No PC shares its activity on this server yet. This PC runs the server only: the PCs that use it appear here after their first daily send, with sharing on (the default)."
+		if len(c.Ignored) == 0 {
+			return c
+		}
 	case only:
 		c.Sub = "Only this PC shares its activity on this server. Your other PCs appear here after their first daily send, with sharing on (the default). The scope line shows no switch until then."
 		if len(c.Ignored) == 0 {
@@ -619,4 +642,22 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 		c.Foot = []Run{{Text: "Fetched from the memory server "}, {Time: format.Rel(now, *m.FetchedAt, d.Loc)}, {Text: every}}
 	}
 	return c
+}
+
+// sentAt is when a PC last sent, as the pages say it: "2 h ago", "yesterday",
+// then "9 d ago" as far as a PC stays in the list (the date stays in the
+// title).
+func sentAt(now, at time.Time, loc *time.Location) format.Time {
+	t := format.Rel(now, at, loc)
+	if loc == nil {
+		loc = time.UTC
+	}
+	n, a := now.In(loc), at.In(loc)
+	ny, nm, nd := n.Date()
+	ay, am, ad := a.Date()
+	days := int(time.Date(ny, nm, nd, 0, 0, 0, 0, time.UTC).Sub(time.Date(ay, am, ad, 0, 0, 0, 0, time.UTC)).Hours() / 24)
+	if days >= 7 {
+		t.Text = strconv.Itoa(days) + " d ago"
+	}
+	return t
 }

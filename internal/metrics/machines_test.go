@@ -1576,6 +1576,22 @@ func TestSystemMachines(t *testing.T) {
 		if got.Sharing || len(got.Rows) != 1 || !got.Rows[0].This || got.Rows[0].Machine != "aaaaaaaa" || len(got.Ignored) != 0 {
 			t.Errorf("machines %+v", got)
 		}
+		if got.Off != OffLedger {
+			t.Errorf("off %q, want %q", got.Off, OffLedger)
+		}
+	})
+	t.Run("which setting is off", func(t *testing.T) {
+		for _, c := range []struct {
+			enabled, ledger bool
+			want            string
+		}{{true, true, ""}, {true, false, OffLedger}, {false, true, OffFeedback}, {false, false, OffBoth}} {
+			x := newFx(t, fxNow)
+			x.cfg = func(cf *config.Config) { cf.Feedback.Enabled, cf.Feedback.ShareLedger = c.enabled, c.ledger }
+			setup(x)
+			if got := run(x, "this"); got.Off != c.want {
+				t.Errorf("enabled %v, share_ledger %v: off %q, want %q", c.enabled, c.ledger, got.Off, c.want)
+			}
+		}
 	})
 	t.Run("short ids that collide show 13 characters", func(t *testing.T) {
 		x := newFx(t, fxNow)
@@ -1684,7 +1700,7 @@ func TestMemorySharedStates(t *testing.T) {
 		calls := 0
 		seam := combinedSeam(t, fxNow, feedback.Remote{"m1": {Credits: 4, CreditsAt: fxNow}}, &calls)
 		s := readShared(t, x, seam)
-		if s.State != "sharing_off" || calls != 0 || s.Others.Used != 0 || s.CombinedAt != nil {
+		if s.State != "sharing_off" || s.Off != OffLedger || calls != 0 || s.Others.Used != 0 || s.CombinedAt != nil {
 			t.Errorf("shared %+v after %d reads", s, calls)
 		}
 	})
