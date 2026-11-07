@@ -31,8 +31,13 @@ func (p Prices) Known() bool { return p.Input > 0 || p.Output > 0 }
 // estimates may over-state an off-peak spend by up to 2x, never the reverse.
 // The retired name deepseek-v4-flash is still accepted by DeepSeek, served
 // and billed as deepseek-flash, so existing installs keep a price.
-// gpt-6-luna, setup's openai default, at OpenAI's standard tier (checked
-// 2026-10-27, developers.openai.com/api/docs/pricing).
+// OpenAI models at the standard tier and short context (checked
+// 2026-11-07, developers.openai.com/api/docs/pricing); gpt-6-luna is
+// setup's openai default. A prompt over 272,000 tokens is billed double,
+// which extraction never sends. OpenAI caches on its own and bills a
+// 30-minute cache write at 1.25x input (Hindsight asks for no other
+// retention), and Hindsight's OpenAI providers report only cache reads:
+// as for Anthropic below, fresh input is charged at Write.
 // Anthropic models at the standard API price, cached = cache hit (checked
 // 2026-11-01, platform.claude.com/docs/en/about-claude/pricing). Haiku 5.5
 // is billed higher for a prompt over 100,000 tokens ($0.50 input, $0.05
@@ -43,11 +48,15 @@ func (p Prices) Known() bool { return p.Input > 0 || p.Output > 0 }
 // the input count, with no separate figure. Cost therefore charges fresh
 // input (input minus cached) at Write, 1.25x Input: it over-states by at
 // most 25% the fresh input never written to the cache, never the reverse.
-// Neither the batch discount nor the US data-residency multiplier is modelled.
+// Neither the batch, flex or priority tiers nor the US data-residency
+// multiplier is modelled.
 var priceTable = map[string]Prices{
 	"deepseek-flash":    {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
 	"deepseek-v4-flash": {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
-	"gpt-6-luna":        {Input: 0.10, Cached: 0.01, Output: 0.50, Currency: "USD"},
+	"gpt-6-luna":        {Input: 0.10, Write: 0.125, Cached: 0.01, Output: 0.50, Currency: "USD"},
+	"gpt-6.1-terra":     {Input: 1, Write: 1.25, Cached: 0.05, Output: 5, Currency: "USD"},
+	"gpt-6.1-sol":       {Input: 2, Write: 2.5, Cached: 0.10, Output: 10, Currency: "USD"},
+	"gpt-6-astra":       {Input: 10, Write: 12.5, Cached: 1, Output: 50, Currency: "USD"},
 	"claude-haiku-5-5":  {Input: 0.10, Write: 0.125, Cached: 0.01, Output: 0.50, Currency: "USD"},
 	"claude-haiku-4-5":  {Input: 1, Write: 1.25, Cached: 0.10, Output: 5, Currency: "USD"},
 	"claude-sonnet-5-5": {Input: 2, Write: 2.5, Cached: 0.10, Output: 10, Currency: "USD"},
