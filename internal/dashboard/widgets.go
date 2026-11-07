@@ -31,6 +31,7 @@ type Head struct {
 	PCs         *PCsChip // the figure adds up the PCs: the chip "all PCs (N)" replaces "this PC"; nil none
 	OthersNF    bool     // a project filter spares the other PCs: the chip "other PCs not filtered"
 	Note        string   // a muted line under the card's content (what stays this PC's); "" none
+	FootNote    string   // a muted word beside the drill link, in the card's foot; "" none
 }
 
 // PCsChip is the chip "all PCs (N)" a widget carries when its figure adds up
@@ -441,6 +442,7 @@ type Fig struct {
 	Icon                      string // the icon before the label (server, pc, doc); "" none
 	Swatch                    string // the class of a swatch before the label (a kind of memory); "" none
 	WordValue                 bool   // the value is a word: it is set smaller than a number
+	SubApprox                 bool   // Sub starts with the word "approximate", set in italics
 }
 
 // figOf is the figure of metric v; the developer's detail is its id.

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"html"
 	"html/template"
 	"math"
 	"slices"
@@ -239,6 +240,101 @@ func latencyOf(l format.Locale, more string, vs ...MetricView) template.HTML {
 		c.Limits = []chart.Limit{{Label: "limit " + l.Duration(*bad), V: *bad, Class: "thr"}}
 	}
 	return c.HTML()
+}
+
+// latencyRangesOf is the merged slowest 1 in 20 per day as the bucket that
+// holds it, with this PC's exact value as a ring; after is the By PC
+// disclosure that closes the figure. ok is false when no day has a bucket (a
+// window drawn by the hour keeps this PC's series): the caller draws lines.
+func latencyRangesOf(l format.Locale, more string, v MetricView, after string) (template.HTML, bool) {
+	c := chart.RangeBars{Label: "Slowest 1 in 20 prompts per day, all PCs, as bucket ranges", NName: "prompts", NOne: "prompt",
+		Fmt: l.Duration, More: more, After: after, Empty: "No days to draw in this window.",
+		LegendBucket: "slowest 1 in 20, all PCs: between two bucket edges", Say: bucketWords}
+	if d, ok := metrics.DefOf("recall.latency"); ok {
+		if d.Absolute.Watch != nil {
+			c.WatchMS = *d.Absolute.Watch
+		}
+		if d.Absolute.Bad != nil {
+			c.LimitMS = *d.Absolute.Bad
+		}
+	}
+	seen := false
+	for _, p := range withoutPartialLead(v.M.Series) {
+		seen = seen || p.Lo != nil
+		c.Days = append(c.Days, chart.RangeDay{X: xName(pointKey(p)), N: countOf(p.N), Lo: p.Lo, Hi: p.Hi, Own: p.ThisP95})
+	}
+	if !seen {
+		return "", false
+	}
+	return c.HTML(), true
+}
+
+// bucketWords says a latency bucket (lo, hi] in a sentence ("between 1.0 and
+// 2.0 s", "over 5 s") and in a table cell ("1.0–2.0 s").
+func bucketWords(lo float64, hi *float64) (between, cell string) {
+	var h *int64
+	if hi != nil {
+		x := int64(*hi)
+		h = &x
+	}
+	cell = views.RangeText(int64(lo), h)
+	if h == nil {
+		if lo >= 1000 {
+			return "over " + strconv.FormatFloat(lo/1000, 'f', -1, 64) + " s", cell
+		}
+		return "over " + strconv.FormatFloat(lo, 'f', -1, 64) + " ms", cell
+	}
+	return "between " + strings.Replace(cell, "–", " and ", 1), cell
+}
+
+// byPCOf is the By PC disclosure: one row per counted PC, this PC first, with
+// its exact speed and the others' as the range of their buckets.
+func byPCOf(l format.Locale, rows []metrics.ByPCRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	rng := func(r *[2]*int64) string {
+		if r == nil || r[0] == nil {
+			return dash
+		}
+		return views.RangeText(*r[0], r[1])
+	}
+	exact := func(v *float64) string {
+		if v == nil {
+			return dash
+		}
+		return l.Duration(*v)
+	}
+	var b strings.Builder
+	b.WriteString(`<details class="tblfb"><summary>By PC</summary><div class="tbl-wrap"><table class="tbl mach"><thead><tr><th>PC</th><th class="r">Prompts</th><th>Slowest 1 in 20</th><th>Typical</th></tr></thead><tbody>`)
+	for _, r := range rows {
+		who := []string{}
+		if w := osWord(r.OS); w != "" {
+			who = append(who, w)
+		}
+		switch {
+		case r.This:
+			who = append(who, "this PC")
+		case r.Stale && r.Until != nil:
+			if at, err := time.Parse(dayKey, *r.Until); err == nil {
+				who = append(who, "up to "+at.Format("Jan 2"))
+			}
+		}
+		slow, typical := rng(r.P95RangeMS), rng(r.P50RangeMS)
+		if r.This {
+			slow, typical = exact(r.P95), exact(r.P50)
+		}
+		b.WriteString(`<tr><td><span class="idc">` + html.EscapeString(r.Machine) + `</span>` + html.EscapeString(strings.Join(who, " · ")) +
+			`</td><td class="r">` + html.EscapeString(l.Int(r.Prompts)) + `</td>`)
+		if !r.Active {
+			b.WriteString(`<td class="muted">no activity in this window</td><td class="muted">` + dash + `</td>`)
+		} else {
+			b.WriteString(`<td>` + html.EscapeString(slow) + `</td><td>` + html.EscapeString(typical) + `</td>`)
+		}
+		b.WriteString(`</tr>`)
+	}
+	b.WriteString(`</tbody></table></div></details>`)
+	return b.String()
 }
 
 // wordsOf names each key with name.

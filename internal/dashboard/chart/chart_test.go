@@ -51,6 +51,7 @@ func corpus() []string {
 		string(usedLine([]string{"a"}, nil).HTML()),
 		spark("Found per day", 24, 31, 27, 22, 30, 29, 28), spark("L", 1),
 		string(Spark{Label: "L", Fmt: plain, Y: []*float64{nil, p(1), p(2)}}.HTML()),
+		string(rbChart(rbDays()...).HTML()),
 	}
 	return append(append(append(out, histStripOutputs()...), calStatusOutputs()...), rangeOutputs()...)
 }

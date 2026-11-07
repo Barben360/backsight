@@ -146,9 +146,9 @@ type PageData struct {
 	CLI   string                     // the command that prints the page's first view
 	State *StateView                 // the state pages' words; nil elsewhere
 	HM    string                     // the Overview's calendar colouring (got, used or sessions); "" the default
-	// Own is this PC's answer to the Overview's view, read only when the page
-	// adds up all PCs: the verdict banner and the tiles' links are this PC's. Nil
-	// everywhere else.
+	// Own is this PC's answer to the page's first view, read only when the
+	// Overview, Cost or day page adds up all PCs: the verdict banner and the
+	// links that count events are this PC's. Nil everywhere else.
 	Own *metrics.Result
 }
 
@@ -562,7 +562,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// What the figures count, not what the URL asked for: sharing off, or a
 		// page that is always this PC's, answers this PC and says so.
 		data.P.Machines = head.Scope.Machines
-		if spec.Name == "overview" && head.Scope.Machines == "all" {
+		if (spec.Name == "overview" || spec.Name == "cost" || spec.Name == "day") && head.Scope.Machines == "all" {
 			if res, st, err := s.data.result(r.Context(), first, viewParams(spec, first, p.ThisPC()), id); st == stateReady && err == nil {
 				data.Own = &res
 			}

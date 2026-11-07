@@ -1,7 +1,7 @@
 {{/* views: cost */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the cards of cost (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd; Extraction adds Rows and Total: Task, Input, Cached, Output, Cost; Yield adds Rows: Week, New, Used, Share, ShareClass, Tokens, Note, and Min; Strip is a list of Fig). Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency, extraction.tokens, extraction.cost, memory.yield, .V.cost.Tables.Extraction, and with developer mode extraction.per_session. */}}
+{{/* widgets: the cards of cost (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd, Lede, State; Extraction adds Rows and Total: Task, Input, Cached, Output, Cost; Yield adds Rows: Week, New, Used, Share, ShareClass, Tokens, Note, and Min; Strip is a list of Fig). Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency, extraction.tokens, extraction.cost, memory.yield, .V.cost.Tables.Extraction, and with developer mode extraction.per_session. */}}
 {{with cost .}}<div class="figs">
 {{range .Strip}}{{template "fig" .}}{{end}}</div>
 <div class="grid-2">
@@ -11,7 +11,8 @@
 <div class="grid-2">
 {{template "pcard" .Latency}}
 {{with .Extraction}}{{template "card-open" .Head}}
-{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{range .Charts}}{{.HTML}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{with .Lede}}<p class="xs muted">{{.}}</p>
+{{end}}{{template "nodata" .Note}}{{range .Charts}}{{.HTML}}
 {{end}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Server task</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
 <tbody>

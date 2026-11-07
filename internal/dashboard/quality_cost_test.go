@@ -1,7 +1,10 @@
 package dashboard
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -963,5 +966,461 @@ func TestOutcomePathsAreInPathOrder(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("run %d: %q, want %q", i, got, want)
 		}
+	}
+}
+
+// costDay is the day i (0 is Oct 1) of the design's 30-day window.
+func costDay(i int) string {
+	return time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format("2006-01-02")
+}
+
+// allPCsCost is the Cost view of B8Cost added up over the four PCs: 1,468 prompts
+// on three PCs, the slowest 1 in 20 between 1.0 and 2.0 s (2.0 and 2.5 s on Oct 13
+// to 15), this PC's exact values as the design draws them, the context as an
+// average of 2,300 characters over 311 sessions beside this PC's high value of
+// 3,600, and the By PC table of the design.
+func allPCsCost(r *metrics.Result) {
+	richCost(r)
+	r.GeneratedAt = scopeNow
+	r.Scope.Machines, r.Scope.PCs = "all", b8PCs(3)
+	give(r, "context.per_session", func(m *metrics.Metric) {
+		m.Value, m.Den, m.Num = fp(2300), ip(311), ip(715300)
+		m.Tags = []string{"status_this_pc", "average"}
+		m.Extra["p50"], m.Extra["p95"], m.Extra["average"] = 2100.0, 3600.0, 2300.0
+	})
+	own := []float64{1500, 1600, 1400, 1500, 1700, 1600, 1500, 1400, 1600, 1700, 1500, 1600, 1900, 1900, 1800, 1600, 1500, 1400, 1500, 1600, 1700, 1600, 1500, 1500, 1400, 1600, 1700, 1500, 1500, 1600}
+	give(r, "recall.latency", func(m *metrics.Metric) {
+		m.Value, m.Den = fp(2000), ip(1468)
+		m.Tags = []string{"approximate"}
+		m.Extra = map[string]any{"p50": 840.0, "p95": 1600.0, "range_ms": rangeMS(1000, i64p(2000)), "p50_range_ms": []any{500.0, 1000.0}}
+		m.Series = nil
+		for i := range own {
+			lo, hi := 1000.0, 2000.0
+			if i >= 12 && i <= 14 {
+				lo, hi = 2000, 2500
+			}
+			m.Series = append(m.Series, metrics.Point{Day: costDay(i), N: ip(int64(41 + i)), Lo: fp(lo), Hi: fp(hi), ThisP95: fp(own[i])})
+		}
+	})
+	r.Tables.ByPC = []metrics.ByPCRow{
+		{Machine: "3f9c2a17", This: true, OS: "linux", Prompts: 676, P95: fp(1600), P50: fp(840), Until: ptrS("2026-10-29"), Active: true},
+		{Machine: "a07be4d1", OS: "darwin", Prompts: 612, P95RangeMS: rangeMS(2000, i64p(2500)), P50RangeMS: rangeMS(500, i64p(1000)), Until: ptrS("2026-10-29"), Active: true},
+		{Machine: "c84e1f39", OS: "linux", Prompts: 180, P95RangeMS: rangeMS(1000, i64p(2000)), P50RangeMS: rangeMS(500, i64p(1000)), Until: ptrS("2026-10-21"), Stale: true, Active: true},
+		{Machine: "5d21c8e0", OS: "windows", Prompts: 0, Until: ptrS("2026-10-29")},
+	}
+}
+
+// thisPCOwn is this PC's own answer to the Cost view: 676 recall prompts.
+func thisPCOwn() *metrics.Result {
+	r := &metrics.Result{Metrics: map[string]metrics.Metric{"recall.latency": {Den: ip(676)}}}
+	return r
+}
+
+func allPCsCostNode(t *testing.T, edit func(d *PageData)) *node {
+	t.Helper()
+	return pageNode(t, "cost", false, func(d *PageData) {
+		allPCsCost(d.V["cost"])
+		d.P.Machines = "all"
+		d.CLI = "backsight stats cost --days 30"
+		d.Own = thisPCOwn()
+		if edit != nil {
+			edit(d)
+		}
+	})
+}
+
+func TestCostLatencyCardAllPCs(t *testing.T) {
+	n := allPCsCostNode(t, nil)
+	c := cardOf(t, n, "w-recall-latency")
+	if h := c.first("h2").text(); h != "How long does memory make a prompt wait?" {
+		t.Errorf("head %q", h)
+	}
+	chip := c.first("span.chip")
+	if chip == nil || chip.text() != "all PCs (4)" || chip.attr("title") != "Added up from the 4 PCs that share their activity on this server" {
+		t.Errorf("chip %v", chip)
+	}
+	if c.first("span.chip .i-pcs") == nil || len(c.find("span.chip")) != 1 {
+		t.Error("the chip is not the one all PCs chip")
+	}
+	// The ⓘ says what, the limits and what the figure rests on.
+	info := c.first("details.info .pop")
+	if info == nil {
+		t.Fatal("no ⓘ")
+	}
+	var dts, dds []string
+	for _, x := range info.find("dt") {
+		dts = append(dts, x.text())
+	}
+	for _, x := range info.find("dd") {
+		dds = append(dds, x.text())
+	}
+	if !slices.Equal(dts, []string{"What", "Limits", "Based on"}) {
+		t.Errorf("ⓘ terms %v", dts)
+	}
+	if len(dds) != 3 || !strings.HasPrefix(dds[0], "Per day, the slowest 1 in 20 prompts across the PCs.") ||
+		dds[1] != "Watch over 2.0 s, attention over 2.5 s. Both are bucket edges, so the status is exact." || dds[2] != "1,468 prompts on 3 PCs" {
+		t.Errorf("ⓘ text %q", dds)
+	}
+	if got := c.first("details.cli code").text(); got != "backsight stats cost --days 30 --machines all" {
+		t.Errorf("CLI %q", got)
+	}
+	// The chart: a bar and a ring per day, the limits, the design's legend.
+	fig := c.first("figure.chart")
+	if len(fig.find("rect.bkt")) != 30 || len(fig.find("circle.bkt-own[cx]")) != 30 || len(fig.find("rect.hit")) != 30 {
+		t.Errorf("%d bars, %d rings, %d hover rects", len(fig.find("rect.bkt")), len(fig.find("circle.bkt-own[cx]")), len(fig.find("rect.hit")))
+	}
+	if fig.first("line.thr-w") == nil || fig.first("line.thr") == nil {
+		t.Error("the watch or limit line is missing")
+	}
+	var legend []string
+	for _, s := range fig.find("div.legend span") {
+		legend = append(legend, s.text())
+	}
+	if w := []string{"slowest 1 in 20, all PCs: between two bucket edges", "this PC alone (exact)", "watch 2.0 s", "limit 2.5 s"}; !slices.Equal(legend, w) {
+		t.Errorf("legend %q, want %q", legend, w)
+	}
+	if hit := fig.find("rect.hit")[12].first("title").text(); hit != "Oct 13: 53 prompts, all PCs; slowest 1 in 20 between 2.0 and 2.5 s; this PC alone 1.9 s" {
+		t.Errorf("hover %q", hit)
+	}
+	// The table of the chart: the design's four columns, a row per day.
+	tbl := fig.first("details.tblfb table.tbl")
+	var head []string
+	for _, th := range tbl.find("thead th") {
+		head = append(head, th.text())
+	}
+	if w := []string{"Day", "Prompts, all PCs", "Slowest 1 in 20, all PCs", "This PC alone"}; !slices.Equal(head, w) {
+		t.Errorf("columns %q, want %q", head, w)
+	}
+	rows := tbl.find("tbody tr")
+	if len(rows) != 30 || rows[0].text() != "Oct 1 41 1.0–2.0 s 1.5 s" || rows[12].text() != "Oct 13 53 2.0–2.5 s 1.9 s" {
+		t.Errorf("%d rows, first %q, Oct 13 %q", len(rows), rows[0].text(), rows[12].text())
+	}
+	// Nothing of this PC's old card: no search line, no lead, no advice.
+	if c.first("div.lead") != nil || len(c.find("polyline")) != 0 || hasCode(c, "backsight doctor") {
+		t.Error("the card keeps the old lines, lead or advice")
+	}
+}
+
+func TestByPCDisclosure(t *testing.T) {
+	n := allPCsCostNode(t, nil)
+	c := cardOf(t, n, "w-recall-latency")
+	by := c.find("figure.chart > details.tblfb")
+	if len(by) != 2 || by[1].first("summary").text() != "By PC" {
+		t.Fatalf("%d disclosures in the figure", len(by))
+	}
+	tbl := by[1].first("table.tbl.mach")
+	var head []string
+	for _, th := range tbl.find("thead th") {
+		head = append(head, th.text())
+	}
+	if w := []string{"PC", "Prompts", "Slowest 1 in 20", "Typical"}; !slices.Equal(head, w) {
+		t.Errorf("columns %q", head)
+	}
+	type row struct{ id, who, prompts, slow, typical string }
+	var got []row
+	for _, tr := range tbl.find("tbody tr") {
+		td := tr.find("td")
+		id := td[0].first("span.idc").text()
+		got = append(got, row{id, strings.TrimPrefix(td[0].text(), id), td[1].text(), td[2].text(), td[3].text()})
+	}
+	want := []row{
+		{"3f9c2a17", "Linux · this PC", "676", "1.6 s", "840 ms"},
+		{"a07be4d1", "macOS", "612", "2.0–2.5 s", "500 ms–1.0 s"},
+		{"c84e1f39", "Linux · up to Oct 21", "180", "1.0–2.0 s", "500 ms–1.0 s"},
+		{"5d21c8e0", "Windows", "0", "no activity in this window", "—"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rows %q\nwant %q", got, want)
+	}
+	idle := tbl.find("tbody tr")[3].find("td")
+	if idle[2].attr("class") != "muted" || idle[3].attr("class") != "muted" {
+		t.Error("an idle PC's cells are not muted")
+	}
+	// The link names this PC's own prompts, and the foot says why others have none.
+	foot := c.first("div.card-foot")
+	if a := foot.first("a"); a == nil || a.text() != "This PC’s 676 prompts →" {
+		t.Errorf("link %v", a)
+	}
+	if m := foot.first("span.muted"); m == nil || m.text() != "Other PCs send counts per bucket, not prompts: their events stay on them." {
+		t.Errorf("foot note %v", m)
+	}
+	// Without this PC's own answer the link does not invent a count.
+	n2 := allPCsCostNode(t, func(d *PageData) { d.Own = nil })
+	if a := cardOf(t, n2, "w-recall-latency").first("div.card-foot a"); a == nil || a.text() != "This PC’s events →" {
+		t.Errorf("link without own: %v", a)
+	}
+	// Hostile text in a row never reaches the page as markup.
+	h := allPCsCostNode(t, func(d *PageData) { d.V["cost"].Tables.ByPC[1].Machine = `<i>x</i>` })
+	if got := h.find("table.mach td span.idc")[1].text(); got != "<i>x</i>" {
+		t.Errorf("id %q", got)
+	}
+}
+
+func TestCostCardsThatStayThisPC(t *testing.T) {
+	n := allPCsCostNode(t, nil)
+	// The context histogram: chip this PC, the command with no flag, the design's sentence with the all PCs average.
+	c := cardOf(t, n, "w-context-per_session")
+	if chip := c.first("span.chip"); chip == nil || chip.text() != "this PC" {
+		t.Errorf("context chip %v", chip)
+	}
+	if got := c.first("details.cli code").text(); got != "backsight stats cost --days 30" {
+		t.Errorf("context CLI %q", got)
+	}
+	st := c.first("div.state.st-few")
+	if st == nil || st.text() != "This chart is this PC’s: other PCs send a total and a count, not sizes. All PCs: 2,300 characters per session on average, over 311 sessions." {
+		t.Errorf("state %v", st)
+	}
+	if b := st.first("b"); b == nil || b.text() != "2,300" {
+		t.Errorf("the average is not in bold: %v", b)
+	}
+	// The card's own number is this PC's high value, not the average.
+	if lead := c.first("div.lead").text(); !strings.Contains(lead, "3,600 chars") || strings.Contains(lead, "2,300") {
+		t.Errorf("lead %q", lead)
+	}
+	// Where the context is added, and the server's cost: this PC / server chips and the design's lines.
+	for id, want := range map[string][2]string{
+		"w-context-split":     {"this PC", "This PC’s only, with all PCs too: other PCs do not send where context was added."},
+		"w-extraction-tokens": {"server", "The server’s own figures, already every PC’s: the same with this PC or all PCs."},
+	} {
+		c := cardOf(t, n, id)
+		if chip := c.first("span.chip"); chip == nil || chip.text() != want[0] {
+			t.Errorf("%s chip %v", id, chip)
+		}
+		if p := c.first("p.xs.muted"); p == nil || p.text() != want[1] {
+			t.Errorf("%s line %v", id, p)
+		}
+	}
+	// The server's cost is unchanged: the same figure and table with this PC or all PCs.
+	table := func(n *node) string {
+		return cardOf(t, n, "w-extraction-tokens").first("table.tbl").text()
+	}
+	this := pageNode(t, "cost", false, func(d *PageData) { richCost(d.V["cost"]) })
+	if a, b := table(n), table(this); a != b || a == "" {
+		t.Errorf("the server's table differs: %q vs %q", a, b)
+	}
+}
+
+func TestCostStripAllPCs(t *testing.T) {
+	n := allPCsCostNode(t, nil)
+	type fig struct{ lab, icon, v, sub string }
+	var got []fig
+	for _, f := range n.find("main div.figs div.fig") {
+		icon := ""
+		if i := f.first("span.lab span.i"); i != nil {
+			icon = strings.TrimPrefix(strings.Fields(i.attr("class"))[2], "i-")
+		}
+		got = append(got, fig{f.first("span.lab").text(), icon, f.first("span.v").text(), f.first("span.s").text()})
+	}
+	want := []fig{
+		{"Context added per session", "pcs", "2,300 chars", "average, all PCs · this PC’s high value 3,600"},
+		{"Context added per prompt that got memory", "pc", "1,500 chars", "high · typical 640 chars · this PC"},
+		{"Time memory adds to a prompt", "pcs", "1.0–2.0 s", "approximate · slowest 1 in 20, all PCs"},
+		{"Time of a memory search", "pc", "1.9 s", "slowest 1 in 20 · this PC"},
+		{"What the server's model spent (cost)", "server", "$186.40", "server, all PCs · last 30 days"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("strip %q\nwant %q", got, want)
+	}
+	if f := n.find("main div.figs div.fig")[2].first("span.s span.approx"); f == nil || f.text() != "approximate" {
+		t.Error("the word approximate is not set apart")
+	}
+}
+
+// With this PC selected, /cost is what it was: none of the all PCs markup.
+func TestCostThisPCIsUnchanged(t *testing.T) {
+	render := func(rich bool, edit func(d *PageData)) string {
+		return render(t, "cost", func(d *PageData) {
+			d.L, d.P = en, views.Params{Days: 30, DaysSet: true}
+			d.CLI = "backsight stats cost --days 30"
+			d.Frame.Window, d.Frame.Prefs.Dev = "last 30 days", false
+			if rich {
+				richCost(d.V["cost"])
+			}
+			if edit != nil {
+				edit(d)
+			}
+		})
+	}
+	plain := render(true, nil)
+	// A this-PC result that carries the scope of the PCs, and an own answer, draws the same bytes.
+	same := render(true, func(d *PageData) {
+		d.V["cost"].Scope.PCs = b8PCs(3)
+		d.Own = thisPCOwn()
+	})
+	if plain != same {
+		t.Error("this PC's page changes when the PCs are only in the scope")
+	}
+	for _, s := range []string{"all PCs (", "bkt", "By PC", "i-pcs", `class="approx"`, `class="state`, "Other PCs send counts", "with all PCs too"} {
+		if strings.Contains(plain, s) {
+			t.Errorf("this PC's page carries %q", s)
+		}
+	}
+	// The main of this PC's page is the bytes block 7 drew (hashes taken from the page before block 8).
+	pin := func(body, want string) {
+		t.Helper()
+		i, j := strings.Index(body, "<main"), strings.Index(body, "</main>")
+		if i < 0 || j < i {
+			t.Fatal("no main")
+		}
+		if sum := fmt.Sprintf("%x", sha256.Sum256([]byte(body[i:j+len("</main>")]))); sum != want {
+			t.Errorf("the main of this PC's page changed: sha256 %s, want %s", sum, want)
+		}
+	}
+	pin(plain, "55b9c03126f9366c8fdcc9fd847fe5ee9f07c7ad3a5ee4bc35372850458a8bd9")
+	pin(render(false, nil), "4ef72f7269615a3f05c94cd28782f65e9b65d6a1d035bc42bdc02864b75ae7c0")
+	// The latency card of this PC's page is still two lines and the limit.
+	n := parseHTML(t, plain)
+	if got := len(cardOf(t, n, "w-recall-latency").find("polyline")); got != 2 {
+		t.Errorf("%d lines", got)
+	}
+}
+
+// A window drawn by the hour keeps this PC's series: the card draws lines, keeps the PCs below and says so.
+func TestCostLatencyByTheHour(t *testing.T) {
+	n := allPCsCostNode(t, func(d *PageData) {
+		m := d.V["cost"].Metrics["recall.latency"]
+		for i := range m.Series {
+			m.Series[i].Lo, m.Series[i].Hi, m.Series[i].ThisP95 = nil, nil, nil
+		}
+		d.V["cost"].Metrics["recall.latency"] = m
+	})
+	c := cardOf(t, n, "w-recall-latency")
+	if len(c.find("rect.bkt")) != 0 || len(c.find("polyline")) == 0 {
+		t.Error("lines expected when no day has a bucket")
+	}
+	if c.first("table.mach") == nil {
+		t.Error("the PCs one by one are gone")
+	}
+	if p := c.first("p.xs.muted"); p == nil || !strings.Contains(p.text(), "this PC’s figures") {
+		t.Errorf("note %v", p)
+	}
+}
+
+// The day page on all PCs names this PC's own counts in its merged tiles; without
+// this PC's own answer (a project page never has one) they say "events".
+func TestDayTilesNameThisPCsEvents(t *testing.T) {
+	day := func(own *metrics.Result) map[string]string {
+		n := pageNode(t, "day", false, func(d *PageData) {
+			r := d.V["days"]
+			r.Scope.Machines, r.Scope.PCs = "all", b8PCs(3)
+			d.P.Machines = "all"
+			d.Own = own
+		})
+		links := map[string]string{}
+		for _, tile := range n.find("article.tile") {
+			links[tile.first("h3").text()] = tile.first("div.tile-foot a").text()
+		}
+		return links
+	}
+	golden := goldenResult(t, "day-page")
+	with := day(golden)
+	found := golden.Metrics["recall.hit_rate"]
+	if found.Den == nil {
+		t.Fatal("the golden day has no prompts to count")
+	}
+	want := "This PC’s " + en.Int(*found.Den) + " prompts →"
+	if *found.Den == 1 {
+		want = "This PC’s 1 prompt →"
+	}
+	if with["Found"] != want {
+		t.Errorf("Found link with own %q, want %q (all %v)", with["Found"], want, with)
+	}
+	if without := day(nil); without["Found"] != "This PC’s events →" {
+		t.Errorf("Found link without own %q", without["Found"])
+	}
+}
+
+// The longest window on all PCs, with eight other PCs: the page stays under the size cap, no chart over
+// the marks cap, and the latency chart keeps its bars (one a day) without hover sentences.
+func TestCostAllPCsAtTheLongestWindow(t *testing.T) {
+	body := render(t, "cost", func(d *PageData) {
+		d.L, d.P = en, views.Params{Days: 395, DaysSet: true, Machines: "all"}
+		d.CLI = "backsight stats cost --days 395"
+		d.Frame.Window, d.Frame.Prefs.Dev = "last 395 days", false
+		d.Own = thisPCOwn()
+		r := d.V["cost"]
+		allPCsCost(r)
+		longen(r, 395)
+		pcs := b8PCs(9)
+		pcs.Count = 9
+		r.Scope.PCs = pcs
+		for i := 0; i < 8; i++ {
+			r.Tables.ByPC = append(r.Tables.ByPC, metrics.ByPCRow{Machine: fmt.Sprintf("%08x", 0xa0b1c2d3+i), OS: "linux", Prompts: int64(100 + i),
+				P95RangeMS: rangeMS(1000, i64p(2000)), P50RangeMS: rangeMS(250, i64p(500)), Until: ptrS("2026-10-29"), Active: true})
+		}
+	})
+	if len(body) > sizeCap {
+		t.Errorf("the page is %d bytes, cap %d", len(body), sizeCap)
+	}
+	t.Logf("page: %d bytes", len(body))
+	n := parseHTML(t, body)
+	for i, f := range n.find("figure.chart") {
+		if marks := len(f.find("title")); marks > chart.MaxMarks {
+			t.Errorf("chart %d holds %d marks, cap %d", i, marks, chart.MaxMarks)
+		}
+	}
+	fig := cardOf(t, n, "w-recall-latency").first("figure.chart")
+	if bars, rings := len(fig.find("rect.bkt")), len(fig.find("circle.bkt-own[cx]")); bars != 395 || rings != 395 {
+		t.Errorf("%d bars and %d rings, want one of each a day", bars, rings)
+	}
+	if len(fig.find("rect.hit")) != 0 || len(fig.first("details.tblfb table").find("tbody tr")) != chart.MaxTableRows {
+		t.Error("a long window has no hover rects and a capped table")
+	}
+	if rows := len(fig.find("table.mach tbody tr")); rows != 12 {
+		t.Errorf("%d By PC rows, want 12 (the design's 4 and 8 more)", rows)
+	}
+	t.Logf("latency chart: %d titles, %d elements drawn", len(fig.find("title")), len(fig.find("rect"))+len(fig.find("circle"))+len(fig.find("line")))
+}
+
+// On a real index with three other PCs, /cost and the day page on all PCs read this PC's own answer for
+// their links ("This PC’s N prompts →"), as the Overview does; the By PC rows start with this PC.
+func TestAllPCsPagesReadThisPCsOwnAnswer(t *testing.T) {
+	h := othersHarness(t)
+	hdr := cookieHdr(h.login())
+	cost := rawPage(t, h, hdr, "/cost?machines=all")
+	c := cardOf(t, cost, "w-recall-latency")
+	if chip := c.first("span.chip"); chip == nil || chip.text() != "all PCs (4)" {
+		t.Fatalf("chip %v", chip)
+	}
+	rows := c.find("table.mach tbody tr")
+	if len(rows) != 4 || !strings.HasSuffix(rows[0].find("td")[0].text(), "this PC") {
+		t.Fatalf("%d By PC rows, the first %q", len(rows), rows[0].text())
+	}
+	// This PC alone, its own count: the same one the page with this PC selected rests on.
+	this := rawPage(t, h, hdr, "/cost?machines=this")
+	based := cardOf(t, this, "w-recall-latency").first("details.info .pop").text()
+	m := regexp.MustCompile(`Based on ([\d,]+) prompts`).FindStringSubmatch(based)
+	if m == nil {
+		t.Fatalf("no count in the ⓘ of this PC's card: %q", based)
+	}
+	if link := c.first("div.card-foot a"); link == nil || link.text() != "This PC’s "+m[1]+" prompts →" {
+		t.Errorf("link %v, want %s prompts", link, m[1])
+	}
+	days := rawPage(t, h, hdr, "/days?machines=all")
+	var href string
+	for _, a := range days.find("a.hm-c") {
+		if strings.HasPrefix(a.attr("href"), "/days/20") {
+			href = a.attr("href")
+			break
+		}
+	}
+	if href == "" {
+		t.Fatal("no day on the calendar")
+	}
+	if !strings.Contains(href, "machines=all") {
+		t.Fatalf("the day link drops the switch: %s", href)
+	}
+	day := rawPage(t, h, hdr, href)
+	found := false
+	for _, tile := range day.find("article.tile") {
+		if a := tile.first("div.tile-foot a"); a != nil && strings.HasPrefix(a.text(), "This PC’s ") {
+			found = found || tile.first("h3").text() == "Found"
+			if strings.Contains(a.text(), "events") && tile.first("h3").text() == "Found" {
+				t.Errorf("the day's Found link has no count: %q", a.text())
+			}
+		}
+	}
+	if !found {
+		t.Error("the day page's merged tiles do not name this PC's events")
 	}
 }

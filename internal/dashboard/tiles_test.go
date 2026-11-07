@@ -17,7 +17,7 @@ var tilePage = views.Params{Days: 7, DaysSet: true}
 func tileNamed(t *testing.T, sc, name string) Tile {
 	t.Helper()
 	r := scenarioNamed(t, sc)
-	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false) {
+	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false, nil) {
 		for _, tl := range g.Tiles {
 			if tl.Name == name {
 				return tl
@@ -92,7 +92,7 @@ func TestTileLinks(t *testing.T) {
 	m := r.Metrics["recall.hit_rate"]
 	m.Den = nil
 	r.Metrics["recall.hit_rate"] = m
-	if tl := tilesOf(r, tilePage, en, r.Window.Loc, false)[0].Tiles[0]; tl.LinkText != "Events →" {
+	if tl := tilesOf(r, tilePage, en, r.Window.Loc, false, nil)[0].Tiles[0]; tl.LinkText != "Events →" {
 		t.Errorf("no count: %q", tl.LinkText)
 	}
 }
@@ -126,7 +126,7 @@ func TestTileHeads(t *testing.T) {
 func TestTileCLIs(t *testing.T) {
 	r := scenarioNamed(t, "healthy")
 	got := map[string]string{}
-	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false) {
+	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false, nil) {
 		for _, tl := range g.Tiles {
 			got[tl.Name] = tl.Head.CLI
 		}
@@ -141,12 +141,12 @@ func TestTileCLIs(t *testing.T) {
 		}
 	}
 	// No window flag unless the page set one; the project is quoted.
-	g := tilesOf(r, views.Params{Project: "my proj"}, en, r.Window.Loc, false)
+	g := tilesOf(r, views.Params{Project: "my proj"}, en, r.Window.Loc, false, nil)
 	if c := g[0].Tiles[0].Head.CLI; c != "backsight stats quality --project 'my proj'" {
 		t.Errorf("project: %q", c)
 	}
 	// The page's own filters do not leak into a tile's command.
-	g = tilesOf(r, views.Params{Has: "wrong", Sort: "used", Limit: 5}, en, r.Window.Loc, false)
+	g = tilesOf(r, views.Params{Has: "wrong", Sort: "used", Limit: 5}, en, r.Window.Loc, false, nil)
 	if c := g[0].Tiles[0].Head.CLI; c != "backsight stats quality" {
 		t.Errorf("filters: %q", c)
 	}
@@ -288,7 +288,7 @@ func TestTileWithoutAValue(t *testing.T) {
 		m.Value, m.Status, m.Den, m.Delta = nil, metrics.StatusTooFew, scN(4), nil
 		r.Metrics[id] = m
 	}
-	tiles := tilesOf(r, tilePage, en, r.Window.Loc, false)
+	tiles := tilesOf(r, tilePage, en, r.Window.Loc, false, nil)
 	ctx, speed := tiles[2].Tiles[0], tiles[2].Tiles[1]
 	if ctx.Big != "—" || ctx.CI != "" || ctx.Sub != "" || ctx.Note != "4 sessions: too few to judge." || ctx.Word != "too few" {
 		t.Errorf("context: %+v", ctx)
@@ -300,7 +300,7 @@ func TestTileWithoutAValue(t *testing.T) {
 
 func tilesFor(r *metrics.Result) map[string]Tile {
 	out := map[string]Tile{}
-	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false) {
+	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false, nil) {
 		for _, tl := range g.Tiles {
 			out[tl.Name] = tl
 		}

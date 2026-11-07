@@ -658,7 +658,7 @@ func TestCLIDisclosureFollowsTheSwitch(t *testing.T) {
 	follow := map[string][]string{
 		"/":         {"w-recall-hit_rate", "w-context-per_session", "w-recall-latency", "w-pipeline-flow", "w-calendar"},
 		"/quality":  {"w-used-turn_rate", "w-recall-hit_rate"},
-		"/cost":     {"w-context-per_session", "w-recall-latency"},
+		"/cost":     {"w-recall-latency"}, // the context card's chart is this PC's: the design's command has no flag
 		"/pipeline": {"w-pipeline-flow"},
 		"/bank":     nil, "/system": nil, "/sessions": nil, "/projects": nil, "/memories": nil,
 		"/days": {"w-calendar"}, "/releases": {"w-releases"},

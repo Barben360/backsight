@@ -57,16 +57,12 @@ var tileSpecs = []tileSpec{
 
 // tilesOf are the Overview's six tiles in their four groups, times read in
 // loc; dev adds each tile's metric id and sample size. On all PCs, own is this
-// PC's answer to the same view (the tiles' links name its counts); without
-// it they say "events".
-func tilesOf(r *metrics.Result, p views.Params, l format.Locale, loc *time.Location, dev bool, own ...*metrics.Result) []TileGroup {
-	var o *metrics.Result
-	if len(own) > 0 {
-		o = own[0]
-	}
+// PC's answer to the same view (the tiles' links name its counts); nil, and
+// without it they say "events" (a page that is always this PC's).
+func tilesOf(r *metrics.Result, p views.Params, l format.Locale, loc *time.Location, dev bool, own *metrics.Result) []TileGroup {
 	var groups []TileGroup
 	for _, s := range tileSpecs {
-		t := tileOf(r, s, p, l, loc, dev, o)
+		t := tileOf(r, s, p, l, loc, dev, own)
 		if n := len(groups); n > 0 && groups[n-1].Name == s.group {
 			groups[n-1].Tiles = append(groups[n-1].Tiles, t)
 		} else {

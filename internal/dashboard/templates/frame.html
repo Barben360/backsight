@@ -242,11 +242,11 @@
 
 {{define "card-close"}}{{with .Note}}<p class="xs muted">{{.}}</p>
 {{end}}{{if .Pager.Total}}<div class="pager">{{with .Pager.Prev}}<a href="{{.}}" rel="prev" class="btn">← Previous</a>{{end}}<span>{{.Pager.From}}–{{.Pager.To}} of {{.Pager.Total}}</span>{{with .Pager.Next}}<a href="{{.}}" rel="next" class="btn">Next →</a>{{end}}</div>
-{{end}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a></div>
+{{end}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a>{{with .FootNote}}<span class="muted">{{.}}</span>{{end}}</div>
 {{end}}</section>
 {{end}}
 
-{{define "fig"}}<div class="fig"><span class="lab">{{with .Icon}}<span class="i i-sm i-{{.}}"></span>{{end}}{{with .Swatch}}<i class="sw {{.}}"></i>{{end}}{{.Label}}</span><span class="v{{if .WordValue}} v-word{{end}}">{{.Value}}</span>{{if .Word}}<span class="st {{.Class}}">{{.Word}}</span>{{end}}{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
+{{define "fig"}}<div class="fig"><span class="lab">{{with .Icon}}<span class="i i-sm i-{{.}}"></span>{{end}}{{with .Swatch}}<i class="sw {{.}}"></i>{{end}}{{.Label}}</span><span class="v{{if .WordValue}} v-word{{end}}">{{.Value}}</span>{{if .Word}}<span class="st {{.Class}}">{{.Word}}</span>{{end}}{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{if $.SubApprox}}<span class="approx">approximate</span> · {{end}}{{.}}</span>{{end}}</div>{{end}}
 
 {{/*
   lead: dot is a Card; its headline numbers and the word for the first.
@@ -260,7 +260,8 @@
 {{end}}{{end}}
 
 {{define "pcard"}}{{template "card-open" .Head}}
-{{template "devids" .}}{{template "lead" .}}{{template "nodata" .Note}}{{range .Charts}}{{with .Name}}<h3 class="chart-name">{{.}}</h3>
+{{template "devids" .}}{{template "lead" .}}{{.State}}{{with .Lede}}<p class="xs muted">{{.}}</p>
+{{end}}{{template "nodata" .Note}}{{range .Charts}}{{with .Name}}<h3 class="chart-name">{{.}}</h3>
 {{end}}{{.HTML}}
 {{end}}{{template "ctail" .}}{{template "card-close" .Head}}{{end}}
 

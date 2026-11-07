@@ -1,6 +1,9 @@
 package dashboard
 
 import (
+	"html"
+	"html/template"
+	"math"
 	"slices"
 	"strings"
 
@@ -29,6 +32,10 @@ type Card struct {
 	HintCmd string
 	Foot    string   // a muted line under everything; "" none
 	Dev     []string // the ids of the card's metrics, in developer mode
+	// Lede is a muted line right under the head: what the card keeps this PC's
+	// on all PCs; "" none. State is the same as a boxed sentence (escaped markup).
+	Lede  string
+	State template.HTML
 }
 
 // view is metric id of r framed for the page: the zone its times are shown
@@ -395,11 +402,29 @@ func costOf(d PageData) CostPage {
 	rl, sl := d.view(r, "recall.latency"), d.view(r, "search.latency")
 	tokens, price := d.view(r, "extraction.tokens"), d.view(r, "extraction.cost")
 	var c CostPage
-	c.Strip = d.strip(perSession, perPrompt, rl, sl, price)
+	c.Strip = d.strip(r, perSession, perPrompt, rl, sl, price)
+	all := r.Scope.Machines == "all" && r.Scope.PCs != nil // the page adds up the PCs
 
 	c.Context = Card{Head: headOf(perSession, d.CLI, l, "", p), Word: word(perSession), Note: d.noData(perSession), Dev: d.devIDs(perSession)}
+	average := mergedTile(r, perSession.ID) && slices.Contains(perSession.M.Tags, "average")
+	if all {
+		// The chart and its numbers are this PC's: other PCs send a total and a
+		// count, not sizes. The command is the page's, with no flag.
+		c.Context.Head.CLI = d.CLI
+		c.Context.State = d.contextState(perSession, average)
+		if d.Own != nil {
+			if om, ok := d.Own.Metrics[perSession.ID]; ok && om.Den != nil {
+				c.Context.Head.Info.BasedOn = basedOn(perSession.Def, om, l)
+			}
+		}
+	}
 	if c.Context.Note.Text == "" {
-		if ld, ok := d.lead(perSession, "high value: 1 session in 20 gets more"); ok {
+		lv := perSession
+		if p95, ok := extraAs[float64](perSession.M, "p95"); ok && average {
+			lv.M.Value = &p95 // the card's number is this PC's high value, not the average
+			lv.M.CI = nil
+		}
+		if ld, ok := d.lead(lv, "high value: 1 session in 20 gets more"); ok {
 			if tk, ok := extraAs[int64](perSession.M, "tokens_p95"); ok {
 				ld.CI = "≈ " + l.Int(tk) + " tokens"
 			}
@@ -410,13 +435,18 @@ func costOf(d PageData) CostPage {
 	}
 
 	c.Split = Card{Head: fixedHead("context-split", "Where is that context added?", "machine", d.CLI), Note: d.noData(perSession), Dev: d.devIDs(perSession)}
+	if all {
+		c.Split.Lede = "This PC’s only, with all PCs too: other PCs do not send where context was added."
+	}
 	if c.Split.Note.Text == "" {
 		c.Split.Charts = []PathChart{{HTML: partsOf(l, "Characters added, per day, at session start and before prompts", d.more(), perSession,
 			splitOrder, splitWords, []string{"f-seq1", "f-seq2"}, "")}}
 	}
 
 	c.Latency = Card{Head: headOf(rl, d.CLI, l, "", p), Word: word(rl), Note: d.noData(rl, sl), Dev: d.devIDs(rl, sl)}
-	if c.Latency.Note.Text == "" {
+	if mergedTile(r, rl.ID) {
+		d.mergedLatency(&c.Latency, r, rl, sl)
+	} else if c.Latency.Note.Text == "" {
 		for _, v := range []MetricView{rl, sl} {
 			if ld, ok := d.lead(v, "slowest 1 in 20: "+views.Label(v.Def)); ok {
 				c.Latency.Leads = append(c.Latency.Leads, ld)
@@ -429,6 +459,9 @@ func costOf(d PageData) CostPage {
 	}
 
 	c.Extraction.Card = Card{Head: headOf(tokens, d.CLI, l, "", p), Word: word(tokens), Note: d.noData(tokens), Dev: d.devIDs(tokens, price)}
+	if all {
+		c.Extraction.Lede = "The server’s own figures, already every PC’s: the same with this PC or all PCs."
+	}
 	if c.Extraction.Note.Text == "" {
 		if ld, ok := d.lead(tokens, "tokens"); ok {
 			c.Extraction.Leads = []Lead{ld}
@@ -483,9 +516,11 @@ func costOf(d PageData) CostPage {
 	return c
 }
 
-// strip is the row of key figures at the top of the Cost page.
-func (d PageData) strip(perSession, perPrompt, rl, sl, price MetricView) []Fig {
+// strip is the row of key figures at the top of the Cost page. On all PCs
+// each figure carries the icon of whose it is, and the merged ones say how.
+func (d PageData) strip(r *metrics.Result, perSession, perPrompt, rl, sl, price MetricView) []Fig {
 	l := d.L
+	all := r.Scope.Machines == "all" && r.Scope.PCs != nil
 	var out []Fig
 	for _, v := range []MetricView{perSession, perPrompt, rl, sl, price} {
 		f := figOf(v, l)
@@ -501,6 +536,9 @@ func (d PageData) strip(perSession, perPrompt, rl, sl, price MetricView) []Fig {
 				f.Sub += " · ≈ " + l.Int(tk) + " tokens"
 			}
 		}
+		if all {
+			d.allPCsFig(&f, r, v, ok)
+		}
 		if !hasValue(v) { // the reason there is no number
 			n := d.noData(v)
 			f.Sub = strings.TrimSpace(n.Text + n.Code + n.Close)
@@ -508,6 +546,56 @@ func (d PageData) strip(perSession, perPrompt, rl, sl, price MetricView) []Fig {
 		out = append(out, f)
 	}
 	return out
+}
+
+// allPCsFig gives a figure of the strip, on all PCs, its icon and the words
+// that say whose number it is: the merged speed is a range from the PCs'
+// buckets, the merged context an average beside this PC's high value, and the
+// others stay this PC's (the server's cost is every PC's).
+func (d PageData) allPCsFig(f *Fig, r *metrics.Result, v MetricView, hasP50 bool) {
+	l := d.L
+	f.Icon = "pc"
+	switch {
+	case v.ID == "extraction.cost":
+		f.Icon = "server"
+	case mergedTile(r, v.ID):
+		f.Icon = "pcs"
+	}
+	if !hasValue(v) {
+		return
+	}
+	switch {
+	case v.ID == "context.per_session" && slices.Contains(v.M.Tags, "average"):
+		f.Delta = nil // the change of an average of totals is not this PC's high value's
+		f.Sub = "average, all PCs"
+		if p95, ok := extraAs[float64](v.M, "p95"); ok {
+			f.Sub += " · this PC’s high value " + l.Size(p95, "")
+		}
+	case v.ID == "recall.latency" && slices.Contains(v.M.Tags, "approximate"):
+		f.Delta = bucketDelta(r, v.M)
+		if lo, hi, ok := views.RangeMS(v.M, "range_ms"); ok {
+			f.Value = views.RangeText(lo, hi)
+		}
+		f.Sub, f.SubApprox = "slowest 1 in 20, all PCs", true
+	case v.ID == "context.per_prompt" && hasP50:
+		f.Sub += " · this PC"
+	case v.ID == "search.latency" && hasP50:
+		f.Sub = "slowest 1 in 20 · this PC"
+	}
+}
+
+// contextState is the boxed sentence of the Context card on all PCs: the
+// chart is this PC's, and the all PCs' average goes with it.
+func (d PageData) contextState(v MetricView, average bool) template.HTML {
+	text := html.EscapeString("This chart is this PC’s: other PCs send a total and a count, not sizes.")
+	if average && hasValue(v) {
+		text += " All PCs: <b>" + html.EscapeString(d.L.Int(int64(math.Round(*v.M.Value)))) + "</b> characters per session on average"
+		if v.M.Den != nil {
+			text += ", over " + html.EscapeString(format.Count(d.L, *v.M.Den, "session", "sessions"))
+		}
+		text += "."
+	}
+	return template.HTML(`<div class="state st-few"><span class="i i-pcs"></span><span>` + text + `</span></div>`)
 }
 
 // DLRow is a row of a card's description list: the text around a moment,
@@ -543,3 +631,50 @@ func cardPill(v MetricView) Word {
 
 // sentenceOf is a no-data sentence as one line of text, for a figure.
 func sentenceOf(n NoData) string { return strings.TrimSpace(n.Text + n.Code + n.Close) }
+
+// latencyWhat is the ⓘ's account of the merged speed.
+const latencyWhat = "Per day, the slowest 1 in 20 prompts across the PCs. Each PC sends how many prompts fell in each time bucket (50, 100, 250, 500 ms, 1, 2, 2.5, 5 s, more); added up, they place the slowest 1 in 20 between two bucket edges, drawn as a bar from one edge to the other."
+
+// mergedLatency draws the Latency card of the Cost page on all PCs: the chip,
+// the ⓘ, the days as the bucket that holds the slowest 1 in 20 with this PC's
+// exact value as a ring, the PCs one by one, and the link to this PC's events.
+func (d PageData) mergedLatency(c *Card, r *metrics.Result, rl, sl MetricView) {
+	l := d.L
+	h := &c.Head
+	h.PCs = allPCsChip(r.Scope)
+	h.OthersNF = othersNotFiltered(rl.M)
+	if h.Drill != "" {
+		h.DrillText = "This PC’s events →"
+		for _, s := range tileSpecs {
+			if s.id == rl.ID {
+				h.DrillText = thisPCLink(d.Own, s, l)
+			}
+		}
+		h.FootNote = "Other PCs send counts per bucket, not prompts: their events stay on them."
+	}
+	if c.Note.Text != "" {
+		return
+	}
+	limits := ""
+	if def, ok := metrics.DefOf(rl.ID); ok && def.Absolute.Watch != nil && def.Absolute.Bad != nil {
+		limits = "Watch over " + l.Duration(*def.Absolute.Watch) + ", attention over " + l.Duration(*def.Absolute.Bad) +
+			". Both are bucket edges, so the status is exact."
+	}
+	based := dash
+	if rl.M.Den != nil {
+		based = format.Count(l, *rl.M.Den, "prompt", "prompts")
+		if pcs := r.Scope.PCs; pcs != nil && pcs.Active > 0 {
+			based += " on " + plural(pcs.Active, "PC", "PCs")
+		}
+	}
+	h.Info = Info{Label: "About this chart", Name: "Time memory adds to a prompt, all PCs", What: latencyWhat, Limits: limits, BasedOn: based,
+		Term: rl.ID + " p95 from merged buckets"}
+	byPC := byPCOf(l, r.Tables.ByPC)
+	if bars, ok := latencyRangesOf(l, d.more(), rl, byPC); ok {
+		c.Charts = []PathChart{{HTML: bars}}
+		return
+	}
+	// A window drawn by the hour keeps this PC's series: lines, and the PCs below.
+	h.Note = "Drawn by the hour from this PC’s figures: the other PCs send whole days."
+	c.Charts = []PathChart{{HTML: latencyOf(l, d.more(), rl, sl) + template.HTML(byPC)}}
+}
