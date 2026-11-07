@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,8 +63,8 @@ func TestEachChangedPriceIsADiff(t *testing.T) {
 	}
 }
 
-// A price the list leaves out is not compared, and a model it leaves out
-// is named apart, never a difference.
+// A price the list leaves out is not compared; a model it leaves out is
+// named apart from the price rows.
 func TestUnlistedIsNotADiff(t *testing.T) {
 	list := matching()
 	delete(list, "gpt-6-luna")
@@ -113,15 +116,21 @@ func TestReport(t *testing.T) {
 	var b bytes.Buffer
 	report(&b, []diff{{Model: "claude-sonnet-5-5", Price: "output", Table: 10, Listed: 12.000000000000002}}, []string{"gpt-6-luna"})
 	out := b.String()
-	for _, want := range []string{"| `claude-sonnet-5-5` | output | 10 | 12 |", "provider's own pricing page", "Not listed by LiteLLM, to check by hand: `gpt-6-luna`."} {
+	for _, want := range []string{"| `claude-sonnet-5-5` | output | 10 | 12 |", "provider's own pricing page", "Not listed by LiteLLM (renamed or dropped?), to check by hand: `gpt-6-luna`."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)
 		}
 	}
 	b.Reset()
 	report(&b, nil, nil)
-	if !strings.HasPrefix(b.String(), "Every price LiteLLM lists") || strings.Contains(b.String(), "|") {
+	if !strings.HasPrefix(b.String(), "LiteLLM lists every model") || strings.Contains(b.String(), "|") {
 		t.Errorf("no diff: %q", b.String())
+	}
+	// Only a missing model: the issue must not open with "matches".
+	b.Reset()
+	report(&b, nil, []string{"gpt-6-luna"})
+	if out := b.String(); strings.Contains(out, "lists every model") || strings.Contains(out, "|") || !strings.Contains(out, "`gpt-6-luna`") {
+		t.Errorf("missing only: %q", out)
 	}
 }
 
@@ -130,6 +139,59 @@ func TestTableNamesAreLowerCase(t *testing.T) {
 	for m := range retain.TablePrices() {
 		if m != strings.ToLower(m) {
 			t.Errorf("%q", m)
+		}
+	}
+}
+
+// writeList writes list as LiteLLM's JSON (prices per token).
+func writeList(t *testing.T, list map[string]entry) string {
+	t.Helper()
+	data, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "prices.json")
+	if err := os.WriteFile(f, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// The exit status is what the workflow acts on: 0 nothing, 1 an issue,
+// 2 a failed run.
+func TestRunExitStatus(t *testing.T) {
+	changed := matching()
+	s := changed["gpt-6-luna"]
+	s.Output = perToken(0.60)
+	changed["gpt-6-luna"] = s
+	oneMissing := matching()
+	delete(oneMissing, "gpt-6-luna")
+	mostMissing := map[string]entry{"gpt-6-luna": matching()["gpt-6-luna"], "some-other-model": {Input: perToken(1)}}
+	garbage := filepath.Join(t.TempDir(), "garbage.json")
+	if err := os.WriteFile(garbage, []byte("<html>rate limited</html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, file string
+		want       int
+		says       string
+	}{
+		{"matching", writeList(t, matching()), 0, "lists every model"},
+		{"a changed price", writeList(t, changed), 1, "| `gpt-6-luna` | output | 0.5 | 0.6 |"},
+		{"a model no longer listed", writeList(t, oneMissing), 1, "`gpt-6-luna`"},
+		{"most models missing", writeList(t, mostMissing), 2, "only 1 of the table's 3 models"},
+		{"not JSON", garbage, 2, "not LiteLLM's price list"},
+		{"no file", filepath.Join(t.TempDir(), "none.json"), 2, "pricedrift:"},
+	} {
+		var out, errw bytes.Buffer
+		if got := run(c.file, table, &out, &errw); got != c.want {
+			t.Errorf("%s: exit %d, want %d (out %q, err %q)", c.name, got, c.want, out.String(), errw.String())
+		}
+		if !strings.Contains(out.String()+errw.String(), c.says) {
+			t.Errorf("%s: output lacks %q: out %q, err %q", c.name, c.says, out.String(), errw.String())
+		}
+		if c.want == 2 && out.Len() > 0 {
+			t.Errorf("%s: a failed run wrote a report: %q", c.name, out.String())
 		}
 	}
 }

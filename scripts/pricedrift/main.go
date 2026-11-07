@@ -8,10 +8,11 @@
 //
 //	pricedrift -litellm <file>
 //
-// It prints a Markdown report and exits 0 when every price LiteLLM lists
-// for a table model matches, 1 when one differs, 2 when the file cannot be
-// read. A model LiteLLM does not list is named in the report, not a
-// difference.
+// It prints a Markdown report and exits 0 when LiteLLM lists every table
+// model at the table's prices, 1 when a price differs or a model is not
+// listed (renamed or dropped: a person looks), 2 when the file cannot be
+// read or lists fewer than half the table's models (a changed format or a
+// partial download, never "no difference").
 package main
 
 import (
@@ -31,20 +32,32 @@ import (
 func main() {
 	file := flag.String("litellm", "", "LiteLLM's model_prices_and_context_window.json")
 	flag.Parse()
-	data, err := os.ReadFile(*file)
-	if err == nil {
-		var list map[string]entry
-		if list, err = parse(data); err == nil {
-			diffs, missing := compare(retain.TablePrices(), list)
-			report(os.Stdout, diffs, missing)
-			if len(diffs) > 0 {
-				os.Exit(1)
-			}
-			return
-		}
+	os.Exit(run(*file, retain.TablePrices(), os.Stdout, os.Stderr))
+}
+
+// run compares table with the list in file, writes the report to out and
+// returns the exit status.
+func run(file string, table map[string]retain.Prices, out, errw io.Writer) int {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Fprintln(errw, "pricedrift:", err)
+		return 2
 	}
-	fmt.Fprintln(os.Stderr, "pricedrift:", err)
-	os.Exit(2)
+	list, err := parse(data)
+	if err != nil {
+		fmt.Fprintln(errw, "pricedrift:", err)
+		return 2
+	}
+	diffs, missing := compare(table, list)
+	if 2*len(missing) > len(table) {
+		fmt.Fprintf(errw, "pricedrift: the list holds only %d of the table's %d models: a changed format or a partial file\n", len(table)-len(missing), len(table))
+		return 2
+	}
+	report(out, diffs, missing)
+	if len(diffs) > 0 || len(missing) > 0 {
+		return 1
+	}
+	return 0
 }
 
 // entry is one LiteLLM model, prices per token; nil: not listed.
@@ -135,10 +148,12 @@ func lookup(list map[string]entry, model string) (entry, bool) {
 func near(a, b float64) bool { return math.Abs(a-b) <= 0.005*max(math.Abs(a), math.Abs(b)) }
 
 func report(w io.Writer, diffs []diff, missing []string) {
-	if len(diffs) == 0 {
-		fmt.Fprintln(w, "Every price LiteLLM lists for the built-in table's models matches.")
-	} else {
-		fmt.Fprintln(w, "The built-in price table (`internal/retain/estimate.go`) differs from LiteLLM's `model_prices_and_context_window.json`. Check each price on the provider's own pricing page before changing the table: LiteLLM is a community list. The table holds DeepSeek's peak price, so a listed off-peak price reads as lower.")
+	if len(diffs) == 0 && len(missing) == 0 {
+		fmt.Fprintln(w, "LiteLLM lists every model of the built-in table at the table's prices.")
+		return
+	}
+	fmt.Fprintln(w, "The built-in price table (`internal/retain/estimate.go`) differs from LiteLLM's `model_prices_and_context_window.json`. Check each price on the provider's own pricing page before changing the table: LiteLLM is a community list. The table holds DeepSeek's peak price, so a listed off-peak price reads as lower.")
+	if len(diffs) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "| Model | Price | Table | LiteLLM |")
 		fmt.Fprintln(w, "|---|---|---|---|")
@@ -148,7 +163,7 @@ func report(w io.Writer, diffs []diff, missing []string) {
 	}
 	if len(missing) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Not listed by LiteLLM, to check by hand: %s.\n", "`"+strings.Join(missing, "`, `")+"`")
+		fmt.Fprintf(w, "Not listed by LiteLLM (renamed or dropped?), to check by hand: %s.\n", "`"+strings.Join(missing, "`, `")+"`")
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Prices per million tokens.")

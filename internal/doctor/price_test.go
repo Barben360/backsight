@@ -48,3 +48,32 @@ func TestPriceNotAskedWhereNothingIsBilledPerToken(t *testing.T) {
 		t.Errorf("config error: %+v", c)
 	}
 }
+
+// A model served on this machine or the LAN has no price to set: a warning
+// there could never be cleared honestly.
+func TestPriceNotAskedOfALocalEndpoint(t *testing.T) {
+	for _, u := range []string{"http://localhost:1234/v1", "http://127.0.0.1:8000/v1", "http://host.docker.internal:11434/v1", "http://192.168.1.20:8080/v1", "http://[::1]:8000/v1"} {
+		c := checkPrice(config.LLM{Provider: "openai", Model: "qwen3-8b", BaseURL: u, Currency: "USD"}, "cfg", nil)
+		if c.Status != Info || c.Summary != "not billed per token: a local endpoint ("+u+")" {
+			t.Errorf("%s: %+v", u, c)
+		}
+	}
+	// A public endpoint stays a warning, and a priced local model is still
+	// reported with its price.
+	for _, u := range []string{"https://api.openai.com/v1", "https://openrouter.ai/api/v1", "", "::bad"} {
+		if c := checkPrice(config.LLM{Provider: "openai", Model: "qwen3-8b", BaseURL: u, Currency: "USD"}, "cfg", nil); c.Status != Warn {
+			t.Errorf("%q: %+v", u, c)
+		}
+	}
+	if c := checkPrice(config.LLM{Provider: "openai", Model: "qwen3-8b", BaseURL: "http://localhost:1234/v1", PriceOutput: 0.2, Currency: "USD"}, "cfg", nil); c.Status != OK {
+		t.Errorf("priced local model: %+v", c)
+	}
+}
+
+// Only an output price set: still the user's prices, input at 0.
+func TestPriceOutputOnlyIsTheConfigs(t *testing.T) {
+	c := checkPrice(config.LLM{Provider: "openai", Model: "gpt-5.4-mini", PriceOutput: 4.5, Currency: "USD"}, "cfg", nil)
+	if c.Status != OK || c.Summary != "gpt-5.4-mini priced from config.toml: 0 input, 0 cached, 4.5 output USD per million tokens" {
+		t.Errorf("%+v", c)
+	}
+}
