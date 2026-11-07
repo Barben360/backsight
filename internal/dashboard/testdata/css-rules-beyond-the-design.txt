@@ -70,4 +70,5 @@ details.never[open] > summary { margin-bottom: var(--sp-2);
 input[type="text"] { min-height: var(--touch); box-sizing: border-box;
 dialog.keys:not([open]) { display: none;
 .tile-st .delta { white-space: normal;
-.tile-top:has(.i-pcs) { flex-wrap: wrap;
+.tile-who { display: flex; flex-wrap: wrap; align-items: center; align-content: center; align-self: stretch; gap: 6px; min-width: 0;
+.tile-who ~ details.info { align-self: flex-start;

@@ -310,9 +310,10 @@
 {{define "tilegroups"}}<div class="tgroups" role="group" aria-label="Key numbers">
 {{range .}}<section class="tgroup"><h2 class="tgroup-h">{{.Name}}</h2><div class="tgroup-tiles">
 {{range .Tiles}}<article class="tile {{.Class}}" aria-labelledby="{{.Head.ID}}">
-<div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
+{{if .Head.PCs}}<div class="tile-top"><div class="tile-who"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>{{template "pcschip" .Head.PCs}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .Head.OthersNF}}{{template "othersnf"}}{{end}}</div><span class="spacer"></span>
+{{template "info" .Head}}</div>{{else}}<div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
 {{if .Head.PCs}}{{template "pcschip" .Head.PCs}}{{else if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .Head.OthersNF}}{{template "othersnf"}}{{end}}<span class="spacer"></span>
-{{template "info" .Head}}</div>
+{{template "info" .Head}}</div>{{end}}
 {{with .Dev}}<span class="devid">{{.}}</span>
 {{end}}<p class="tile-q">{{.Question}}</p>
 <div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{if .CI}}<span class="ci{{if .Approx}} approx{{end}}">{{.CI}}</span>{{end}}</div>

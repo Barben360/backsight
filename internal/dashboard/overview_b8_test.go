@@ -2,13 +2,13 @@ package dashboard
 
 import (
 	"bytes"
-	"github.com/Barben360/backsight/internal/dashboard/format"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )

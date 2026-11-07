@@ -269,8 +269,9 @@ func latencyRangesOf(l format.Locale, more string, v MetricView, after string) (
 	return c.HTML(), true
 }
 
-// bucketWordsIn says, in the page's locale, a latency bucket (lo, hi] in a sentence ("between 1.0 and
-// 2.0 s", "over 5.0 s") and in a table cell ("1.0–2.0 s").
+// bucketWordsIn says a latency bucket (lo, hi] in the page's locale, in a
+// sentence ("between 1,0 and 2,0 s", "over 5,0 s") and in a table cell
+// ("1,0–2,0 s").
 func bucketWordsIn(l format.Locale) func(lo float64, hi *float64) (between, cell string) {
 	return func(lo float64, hi *float64) (between, cell string) {
 		var h *int64

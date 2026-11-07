@@ -798,6 +798,7 @@ dialog.keys:not([open]) { display: none; }
   .seg a.seg-off { color: GrayText; }
 }
 
-/* Several PCs: a tile's delta wraps inside the tile (the arrow stays with the first word through a no-break space), and a tile head that carries the "all PCs" chip wraps rather than push the info button out. */
+/* Several PCs: a tile's delta wraps inside the tile (the arrow stays with the first word through a no-break space); in a head that carries the "all PCs" chip the title and the chip are a group that wraps (chip under title) while the info button keeps the first line, at the right edge. */
 .tile-st .delta { white-space: normal; }
-.tile-top:has(.i-pcs) { flex-wrap: wrap; }
+.tile-who { display: flex; flex-wrap: wrap; align-items: center; align-content: center; align-self: stretch; gap: 6px; min-width: 0; }
+.tile-who ~ details.info { align-self: flex-start; }

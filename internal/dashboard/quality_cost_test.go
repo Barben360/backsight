@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/Barben360/backsight/internal/dashboard/format"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/chart"
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -1521,5 +1521,51 @@ func TestRangeTextsFollowThePagesLocale(t *testing.T) {
 	}
 	if !strings.Contains(art.text(), "typical 500 ms–1,0 s") {
 		t.Errorf("drawn tile %q", art.text())
+	}
+}
+
+// The Cost page in French, all PCs: the card's figure, the By PC table and the
+// detail line write their buckets with the comma, as "limit 2,5 s" does.
+func TestCostPageBucketsFollowTheLocale(t *testing.T) {
+	fr := format.FromAcceptLanguage("fr")
+	n := allPCsCostNode(t, func(d *PageData) { d.L = fr })
+	var figs []string
+	for _, f := range n.find("div.fig") {
+		figs = append(figs, f.text())
+	}
+	if all := strings.Join(figs, "|"); !strings.Contains(all, "1,0–2,0 s") || strings.Contains(all, "1.0") {
+		t.Errorf("Speed figure not in the locale: %q", all)
+	}
+	c := cardOf(t, n, "w-recall-latency")
+	var cells []string
+	for _, td := range c.find("table.tbl.mach td") {
+		cells = append(cells, td.text())
+	}
+	if all := strings.Join(cells, "|"); !strings.Contains(all, "2,0–2,5 s|500 ms–1,0 s") || strings.Contains(all, "1.0") {
+		t.Errorf("By PC table not in the locale: %q", all)
+	}
+	// The detail line under a Speed card that is not merged away (the PCs are
+	// not counted here) reads the same typical range.
+	line := func(l format.Locale) string {
+		n := allPCsCostNode(t, func(d *PageData) { d.L = l; d.V["cost"].Scope.PCs = nil })
+		return cardOf(t, n, "w-recall-latency").text()
+	}
+	if txt := line(fr); !strings.Contains(txt, "all PCs: typical 500 ms–1,0 s") {
+		t.Errorf("detail line not in the locale: %q", txt)
+	}
+	if txt := line(format.Locale{}); !strings.Contains(txt, "all PCs: typical 500 ms–1.0 s") {
+		t.Errorf("English detail line: %q", txt)
+	}
+}
+
+// The copy-summary line for Speed on all PCs writes its bucket in the locale.
+func TestSummaryLineBucketsFollowTheLocale(t *testing.T) {
+	r := allPCsOverview(t)
+	speedAs(r, metrics.StatusBad, 5000, 2000, 2000, i64p(5000), []any{500.0, 1000.0})
+	if got := mergedCostLine(r, format.FromAcceptLanguage("fr"), "Speed"); got != "slowest 1 in 20 between 2,0 and 5,0 s (approximate), all PCs" {
+		t.Errorf("line %q", got)
+	}
+	if got := mergedCostLine(r, format.Locale{}, "Speed"); got != "slowest 1 in 20 between 2.0 and 5.0 s (approximate), all PCs" {
+		t.Errorf("English line %q", got)
 	}
 }

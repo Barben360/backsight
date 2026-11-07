@@ -103,7 +103,7 @@ func pipelineOf(d PageData) PipelinePage {
 			{Name: "Share sent, per day", HTML: linesOf(l, "Share of sessions sent, per day", d.more(), true, flow)},
 			{Name: outcomes.Def.Question, HTML: flowOf(l, d.more(), outcomes)},
 		}
-		p.Flow.Extras = extrasOf(flow, outcomes)
+		p.Flow.Extras = extrasOf(d.L, flow, outcomes)
 		if flow.M.Status == metrics.StatusWatch || flow.M.Status == metrics.StatusBad {
 			p.Flow.Hint, p.Flow.HintCmd = "Sessions not reaching the server? This checks both ends:", "backsight doctor"
 		}
@@ -317,7 +317,7 @@ func (d PageData) hooksOf(hooks MetricView) HooksCard {
 	inWindow := slices.DeleteFunc(slices.Clone(kinds), func(k string) bool { return window[k] == 0 })
 	name := func(k string) string { return wordOr(views.FailureKindWords, k, views.FailureKindWords["unknown"]) }
 	c.Charts = []PathChart{{HTML: partsOf(l, "Steps that crashed, by how they stopped, per day", d.more(), hooks, inWindow, wordsOf(inWindow, name), hookClasses, "")}}
-	c.Extras = extrasOf(hooks)
+	c.Extras = extrasOf(d.L, hooks)
 	c.Hint, c.HintCmd = "To report it, this prints a redacted summary and a link (nothing is sent):", "backsight report"
 	return c
 }

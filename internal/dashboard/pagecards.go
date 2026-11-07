@@ -133,18 +133,18 @@ func (d PageData) more() string { return d.CLI + " --json" }
 
 // extrasOf are the lines under the numbers of the given metrics: what they
 // are made of (details) and their breakdowns.
-func extrasOf(vs ...MetricView) []string {
+func extrasOf(l format.Locale, vs ...MetricView) []string {
 	var out []string
 	for _, v := range vs {
-		out = append(out, detailsOf(v)...)
+		out = append(out, detailsIn(l, v)...)
 		out = append(out, foundLines(v, views.ExtraLines)...)
 	}
 	return out
 }
 
 // labelled is lines of metric v, each starting with the metric's label.
-func labelled(v MetricView) []string {
-	lines := detailsOf(v)
+func labelled(l format.Locale, v MetricView) []string {
+	lines := detailsIn(l, v)
 	for i, s := range lines {
 		lines[i] = views.Label(v.Def) + ": " + s
 	}
@@ -188,7 +188,7 @@ func qualityOf(d PageData) QualityPage {
 
 	q.Used = Card{Head: headOf(used, d.CLI, l, "", p), Word: word(used), Note: d.noData(used, cov), Dev: d.devIDs(used, cov)}
 	if q.Used.Note.Text == "" {
-		q.Used.Extras = extrasOf(used)
+		q.Used.Extras = extrasOf(d.L, used)
 		q.Used.Leads = leadsOf(d, [2]MetricView{used, cov}, [2]string{"used by Claude", "said what it used"})
 		q.Used.Charts = []PathChart{{HTML: linesOf(l, "Used by Claude, and how often it said what it used, per day", d.more(), true, used, cov)}}
 	}
@@ -217,7 +217,7 @@ func qualityOf(d PageData) QualityPage {
 
 	q.Hit = Card{Head: headOf(hit, d.CLI, l, "", p), Word: word(hit), Note: d.noData(hit), Dev: d.devIDs(hit)}
 	if q.Hit.Note.Text == "" {
-		q.Hit.Extras = extrasOf(hit)
+		q.Hit.Extras = extrasOf(d.L, hit)
 		q.Hit.Leads = leadsOf(d, [2]MetricView{hit, {}}, [2]string{"of prompts got memory", ""})
 		q.Hit.Charts = []PathChart{{HTML: linesOf(l, "Prompts that got memory, per day", d.more(), true, hit)}}
 	}
@@ -227,7 +227,7 @@ func qualityOf(d PageData) QualityPage {
 		words := wordsOf(emptyOrder, views.EmptyWords.Replace)
 		q.Empty.Charts = []PathChart{{HTML: partsOf(l, "Prompts that got nothing, by why, per day", d.more(), empty, emptyOrder, words,
 			[]string{"f-failed", "f-seq1", "f-seq2", "f-seq3", "f-aside", "f-neutral"}, "")}}
-		q.Empty.Extras = extrasOf(empty)
+		q.Empty.Extras = extrasOf(d.L, empty)
 		switch topEmpty(empty) {
 		case "error":
 			q.Empty.Hint = "Most prompts got nothing because the memory could not be searched, not because it is empty. Check the server:"
@@ -328,7 +328,7 @@ func (d PageData) rankingCard(r *metrics.Result) *Card {
 	if rank := d.view(r, "used.rank"); hasValue(rank) {
 		c.Charts = []PathChart{{HTML: rankHistOf(d.L, d.more(), rank)}}
 	}
-	c.Extras = extrasOf(slices.DeleteFunc(slices.Clone(vs), func(v MetricView) bool {
+	c.Extras = extrasOf(d.L, slices.DeleteFunc(slices.Clone(vs), func(v MetricView) bool {
 		return v.ID != "used.rank" && v.ID != "used.by_path" && v.ID != "recall.by_lang"
 	})...)
 	return &c
@@ -431,7 +431,7 @@ func costOf(d PageData) CostPage {
 			}
 			c.Context.Leads = []Lead{ld}
 		}
-		c.Context.Extras = extrasOf(perSession)
+		c.Context.Extras = extrasOf(d.L, perSession)
 		c.Context.Charts = []PathChart{{HTML: contextHistOf(l, d.more(), perSession)}}
 	}
 
@@ -453,7 +453,7 @@ func costOf(d PageData) CostPage {
 				c.Latency.Leads = append(c.Latency.Leads, ld)
 			}
 		}
-		c.Latency.Extras = slices.Concat(labelled(rl), labelled(sl))
+		c.Latency.Extras = slices.Concat(labelled(d.L, rl), labelled(d.L, sl))
 		c.Latency.Charts = []PathChart{{HTML: latencyOf(l, d.more(), rl, sl)}}
 		c.Latency.Hint = "Too slow? This checks the server and its search index:"
 		c.Latency.HintCmd = "backsight doctor"
@@ -467,7 +467,7 @@ func costOf(d PageData) CostPage {
 		if ld, ok := d.lead(tokens, "tokens"); ok {
 			c.Extraction.Leads = []Lead{ld}
 		}
-		c.Extraction.Extras = extrasOf(tokens, price)
+		c.Extraction.Extras = extrasOf(d.L, tokens, price)
 		from, _ := extraAs[string](tokens.M, "record_from")
 		c.Extraction.Charts = []PathChart{{HTML: extractionChart(l, d.more(), r.Tables.Extraction, tokens.M.Series) +
 			recordBlock(tokens.M.Series, from, false)}}
