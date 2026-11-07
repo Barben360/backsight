@@ -551,7 +551,7 @@ vb_status() {
 # and purge run before the offline and latency checks, which leave
 # sessions on A for its timer to send while the restore check counts what
 # each tick re-sends.
-VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients timers
+VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients several-pcs timers
   dedup-copied dedup-concurrent dedup-split key-rotation restore-across-clients purge-across-clients
   offline-laptop offline-hung unsent-cost latency-0ms latency-20ms latency-80ms)
 

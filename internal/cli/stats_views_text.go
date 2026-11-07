@@ -137,11 +137,25 @@ func viewText(r metrics.Result, dev bool) string {
 	return b.String()
 }
 
-// footer names the scope of the numbers.
+// footer names the scope of the numbers. With all PCs it counts them, says
+// how far the other PCs' figures reach, how many documents were set aside
+// and that a project filter leaves the other PCs' figures whole.
 func footer(r metrics.Result) string {
 	machines := "this PC"
-	if r.Scope.Machines != "" && r.Scope.Machines != "this" {
-		machines = r.Scope.Machines
+	if r.Scope.Machines == "all" {
+		machines = "all PCs on this server"
+		if p := r.Scope.PCs; p != nil {
+			machines += fmt.Sprintf(" (%d)", p.Count)
+			if p.Until != nil {
+				machines += " · other PCs up to " + *p.Until
+			}
+			if p.Ignored > 0 {
+				machines += " · " + countOf(int64(p.Ignored), "document", "documents") + " ignored"
+			}
+		}
+		if r.Scope.OthersUnfiltered {
+			machines += " · other PCs not filtered"
+		}
 	}
 	server := r.Scope.Server
 	if server == "" {
@@ -222,10 +236,21 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 		value = ageText(int64(*m.Value)) // the last tick's age, as the jobs table prints it
 	}
 	var parts []string
-	if m.Den != nil {
-		parts = append(parts, "n="+grouped(*m.Den))
+	if slices.Contains(m.Tags, "approximate") {
+		parts = append(parts, "approximate") // a range read from the PCs' buckets
 	}
-	parts = append(parts, metricStatusText(d, m))
+	if m.Den != nil {
+		n := "n=" + grouped(*m.Den)
+		if slices.Contains(m.Tags, "average") {
+			n += " sessions"
+		}
+		parts = append(parts, n)
+	}
+	status := metricStatusText(d, m)
+	if slices.Contains(m.Tags, "status_this_pc") {
+		status = "status on this PC: " + status // the other PCs send no figure the status could use
+	}
+	parts = append(parts, status)
 	if slices.Contains(m.Tags, "unreliable") {
 		parts = append(parts, "unreliable")
 	}
@@ -396,6 +421,9 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 	if s := t.System; s != nil {
 		systemText(b, *s, loc)
 	}
+	if m := t.Machines; m != nil {
+		machinesText(b, *m, loc)
+	}
 	projectsText(b, t, loc)
 	if t.Sessions != nil {
 		section(b, "Sessions", sessionHead, sessionRows(t.Sessions, loc))
@@ -426,6 +454,66 @@ func systemText(b *strings.Builder, s metrics.SystemInfo, loc *time.Location) {
 	b.WriteString("\nSystem\n")
 	for _, r := range views.SystemRows(s, func(t time.Time) string { return whenText(t, loc) }) {
 		fmt.Fprintf(b, "%-15s %s\n", r.Label, r.Text)
+	}
+}
+
+// machinesText lists the PCs that share their figures and the documents set
+// aside; with sharing off it says so.
+func machinesText(b *strings.Builder, m metrics.Machines, loc *time.Location) {
+	if !m.Sharing {
+		b.WriteString("\nPCs\nSharing with other PCs is off (feedback.enabled and feedback.share_ledger): this PC's figures are neither sent nor read.\n")
+	}
+	var rows [][]string
+	for _, r := range m.Rows {
+		who := r.Machine
+		if who == "" {
+			who = "(not yet named)"
+		}
+		state := "quiet"
+		switch {
+		case r.Stale:
+			state = "stopped sending"
+		case r.Active:
+			state = "active"
+		}
+		if r.This {
+			who += " (this PC)"
+		}
+		upTo := "—"
+		if r.Until != nil {
+			upTo = *r.Until
+		}
+		sent := "never"
+		if r.LastSent != nil {
+			sent = whenText(*r.LastSent, loc)
+		}
+		version := r.BinaryVersion
+		if version == "" {
+			version = "—"
+		}
+		rows = append(rows, []string{who, r.OS, r.FirstSeen, sent, version, upTo, state})
+	}
+	heading := "PCs"
+	if m.Sharing {
+		fetched := "never fetched"
+		if m.FetchedAt != nil {
+			fetched = "fetched " + whenText(*m.FetchedAt, loc)
+		}
+		heading += " (" + fetched + ")"
+		section(b, heading, []string{"PC", "OS", "First seen", "Last sent", "Version", "Figures up to", "State"}, rows)
+	} else if len(rows) > 0 {
+		table(b, []string{"PC", "OS", "First seen", "Last sent", "Version", "Figures up to", "State"}, rows)
+	}
+	if len(m.Ignored) > 0 {
+		var ign [][]string
+		for _, g := range m.Ignored {
+			who := g.Machine
+			if who == "" {
+				who = "(unknown PC)"
+			}
+			ign = append(ign, []string{who, word(views.IgnoredWords, g.Reason)})
+		}
+		section(b, "Documents ignored", []string{"PC", "Why"}, ign)
 	}
 }
 

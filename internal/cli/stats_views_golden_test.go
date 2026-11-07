@@ -13,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/output"
@@ -854,4 +855,173 @@ func TestStatsBlockTextShapes(t *testing.T) {
 		}
 		wantLines(t, "origin "+state, viewText(m, false), want)
 	}
+}
+
+// The two other PCs of the all-PCs fixtures.
+const (
+	otherPCFresh = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	otherPCStale = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+)
+
+// otherDays are the days of one other PC: the same figures each day, so the
+// sums are easy to check by hand. A day holds 40 prompts, 20 of 36 got
+// memory, 6 of 12 turns used it, 10 of 12 declared, 1 of 12 wrong, 4,600
+// characters over 2 sessions, 80 recalls timed (2 under 100 ms, 10 under 250,
+// 20 under 500, 30 under a second, 16 under 2 s, 2 under 2.5 s) and 9 of 10
+// sends that worked.
+func otherDays(from, to string, version string) []machines.Day {
+	f := machines.Figures{Prompts: 40, Hit: machines.Pair{20, 36}, Used: machines.Pair{6, 12}, Coverage: machines.Pair{10, 12},
+		Wrong: machines.Pair{1, 12}, Context: machines.Pair{4600, 2}, Latency: machines.Latency{0, 2, 10, 20, 30, 16, 2, 0, 0}}
+	var out []machines.Day
+	for d, _ := time.Parse("2006-01-02", from); d.Format("2006-01-02") <= to; d = d.AddDate(0, 0, 1) {
+		out = append(out, machines.Day{Day: d.Format("2006-01-02"), Figures: f, Flow: machines.Pair{9, 10},
+			Versions: map[string]machines.Figures{version: f}})
+	}
+	return out
+}
+
+// fixturePC is the document of another PC last sent at at, covering from to
+// until; it runs the release version.
+func fixturePC(id, os, first string, at time.Time, from, until, version string) machines.Doc {
+	return machines.Doc{Machine: id, At: at, OS: os, FirstSeen: first, BinaryVersion: version, Until: until,
+		Days: otherDays(from, until, version)}
+}
+
+// otherPCsFixture writes the cache of two other PCs of the goldens' clock:
+// one that sent 3 hours ago (days 3 to 7 October, darwin, release v0.1.18)
+// and one that went quiet 3 days ago (days 2 to 4 October, windows, v0.1.17),
+// and one document set aside.
+func otherPCsFixture(t *testing.T) {
+	t.Helper()
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, stale := fixturePC(otherPCFresh, "darwin", "2026-09-20", goldenNow.Add(-3*time.Hour), "2026-10-03", "2026-10-07", "v0.1.18"),
+		fixturePC(otherPCStale, "windows", "2026-09-25", goldenNow.Add(-72*time.Hour), "2026-10-02", "2026-10-04", "v0.1.17")
+	c := machines.Cache{FetchedAt: goldenNow.Add(-time.Hour), Ignored: []machines.Ignored{{Machine: "deadbeef", Reason: machines.UnknownVersion}}}
+	for _, doc := range []machines.Doc{fresh, stale} {
+		raw, err := doc.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Docs = append(c.Docs, machines.CachedDoc{Name: machines.DocPrefix + doc.Machine, Raw: raw})
+	}
+	if err := os.MkdirAll(d.MetricsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := machines.SaveCache(d.MetricsDir(), c); err != nil {
+		t.Fatal(err)
+	}
+	// this PC has a name and has published once
+	if err := os.WriteFile(filepath.Join(d.State, "machine_id"), []byte("3f9c2a17-1b2c-4d3e-8f40-0123456789ab\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := machines.SavePublished(d.MetricsDir(), machines.Published{At: goldenNow.Add(-5 * time.Hour), Until: "2026-10-07", FirstSeen: "2026-09-15", Bytes: 900}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// allPCsViews are the views pinned with --machines all.
+var allPCsViews = []struct {
+	name string
+	args []string
+}{
+	{"overview", []string{"stats", "overview", "--machines", "all"}},
+	{"overview-filter", []string{"stats", "overview", "--machines", "all", "--project", "p1"}},
+	{"quality", []string{"stats", "quality", "--machines", "all"}},
+	{"cost", []string{"stats", "cost", "--machines", "all"}},
+	{"days", []string{"stats", "days", "--machines", "all"}},
+	{"day-page", []string{"stats", "days", "2026-10-07", "--machines", "all"}},
+	{"releases", []string{"stats", "releases", "--machines", "all"}},
+	{"system", []string{"stats", "system", "--machines", "all"}},
+}
+
+// With --machines all the text names the PCs counted, the day the other PCs'
+// figures reach, the documents set aside and, under a project filter, that
+// the other PCs are not filtered; the speed is a range read from the
+// buckets, the context an average over the sessions of every PC, and
+// System lists the PCs. Each view is pinned (-update rewrites them).
+func TestViewTextAllPCs(t *testing.T) {
+	blockSetup(t)
+	otherPCsFixture(t)
+	for _, v := range allPCsViews {
+		t.Run(v.name, func(t *testing.T) {
+			viewGolden(t, "stats-all-pcs-"+v.name+".golden", append(v.args, "--tz", "Europe/Paris")...)
+		})
+	}
+	viewGolden(t, "stats-all-pcs-overview-json.golden", "stats", "overview", "--machines", "all", "--tz", "Europe/Paris", "--json")
+	viewGolden(t, "stats-all-pcs-system-json.golden", "stats", "system", "--machines", "all", "--tz", "Europe/Paris", "--json")
+
+	text := func(args ...string) string {
+		t.Helper()
+		code, out, errOut := run(t, append(append([]string{"stats"}, args...), "--tz", "Europe/Paris")...)
+		if code != output.OK {
+			t.Fatalf("%v: exit %d: %s %s", args, code, out, errOut)
+		}
+		return out
+	}
+	foot := "Activity on all PCs on this server (3) · other PCs up to 2026-10-04 · 1 document ignored · memory on 127.0.0.1:"
+	if out := text("cost", "--machines", "all"); !strings.Contains(out, foot) {
+		t.Errorf("no footer %q in:\n%s", foot, out)
+	}
+	if out := text("overview", "--machines", "all", "--project", "p1"); !strings.Contains(out, "1 document ignored · other PCs not filtered · memory on") {
+		t.Errorf("a project filter does not say the other PCs are not filtered:\n%s", out)
+	}
+	if out := text("overview", "--project", "p1"); strings.Contains(out, "other PCs") || !strings.Contains(out, "Activity on this PC · memory on") {
+		t.Errorf("this PC alone names the other PCs:\n%s", out)
+	}
+	// the speed of the 649 recalls: 8 days of 80 from the other PCs and
+	// this PC's 9; the slowest 1 in 20 is rank 617, in (1000, 2000], and
+	// the typical one rank 325, in (500, 1000]
+	wantLines(t, "cost", text("cost", "--machines", "all"),
+		"Time memory adds to a prompt 1.0–2.0 s (approximate, n=649, ok)", "all PCs: typical 500 ms–1.0 s")
+	// the sessions: this PC's 5 sent and the 8 days of 10 of the others, 9 of 10 ok
+	wantLines(t, "overview", text("overview", "--machines", "all"), "Sessions sent 91 % (83–95 %) (n=85, status on this PC: ok)")
+	sys := text("system", "--machines", "all")
+	wantLines(t, "system", sys,
+		"PCs (fetched 2026-10-08 13:00)",
+		"3f9c2a17 (this PC) linux 2026-09-15 2026-10-08 09:00 dev — active",
+		"11111111 darwin 2026-09-20 2026-10-08 11:00 v0.1.18 2026-10-07 active",
+		"22222222 windows 2026-09-25 2026-10-05 14:00 v0.1.17 2026-10-04 stopped sending",
+		"deadbeef written by a newer backsight: update this PC")
+}
+
+// The speed and the context of all PCs, as lines: a range read from the
+// buckets, an average over the sessions, each with what it stands on.
+func TestViewTextMergedLines(t *testing.T) {
+	ptr := func(v float64) *float64 { return &v }
+	i64 := func(v int64) *int64 { return &v }
+	t.Run("speed is a range", func(t *testing.T) {
+		m := metrics.Metric{Value: ptr(2000), Den: i64(1468), Status: metrics.StatusOK, Tags: []string{"approximate"},
+			Extra: map[string]any{"range_ms": &[2]*int64{i64(1000), i64(2000)}, "p50_range_ms": &[2]*int64{i64(250), i64(500)}, "p50": 420.0, "p95": 1900.0}}
+		text := viewText(result("cost", "recall.latency", m), false)
+		wantLines(t, "speed", text, "Time memory adds to a prompt 1.0–2.0 s (approximate, n=1,468, ok)",
+			"all PCs: typical 250–500 ms", "this PC alone: typical 420 ms, slowest 1 in 20 1.9 s")
+	})
+	t.Run("the open bucket and the edges", func(t *testing.T) {
+		for _, c := range []struct {
+			lo   int64
+			hi   *int64
+			want string
+		}{{0, i64(50), "0–50 ms"}, {500, i64(1000), "500 ms–1.0 s"}, {2500, i64(5000), "2.5–5.0 s"}, {5000, nil, "over 5.0 s"}} {
+			m := metrics.Metric{Value: ptr(5000), Den: i64(200), Status: metrics.StatusBad, Tags: []string{"approximate"},
+				Extra: map[string]any{"range_ms": &[2]*int64{i64(c.lo), c.hi}}}
+			if l := lineOf(t, viewText(result("cost", "recall.latency", m), false), "Time memory adds to a prompt"); !strings.Contains(l, " "+c.want+" ") {
+				t.Errorf("%s: line %q", c.want, l)
+			}
+		}
+	})
+	t.Run("context is an average", func(t *testing.T) {
+		m := metrics.Metric{Value: ptr(2300), Num: i64(715300), Den: i64(311), Status: metrics.StatusOK, Tags: []string{"status_this_pc", "average"},
+			Extra: map[string]any{"p50": 2000.0, "p95": 5000.0, "average": 2300.0}}
+		text := viewText(result("cost", "context.per_session", m), false)
+		wantLines(t, "context", text, "Context added per session 2,300 chars on average (n=311 sessions, status on this PC: ok)",
+			"this PC alone: typical 2,000 chars, high 5,000 chars")
+	})
+	t.Run("this PC alone keeps its lines", func(t *testing.T) {
+		m := metrics.Metric{Value: ptr(2300), Den: i64(311), Status: metrics.StatusOK, Extra: map[string]any{"p50": 2000.0, "p95": 5000.0}}
+		text := viewText(result("cost", "context.per_session", m), false)
+		wantLines(t, "context", text, "Context added per session 2,300 chars (n=311, ok)", "typical 2,000 chars, high 5,000 chars")
+	})
 }

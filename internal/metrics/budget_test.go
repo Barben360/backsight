@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,10 +49,13 @@ func TestViewBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	indexgen.Generate(t, dirs.State, indexgen.Budget)
+	spec := indexgen.Budget
+	spec.OtherPCs = 8 // the other PCs' cache the views with machines=all merge
+	indexgen.Generate(t, dirs.State, spec)
 	ctx := context.Background()
 	ix, err := index.Open(ctx, index.Options{Dirs: dirs, Home: home, Getenv: func(string) string { return "" },
-		Now: func() time.Time { return indexgen.Now }})
+		Now:      func() time.Time { return indexgen.Now },
+		Machines: func() (machines.Cache, error) { return machines.LoadCache(dirs.MetricsDir()) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +76,7 @@ func TestViewBudgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := Query{Window: w, Machines: "this"}
+	thisOnly := map[string]Result{}
 
 	// timed runs view for query and returns its best of 3 and its result.
 	timed := func(name, view string, q Query) Result {
@@ -93,6 +98,7 @@ func TestViewBudgets(t *testing.T) {
 	}
 	for _, view := range Views[:6] {
 		r := timed(view, view, q)
+		thisOnly[view] = r
 		if view == "overview" { // the block's reads: time to recall (the sessions' way) and Helped most
 			f, _ := r.Metrics["pipeline.time_to_recall"].Extra["funnel"].(map[string]int64)
 			if f["ended"] < 100 {
@@ -105,6 +111,47 @@ func TestViewBudgets(t *testing.T) {
 		// the measure is of real work: each view read the generated week
 		if c := realWork[view]; !c.ok(r) {
 			t.Errorf("%s: %s = %+v, want %s", view, c.id, r.Metrics[c.id], c.what)
+		}
+	}
+
+	// The views that merge the other PCs, with all of them: 8 other PCs over
+	// the 13 months, within the same limit, and each read what it merges.
+	aq := q
+	aq.Machines = "all"
+	for _, view := range []string{"overview", "quality", "cost", "days", "releases"} {
+		r := timed(view+" --machines all", view, aq)
+		if p := r.Scope.PCs; r.Scope.Machines != "all" || p == nil || p.Count != 9 || p.Stale != 1 {
+			t.Errorf("%s --machines all: scope %+v, pcs %+v, want 9 PCs, one of them stale", view, r.Scope, p)
+		}
+		switch view {
+		case "overview", "quality":
+			a, b := r.Metrics["recall.hit_rate"].Den, thisOnly[view].Metrics["recall.hit_rate"].Den
+			if view == "quality" {
+				a, b = r.Metrics["used.turn_rate"].Den, thisOnly[view].Metrics["used.turn_rate"].Den
+			}
+			if a == nil || b == nil || *a <= *b {
+				t.Errorf("%s --machines all: n %v, this PC's %v, want the other PCs' added", view, a, b)
+			}
+		case "cost":
+			if m := r.Metrics["recall.latency"]; !slices.Contains(m.Tags, "approximate") {
+				t.Errorf("cost --machines all: latency tags %v, want approximate (merged from the buckets)", m.Tags)
+			}
+		case "days":
+			merged := int64(0)
+			for _, c := range r.Tables.Calendar {
+				merged += c.Prompts
+			}
+			ra, err := Run(ctx, "days", src, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			alone := int64(0)
+			for _, c := range ra.Tables.Calendar {
+				alone += c.Prompts
+			}
+			if merged <= alone {
+				t.Errorf("days --machines all: %d prompts in the calendar, this PC's %d, want the other PCs' added", merged, alone)
+			}
 		}
 	}
 

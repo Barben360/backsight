@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,4 +84,57 @@ func halve(f machines.Figures) machines.Figures {
 		g.Latency[i] = v / 2
 	}
 	return g
+}
+
+// The canary strings of HostileCache, one per way a fetched document can
+// carry text that must never reach a table, a view or a page.
+const (
+	CanaryUnknown = "CANARY-UNKNOWN-FIELD-31f"  // in a field the reader does not know
+	CanaryScript  = "CANARY-SCRIPT-VERSION-8c2" // in a version key, inside <script>
+	CanaryBig     = "CANARY-OVERSIZE-DOC-5d9"   // in a document over the size cap
+	CanaryName    = "CANARY-DOC-NAME-a07"       // in a document name that holds no machine id
+	CanaryIgnored = "CANARY-IGNORED-ENTRY-e44"  // in the cache's own list of ignored documents
+)
+
+// HostileBigMachine is the machine id of the oversize document of
+// HostileCache.
+const HostileBigMachine = "c0c0c0c0-1111-4222-8333-444455556666"
+
+// HostileCanaries are every canary of HostileCache, and the tag that holds
+// one.
+var HostileCanaries = []string{CanaryUnknown, CanaryScript, CanaryBig, CanaryName, CanaryIgnored, "<script>"}
+
+// HostileCache is a cache of hostile documents: good with an unknown field
+// that holds a canary (a reader ignores the field, so the document stays a
+// good one), scripty with a <script> canary for its "v0.1.29" version key
+// (it must hold that version), a document over the size cap, a document
+// whose name holds no machine id, and an ignored entry that names a canary.
+// Only good is counted by a reader; the other four are set aside whole.
+func HostileCache(t testing.TB, good, scripty machines.Doc, fetchedAt time.Time) machines.Cache {
+	t.Helper()
+	raw, err := good.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withUnknown := strings.Replace(raw, `{"v":1,`, `{"v":1,"`+CanaryUnknown+`":{"deep":"`+CanaryUnknown+`"},`, 1)
+	if withUnknown == raw {
+		t.Fatal("the unknown field was not added")
+	}
+	sraw, err := scripty.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptRaw := strings.Replace(sraw, `"v0.1.29":{`, `"<script>`+CanaryScript+`</script>":{`, 1)
+	if scriptRaw == sraw {
+		t.Fatal("the script version was not added")
+	}
+	big := `{"v":1,"x":"` + strings.Repeat("a", machines.MaxBytes) + CanaryBig + `"}` // over the 1 MiB cap
+	return machines.Cache{FetchedAt: fetchedAt,
+		Docs: []machines.CachedDoc{
+			{Name: machines.DocPrefix + good.Machine, Raw: withUnknown},
+			{Name: machines.DocPrefix + scripty.Machine, Raw: scriptRaw},
+			{Name: machines.DocPrefix + HostileBigMachine, Raw: big},
+			{Name: machines.DocPrefix + CanaryName, Raw: raw},
+		},
+		Ignored: []machines.Ignored{{Machine: CanaryIgnored, Reason: machines.Reason(CanaryIgnored)}}}
 }

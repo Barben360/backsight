@@ -404,41 +404,15 @@ func TestDuplicateNamesKeepTheFirst(t *testing.T) {
 // WAL or (after a VACUUM) the pages it freed.
 func TestHostileCacheNeverReachesTheTables(t *testing.T) {
 	const (
-		cUnknown = "CANARY-UNKNOWN-FIELD-31f"
-		cScript  = "CANARY-SCRIPT-VERSION-8c2"
-		cBig     = "CANARY-OVERSIZE-DOC-5d9"
-		cName    = "CANARY-DOC-NAME-a07"
-		cIgnored = "CANARY-IGNORED-ENTRY-e44"
+		cUnknown = indexgen.CanaryUnknown
+		cScript  = indexgen.CanaryScript
+		cBig     = indexgen.CanaryBig
+		cName    = indexgen.CanaryName
+		cIgnored = indexgen.CanaryIgnored
+		pcC      = indexgen.HostileBigMachine
 	)
 	e, _ := machEnv(t)
-
-	good, err := pcDoc(pcA, "linux").Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	withUnknown := strings.Replace(good, `{"v":1,`, `{"v":1,"`+cUnknown+`":{"deep":"`+cUnknown+`"},`, 1)
-	if withUnknown == good {
-		t.Fatal("the unknown field was not added")
-	}
-	scripty := pcDoc(pcB, "linux")
-	raw, err := scripty.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	scriptRaw := strings.Replace(raw, `"v0.1.29":{`, `"<script>`+cScript+`</script>":{`, 1)
-	if scriptRaw == raw {
-		t.Fatal("the script version was not added")
-	}
-	big := `{"v":1,"x":"` + strings.Repeat("a", machines.MaxBytes) + cBig + `"}` // over the 1 MiB cap
-	const pcC = "c0c0c0c0-1111-4222-8333-444455556666"
-	putCache(t, e, machines.Cache{FetchedAt: fetchedAt,
-		Docs: []machines.CachedDoc{
-			{Name: machines.DocPrefix + pcA, Raw: withUnknown},
-			{Name: machines.DocPrefix + pcB, Raw: scriptRaw},
-			{Name: machines.DocPrefix + pcC, Raw: big},
-			{Name: machines.DocPrefix + cName, Raw: good},
-		},
-		Ignored: []machines.Ignored{{Machine: cIgnored, Reason: machines.Reason(cIgnored)}}})
+	putCache(t, e, indexgen.HostileCache(t, pcDoc(pcA, "linux"), pcDoc(pcB, "linux"), fetchedAt))
 	e.catchUp(time.Minute)
 
 	// The unknown field is ignored, so its document is a good one; the

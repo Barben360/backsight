@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/metrics"
@@ -76,5 +77,38 @@ func TestDeclaredWordsCoverEveryVerdict(t *testing.T) {
 			t.Errorf("verdicts %q and %q share the word %q", other, v, w)
 		}
 		seen[w] = v
+	}
+}
+
+// A latency range reads the same whether the view computed it or JSON
+// carried it, the open bucket as "over".
+func TestRangeMSReadsBothForms(t *testing.T) {
+	var decoded struct{ R []any }
+	if err := json.Unmarshal([]byte(`{"R":[1000,2000]}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var open struct{ R []any }
+	if err := json.Unmarshal([]byte(`{"R":[5000,null]}`), &open); err != nil {
+		t.Fatal(err)
+	}
+	lo, hi := int64(250), int64(500)
+	for _, c := range []struct {
+		name string
+		v    any
+		want string
+	}{
+		{"computed", &[2]*int64{&lo, &hi}, "250–500 ms"},
+		{"decoded", decoded.R, "1.0–2.0 s"},
+		{"decoded open", open.R, "over 5.0 s"},
+	} {
+		l, h, ok := RangeMS(metrics.Metric{Extra: map[string]any{"r": c.v}}, "r")
+		if !ok || RangeText(l, h) != c.want {
+			t.Errorf("%s: %d %v %v, text %q, want %q", c.name, l, h, ok, RangeText(l, h), c.want)
+		}
+	}
+	for _, v := range []any{nil, (*[2]*int64)(nil), []any{"x", 1.0}, []any{1.0}, "1-2"} {
+		if _, _, ok := RangeMS(metrics.Metric{Extra: map[string]any{"r": v}}, "r"); ok {
+			t.Errorf("%v read as a range", v)
+		}
 	}
 }

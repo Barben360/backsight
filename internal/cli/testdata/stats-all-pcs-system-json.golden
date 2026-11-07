@@ -1,0 +1,421 @@
+{
+  "schema_version": 1,
+  "command": "stats system",
+  "ok": true,
+  "data": {
+    "view": "system",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "all",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true,
+      "pcs": {
+        "sharing": true,
+        "count": 3,
+        "active": 3,
+        "stale": 1,
+        "ignored": 1,
+        "fetched_at": "2026-10-08T13:00:00+02:00",
+        "until": "2026-10-04",
+        "list": [
+          {
+            "machine": "3f9c2a17",
+            "this": true,
+            "os": "linux",
+            "first_seen": "2026-09-15",
+            "until": null,
+            "stale": false
+          },
+          {
+            "machine": "11111111",
+            "this": false,
+            "os": "darwin",
+            "first_seen": "2026-09-20",
+            "until": "2026-10-07",
+            "stale": false
+          },
+          {
+            "machine": "22222222",
+            "this": false,
+            "os": "windows",
+            "first_seen": "2026-09-25",
+            "until": "2026-10-04",
+            "stale": true
+          }
+        ]
+      }
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {
+      "doctor.check": {
+        "value": 1,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "watch",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight doctor",
+        "extra": {
+          "error": 1,
+          "info": 0,
+          "ok": 2,
+          "warn": 1
+        }
+      },
+      "doctor.history": {
+        "value": 3,
+        "num": 3,
+        "den": 3,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats system",
+        "extra": {
+          "days_without": 5
+        }
+      },
+      "jobs.last_run": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight jobs tick"
+      },
+      "local.backlog": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight retain waiting",
+        "extra": {
+          "notes_queued": 0,
+          "oldest_ms": 0,
+          "quarantined": 0,
+          "sessions_waiting": 0
+        }
+      },
+      "secrets.suspects": {
+        "value": 1,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "watch",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory scan",
+        "extra": {
+          "age_days": 2,
+          "forgotten": 0,
+          "live": 1,
+          "ms": 1200,
+          "pages": 3,
+          "scanned_at": "2026-10-06T14:00:00+02:00"
+        }
+      },
+      "server.reach": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": 0,
+        "delta": 0,
+        "drill": "backsight doctor",
+        "extra": {
+          "breaker_open_until": null,
+          "failing_since": null,
+          "last_ok": null,
+          "skipped_prompts": 0
+        }
+      }
+    },
+    "tables": {
+      "jobs": [],
+      "doctor": [
+        {
+          "id": "config",
+          "status": "ok",
+          "fix": ""
+        },
+        {
+          "id": "server",
+          "status": "ok",
+          "fix": ""
+        },
+        {
+          "id": "backup",
+          "status": "warn",
+          "fix": "backsight backup create"
+        },
+        {
+          "id": "bank",
+          "status": "error",
+          "fix": "backsight doctor"
+        }
+      ],
+      "doctor_history": [
+        {
+          "check": "backup",
+          "now": "watch",
+          "ok": 1,
+          "watch": 2,
+          "bad": 0,
+          "last_change": {
+            "day": "2026-10-07",
+            "from": "ok",
+            "to": "watch"
+          },
+          "days": [
+            {
+              "day": "2026-10-01",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-02",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-03",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-04",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-05",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-06",
+              "status": "ok"
+            },
+            {
+              "day": "2026-10-07",
+              "status": "watch"
+            },
+            {
+              "day": "2026-10-08",
+              "status": "watch"
+            }
+          ]
+        },
+        {
+          "check": "memory",
+          "now": "bad",
+          "ok": 2,
+          "watch": 0,
+          "bad": 1,
+          "last_change": {
+            "day": "2026-10-08",
+            "from": "ok",
+            "to": "bad"
+          },
+          "days": [
+            {
+              "day": "2026-10-01",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-02",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-03",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-04",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-05",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-06",
+              "status": "ok"
+            },
+            {
+              "day": "2026-10-07",
+              "status": "ok"
+            },
+            {
+              "day": "2026-10-08",
+              "status": "bad"
+            }
+          ]
+        },
+        {
+          "check": "config",
+          "now": "ok",
+          "ok": 3,
+          "watch": 0,
+          "bad": 0,
+          "last_change": null,
+          "days": [
+            {
+              "day": "2026-10-01",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-02",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-03",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-04",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-05",
+              "status": "none"
+            },
+            {
+              "day": "2026-10-06",
+              "status": "ok"
+            },
+            {
+              "day": "2026-10-07",
+              "status": "ok"
+            },
+            {
+              "day": "2026-10-08",
+              "status": "ok"
+            }
+          ]
+        }
+      ],
+      "system": {
+        "server_version": "1.1.0",
+        "runtime": "docker",
+        "mode": "local",
+        "reach": {
+          "breaker_failures": 0
+        },
+        "backup": {
+          "ok": false
+        },
+        "update": {
+          "newer": 0,
+          "check_failed": false
+        },
+        "index": {
+          "schema": 3,
+          "ingested_at": "2026-10-08T14:00:00+02:00",
+          "lag_seconds": 0,
+          "partial": false
+        }
+      },
+      "machines": {
+        "sharing": true,
+        "fetched_at": "2026-10-08T13:00:00+02:00",
+        "rows": [
+          {
+            "machine": "3f9c2a17",
+            "this": true,
+            "os": "linux",
+            "first_seen": "2026-09-15",
+            "last_sent": "2026-10-08T09:00:00+02:00",
+            "binary_version": "dev",
+            "until": null,
+            "stale": false,
+            "active": true
+          },
+          {
+            "machine": "11111111",
+            "this": false,
+            "os": "darwin",
+            "first_seen": "2026-09-20",
+            "last_sent": "2026-10-08T11:00:00+02:00",
+            "binary_version": "v0.1.18",
+            "until": "2026-10-07",
+            "stale": false,
+            "active": true
+          },
+          {
+            "machine": "22222222",
+            "this": false,
+            "os": "windows",
+            "first_seen": "2026-09-25",
+            "last_sent": "2026-10-05T14:00:00+02:00",
+            "binary_version": "v0.1.17",
+            "until": "2026-10-04",
+            "stale": true,
+            "active": true
+          }
+        ],
+        "ignored": [
+          {
+            "machine": "deadbeef",
+            "reason": "unknown_version"
+          }
+        ]
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

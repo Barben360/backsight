@@ -12,6 +12,8 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/index/indexgen"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 )
@@ -187,4 +189,86 @@ func canaryCompareHistory(t *testing.T, home string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// Free text in the other PCs' documents stays out of every view: the hostile
+// cache of the index tests (an unknown field, a <script> version key, an
+// oversize document, a document name and an ignored entry that each hold a
+// canary) beside two valid documents of other PCs, read with --machines all
+// and --machines this, every view and id form, text and JSON, --dev. No
+// canary in any output; the control is that the valid documents count (their
+// figures are in the sums) and the hostile ones are set aside as counts.
+func TestViewsHoldNoCanaryFromOtherPCs(t *testing.T) {
+	viewsFixture(t)
+	fixedDoctor(t)
+	browseFixture(t)
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const third = "33333333-cccc-4ccc-8ccc-cccccccccccc"
+	sent := goldenNow.Add(-3 * time.Hour)
+	cache := indexgen.HostileCache(t,
+		fixturePC(otherPCFresh, "darwin", "2026-09-20", sent, "2026-10-03", "2026-10-07", "v0.1.18"),
+		fixturePC(otherPCStale, "windows", "2026-09-25", sent, "2026-10-02", "2026-10-04", "v0.1.29"), goldenNow.Add(-time.Hour))
+	raw, err := fixturePC(third, "linux", "2026-09-22", sent, "2026-10-05", "2026-10-07", "v0.1.18").Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.Docs = append(cache.Docs, machines.CachedDoc{Name: machines.DocPrefix + third, Raw: raw})
+	if err := os.MkdirAll(d.MetricsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := machines.SaveCache(d.MetricsDir(), cache); err != nil {
+		t.Fatal(err)
+	}
+
+	// the control: the two valid documents are counted, the others set aside
+	alone := runView(t, "stats", "overview", "--machines", "this")
+	all := runView(t, "stats", "overview", "--machines", "all")
+	if all.code != output.OK || at(all.env.Data, "scope", "pcs", "count") != float64(3) || at(all.env.Data, "scope", "pcs", "ignored") != float64(4) {
+		t.Fatalf("scope.pcs = %v, want 3 PCs counted and 4 documents ignored", at(all.env.Data, "scope", "pcs"))
+	}
+	den := func(v viewOut) float64 {
+		n, _ := at(v.env.Data, "metrics", "recall.hit_rate", "den").(float64)
+		return n
+	}
+	if want := den(alone) + 5*36 + 3*36; den(all) != want {
+		t.Errorf("recall.hit_rate den = %v, want this PC's %v plus 8 days of 36", den(all), den(alone))
+	}
+
+	scan := func(what string, args ...string) {
+		t.Helper()
+		code, out, errOut := run(t, args...)
+		if code != output.OK {
+			t.Errorf("%s: exit %d: %s %s", what, code, out, errOut)
+		}
+		for _, c := range append(slices.Clone(indexgen.HostileCanaries), "CANARY") {
+			if strings.Contains(out+errOut, c) {
+				t.Errorf("%s: %q in the output of %v", what, c, args)
+			}
+		}
+	}
+	ids := map[string][]string{
+		"sessions": {"sess-long-1"},
+		"memories": {"mem-long-1"},
+		"projects": {"p1"},
+		"days":     {"2026-10-07"},
+		"defs":     {"recall.hit_rate"},
+	}
+	for _, view := range metrics.Views {
+		for _, scope := range []string{"this", "all"} {
+			for _, dev := range [][]string{nil, {"--dev"}} {
+				for _, js := range [][]string{nil, {"--json"}} {
+					base := append(append([]string{"stats", view}, dev...), js...)
+					base = append(base, "--machines", scope, "--tz", "Europe/Paris")
+					scan(view+" "+scope, base...)
+					for _, id := range ids[view] {
+						scan(view+" "+id+" "+scope, append([]string{"stats", view, id}, base[2:]...)...)
+					}
+				}
+			}
+		}
+	}
+	scan("a project filter", "stats", "overview", "--machines", "all", "--project", "p1", "--json")
 }

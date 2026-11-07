@@ -1,0 +1,87 @@
+Is my memory working? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+Project: p1
+
+Verdict (last 7 days)
+Found    learning — Learning: day 3 of about 7, 9 prompts so far.
+Right    learning — Learning: day 3 of about 7, 9 prompts so far.
+Cost     too early — Not enough yet: 8 prompts, 100 needed.
+Flowing  attention — Health check «memory» failed.
+
+In this window (7 days): 167 prompts got memory, Claude used it in 49 turns, about 9,200 tokens added; extraction cost unknown: costs need prices, set price_input, price_cached and price_output under [llm] in the config file (server, all PCs).
+
+Found
+Prompts that got memory                      56 % (51–62 %)           (n=296, ok)
+Prompts that found nothing                   1 prompt                 (ok, +1 vs previous)
+  why: reason not recorded 1
+  prompts skipped: other 1
+
+Right
+Turns where Claude used memory               51 % (41–60 %)           (n=97, ok)
+  worst case, if every turn where Claude did not say counts as unused: 51 %
+Turns where Claude said what it used         84 % (75–90 %)           (n=97, ok)
+Memories reported wrong or out of date       8 % (4–15 %)             (n=97, ok — close to the line)
+
+Cost
+Context added per session                    —                        (n=23 sessions, status on this PC: too few, 77 more needed)
+Time memory adds to a prompt                 1.0–2.0 s                (approximate, n=648, ok)
+  all PCs: typical 500 ms–1.0 s
+
+Memory
+Memories                                     0                        (ok, no history)
+New memories per day                         —                        (no data: nothing recorded yet, not filtered by project)
+Summaries waiting                            0                        (ok, not filtered by project, no history)
+
+Flowing
+Sessions sent                                91 % (83–95 %)           (n=85, status on this PC: ok)
+  sent 5, failed 0, set aside after an error 0, waiting 0
+Waiting on this PC                           0                        (ok)
+Waiting on the server                        0                        (ok, not filtered by project)
+  waiting 0, running 0, failed in the last 7 days 0, failed in all 0
+Steps that crashed                           0                        (ok, no change vs previous)
+Memory server answering                      yes                      (ok, no change vs previous)
+Health checks                                1 failed                 (watch)
+  1 failed, 1 with a warning
+Background jobs                              —                        (no data: nothing recorded yet)
+From session to recalled memory              —                        (n=4, too few, 16 more needed)
+  partial: some of it could not be read
+  session ended 7 → sent 4 → turned into memories 1 → shown again 1
+  not sent 3, never turned into memories 2, still on the server 1, shown, origin not known yet 1
+  last turn to sent: 4 sessions, too few for a typical time
+  sent to turned into memories: 1 session, too few for a typical time
+  turned into memories to shown again: 1 session, too few for a typical time
+  the whole way: 1 session, too few for a typical time
+Possible secrets in memory                   1                        (watch, not filtered by project)
+  last scan 2026-10-06 14:00, 2 days ago (3 pages read)
+
+To review
+Often shown, never used                      1                        (info, not filtered by project, no change vs previous)
+Hidden                                       0                        (info, not filtered by project, no change vs previous)
+Reported wrong                               0                        (info, not filtered by project, no change vs previous)
+
+Needs attention
+1. Health check «memory» failed.
+   Run: backsight doctor
+2. Possible secrets in memory: run backsight memory scan.
+   Run: backsight memory scan
+3. Health check «backup» reports a warning.
+   Run: backsight backup create
+
+Worth a look
+Often shown, never used: 1  (backsight memory stale)
+
+Activity
+9 prompts typed, 8 recalls, 7 of them added memory
+
+Lately
+Session   Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent
+sess-lon  p1       2026-10-08 03:00  1        1            1      1     0      0              sent
+rel-v0.1  p1       2026-10-08 04:00  1        1            0      0     0      0              —
+s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
+sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              sent
+s1        p1       2026-10-07 08:00  3        1            0      0     0      0              —
+
+Helped most
+Memory    Project  Kind                           Used  Shown
+mem-long  p1       facts about you and your work  1     1
+
+Activity on all PCs on this server (3) · other PCs up to 2026-10-04 · 1 document ignored · other PCs not filtered · memory on 127.0.0.1:PORT · --json for every field
