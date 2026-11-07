@@ -837,6 +837,27 @@ func TestProjectFilterAddsOthersWhole(t *testing.T) {
 	}
 }
 
+// The merged latency and context carry others_not_filtered under a project
+// filter (the other PCs' whole figures are in them), and only then.
+func TestOthersNotFilteredOnLatencyAndContext(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("backsight", "bs", fxNow, 3, func(i int, p *telemetry.Prompt) { p.MS, p.Chars = 800, 1000 })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-28")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 5, Context: machines.Pair{500, 5}, Latency: [9]int64{4: 5}}})
+	q := x.allQuery()
+	q.Project = "backsight"
+	filtered := x.runAs("cost", q)
+	plain := x.mergedOf("cost", x.query(7))
+	for _, id := range []string{"recall.latency", "context.per_session"} {
+		if m := filtered.Metrics[id]; !slices.Contains(m.Tags, tagOthersNotFiltered) {
+			t.Errorf("%s under a project filter: tags %v lack others_not_filtered", id, m.Tags)
+		}
+		if m := plain[id]; slices.Contains(m.Tags, tagOthersNotFiltered) {
+			t.Errorf("%s without a filter: tags %v", id, m.Tags)
+		}
+	}
+}
+
 // In a window drawn by the hour the totals add the days whose noon is in it
 // but the series stay this PC's: 4 of 10 here, 6 of 9 there (Oct 29 12:00Z
 // is in the last 24 h, Oct 30 12:00Z is after the window's end).
