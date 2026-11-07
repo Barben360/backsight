@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var dlg = doc.querySelector('dialog.keys');
   var pages = { o: '/', q: '/quality', c: '/cost', b: '/bank', p: '/pipeline', s: '/system' };
   var gAt = 0; // when g was pressed
-  var keep = ['days', 'since', 'until', 'tz', 'project', 'path', 'dev']; // the window and scope every page takes
+  var keep = ['days', 'since', 'until', 'tz', 'project', 'path', 'dev', 'machines']; // the window and scope every page takes
   var opener = null;
 
   // The query a chord carries: the window and scope only, since the other

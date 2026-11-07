@@ -33,6 +33,10 @@ func sharingOn(c config.Config) bool { return c.Feedback.Enabled && c.Feedback.S
 // --machines all (the CLI and the pages carry the flag only for these).
 func MergingView(view string) bool { return slices.Contains(mergingViews, view) }
 
+// ThisOnlyView says whether view always answers this PC's figures (projects,
+// sessions and memories: other PCs send none), whatever --machines says.
+func ThisOnlyView(view string) bool { return slices.Contains(thisOnlyViews, view) }
+
 // MergedMetric says whether the metric id is one the views add up over the
 // PCs (M2-M5): the ratio rates, context per session, speed and flow.
 func MergedMetric(id string) bool {
@@ -643,7 +647,6 @@ func scopePCs(e env) (*PCs, bool, error) {
 		if self.Machine != "" {
 			row.Machine = short(self.Machine, ids)
 		}
-		p.List = append(p.List, row)
 		active, err := thisActive(e)
 		if err != nil {
 			return nil, false, err
@@ -651,6 +654,8 @@ func scopePCs(e env) (*PCs, bool, error) {
 		if active {
 			p.Active++
 		}
+		row.Active = active
+		p.List = append(p.List, row)
 	}
 	for _, o := range others {
 		row := PCRow{Machine: short(o.machine, ids), OS: o.os, FirstSeen: o.first,
@@ -662,6 +667,8 @@ func scopePCs(e env) (*PCs, bool, error) {
 				p.Until = &u
 			}
 		}
+		sent := time.UnixMilli(o.at).UTC()
+		row.SentAt = &sent
 		if row.Stale {
 			p.Stale++
 		}
@@ -672,6 +679,7 @@ func scopePCs(e env) (*PCs, bool, error) {
 		if active {
 			p.Active++
 		}
+		row.Active = active
 		p.List = append(p.List, row)
 	}
 	p.Count = len(p.List)

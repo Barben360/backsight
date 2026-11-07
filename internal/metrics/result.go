@@ -97,7 +97,12 @@ type PCRow struct {
 	OS        string  `json:"os"`
 	FirstSeen string  `json:"first_seen"`
 	Until     *string `json:"until"`
-	Stale     bool    `json:"stale"`
+	// SentAt is when the PC's document was sent (UTC); null for this PC,
+	// whose figures are live.
+	SentAt *time.Time `json:"sent_at"`
+	Stale  bool       `json:"stale"`
+	// Active: the PC has a prompt in the window.
+	Active bool `json:"active"`
 }
 
 // ServerState is whether the server answered; LastOK is null when unknown.

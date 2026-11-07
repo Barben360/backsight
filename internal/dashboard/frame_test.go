@@ -330,6 +330,7 @@ type scopeFx struct {
 	machines string // the URL's machines, "" this PC
 	scope    metrics.Scope
 	read     *metrics.ServerState
+	view     string // the view the page reads; overview when empty
 }
 
 var scopeNow = time.Date(2026, 10, 30, 15, 42, 0, 0, time.UTC)
@@ -340,11 +341,12 @@ func ptrS(s string) *string { return &s }
 // nothing for 9 days (it sent on Oct 21: its figures stop on Oct 20).
 func fourPCs() *metrics.PCs {
 	fetched := time.Date(2026, 10, 30, 13, 42, 0, 0, time.UTC)
+	ago := func(d time.Duration) *time.Time { t := scopeNow.Add(-d); return &t }
 	return &metrics.PCs{Sharing: true, Count: 4, Active: 3, Stale: 1, Ignored: 1, FetchedAt: &fetched, Until: ptrS("2026-10-20"), List: []metrics.PCRow{
-		{Machine: "3f9c2a17", This: true, OS: "linux", FirstSeen: "2026-09-02", Until: ptrS("2026-10-29")},
-		{Machine: "a07be4d1", OS: "darwin", FirstSeen: "2026-10-10", Until: ptrS("2026-10-29")},
-		{Machine: "5d21c8e0", OS: "windows", FirstSeen: "2026-10-28", Until: ptrS("2026-10-29")},
-		{Machine: "c84e1f39", OS: "linux", FirstSeen: "2026-07-18", Until: ptrS("2026-10-20"), Stale: true},
+		{Machine: "3f9c2a17", This: true, OS: "linux", FirstSeen: "2026-09-02", Until: ptrS("2026-10-29"), Active: true},
+		{Machine: "a07be4d1", OS: "darwin", FirstSeen: "2026-10-10", Until: ptrS("2026-10-29"), SentAt: ago(5 * time.Hour), Active: true},
+		{Machine: "5d21c8e0", OS: "windows", FirstSeen: "2026-10-28", Until: ptrS("2026-10-29"), SentAt: ago(time.Hour)},
+		{Machine: "c84e1f39", OS: "linux", FirstSeen: "2026-07-18", Until: ptrS("2026-10-20"), SentAt: ago(9*24*time.Hour + time.Hour), Stale: true, Active: true},
 	}}
 }
 
@@ -363,7 +365,7 @@ func scopeBar(t *testing.T, c scopeFx) (*node, string) {
 	d.Frame.Path, d.Frame.Scope, d.Frame.Generated, d.Frame.ServerRead = path, &sc, scopeNow, c.read
 	d.Frame.Machines = c.machines
 	d.Frame.RenderedAt = scopeNow
-	d.Frame.Switch = switchOf(d)
+	d.Frame.Switch = switchOf(d, cmpOr(c.view, "overview"))
 	body, err := renderPage(set, "overview", d)
 	if err != nil {
 		t.Fatal(err)
@@ -406,9 +408,9 @@ func TestScopeSwitchStates(t *testing.T) {
 			cur:   []string{"all PCs on this server (4)"},
 			chips: []string{"1 PC: nothing sent for 9 days", "1 document ignored"},
 			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
-				"a07be4d1 macOS · since Oct 10 figures up to Oct 29",
-				"5d21c8e0 Windows · since Oct 28 figures up to Oct 29",
-				"c84e1f39 Linux · since Jul 18 nothing sent for 9 days: its figures stop on Oct 20"}},
+				"a07be4d1 macOS · since Oct 10 sent 5 h ago",
+				"5d21c8e0 Windows · since Oct 28 sent 1 h ago · no activity in this window",
+				"c84e1f39 Linux · since Jul 18 sent 9 days ago: its figures stop on Oct 20"}},
 		{name: "all PCs with a project filter", fx: scopeFx{path: "/?project=backsight", machines: "all", scope: func() metrics.Scope {
 			s := base("all", fourPCs())
 			s.Project, s.OthersUnfiltered = "backsight", true
@@ -418,9 +420,9 @@ func TestScopeSwitchStates(t *testing.T) {
 			cur:   []string{"all PCs on this server (4)"},
 			chips: []string{"other PCs: not filtered", "1 PC: nothing sent for 9 days", "1 document ignored"},
 			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
-				"a07be4d1 macOS · since Oct 10 figures up to Oct 29",
-				"5d21c8e0 Windows · since Oct 28 figures up to Oct 29",
-				"c84e1f39 Linux · since Jul 18 nothing sent for 9 days: its figures stop on Oct 20"}},
+				"a07be4d1 macOS · since Oct 10 sent 5 h ago",
+				"5d21c8e0 Windows · since Oct 28 sent 1 h ago · no activity in this window",
+				"c84e1f39 Linux · since Jul 18 sent 9 days ago: its figures stop on Oct 20"}},
 		{name: "sharing off", fx: scopeFx{scope: base("this", &metrics.PCs{List: []metrics.PCRow{}})},
 			line: "this PC all PCs: sharing is off here", links: []string{"/", "/system#machines"}, cur: []string{"this PC"}},
 		{name: "sharing off behind a kept link", fx: scopeFx{machines: "all", scope: base("this", &metrics.PCs{List: []metrics.PCRow{}})},
@@ -435,9 +437,9 @@ func TestScopeSwitchStates(t *testing.T) {
 			cur:   []string{"all PCs on this server (4)"},
 			chips: []string{"1 PC: nothing sent for 9 days", "1 document ignored", "other PCs as fetched at 07:40"},
 			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
-				"a07be4d1 macOS · since Oct 10 figures up to Oct 29",
-				"5d21c8e0 Windows · since Oct 28 figures up to Oct 29",
-				"c84e1f39 Linux · since Jul 18 nothing sent for 9 days: its figures stop on Oct 20"}},
+				"a07be4d1 macOS · since Oct 10 sent 5 h ago",
+				"5d21c8e0 Windows · since Oct 28 sent 1 h ago · no activity in this window",
+				"c84e1f39 Linux · since Jul 18 sent 9 days ago: its figures stop on Oct 20"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -510,6 +512,24 @@ func TestScopeSwitchStates(t *testing.T) {
 		if n := doc.find("details.pcs .pcl-note"); len(n) != 3 || n[0].text() != "1 document did not pass the checks and is left out. What it holds is not shown." ||
 			n[2].text() != "Other PCs’ figures were fetched 2 h ago; they are fetched every 6 h." {
 			t.Errorf("notes %v", n)
+		}
+	})
+	t.Run("the quiet days of the chip come from when the PC sent, not from its last day", func(t *testing.T) {
+		p := fourPCs()
+		sent := scopeNow.Add(-4*24*time.Hour - time.Hour)
+		p.List[3].SentAt = &sent // until still says Oct 20
+		doc, _ := scopeBar(t, scopeFx{machines: "all", scope: base("all", p)})
+		var chip string
+		for _, a := range doc.find(".wrap.scope > a") {
+			if strings.Contains(a.text(), "nothing sent") {
+				chip = a.text() + " | " + a.attr("title")
+			}
+		}
+		if want := "1 PC: nothing sent for 4 days | c84e1f39 last sent its figures 4 days ago: its days after Oct 20 are missing."; chip != want {
+			t.Errorf("chip %q, want %q", chip, want)
+		}
+		if li := doc.find("details.pcs li")[3]; li.text() != "c84e1f39 Linux · since Jul 18 sent 4 days ago: its figures stop on Oct 20" {
+			t.Errorf("row %q", li.text())
 		}
 	})
 	t.Run("at 900 px the switch takes its own line and keeps its touch size", func(t *testing.T) {
@@ -824,4 +844,62 @@ func TestEveryLinkKeepsMachines(t *testing.T) {
 	if seen < 200 {
 		t.Errorf("only %d links checked", seen)
 	}
+}
+
+// On the pages that are always this PC's (projects, sessions, memories) the
+// "all PCs" half is plain text that says why, not a link that reloads the same
+// figures; on the pages that add the PCs up it is a link.
+func TestAllPCsHalfIsTextOnThisPCsPages(t *testing.T) {
+	sc := metrics.Scope{Machines: "this", Server: "192.168.1.20:18888", ServerOK: true, PCs: fourPCs()}
+	for _, c := range []struct {
+		view string
+		text bool
+	}{{"projects", true}, {"sessions", true}, {"memories", true}, {"overview", false}, {"quality", false}, {"bank", false}} {
+		for _, asked := range []string{"", "all"} {
+			doc, raw := scopeBar(t, scopeFx{view: c.view, machines: asked, scope: sc})
+			sw := doc.first(".mscope nav.mseg")
+			if sw == nil {
+				t.Fatalf("%s: no switch in %s", c.view, raw)
+			}
+			span := sw.first("span[aria-disabled=true]")
+			if c.text {
+				if span == nil || span.text() != "all PCs on this server (4)" || span.attr("title") != "Projects, sessions and memories are this PC’s: other PCs send none" {
+					t.Errorf("%s (machines=%q): second half %v, want disabled text with the reason", c.view, asked, span)
+				}
+				if got := linksIn(sw, ""); len(got) != 1 {
+					t.Errorf("%s (machines=%q): links %q, want only the this-PC half", c.view, asked, got)
+				}
+				if got := current(sw, "", "true"); !slices.Equal(got, []string{"this PC"}) {
+					t.Errorf("%s (machines=%q): current %q", c.view, asked, got)
+				}
+			} else if span != nil || len(linksIn(sw, "")) != 2 {
+				t.Errorf("%s (machines=%q): second half is not a link: %s", c.view, asked, raw)
+			}
+		}
+	}
+}
+
+// With shortcuts on, the keys carry the all-PCs parameter with the window and
+// the filter: g then a letter must not change whose activity the page shows.
+func TestChordKeepsMachines(t *testing.T) {
+	js := string(mustCopyJS(t))
+	i := strings.Index(js, "var keep = [")
+	if i < 0 {
+		t.Fatal("no keep list in copy.js")
+	}
+	list := js[i : i+strings.Index(js[i:], "];")]
+	for _, k := range []string{"'days'", "'since'", "'until'", "'tz'", "'project'", "'path'", "'dev'", "'machines'"} {
+		if !strings.Contains(list, k) {
+			t.Errorf("the chord's keep list %s lacks %s", list, k)
+		}
+	}
+}
+
+func mustCopyJS(t *testing.T) []byte {
+	t.Helper()
+	b, err := assetFS.ReadFile("assets/copy.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

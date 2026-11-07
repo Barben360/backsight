@@ -35,7 +35,9 @@
             "os": "linux",
             "first_seen": "",
             "until": null,
-            "stale": false
+            "sent_at": null,
+            "stale": false,
+            "active": true
           }
         ]
       }

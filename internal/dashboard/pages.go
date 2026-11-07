@@ -587,7 +587,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			}
 		}
 		if kindOf[r.Pattern] != "text" {
-			data.Frame.Switch = switchOf(data)
+			data.Frame.Switch = switchOf(data, head.View)
 		}
 		body, err := renderPage(s.tpl, spec.Name, data)
 		if err != nil {
@@ -762,6 +762,8 @@ type Switch struct {
 	Off               bool   // this PC's sharing is off: the second half is a link to Machines
 	OffHref           string // (keepMachines adds the parameter a kept link carries)
 	OffTitle          string
+	NoneTitle         string
+	AllNone           bool // the page is always this PC's: the second half is text, not a link
 	Host              bool // the server is on this machine: the address says so
 	Which             *WhichPCs
 	Chips             []PCChip
@@ -788,6 +790,7 @@ type PCChip struct {
 
 const (
 	machinesHref   = "/system#machines"
+	thisOnlyHint   = "Projects, sessions and memories are this PC’s: other PCs send none"
 	sharingOffHint = "This PC does not share its activity (feedback.share_ledger is off), so it does not read the other PCs’ either. See Machines on System."
 )
 
@@ -837,7 +840,7 @@ func addMachines(path string) string {
 // for all PCs (a kept link keeps working and says what it counts) and, with
 // a memory server set up, when this PC's sharing is off (to say why all PCs
 // is not offered).
-func switchOf(d PageData) *Switch {
+func switchOf(d PageData, view string) *Switch {
 	f, sc := d.Frame, d.Frame.Scope
 	if sc == nil || sc.PCs == nil {
 		return nil
@@ -849,7 +852,7 @@ func switchOf(d PageData) *Switch {
 	sw := &Switch{
 		ThisHref: without(f.Path, "machines"), AllHref: addMachines(f.Path), N: pcs.Count,
 		AllSelected: sc.Machines == "all", Off: !pcs.Sharing, OffHref: machinesHref, OffTitle: sharingOffHint,
-		Host: isLoopbackHost(sc.Server),
+		Host: isLoopbackHost(sc.Server), AllNone: metrics.ThisOnlyView(view) && pcs.Sharing, NoneTitle: thisOnlyHint,
 	}
 	if !sw.AllSelected {
 		return sw
@@ -871,16 +874,9 @@ func shortDay(day string, now time.Time) string {
 	return t.Format("Jan 2")
 }
 
-// quietDays is how many whole days a PC has sent nothing for, judged by the
-// last day its figures cover (it sent the day after), at least the two days
-// after which a PC is stale.
-func quietDays(until string, now time.Time) (int, bool) {
-	u, err := time.Parse(time.DateOnly, until)
-	if err != nil {
-		return 0, false
-	}
-	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	return max(2, int(today.Sub(u).Hours()/24)-1), true
+// sentAgo is how long ago a PC sent its document, as views.Age writes it.
+func sentAgo(sent, now time.Time) string {
+	return views.Age(max(0, now.Sub(sent).Milliseconds()))
 }
 
 func plural(n int, one, many string) string {
@@ -919,15 +915,15 @@ func whichPCs(d PageData, pcs *metrics.PCs) *WhichPCs {
 			}
 			parts = append(parts, this)
 			it.State = "its own figures, live"
-		case r.Stale && r.Until != nil:
-			days, _ := quietDays(*r.Until, now)
-			it.State = "nothing sent for " + plural(days, "day", "days") + ": its figures stop on " + shortDay(*r.Until, now)
-		case r.Stale:
-			it.State = "nothing sent for over 2 days"
-		case r.Until != nil:
-			it.State = "figures up to " + shortDay(*r.Until, now)
-		default:
+		case r.SentAt == nil: // a counted PC always has a send time
 			it.State = "figures not read yet"
+		case r.Stale && r.Until != nil:
+			it.State = "sent " + sentAgo(*r.SentAt, now) + " ago: its figures stop on " + shortDay(*r.Until, now)
+		default:
+			it.State = "sent " + sentAgo(*r.SentAt, now) + " ago"
+			if !r.Active {
+				it.State += " · no activity in this window"
+			}
 		}
 		it.Label = strings.Join(parts, " · ")
 		w.Rows = append(w.Rows, it)
@@ -976,21 +972,21 @@ func pcChips(d PageData, pcs *metrics.PCs) []PCChip {
 	}
 	if pcs.Stale > 0 {
 		var quiet []metrics.PCRow
-		days, known := 0, false
+		var oldest *time.Time // the longest silence
 		for _, r := range pcs.List {
 			if r.Stale {
 				quiet = append(quiet, r)
-				if r.Until != nil {
-					if n, ok := quietDays(*r.Until, now); ok && n > days {
-						days, known = n, true
-					}
+				if r.SentAt != nil && (oldest == nil || r.SentAt.Before(*oldest)) {
+					oldest = r.SentAt
 				}
 			}
 		}
 		since := "over 2 days"
-		if known {
-			since = plural(days, "day", "days")
+		if oldest != nil {
+			since = sentAgo(*oldest, now)
 		}
+		// chip st-watch, not chip-stale: the stylesheet hides chip-stale for the
+		// first 300 s (it is the "page is old" chip), which would hide a standing note.
 		c := PCChip{Class: "chip st-watch", Icon: "i-clock", Href: machinesHref,
 			Text: plural(pcs.Stale, "PC", "PCs") + ": nothing sent for " + since}
 		if len(quiet) == 1 && quiet[0].Until != nil {

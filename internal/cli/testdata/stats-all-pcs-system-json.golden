@@ -35,7 +35,9 @@
             "os": "linux",
             "first_seen": "2026-09-15",
             "until": "2026-10-07",
-            "stale": false
+            "sent_at": null,
+            "stale": false,
+            "active": true
           },
           {
             "machine": "11111111",
@@ -43,7 +45,9 @@
             "os": "darwin",
             "first_seen": "2026-09-20",
             "until": "2026-10-07",
-            "stale": false
+            "sent_at": "2026-10-08T09:00:00Z",
+            "stale": false,
+            "active": true
           },
           {
             "machine": "22222222",
@@ -51,7 +55,9 @@
             "os": "windows",
             "first_seen": "2026-09-25",
             "until": "2026-10-04",
-            "stale": true
+            "sent_at": "2026-10-05T12:00:00Z",
+            "stale": true,
+            "active": true
           }
         ]
       }

@@ -105,9 +105,9 @@ func TestScopePCs(t *testing.T) {
 			t.Errorf("fetched_at %v with no pc_fetch row", p.FetchedAt)
 		}
 		want := []PCRow{
-			{Machine: "aaaaaaaa", This: true, OS: "linux", FirstSeen: "2026-09-01"},
-			{Machine: "cccccccc", OS: "linux", FirstSeen: "2026-09-05", Until: ptr("2026-10-27"), Stale: true},
-			{Machine: "bbbbbbbb", OS: "linux", FirstSeen: "2026-09-10", Until: ptr("2026-10-29")},
+			{Machine: "aaaaaaaa", This: true, OS: "linux", FirstSeen: "2026-09-01", Active: true},
+			{Machine: "cccccccc", OS: "linux", FirstSeen: "2026-09-05", Until: ptr("2026-10-27"), SentAt: sentUTC(fxNow.Add(-72 * time.Hour)), Stale: true},
+			{Machine: "bbbbbbbb", OS: "linux", FirstSeen: "2026-09-10", Until: ptr("2026-10-29"), SentAt: sentUTC(fxNow.Add(-time.Hour)), Active: true},
 		}
 		if !reflect.DeepEqual(p.List, want) {
 			t.Errorf("list\n got %+v\nwant %+v", p.List, want)
@@ -1789,6 +1789,103 @@ func TestThisPCUntilInByPCAndScope(t *testing.T) {
 			if r.Scope.PCs.Until == nil || *r.Scope.PCs.Until != "2026-10-28" {
 				t.Errorf("scope.pcs.until %v, want the other PC's 2026-10-28", r.Scope.PCs.Until)
 			}
+		}
+	}
+}
+
+// sentUTC is t as scope.pcs.list writes a document's send time: UTC, to the ms.
+func sentUTC(t time.Time) *time.Time { u := time.UnixMilli(t.UnixMilli()).UTC(); return &u }
+
+// A row says when its PC sent (UTC, null for this PC) and whether it typed a
+// prompt in the window (this PC's own typed prompts included), in both modes,
+// and the JSON writes sent_at as RFC 3339 UTC.
+func TestScopePCsRowsSentAndActive(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "p", fxNow, 3, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-5*time.Hour), "2026-10-29")
+	x.pcDoc(pcOther2, "2026-09-05", fxNow.Add(-time.Hour), "2026-10-29")
+	x.pcDay(pcOther1, "2026-10-28", 5, 1, 5)
+	for _, mode := range []string{"this", "all"} {
+		q := x.query(7)
+		q.Machines = mode
+		list := x.runAs("overview", q).Scope.PCs.List
+		by := map[string]PCRow{}
+		for _, r := range list {
+			by[r.Machine] = r
+		}
+		this, busy, idle := by["aaaaaaaa"], by["bbbbbbbb"], by["cccccccc"]
+		if !this.This || this.SentAt != nil || !this.Active {
+			t.Errorf("%s: this PC %+v, want active and no sent_at", mode, this)
+		}
+		if busy.SentAt == nil || !busy.SentAt.Equal(fxNow.Add(-5*time.Hour)) || busy.SentAt.Location() != time.UTC || !busy.Active {
+			t.Errorf("%s: busy PC %+v, want sent 5 h ago (UTC) and active", mode, busy)
+		}
+		if idle.SentAt == nil || !idle.SentAt.Equal(fxNow.Add(-time.Hour)) || idle.Active {
+			t.Errorf("%s: idle PC %+v, want sent 1 h ago and not active", mode, idle)
+		}
+	}
+	raw, err := json.Marshal(x.runAs("overview", x.query(7)).Scope.PCs.List)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"sent_at":"` + fxNow.Add(-5*time.Hour).UTC().Format("2006-01-02T15:04:05Z") + `"`
+	if !strings.Contains(string(raw), want) || !strings.Contains(string(raw), `"sent_at":null`) || !strings.Contains(string(raw), `"active":false`) {
+		t.Errorf("json %s lacks %s, a null sent_at and an inactive PC", raw, want)
+	}
+}
+
+// The views and metrics --machines all adds up are the ones MergingView and
+// MergedMetric say (the pages and the CLI read those two to decide where the
+// flag goes): with another PC's figures in the window, a metric differs from
+// this PC's own exactly when MergedMetric says it merges, and a view's figures
+// differ exactly when MergingView says it merges. A new merged metric or view
+// that is not added to the lists turns this red.
+func TestMergedMetricAndViewListsMatchTheMerge(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "p", fxNow, 40, func(i int, p *telemetry.Prompt) { p.Injected = i % 2; p.MS = 400 })
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
+	full := machines.Figures{Prompts: 30, Hit: machines.Pair{10, 30}, Used: machines.Pair{6, 12}, Coverage: machines.Pair{12, 20},
+		Wrong: machines.Pair{2, 12}, Context: machines.Pair{40000, 4}, Latency: [9]int64{0, 2, 5, 10, 8, 3, 2, 0, 0}}
+	for d := 1; d <= 5; d++ {
+		day := fxNow.AddDate(0, 0, -d).UTC().Format("2006-01-02")
+		half := machines.Figures{Prompts: 15, Hit: machines.Pair{5, 15}, Used: machines.Pair{3, 6}, Coverage: machines.Pair{6, 10}, Wrong: machines.Pair{1, 6}, Context: machines.Pair{20000, 2}}
+		x.pcRows(pcRow{machine: pcOther1, day: day, f: full, flow: machines.Pair{9, 10}},
+			pcRow{machine: pcOther1, day: day, version: "0.1.30", f: half})
+	}
+	this, all := x.query(7), x.allQuery()
+	this.Dev, all.Dev = true, true // the developer metrics are views' too
+	differs := map[string]bool{}
+	present := map[string]bool{}
+	for _, view := range Views {
+		a, b := x.runAs(view, this), x.runAs(view, all)
+		viewDiffers := false
+		for id, m := range a.Metrics {
+			present[id] = true
+			if !reflect.DeepEqual(m, b.Metrics[id]) {
+				differs[id] = true
+				viewDiffers = true
+			}
+		}
+		if len(a.Metrics) != len(b.Metrics) {
+			t.Errorf("%s: %d metrics with this, %d with all", view, len(a.Metrics), len(b.Metrics))
+		}
+		ta, tb := a.Tables, b.Tables
+		ta.ByPC, tb.ByPC = nil, nil // only listed with all, in a view that merges
+		if !reflect.DeepEqual(ta, tb) {
+			viewDiffers = true
+		}
+		if viewDiffers != MergingView(view) {
+			t.Errorf("view %s: its figures differ with all: %t, MergingView: %t", view, viewDiffers, MergingView(view))
+		}
+	}
+	for id := range present {
+		if differs[id] != MergedMetric(id) {
+			t.Errorf("metric %s: differs with all: %t, MergedMetric: %t", id, differs[id], MergedMetric(id))
+		}
+	}
+	for _, id := range []string{"recall.hit_rate", "used.turn_rate", "declare.coverage", "verdict.wrong_rate", "context.per_session", "recall.latency", "pipeline.flow"} {
+		if !present[id] || !differs[id] {
+			t.Errorf("metric %s: present %t, differs %t: the fixture does not exercise it", id, present[id], differs[id])
 		}
 	}
 }
