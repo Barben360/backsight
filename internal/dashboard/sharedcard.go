@@ -99,7 +99,11 @@ func (d PageData) sharedCard(r *metrics.Result, m *metrics.MemoryPage) *SharedCa
 	}
 
 	n := sh.Machines
-	c.Head.PCs = &PCsChip{Text: "all PCs (" + strconv.Itoa(n+1) + ")", Title: "This PC’s counts and the counts your other PCs share"}
+	all := n
+	if thisCounts(r.Scope.PCs) {
+		all++ // this PC's own counts are one of the PCs added up
+	}
+	c.Head.PCs = &PCsChip{Text: "all PCs (" + strconv.Itoa(all) + ")", Title: "This PC’s counts and the counts your other PCs share"}
 	c.Head.CLI = "backsight stats memories " + quoteArg(m.Row.ID) + " --machines all"
 	c.Head.Info = Info{
 		Label: "About the other PCs’ counts", Name: "Counts from your other PCs",
@@ -160,4 +164,19 @@ func zoneOf(loc *time.Location) *time.Location {
 		return time.UTC
 	}
 	return loc
+}
+
+// thisCounts says this PC is one of the PCs counted: on a server-only host it
+// is not (it records no activity), and the count is the others' alone, as the
+// scope line's switch says. Unknown (no list) it counts.
+func thisCounts(pcs *metrics.PCs) bool {
+	if pcs == nil || len(pcs.List) == 0 {
+		return true
+	}
+	for _, row := range pcs.List {
+		if row.This {
+			return true
+		}
+	}
+	return false
 }

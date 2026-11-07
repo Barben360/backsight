@@ -1256,6 +1256,13 @@ func TestCostThisPCIsUnchanged(t *testing.T) {
 		}
 	}
 	// The main of this PC's page is the bytes block 7 drew (hashes taken from the page before block 8).
+	// To re-pin after a change of this PC's page that is meant (a word, a class), run
+	//
+	//	go test ./internal/dashboard/ -run TestCostThisPCIsUnchanged
+	//
+	// and copy the "sha256 <got>" each failure prints into the matching pin below
+	// (the first is the rich page, the second the empty one). A change nobody meant is
+	// the bug: read the page's diff first, as this PC's page must not move with block 8.
 	pin := func(body, want string) {
 		t.Helper()
 		i, j := strings.Index(body, "<main"), strings.Index(body, "</main>")
@@ -1422,5 +1429,49 @@ func TestAllPCsPagesReadThisPCsOwnAnswer(t *testing.T) {
 	}
 	if !found {
 		t.Error("the day page's merged tiles do not name this PC's events")
+	}
+}
+
+// This PC before it has a machine id is drawn as Which PCs draws it, a dash
+// that says why, not an empty chip.
+func TestByPCWithoutAMachineIDDrawsNoEmptyChip(t *testing.T) {
+	n := allPCsCostNode(t, func(d *PageData) { d.V["cost"].Tables.ByPC[0].Machine = "" })
+	tbl := cardOf(t, n, "w-recall-latency").find("table.tbl.mach")[0]
+	first := tbl.find("tbody tr")[0].first("span.idc")
+	if first == nil || first.text() != "—" || first.attr("title") != "This PC has no machine id yet" {
+		t.Errorf("first id chip %v", first)
+	}
+	for _, id := range tbl.find("span.idc") {
+		if strings.TrimSpace(id.text()) == "" {
+			t.Errorf("an empty id chip: %v", id)
+		}
+	}
+}
+
+// A bucket reads the same in the hover, the table and the CLI, the open one
+// included ("over 5.0 s", never "over 5 s").
+func TestBucketWordsAreTheTablesAndTheCLIs(t *testing.T) {
+	i := func(v int64) *int64 { return &v }
+	f := func(v float64) *float64 { return &v }
+	for _, c := range []struct {
+		lo      float64
+		hi      *float64
+		between string
+	}{
+		{1000, f(2000), "between 1.0 and 2.0 s"},
+		{250, f(500), "between 250 and 500 ms"},
+		{5000, nil, "over 5.0 s"},
+	} {
+		between, cell := bucketWords(c.lo, c.hi)
+		var hi *int64
+		if c.hi != nil {
+			hi = i(int64(*c.hi))
+		}
+		if want := views.RangeText(int64(c.lo), hi); cell != want {
+			t.Errorf("cell %q, want the CLI's %q", cell, want)
+		}
+		if between != c.between {
+			t.Errorf("hover %q, want %q", between, c.between)
+		}
 	}
 }

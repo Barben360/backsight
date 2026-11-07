@@ -232,3 +232,31 @@ func TestMemorySharedCardStates(t *testing.T) {
 		}
 	})
 }
+
+// On a server-only host this PC is not one of the PCs counted: the card's
+// chip says the other PCs' number, as the scope line's switch does; where this
+// PC counts it adds itself.
+func TestMemorySharedChipCountsThisPCOnlyWhenItCounts(t *testing.T) {
+	others := []metrics.PCRow{{Machine: "a07be4d1"}, {Machine: "5d21c8e0"}, {Machine: "c84e1f39"}}
+	for _, c := range []struct {
+		name string
+		pcs  *metrics.PCs
+		want string
+	}{
+		{"this PC counts", &metrics.PCs{Count: 4, List: append([]metrics.PCRow{{Machine: "3f9c2a17", This: true}}, others...)}, "all PCs (4)"},
+		{"server-only host", &metrics.PCs{Count: 3, List: others}, "all PCs (3)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			n := detailNode(t, "memory", "/memories/m", views.Params{Limit: 50}, func(d *PageData) {
+				d.V["memories"].GeneratedAt = detailBase
+				d.Frame.Generated, d.Frame.ServerRead = detailBase, &metrics.ServerState{OK: true}
+				d.V["memories"].Scope.PCs = c.pcs
+				m := d.V["memories"].Tables.Memory
+				m.Row.ID, m.Shared = "7f3a9c21e04b4d0e9a1f6c55b2d18e07", countedShared()
+			})
+			if chip := sharedCardOf(t, n).first("div.card-head span.chip"); chip == nil || chip.text() != c.want {
+				t.Errorf("chip %v, want %q", chip, c.want)
+			}
+		})
+	}
+}

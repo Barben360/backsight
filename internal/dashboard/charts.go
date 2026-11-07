@@ -270,7 +270,7 @@ func latencyRangesOf(l format.Locale, more string, v MetricView, after string) (
 }
 
 // bucketWords says a latency bucket (lo, hi] in a sentence ("between 1.0 and
-// 2.0 s", "over 5 s") and in a table cell ("1.0–2.0 s").
+// 2.0 s", "over 5.0 s") and in a table cell ("1.0–2.0 s").
 func bucketWords(lo float64, hi *float64) (between, cell string) {
 	var h *int64
 	if hi != nil {
@@ -279,10 +279,7 @@ func bucketWords(lo float64, hi *float64) (between, cell string) {
 	}
 	cell = views.RangeText(int64(lo), h)
 	if h == nil {
-		if lo >= 1000 {
-			return "over " + strconv.FormatFloat(lo/1000, 'f', -1, 64) + " s", cell
-		}
-		return "over " + strconv.FormatFloat(lo, 'f', -1, 64) + " ms", cell
+		return cell, cell // "over 5.0 s", the words the table and the CLI use
 	}
 	return "between " + strings.Replace(cell, "–", " and ", 1), cell
 }
@@ -324,7 +321,11 @@ func byPCOf(l format.Locale, rows []metrics.ByPCRow) string {
 		if r.This {
 			slow, typical = exact(r.P95), exact(r.P50)
 		}
-		b.WriteString(`<tr><td><span class="idc">` + html.EscapeString(r.Machine) + `</span>` + html.EscapeString(strings.Join(who, " · ")) +
+		id := `<span class="idc">` + html.EscapeString(r.Machine) + `</span>`
+		if r.Machine == "" { // this PC before it has an id: say so, as Which PCs does
+			id = `<span class="idc" title="This PC has no machine id yet">—</span>`
+		}
+		b.WriteString(`<tr><td>` + id + html.EscapeString(strings.Join(who, " · ")) +
 			`</td><td class="r">` + html.EscapeString(l.Int(r.Prompts)) + `</td>`)
 		if !r.Active {
 			b.WriteString(`<td class="muted">no activity in this window</td><td class="muted">` + dash + `</td>`)

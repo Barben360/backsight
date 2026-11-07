@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
@@ -180,6 +181,7 @@ func TestSummaryLineAllPCs(t *testing.T) {
 	if strings.Contains(text, "Cost       ok") {
 		t.Errorf("Cost's line stays beside Speed and Context:\n%s", text)
 	}
+	assertWidth(t, "all PCs", text)
 	// What the copy button carries is the same text.
 	if got := doc.first(".summary-row button.copy").attr("data-copy"); got != text {
 		t.Errorf("the copied summary differs from the text:\n%q\n%q", got, text)
@@ -193,6 +195,7 @@ func TestSummaryLineAllPCs(t *testing.T) {
 			t.Errorf("this PC's text lacks %q:\n%s", w, plain)
 		}
 	}
+	assertWidth(t, "this PC", plain)
 	for _, bad := range []string{"Activity on all", "on all PCs", "this PC)"} {
 		if strings.Contains(plain, bad) {
 			t.Errorf("this PC's text says %q:\n%s", bad, plain)
@@ -434,5 +437,20 @@ func TestCalendarBySessionsSaysThisPC(t *testing.T) {
 	this := &metrics.Result{Scope: metrics.Scope{Machines: "this"}, Tables: days.Tables}
 	if got := by(this, "sessions"); strings.Contains(got, "this PC") {
 		t.Errorf("this PC's calendar: %.400s", got)
+	}
+}
+
+// assertWidth fails on a line of the summary text over 72 characters: it is
+// pasted into a chat or a terminal, and wraps there at 72.
+func assertWidth(t *testing.T, what, text string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for _, l := range lines {
+		if n := utf8.RuneCountInString(l); n > 72 {
+			t.Errorf("%s: a summary line of %d characters: %q", what, n, l)
+		}
+	}
+	if len(lines) < 5 {
+		t.Errorf("%s: only %d lines checked", what, len(lines))
 	}
 }
