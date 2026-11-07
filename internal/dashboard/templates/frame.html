@@ -212,7 +212,7 @@
   HrefText). cmd: dot is a command string. fig: dot is a Fig. nodata: dot is
   a NoData.
 */}}
-{{define "card-open"}}<section class="card" aria-labelledby="{{.ID}}">
+{{define "card-open"}}<section class="card"{{with .Anchor}} id="{{.}}"{{end}} aria-labelledby="{{.ID}}">
 {{template "card-head" .}}{{end}}
 
 {{/* pcschip: dot is a PCsChip; othersnf: the chip of a merged figure whose project filter spares the other PCs. */}}
@@ -232,7 +232,7 @@
 {{template "card-close" .Head}}{{end}}
 
 {{define "info"}}{{if .Info.Label}}<details class="info"><summary aria-label="{{.Info.Label}}" aria-describedby="{{.ID}}-info"><span class="i i-info"></span></summary><div class="pop" id="{{.ID}}-info" role="note"><b>{{.Info.Name}}</b>
-{{if or .Info.What .Info.Limits .Info.BasedOn .Info.Smallest .Info.Privacy}}<dl>{{with .Info.What}}<dt>What</dt><dd>{{.}}</dd>{{end}}{{with .Info.Limits}}<dt>Limits</dt><dd>{{.}}</dd>{{end}}{{with .Info.BasedOn}}<dt>Based on</dt><dd>{{.}}</dd>{{end}}{{with .Info.Smallest}}<dt>Smallest change it can see</dt><dd>{{.}}</dd>{{end}}{{with .Info.Privacy}}<dt>Privacy</dt><dd>{{.}}</dd>{{end}}</dl>
+{{if or .Info.What .Info.Limits .Info.BasedOn .Info.Smallest .Info.Rows .Info.Privacy}}<dl>{{with .Info.What}}<dt>What</dt><dd>{{.}}</dd>{{end}}{{with .Info.Limits}}<dt>Limits</dt><dd>{{.}}</dd>{{end}}{{with .Info.BasedOn}}<dt>Based on</dt><dd>{{.}}</dd>{{end}}{{with .Info.Smallest}}<dt>Smallest change it can see</dt><dd>{{.}}</dd>{{end}}{{range .Info.Rows}}<dt>{{.Term}}</dt><dd>{{template "runs" .Runs}}</dd>{{end}}{{with .Info.Privacy}}<dt>Privacy</dt><dd>{{.}}</dd>{{end}}</dl>
 {{end}}{{range .Info.Paras}}<p>{{.}}</p>
 {{end}}{{with .Info.Term}}<code class="term">{{.}}</code>{{end}}{{with .Info.Href}}<a href="{{.}}">{{$.Info.HrefText}}</a>{{end}}</div></details>{{end}}{{end}}
 
@@ -275,11 +275,14 @@
 {{end}}{{with .HintCmd}}{{template "cmd" .}}{{end}}{{end}}
 
 {{/* reltime: dot is a format.Time; a moment as the time element shows it. */}}
+{{/* runs: dot is a list of Run (Text, Code, Href, Time): a sentence with code, a link or a moment in it. */}}
+{{define "runs"}}{{range .}}{{if .Code}}<code>{{.Code}}</code>{{else if .Href}}<a href="{{.Href}}">{{.Text}}</a>{{else if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}{{end}}
+
 {{define "reltime"}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}
 
 {{/* dl: dot is a list of DLRow; rows of a description list, a moment in the middle of a row's text. */}}
 {{define "dl"}}<dl class="dl">
-{{range .}}<dt>{{.Label}}</dt><dd{{if or .Mono .Num}} class="{{if .Mono}}mono{{end}}{{if .Num}}num{{end}}"{{end}}>{{if .Class}}<span class="st {{.Class}}">{{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}{{if .Class}}</span>{{end}}</dd>
+{{range .}}<dt>{{.Label}}</dt><dd{{if or .Mono .Num}} class="{{if .Mono}}mono{{end}}{{if .Num}}num{{end}}"{{end}}>{{if .Class}}<span class="st {{.Class}}">{{end}}{{with .ID}}<span class="idc" title="Short machine id: the label other PCs see">{{.}}</span> {{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}{{if .Class}}</span>{{end}}</dd>
 {{end}}</dl>
 {{end}}
 

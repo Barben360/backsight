@@ -3,6 +3,7 @@ package dashboard
 import (
 	"html/template"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,9 +21,12 @@ type SystemPage struct {
 	Server ServerCard
 	PC     PCCard
 	Look   LookCard
-	Checks ChecksCard
-	Strip  HistoryCard
-	Secret SecretsCard
+	// Machines is the card of the PCs that share their activity; nil when the
+	// view carries no table of them.
+	Machines *MachinesCard
+	Checks   ChecksCard
+	Strip    HistoryCard
+	Secret   SecretsCard
 }
 
 // ServerCard is the memory server as this PC sees it.
@@ -51,6 +55,7 @@ type LookCard struct {
 type LookLine struct {
 	Pill      Word
 	Text, Why string
+	Runs      []Run // the sentence when it holds code; read instead of Text
 	Cmd       string
 }
 
@@ -81,6 +86,7 @@ func systemOf(d PageData) SystemPage {
 	p.Server = d.serverCard(r, reach, *info)
 	p.PC = d.pcCard(r, jobs, backlog, *info)
 	p.Look = d.lookCard(r, doctor)
+	p.Machines = d.machinesCard(r)
 	p.Checks = d.checksCard(r, doctor)
 	p.Strip = d.historyCard(r)
 	p.Secret = d.secretsCard(r)
@@ -143,6 +149,7 @@ func (d PageData) pcCard(r *metrics.Result, jobs, backlog MetricView, s metrics.
 		views.Label(jobs.Def)+": "+jobs.Def.Question, views.Label(backlog.Def)+": "+backlog.Def.Question)
 	c := PCCard{Card: Card{Head: h, Dev: d.devIDs(jobs, backlog)}}
 	c.Rows = append(c.Rows, textRow("backsight", d.Frame.Version))
+	c.Rows = append(c.Rows, d.thisPCRows(r)...)
 
 	update := textRow("Update", "none newer")
 	switch {
@@ -238,6 +245,10 @@ func (d PageData) lookCard(r *metrics.Result, doctor MetricView) LookCard {
 			}
 			c.Items = append(c.Items, LookLine{Pill: Word{views.DoctorStatusWords[status], class}, Text: metrics.DoctorName(row.ID), Cmd: row.Fix})
 		}
+	}
+	// A choice, not a fault: it is told, never counted as a warning.
+	if m := r.Tables.Machines; m != nil && !m.Sharing {
+		c.Items = append(c.Items, sharingOffItem())
 	}
 	var counts []string
 	if bad > 0 {
@@ -402,4 +413,210 @@ func scanTook(ms float64) string {
 		return strconv.FormatInt(int64(math.Round(ms/1000)), 10) + " s"
 	}
 	return chart.Span(ms)
+}
+
+// sharingOffItem is what tells a PC that does not share its activity how to
+// turn that on. It is System's alone: sharing off is a choice.
+func sharingOffItem() LookLine {
+	return LookLine{
+		Pill: Word{"info", "st-info"},
+		Runs: []Run{
+			{Text: "This PC does not share its activity: "}, {Code: "feedback.share_ledger"},
+			{Text: " is off. Your other PCs do not see it, and “all PCs” is off here. To share, set "}, {Code: "share_ledger = true"},
+			{Text: " under "}, {Code: "[feedback]"}, {Text: " in "}, {Code: "config.toml"}, {Text: " ("}, {Code: "backsight paths"},
+			{Text: " shows where it is), then send now:"},
+		},
+		Cmd: "backsight jobs tick",
+		Why: "Off is a valid choice and nothing is broken. Sharing sends daily totals and which memories Claude used: no project, session, memory text or computer name. The same setting shares the counts that rank memory on all your PCs.",
+	}
+}
+
+// thisPCRows are the rows of This PC that tell which machine it is among the
+// PCs and whether it shares: its short id, system and first day, and when it
+// last sent. None when the view carries no table of the PCs, or this PC is
+// not among them.
+func (d PageData) thisPCRows(r *metrics.Result) []DLRow {
+	m := r.Tables.Machines
+	if m == nil {
+		return nil
+	}
+	var self *metrics.MachineRow
+	for i := range m.Rows {
+		if m.Rows[i].This {
+			self = &m.Rows[i]
+		}
+	}
+	if self == nil {
+		return nil
+	}
+	var rows []DLRow
+	var parts []string
+	if w := osWord(self.OS); w != "" {
+		parts = append(parts, w)
+	}
+	if self.FirstSeen != "" {
+		parts = append(parts, "since "+shortDay(self.FirstSeen, r.GeneratedAt))
+	}
+	if id := shortMachineID(self.Machine); id != "" || len(parts) > 0 {
+		rows = append(rows, DLRow{Label: "Machine", ID: id, Pre: strings.Join(parts, " · ")})
+	}
+	switch {
+	case !m.Sharing:
+		rows = append(rows, textRow("Shares its activity", "no"))
+	case self.LastSent != nil:
+		rows = append(rows, DLRow{Label: "Shares its activity", Pre: "yes, last sent ", Time: format.Rel(r.GeneratedAt, *self.LastSent, d.Loc)})
+	default:
+		rows = append(rows, textRow("Shares its activity", "yes, nothing sent yet"))
+	}
+	return rows
+}
+
+// machineIDRe is what a short machine id looks like: the start of a lower-case
+// UUID, longer only when two PCs start alike.
+var machineIDRe = regexp.MustCompile(`^[0-9a-f][0-9a-f-]{7,35}$`)
+
+// shortMachineID is id when it reads as a short machine id, else "": a name
+// from another PC's document is never drawn as it came.
+func shortMachineID(id string) string {
+	if machineIDRe.MatchString(id) {
+		return id
+	}
+	return ""
+}
+
+// MachinesCard is the card of the PCs that share their activity on this
+// server. Notice says the server does not answer; Items holds the sharing-off
+// item; Sub and Foot are the sentences under the table.
+type MachinesCard struct {
+	Card
+	Notice  *Notice
+	Items   []LookLine
+	Short   bool // the four-column table of a card with nothing to compare
+	Rows    []MachineLine
+	Ignored []IgnoredLine
+	Sub     string
+	Foot    []Run
+}
+
+// Notice is a boxed sentence with its icon and class.
+type Notice struct {
+	Icon, Class, Text string
+	Runs              []Run // read instead of Text when set
+}
+
+// MachineLine is a PC of the table. Counted is the word of "In “all PCs”",
+// Why what is said beside it.
+type MachineLine struct {
+	ID, System, Version string
+	This                bool
+	First, Sent         format.Time
+	Quiet               bool // gone quiet: the last send is drawn as a warning
+	Counted             Word
+	Why                 string
+}
+
+// IgnoredLine is a document set aside: the short id read from its name (""
+// when it does not read) and the words for why; nothing else of it.
+type IgnoredLine struct{ ID, Why string }
+
+// machinesCard is the card of tables.machines in its states: the PCs, this PC
+// only, sharing off and the server not answering. nil without the table.
+func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
+	m := r.Tables.Machines
+	if m == nil {
+		return nil
+	}
+	now := r.GeneratedAt
+	h := fixedHead("machines", "Which PCs share their activity here?", "server", "backsight stats system")
+	h.Anchor = "machines"
+	h.Info = Info{
+		Label: "About Machines", Name: "Machines",
+		What:    "Each PC with sharing on sends, once a day, its daily totals to the memory server; “all PCs” adds them up. A PC is named by the start of its machine id, its system and the day it first sent.",
+		Rows:    []InfoRow{{Term: "Not here", Runs: []Run{{Text: "A PC with sharing off ("}, {Code: "feedback.share_ledger"}, {Text: ") sends nothing, so no one can list it."}}}},
+		Privacy: "The totals hold no project name, session, memory id, text or computer name.",
+		Term:    "backsight:metrics:machine_id",
+	}
+	c := &MachinesCard{Card: Card{Head: h}}
+	if !m.Sharing {
+		c.Head.Info, c.Head.CLI, c.Head.Scope = Info{}, "", ""
+		c.Head.Pill = Word{"sharing off", "st-info"}
+		c.Items = []LookLine{sharingOffItem()}
+		c.Head.Note = "The same item shows in “What needs a look here?”, never in “What should I do?”: it is a choice, not a fault."
+		return c
+	}
+	stale := false
+	for _, row := range m.Rows {
+		ln := MachineLine{ID: shortMachineID(row.Machine), This: row.This, System: dash, Version: dash, Quiet: row.Stale}
+		if w := osWord(row.OS); w != "" {
+			ln.System = w
+		}
+		if row.BinaryVersion != "" {
+			ln.Version = row.BinaryVersion
+		}
+		if row.FirstSeen != "" {
+			ln.First = format.Time{Text: shortDay(row.FirstSeen, now), Datetime: row.FirstSeen, Title: row.FirstSeen}
+		}
+		if row.LastSent != nil {
+			ln.Sent = format.Rel(now, *row.LastSent, d.Loc)
+		}
+		switch {
+		case row.This:
+			ln.Counted, ln.Why = Word{"counted", "st-ok"}, "its own figures, live"
+		case row.Stale:
+			stale = true
+			ln.Counted = Word{"gone quiet", "st-watch"}
+			if row.Until != nil {
+				ln.Counted.Word = "up to " + shortDay(*row.Until, now)
+			}
+		default:
+			ln.Counted = Word{"counted", "st-ok"}
+			if !row.Active {
+				ln.Why = "no activity in this window"
+			}
+		}
+		c.Rows = append(c.Rows, ln)
+	}
+	for _, g := range m.Ignored {
+		c.Ignored = append(c.Ignored, IgnoredLine{ID: shortMachineID(g.Machine), Why: wordOr(views.IgnoredWords, g.Reason, views.IgnoredWords["not_valid"])})
+	}
+	only := len(m.Rows) <= 1
+	aside := views.CountOf(int64(len(m.Rows)), "PC", "PCs")
+	if only {
+		aside = "this PC only"
+	}
+	if n := len(m.Ignored); n > 0 {
+		aside += " · " + views.CountOf(int64(n), "document", "documents") + " ignored"
+	}
+	c.Head.Aside = aside
+	silent := serverSilent(d.Frame)
+	c.Short = (only || silent) && len(c.Ignored) == 0 && !stale
+	switch {
+	case silent:
+		c.Head.Pill = Word{"not answering", "st-watch"}
+		text := "Memory server not answering"
+		if since := serverSince(d.Frame); !since.IsZero() {
+			text += " since " + format.Clock(now, since, d.Loc)
+		}
+		text += "."
+		if m.FetchedAt != nil {
+			text += " The list is the one fetched at " + format.Clock(now, *m.FetchedAt, d.Loc) + "."
+		} else {
+			text += " The list has not been fetched yet."
+		}
+		c.Notice = &Notice{Icon: "server", Class: "st-watch", Text: text}
+		c.Foot = []Run{{Text: "This PC’s figures wait and are sent once the server answers; nothing is lost."}}
+		return c
+	case only:
+		c.Sub = "Only this PC shares its activity on this server. Your other PCs appear here after their first daily send, with sharing on (the default). The scope line shows no switch until then."
+		if len(c.Ignored) == 0 {
+			return c
+		}
+	}
+	every := ", every 6 h. An ignored document is left out whole; what it holds is not shown. A PC that has not sent for 30 days drops off this list."
+	if m.FetchedAt == nil {
+		c.Foot = []Run{{Text: "Not fetched from the memory server yet; it is fetched every 6 h. An ignored document is left out whole; what it holds is not shown. A PC that has not sent for 30 days drops off this list."}}
+	} else {
+		c.Foot = []Run{{Text: "Fetched from the memory server "}, {Time: format.Rel(now, *m.FetchedAt, d.Loc)}, {Text: every}}
+	}
+	return c
 }

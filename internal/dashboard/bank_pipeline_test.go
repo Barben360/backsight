@@ -1146,7 +1146,7 @@ func TestSystemCards(t *testing.T) {
 	for _, h := range mainOf(t, n).find("h2") {
 		titles = append(titles, h.text())
 	}
-	if w := []string{"Memory server", "This PC", "What needs a look here?", "Do backsight's own health checks pass?", "Have the health checks passed lately?", "Could memory hold a secret?"}; !slices.Equal(titles, w) {
+	if w := []string{"Memory server", "This PC", "What needs a look here?", "Which PCs share their activity here?", "Do backsight's own health checks pass?", "Have the health checks passed lately?", "Could memory hold a secret?"}; !slices.Equal(titles, w) {
 		t.Fatalf("titles %q, want %q", titles, w)
 	}
 	grid := cardOf(t, n, "w-server-reach").Parent
@@ -1173,7 +1173,7 @@ func TestSystemCards(t *testing.T) {
 	})
 	t.Run("this PC", func(t *testing.T) {
 		c := cardOf(t, n, "w-this-pc")
-		w := [][2]string{{"backsight", "v0.1.17-m7"}, {"Update", "1 newer release"}, {"Background jobs", "regular upkeep: done, 4 min ago · daily maintenance: partly done, 3 h ago"},
+		w := [][2]string{{"backsight", "v0.1.17-m7"}, {"Machine", "Linux"}, {"Shares its activity", "yes, nothing sent yet"}, {"Update", "1 newer release"}, {"Background jobs", "regular upkeep: done, 4 min ago · daily maintenance: partly done, 3 h ago"},
 			{"Waiting to be sent", "0 waiting"}, {"Last backup", "3 d ago · verified"}, {"History index", "updated 3 min ago, 3 s behind"}}
 		got := dlOf(c)
 		if len(got) != len(w) {
@@ -1187,7 +1187,7 @@ func TestSystemCards(t *testing.T) {
 		if !hasCode(c, "/backsight:update") {
 			t.Error("no update command")
 		}
-		if up := c.find("dl.dl dd")[1].first("span.st"); up == nil || !strings.Contains(up.attr("class"), "st-info") {
+		if up := c.find("dl.dl dd")[3].first("span.st"); up == nil || !strings.Contains(up.attr("class"), "st-info") {
 			t.Errorf("update class %+v", up)
 		}
 		for _, q := range []string{"Are the background jobs running?", "Is anything stuck on this PC?"} {

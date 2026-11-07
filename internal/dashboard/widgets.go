@@ -32,6 +32,7 @@ type Head struct {
 	OthersNF    bool     // a project filter spares the other PCs: the chip "other PCs not filtered"
 	Note        string   // a muted line under the card's content (what stays this PC's); "" none
 	FootNote    string   // a muted word beside the drill link, in the card's foot; "" none
+	Anchor      string   // the id of the card's section, a link target; "" none
 }
 
 // PCsChip is the chip "all PCs (N)" a widget carries when its figure adds up
@@ -59,12 +60,27 @@ type Info struct {
 	What        string
 	Limits      string
 	BasedOn     string
-	Smallest    string // a metric's rows; "" omits one
-	Privacy     string // what is kept and what never is; "" omits the row
+	Smallest    string    // a metric's rows; "" omits one
+	Privacy     string    // what is kept and what never is; "" omits the row
+	Rows        []InfoRow // more rows, after Smallest and before Privacy
 	Paras       []string
 	Term        string // shown in <code class="term">; "" none
 	Href        string
 	HrefText    string
+}
+
+// InfoRow is a row of an ⓘ popover whose text holds code or a link.
+type InfoRow struct {
+	Term string
+	Runs []Run
+}
+
+// Run is a piece of a sentence: plain text, code, a link (Text is its words)
+// or a moment. Only one of Code, Href and Time is set; every value is
+// escaped where it is drawn.
+type Run struct {
+	Text, Code, Href string
+	Time             format.Time
 }
 
 // hooksFailuresWhat is what the ⓘ says for hooks.failures: the catalog's

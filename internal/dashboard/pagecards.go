@@ -602,6 +602,7 @@ func (d PageData) contextState(v MetricView, average bool) template.HTML {
 // the moment itself when it has one, and the class that colours the row.
 type DLRow struct {
 	Label, Pre, Post, Class string
+	ID                      string // a short machine id, shown before Pre; "" none
 	Time                    format.Time
 	Mono, Num               bool
 }
