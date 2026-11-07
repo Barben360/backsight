@@ -27,6 +27,7 @@ locks
 writes
 server-reach
 backfill
+price
 split-session
 replace-unconfirmed
 disk
