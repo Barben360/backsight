@@ -412,3 +412,63 @@ func TestMachinesCardServerOnlyHostWithNoPC(t *testing.T) {
 		t.Errorf("the card says this PC shares, or draws a table of nothing: %q", allText(c))
 	}
 }
+
+// A PC's last send reads the same in the scope line, the stale chip and the
+// Machines card: one rule, the elapsed time cut to whole minutes, hours (under
+// 48) or days, whatever the calendar day it fell on.
+func TestLastSendReadsTheSameEverywhere(t *testing.T) {
+	now := time.Date(2026, 10, 30, 0, 30, 0, 0, time.UTC)
+	for _, c := range []struct {
+		ago        time.Duration
+		compact    string
+		spelledOut string
+	}{
+		{20 * time.Second, "just now", "under 1 min"},
+		{40 * time.Minute, "40 min ago", "40 min"}, // the day before on the calendar
+		{47 * time.Hour, "47 h ago", "47 h"},
+		{49 * time.Hour, "2 d ago", "2 days"},
+		{7*24*time.Hour + 19*time.Hour, "7 d ago", "7 days"}, // 7.8 days: floored in every place
+		{9 * 24 * time.Hour, "9 d ago", "9 days"},
+	} {
+		at := now.Add(-c.ago)
+		if got := sentAgo(at, now); got != c.compact {
+			t.Errorf("sentAgo(%v) = %q, want %q", c.ago, got, c.compact)
+		}
+		if got := sentFor(at, now); got != c.spelledOut {
+			t.Errorf("sentFor(%v) = %q, want %q", c.ago, got, c.spelledOut)
+		}
+		if got := sentAt(now, at, time.UTC).Text; got != c.compact {
+			t.Errorf("the Machines card says %q for %v, the scope line %q", got, c.ago, c.compact)
+		}
+	}
+
+	// On the page: every PC's age is the same in the scope line and the card.
+	h := othersHarness(t)
+	doc := rawPage(t, h, cookieHdr(h.login()), "/system?machines=all&days=30")
+	card := cardOf(t, doc, "w-machines")
+	inCard := map[string]string{}
+	for _, tr := range card.find("tbody tr") {
+		tds := tr.find("td")
+		if id := tr.first("span.idc"); id != nil && len(tds) > 3 && !tr.has("class") {
+			inCard[id.text()] = tds[3].text()
+		}
+	}
+	checked := 0
+	for _, li := range doc.find(".scopebar details.pcs li") {
+		txt := li.text()
+		_, rest, ok := strings.Cut(txt, " sent ")
+		if !ok {
+			continue
+		}
+		ago, _, _ := strings.Cut(rest, ":")
+		ago, _, _ = strings.Cut(ago, " · ")
+		id, _, _ := strings.Cut(txt, " ")
+		if got := inCard[id]; got != ago {
+			t.Errorf("%s: scope line says %q, Machines card %q", id, ago, got)
+		}
+		checked++
+	}
+	if checked < 3 {
+		t.Errorf("only %d PCs compared (card %v)", checked, inCard)
+	}
+}

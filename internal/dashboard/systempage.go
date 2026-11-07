@@ -644,20 +644,11 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 	return c
 }
 
-// sentAt is when a PC last sent, as the pages say it: "2 h ago", "yesterday",
-// then "9 d ago" as far as a PC stays in the list (the date stays in the
-// title).
+// sentAt is when a PC last sent, as the pages say it ("5 h ago", "9 d ago":
+// the same words as the scope line, through sentAgo); the date stays in the
+// title.
 func sentAt(now, at time.Time, loc *time.Location) format.Time {
 	t := format.Rel(now, at, loc)
-	if loc == nil {
-		loc = time.UTC
-	}
-	n, a := now.In(loc), at.In(loc)
-	ny, nm, nd := n.Date()
-	ay, am, ad := a.Date()
-	days := int(time.Date(ny, nm, nd, 0, 0, 0, 0, time.UTC).Sub(time.Date(ay, am, ad, 0, 0, 0, 0, time.UTC)).Hours() / 24)
-	if days >= 7 {
-		t.Text = strconv.Itoa(days) + " d ago"
-	}
+	t.Text = sentAgo(at, now)
 	return t
 }

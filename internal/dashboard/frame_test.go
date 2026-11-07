@@ -411,7 +411,7 @@ func TestScopeSwitchStates(t *testing.T) {
 			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
 				"a07be4d1 macOS · since Oct 10 sent 5 h ago",
 				"5d21c8e0 Windows · since Oct 28 sent 1 h ago · no activity in this window",
-				"c84e1f39 Linux · since Jul 18 sent 9 days ago: its figures stop on Oct 20"}},
+				"c84e1f39 Linux · since Jul 18 sent 9 d ago: its figures stop on Oct 20"}},
 		{name: "all PCs with a project filter", fx: scopeFx{path: "/?project=backsight", machines: "all", scope: func() metrics.Scope {
 			s := base("all", fourPCs())
 			s.Project, s.OthersUnfiltered = "backsight", true
@@ -423,7 +423,7 @@ func TestScopeSwitchStates(t *testing.T) {
 			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
 				"a07be4d1 macOS · since Oct 10 sent 5 h ago",
 				"5d21c8e0 Windows · since Oct 28 sent 1 h ago · no activity in this window",
-				"c84e1f39 Linux · since Jul 18 sent 9 days ago: its figures stop on Oct 20"}},
+				"c84e1f39 Linux · since Jul 18 sent 9 d ago: its figures stop on Oct 20"}},
 		{name: "sharing off", fx: scopeFx{scope: base("this", &metrics.PCs{List: []metrics.PCRow{}})},
 			line: "this PC all PCs: sharing is off here", links: []string{"/", "/system#machines"}, cur: []string{"this PC"}},
 		{name: "sharing off behind a kept link", fx: scopeFx{machines: "all", scope: base("this", &metrics.PCs{List: []metrics.PCRow{}})},
@@ -440,7 +440,7 @@ func TestScopeSwitchStates(t *testing.T) {
 			which: []string{"3f9c2a17 Linux · since Sep 2 · this PC its own figures, live",
 				"a07be4d1 macOS · since Oct 10 sent 5 h ago",
 				"5d21c8e0 Windows · since Oct 28 sent 1 h ago · no activity in this window",
-				"c84e1f39 Linux · since Jul 18 sent 9 days ago: its figures stop on Oct 20"}},
+				"c84e1f39 Linux · since Jul 18 sent 9 d ago: its figures stop on Oct 20"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -529,7 +529,7 @@ func TestScopeSwitchStates(t *testing.T) {
 		if want := "1 PC: nothing sent for 4 days | c84e1f39 last sent its figures 4 days ago: its days after Oct 20 are missing."; chip != want {
 			t.Errorf("chip %q, want %q", chip, want)
 		}
-		if li := doc.find("details.pcs li")[3]; li.text() != "c84e1f39 Linux · since Jul 18 sent 4 days ago: its figures stop on Oct 20" {
+		if li := doc.find("details.pcs li")[3]; li.text() != "c84e1f39 Linux · since Jul 18 sent 4 d ago: its figures stop on Oct 20" {
 			t.Errorf("row %q", li.text())
 		}
 	})
@@ -879,7 +879,9 @@ func TestAllPCsHalfIsTextOnThisPCsPages(t *testing.T) {
 			}
 			span := sw.first("span[aria-disabled=true]")
 			if c.text {
-				if span == nil || span.text() != "all PCs on this server (4)" || span.attr("title") != "Projects, sessions and memories are this PC’s: other PCs send none" {
+				const reason = "Projects, sessions and memories are this PC’s: other PCs send none"
+				// The reason is also text, for screen readers and touch (a title shows on hover only).
+				if sr := span.first(".sr-only"); span == nil || sr == nil || sr.text() != ": "+reason || span.text() != "all PCs on this server (4): "+reason || span.attr("title") != reason {
 					t.Errorf("%s (machines=%q): second half %v, want disabled text with the reason", c.view, asked, span)
 				}
 				if got := linksIn(sw, ""); len(got) != 1 {

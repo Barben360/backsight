@@ -151,7 +151,7 @@
 */}}
 {{define "mscope"}}<span class="mscope">Activity on
 <nav class="seg mseg" aria-label="Whose activity"><a href="{{.ThisHref}}" data-machines="this"{{if not .AllSelected}} aria-current="true"{{end}}>this PC</a>
-{{if .Off}}<a class="seg-off" href="{{.OffHref}}" title="{{.OffTitle}}">all PCs: sharing is off here</a>{{else if .AllNone}}<span aria-disabled="true" title="{{.NoneTitle}}">all PCs on this server ({{.N}})</span>{{else}}<a href="{{.AllHref}}"{{if .AllSelected}} aria-current="true"{{end}}>all PCs on this server ({{.N}})</a>{{end}}</nav>
+{{if .Off}}<a class="seg-off" href="{{.OffHref}}" title="{{.OffTitle}}">all PCs: sharing is off here</a>{{else if .AllNone}}<span aria-disabled="true" title="{{.NoneTitle}}">all PCs on this server ({{.N}})<span class="sr-only">: {{.NoneTitle}}</span></span>{{else}}<a href="{{.AllHref}}"{{if .AllSelected}} aria-current="true"{{end}}>all PCs on this server ({{.N}})</a>{{end}}</nav>
 {{with .Which}}<details class="menu pcs">
 <summary class="chip" aria-label="Which PCs are counted in all PCs"><span class="i i-sm i-pcs"></span>Which PCs <span class="caret" aria-hidden="true">▾</span></summary>
 <div class="menu-pop wider pcs-pop">

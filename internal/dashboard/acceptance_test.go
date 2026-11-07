@@ -407,7 +407,7 @@ func TestAcceptancePCsPagesAreOnAllPCs(t *testing.T) {
 				t.Errorf("%s is not a this-PC-only view", view)
 			}
 			span := sw.first("nav.mseg span[aria-disabled]")
-			if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{"this PC"}) || span == nil || span.text() != want ||
+			if got := current(sw, "nav.mseg", "true"); !slices.Equal(got, []string{"this PC"}) || span == nil || span.text() != want+": "+thisOnlyHint ||
 				span.attr("title") != thisOnlyHint || sw.first("details.pcs") != nil {
 				t.Errorf("selected %q, disabled half %v, list %v: want this PC, and %q as text", got, span, sw.first("details.pcs") != nil, want)
 			}

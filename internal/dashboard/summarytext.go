@@ -257,7 +257,7 @@ func pcNotes(sc metrics.Scope, now time.Time) string {
 		}
 		since := "over 2 days"
 		if oldest != nil {
-			since = sentAgo(*oldest, now)
+			since = sentFor(*oldest, now)
 		}
 		notes = append(notes, plural(st, "PC", "PCs")+" sent nothing for "+since)
 	}

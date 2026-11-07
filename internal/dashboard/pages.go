@@ -924,9 +924,46 @@ func shortDay(day string, now time.Time) string {
 	return t.Format("Jan 2")
 }
 
-// sentAgo is how long ago a PC sent its document, as views.Age writes it.
+// A PC's last send is told by ONE rule everywhere (the scope line's Which PCs,
+// the stale chip and System's Machines card), so the same PC never reads 7 d
+// in one place and 8 in another: the time elapsed, cut down to whole minutes,
+// hours (under 48) or days.
+func sentSpan(sent, now time.Time) (n int64, unit string) {
+	d := max(0, now.Sub(sent))
+	switch {
+	case d < time.Minute:
+		return 0, ""
+	case d < time.Hour:
+		return int64(d / time.Minute), "min"
+	case d < 48*time.Hour:
+		return int64(d / time.Hour), "h"
+	}
+	return int64(d / (24 * time.Hour)), "d"
+}
+
+// sentAgo is how long ago a PC sent its document, in the design's compact
+// words: "just now", "12 min ago", "5 h ago", "9 d ago".
 func sentAgo(sent, now time.Time) string {
-	return views.Age(max(0, now.Sub(sent).Milliseconds()))
+	n, unit := sentSpan(sent, now)
+	if unit == "" {
+		return "just now"
+	}
+	return strconv.FormatInt(n, 10) + " " + unit + " ago"
+}
+
+// sentFor is the same span as a length of silence, for "nothing sent for 9
+// days": the same count as sentAgo, spelled out.
+func sentFor(sent, now time.Time) string {
+	n, unit := sentSpan(sent, now)
+	switch unit {
+	case "":
+		return "under 1 min"
+	case "min":
+		return strconv.FormatInt(n, 10) + " min"
+	case "h":
+		return strconv.FormatInt(n, 10) + " h"
+	}
+	return strconv.FormatInt(n, 10) + " days"
 }
 
 func plural(n int, one, many string) string {
@@ -968,9 +1005,9 @@ func whichPCs(d PageData, pcs *metrics.PCs) *WhichPCs {
 		case r.SentAt == nil: // a counted PC always has a send time
 			it.State = "figures not read yet"
 		case r.Stale && r.Until != nil:
-			it.State = "sent " + sentAgo(*r.SentAt, now) + " ago: its figures stop on " + shortDay(*r.Until, now)
+			it.State = "sent " + sentAgo(*r.SentAt, now) + ": its figures stop on " + shortDay(*r.Until, now)
 		default:
-			it.State = "sent " + sentAgo(*r.SentAt, now) + " ago"
+			it.State = "sent " + sentAgo(*r.SentAt, now)
 			if !r.Active {
 				it.State += " · no activity in this window"
 			}
@@ -1033,7 +1070,7 @@ func pcChips(d PageData, pcs *metrics.PCs) []PCChip {
 		}
 		since := "over 2 days"
 		if oldest != nil {
-			since = sentAgo(*oldest, now)
+			since = sentFor(*oldest, now)
 		}
 		// chip st-watch, not chip-stale: the stylesheet hides chip-stale for the
 		// first 300 s (it is the "page is old" chip), which would hide a standing note.
