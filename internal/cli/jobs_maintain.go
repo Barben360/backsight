@@ -148,7 +148,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			res.DoctorHistory = maintainDoctorHistory(d, rep, now)
 			res.ServerDaily = maintainServerDaily(cmd.Context(), d, now)
 			res.MemoryDocs = maintainMemoryDocs(cmd.Context(), d, home, now)
-			maintainConfig(tw, now)
+			maintainConfig(tw, now, localZone())
 			return finish()
 		},
 	}
@@ -170,11 +170,15 @@ func maintainDoctorHistory(d paths.Dirs, rep doctor.Report, clock func() time.Ti
 	return fmt.Sprintf("%d check(s)", len(checks))
 }
 
+// localZone is the zone of the local dates maintain keeps; tests swap it
+// rather than write time.Local, which other goroutines read (issue #204).
+var localZone = func() *time.Location { return time.Local }
+
 // maintainConfig emits the numeric settings as a config event unless the
 // telemetry month files (the current and the previous) already hold one of
-// today's local date with the same hash: once a day, and again the same day
-// when a setting changed.
-func maintainConfig(tw *telemetry.Writer, clock func() time.Time) {
+// today's date in local with the same hash: once a day, and again the same
+// day when a setting changed.
+func maintainConfig(tw *telemetry.Writer, clock func() time.Time, local *time.Location) {
 	cfg, _, err := loadServerConfig()
 	if err != nil {
 		return
@@ -207,7 +211,7 @@ func maintainConfig(tw *telemetry.Writer, clock func() time.Time) {
 			}
 		}
 	}
-	day := func(t time.Time) string { return t.In(time.Local).Format("2006-01-02") }
+	day := func(t time.Time) string { return t.In(local).Format("2006-01-02") }
 	if !lastTS.IsZero() && day(lastTS) == day(at) && lastSum == sum {
 		return
 	}
