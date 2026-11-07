@@ -79,10 +79,11 @@ func TestPricesAndCost(t *testing.T) {
 	if got := p.Cost(100, 500, 0, 0); got != 500*p.Cached/1e6 {
 		t.Errorf("cached above input must not go negative: %v", got)
 	}
-	if l := PricesFor("gpt-6-luna", 0, 0, 0, "USD"); l.Input != 0.10 || l.Cached != 0.01 || l.Output != 0.50 {
-		t.Errorf("setup's openai default needs its price: %+v", l)
-	}
 	for model, want := range map[string]Prices{
+		"gpt-6-luna":        {Input: 0.10, Cached: 0.01, Output: 0.50, Write: 0.125}, // setup's openai default
+		"GPT-6.1-Terra":     {Input: 1, Cached: 0.05, Output: 5, Write: 1.25},
+		"gpt-6.1-sol":       {Input: 2, Cached: 0.10, Output: 10, Write: 2.5},
+		"gpt-6-astra":       {Input: 10, Cached: 1, Output: 50, Write: 12.5},
 		"claude-haiku-5-5":  {Input: 0.10, Cached: 0.01, Output: 0.50, Write: 0.125},
 		"Claude-Haiku-4-5":  {Input: 1, Cached: 0.10, Output: 5, Write: 1.25},
 		"claude-sonnet-5-5": {Input: 2, Cached: 0.10, Output: 10, Write: 2.5},
@@ -97,6 +98,10 @@ func TestPricesAndCost(t *testing.T) {
 	// 1M fresh input (at the 0.125 write price) + 1M cached + 1M output on setup's anthropic default.
 	if got := PricesFor("claude-haiku-5-5", 0, 0, 0, "USD").Cost(2_000_000, 1_000_000, 1_000_000, 0); got < 0.6349 || got > 0.6351 {
 		t.Errorf("haiku 5.5 cost %v", got)
+	}
+	// 1M fresh input at the 0.125 write price + 1M output on setup's openai default.
+	if got := PricesFor("gpt-6-luna", 0, 0, 0, "USD").Cost(1_000_000, 0, 1_000_000, 0); got < 0.6249 || got > 0.6251 {
+		t.Errorf("gpt-6-luna cost %v", got)
 	}
 	if PricesFor("some-local-model", 0, 0, 0, "USD").Known() {
 		t.Error("an unknown model has no price")
