@@ -1,6 +1,9 @@
 package retain
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestEstimatedFactsMatchesEstimateSession(t *testing.T) {
 	p := Prices{Input: 1, Output: 2}
@@ -30,5 +33,52 @@ func TestEstimateDocumentCountsAtLeastOneFact(t *testing.T) {
 	}
 	if EstimatedDocumentFacts(100) != 1 || EstimatedDocumentFacts(0) != 0 || EstimatedDocumentFacts(1300) != 2 {
 		t.Errorf("document facts = %d %d %d", EstimatedDocumentFacts(100), EstimatedDocumentFacts(0), EstimatedDocumentFacts(1300))
+	}
+}
+
+// Anthropic bills a cache write at 1.25x input and the stats cannot tell
+// writes apart, so fresh input is charged at the write price.
+func TestAnthropicFreshInputIsChargedAtTheCacheWritePrice(t *testing.T) {
+	sonnet := PricesFor("claude-sonnet-5-5", 0, 0, 0, "USD") // input 2, write 2.5, cached 0.10, output 10
+	if got, want := sonnet.Cost(1_000_000, 0, 0, 0), 2.5; math.Abs(got-want) > 1e-9 {
+		t.Errorf("uncached input cost %v, want %v (1.25x the input price)", got, want)
+	}
+	// 1M fresh at 2.5 + 1M cached at 0.10, never at the write price.
+	if got, want := sonnet.Cost(2_000_000, 1_000_000, 0, 0), 2.6; math.Abs(got-want) > 1e-9 {
+		t.Errorf("fresh+cached cost %v, want %v", got, want)
+	}
+	if got, want := sonnet.Cost(1_000_000, 1_000_000, 0, 0), 0.10; math.Abs(got-want) > 1e-9 {
+		t.Errorf("cached-only cost %v, want %v", got, want)
+	}
+	if got, want := sonnet.Cost(0, 0, 1_000_000, 0), 10.0; math.Abs(got-want) > 1e-9 {
+		t.Errorf("output cost %v, want %v", got, want)
+	}
+}
+
+func TestNoWriteSurchargeOutsideTheAnthropicTable(t *testing.T) {
+	ds := PricesFor("deepseek-flash", 0, 0, 0, "USD")
+	if got, want := ds.Cost(1_000_000, 0, 0, 0), 0.30; math.Abs(got-want) > 1e-9 {
+		t.Errorf("deepseek input cost %v, want %v", got, want)
+	}
+	// The user's own prices are used as given.
+	cfg := PricesFor("claude-sonnet-5-5", 3, 0.3, 15, "EUR")
+	if cfg.Write != 0 {
+		t.Errorf("configured prices must carry no write surcharge: %+v", cfg)
+	}
+	if got, want := cfg.Cost(1_000_000, 0, 0, 0), 3.0; math.Abs(got-want) > 1e-9 {
+		t.Errorf("configured input cost %v, want %v", got, want)
+	}
+}
+
+func TestAnthropicEstimateInputIs25PercentHigher(t *testing.T) {
+	// 30000 chars: 1 chunk, 50 facts -> 3300 + 8571 + 80000 input tokens.
+	e := EstimateSession(30000, PricesFor("claude-sonnet-5-5", 0, 0, 0, "USD"))
+	in, out := e.InputTokens, e.OutputTokens
+	if want := (float64(in)*2.5 + float64(out)*10) / 1e6; math.Abs(e.Cost-want) > 1e-12 {
+		t.Errorf("estimate cost %v, want %v (input at 1.25x)", e.Cost, want)
+	}
+	plain := EstimateSession(30000, Prices{Input: 2, Output: 10})
+	if diff, want := e.Cost-plain.Cost, float64(in)*0.5/1e6; math.Abs(diff-want) > 1e-12 {
+		t.Errorf("surcharge %v, want %v", diff, want)
 	}
 }

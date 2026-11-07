@@ -6,10 +6,12 @@ import (
 	"time"
 )
 
-// Prices per million tokens.
+// Prices per million tokens. Write is the price of an input token written to
+// the provider's cache (Anthropic bills it above Input); zero means no
+// surcharge.
 type Prices struct {
-	Input, Cached, Output float64
-	Currency              string
+	Input, Cached, Output, Write float64
+	Currency                     string
 }
 
 // Known reports whether a cost can be computed.
@@ -32,16 +34,21 @@ func (p Prices) Known() bool { return p.Input > 0 || p.Output > 0 }
 // is billed higher for a prompt over 100,000 tokens ($0.50 input, $0.05
 // cached, $2.50 output); the table holds the lower tier because extraction
 // requests are far below that size (one chunk is about 30,000 characters).
+// Anthropic bills a 5-minute cache write at 1.25x the input price, and
+// Hindsight's Anthropic provider caches that way but reports writes inside
+// the input count, with no separate figure. Cost therefore charges fresh
+// input (input minus cached) at Write, 1.25x Input: it over-states by at
+// most 25% the fresh input never written to the cache, never the reverse.
 // Neither the batch discount nor the US data-residency multiplier is modelled.
 var priceTable = map[string]Prices{
 	"deepseek-flash":    {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
 	"deepseek-v4-flash": {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
 	"gpt-6-luna":        {Input: 0.10, Cached: 0.01, Output: 0.50, Currency: "USD"},
-	"claude-haiku-5-5":  {Input: 0.10, Cached: 0.01, Output: 0.50, Currency: "USD"},
-	"claude-haiku-4-5":  {Input: 1, Cached: 0.10, Output: 5, Currency: "USD"},
-	"claude-sonnet-5-5": {Input: 2, Cached: 0.10, Output: 10, Currency: "USD"},
-	"claude-opus-5-5":   {Input: 4, Cached: 0.20, Output: 20, Currency: "USD"},
-	"claude-fable-5-1":  {Input: 10, Cached: 0.25, Output: 50, Currency: "USD"},
+	"claude-haiku-5-5":  {Input: 0.10, Write: 0.125, Cached: 0.01, Output: 0.50, Currency: "USD"},
+	"claude-haiku-4-5":  {Input: 1, Write: 1.25, Cached: 0.10, Output: 5, Currency: "USD"},
+	"claude-sonnet-5-5": {Input: 2, Write: 2.5, Cached: 0.10, Output: 10, Currency: "USD"},
+	"claude-opus-5-5":   {Input: 4, Write: 5, Cached: 0.20, Output: 20, Currency: "USD"},
+	"claude-fable-5-1":  {Input: 10, Write: 12.5, Cached: 0.25, Output: 50, Currency: "USD"},
 }
 
 // PricesFor returns the configured prices, else the table's for model.
@@ -58,14 +65,14 @@ func PricesFor(model string, input, cached, output float64, currency string) Pri
 	return Prices{Currency: currency}
 }
 
-// Cost of measured tokens: cached input at the cached price, thoughts as
-// output.
+// Cost of measured tokens: cached input at the cached price, fresh input at
+// the higher of Input and Write, thoughts as output.
 func (p Prices) Cost(input, cached, output, thoughts int64) float64 {
 	fresh := input - cached
 	if fresh < 0 {
 		fresh = 0
 	}
-	return (float64(fresh)*p.Input + float64(cached)*p.Cached + float64(output+thoughts)*p.Output) / 1e6
+	return (float64(fresh)*max(p.Input, p.Write) + float64(cached)*p.Cached + float64(output+thoughts)*p.Output) / 1e6
 }
 
 // Estimate is the expected spend of sending some content (decision 0051).
