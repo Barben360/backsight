@@ -493,6 +493,12 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			if err == nil {
 				p, err = views.FromValues(first, q)
 			}
+			// TEMPORARY, PR 3 removes this guard: until the pages label the
+			// other PCs' figures, a page URL reads this PC only (the JSON API
+			// keeps machines=all). The refusal is the bad-parameter path.
+			if err == nil && p.Machines != "" && p.Machines != "this" {
+				err = views.Usage("--machines: this (the pages show this PC only for now)")
+			}
 			// A comparison the view would refuse (the same version twice) is
 			// refused here, not redirected to.
 			if err == nil && picked {

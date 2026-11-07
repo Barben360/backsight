@@ -101,11 +101,17 @@ func TestPageParams(t *testing.T) {
 		{"/quality?has=used", 400, "Unknown parameter"},
 		{"/quality?days=1;x", 400, "The query string is malformed."},
 		{"/sessions?has=used", 200, ""},
+		{"/quality?machines=all", 400, "--machines: this"},
+		{"/quality?machines=this", 200, ""},
 	} {
 		r, b := pageGet(t, h, ck, c.path)
 		if r.StatusCode != c.status || !strings.Contains(b, c.want) {
 			t.Errorf("GET %s: %d, want %d with %q in %q", c.path, r.StatusCode, c.status, c.want, b)
 		}
+	}
+	// The guard is the pages' only: the JSON API takes machines=all.
+	if r, m := apiGet(t, h, ck, "/api/v1/quality?machines=all"); r.StatusCode != 200 || dig(t, m, "data.scope.machines") != "all" {
+		t.Errorf("API machines=all: %d, scope.machines %v, want 200 and all", r.StatusCode, dig(t, m, "data.scope.machines"))
 	}
 	plain, dev, off := rawPage(t, h, cookieHdr(ck), "/quality"), rawPage(t, h, cookieHdr(ck), "/quality?dev=1"), rawPage(t, h, cookieHdr(ck), "/quality?dev=0")
 	has := func(n *node) bool { return len(n.find("nav.nav details summary")) == 2 }
