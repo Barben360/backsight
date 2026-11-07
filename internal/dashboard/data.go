@@ -342,6 +342,9 @@ func (d *data) result(ctx context.Context, view string, p views.Params, id strin
 		if err != nil {
 			return metrics.Result{}, err
 		}
+		// The Overview, Cost and a day on all PCs carry this PC's own answer (the page's "This PC's N" links):
+		// it comes from the same read as the merged figures. The cache keeps the Result value, own answer included.
+		q.WithOwn = view == "overview" || view == "cost" || (view == "days" && id != "")
 		return metrics.Run(ctx, view, src, q)
 	})
 	if errors.Is(err, index.ErrSchemaChanged) {

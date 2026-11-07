@@ -1958,3 +1958,53 @@ func TestMergingViewsAreTheSixOfTheDesign(t *testing.T) {
 		}
 	}
 }
+
+// A merged run asked for it carries this PC's own answer, equal to what the same query on this PC gives (JSON,
+// as `stats <view> --json` prints it), while the merged JSON stays what it was: the field is never encoded, and
+// a run not asked, one on this PC, or one that did not merge (sharing off) carries none.
+func TestMergedRunCarriesThisPCsOwnAnswer(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 30, injecting(12))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 70, Hit: machines.Pair{26, 70}}})
+	enc := func(r Result) string {
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, view := range []string{"overview", "cost"} {
+		plain := x.runAs(view, x.allQuery())
+		asked := x.allQuery()
+		asked.WithOwn = true
+		with := x.runAs(view, asked)
+		this := x.runAs(view, x.query(7))
+		if plain.ThisPC() != nil || this.ThisPC() != nil {
+			t.Errorf("%s: a run not asked, or on this PC, carries an own answer", view)
+		}
+		if enc(with) != enc(plain) {
+			t.Errorf("%s: asking for the own answer changed the merged JSON", view)
+		}
+		own := with.ThisPC()
+		if own == nil {
+			t.Fatalf("%s: no own answer on a merged run", view)
+		}
+		if enc(*own) != enc(this) {
+			t.Errorf("%s: own answer differs from --machines this:\n%s\n%s", view, enc(*own), enc(this))
+		}
+		if own.Scope.Machines != "this" || with.Scope.Machines != "all" {
+			t.Errorf("%s: scopes own %q merged %q", view, own.Scope.Machines, with.Scope.Machines)
+		}
+	}
+	asked := x.allQuery()
+	asked.WithOwn = true
+	// The own answer is not the merged one: the merged figures add the other PC's 70 prompts.
+	if r := x.runAs("quality", asked); r.ThisPC() == nil || enc(*r.ThisPC()) == enc(r) {
+		t.Error("the own answer is the merged one")
+	}
+	x.cfg = func(c *config.Config) { c.Feedback.ShareLedger = false }
+	if r := x.runAs("overview", asked); r.Scope.Machines != "this" || r.ThisPC() != nil {
+		t.Errorf("sharing off: scope %q, own %v", r.Scope.Machines, r.ThisPC())
+	}
+}

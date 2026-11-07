@@ -245,9 +245,10 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 	}
 	q.Machines = machines
 	prev := q.Window.Previous()
-	r := Result{View: name, ViewSchema: ViewSchema, Window: q.Window, Previous: Span{Since: prev.Since, Until: prev.Until},
-		Scope: Scope{Machines: machines, Server: src.ServerHost, Project: q.Project}, Index: src.Fresh}
-	err := withTx(ctx, src, q, need, func(e env) error {
+	// build is the view's answer for one switch, in the transaction's env.
+	build := func(e env, machines string) (Result, error) {
+		r := Result{View: name, ViewSchema: ViewSchema, Window: q.Window, Previous: Span{Since: prev.Since, Until: prev.Until},
+			Scope: Scope{Machines: machines, Server: src.ServerHost, Project: q.Project}, Index: src.Fresh}
 		e.view = name
 		r.GeneratedAt = e.now.In(viewLoc(e))
 		if !r.Index.IngestedAt.IsZero() {
@@ -259,22 +260,42 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 		} else {
 			ok, at, err := reachRecorded(e)
 			if err != nil {
-				return err
+				return Result{}, err
 			}
 			r.Scope.ServerOK, r.Scope.ServerOKAt = ok, at
 		}
 		pcs, others, err := scopePCs(e)
 		if err != nil {
-			return err
+			return Result{}, err
 		}
 		r.Scope.PCs = pcs
 		r.Scope.OthersUnfiltered = machines == "all" && q.Project != "" && others
-		return fill(e, &r)
+		if err := fill(e, &r); err != nil {
+			return Result{}, err
+		}
+		normalise(&r)
+		return r, nil
+	}
+	var r Result
+	err := withTx(ctx, src, q, need, func(e env) error {
+		var err error
+		if r, err = build(e, machines); err != nil {
+			return err
+		}
+		if machines == "all" && q.WithOwn {
+			// This PC's own answer, from the same transaction and memo: the families this PC's run shares
+			// with the merged one are not computed again.
+			own, err := build(e.this(), "this")
+			if err != nil {
+				return err
+			}
+			r.own = &own
+		}
+		return nil
 	})
 	if err != nil {
 		return Result{}, err
 	}
-	normalise(&r)
 	return r, nil
 }
 

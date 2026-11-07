@@ -146,8 +146,8 @@ type PageData struct {
 	CLI   string                     // the command that prints the page's first view
 	State *StateView                 // the state pages' words; nil elsewhere
 	HM    string                     // the Overview's calendar colouring (got, used or sessions); "" the default
-	// Own is this PC's answer to the page's first view, read only when the
-	// Overview, Cost or day page adds up all PCs: the verdict banner and the
+	// Own is this PC's answer to the page's first view, carried by the merged
+	// result of the Overview, Cost and day page on all PCs (Result.ThisPC): the
 	// links that count events are this PC's. Nil everywhere else.
 	Own *metrics.Result
 }
@@ -546,38 +546,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p.Limit, p.Offset = metrics.MaxLimit, 0
 			data.P = p
 		}
-		// The Overview, Cost and the day page on all PCs also read this PC's own answer (for their "This PC's N"
-		// links): it is a read of its own, so it runs beside the merged views and not after them.
-		ownKind := spec.Name == "overview" || spec.Name == "cost" || spec.Name == "day"
-		type ownRead struct {
-			res metrics.Result
-			st  indexState
-			err error
-		}
-		var ownCh chan ownRead
-		if ownKind && p.Machines == "all" {
-			ownCh = make(chan ownRead, 1)
-			read := ownReadHook
-			if read == nil {
-				read = s.data.result
-			}
-			go func() {
-				var o ownRead
-				defer func() {
-					if recover() != nil { // as a view's: the page fails, not the process
-						o = ownRead{st: stateReady, err: errViewFailed}
-					}
-					ownCh <- o
-				}()
-				o.res, o.st, o.err = read(r.Context(), first, viewParams(spec, first, p.ThisPC()), id)
-			}()
-		}
 		outs := s.readViews(r.Context(), spec, p, id)
-		defer func() { // never leave the read running past the request
-			if ownCh != nil {
-				<-ownCh
-			}
-		}()
 		if bad, ok := firstProblem(outs); ok {
 			if s.notReadyPage(w, r, bad.st, prefs) {
 				return
@@ -593,17 +562,8 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		// What the figures count, not what the URL asked for: sharing off, or a
 		// page that is always this PC's, answers this PC and says so.
 		data.P.Machines = head.Scope.Machines
-		if ownCh != nil && head.Scope.Machines == "all" { // sharing off answers this PC: the read is not needed
-			o := <-ownCh
-			ownCh = nil
-			if errors.Is(o.err, errViewFailed) {
-				s.failurePage(w, r, title, prefs, o.err)
-				return
-			}
-			if o.st == stateReady && o.err == nil {
-				data.Own = &o.res
-			}
-		}
+		// The merged views carry this PC's own answer (nil when sharing is off: the figures are this PC's).
+		data.Own = head.ThisPC()
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)
 			if spec.Name == "day" {
@@ -666,10 +626,6 @@ func (s *Server) readViews(ctx context.Context, spec pageSpec, p views.Params, i
 
 // viewReader reads one view: data.result, or a stand-in in a test.
 type viewReader func(ctx context.Context, view string, p views.Params, id string) (metrics.Result, indexState, error)
-
-// ownReadHook replaces the read of this PC's own answer in a test (nil in the program): set before the server
-// starts.
-var ownReadHook viewReader
 
 // errViewFailed is what a view that panicked reports: the page fails, not
 // the process. The panic's value stays out of it (it may name a path).

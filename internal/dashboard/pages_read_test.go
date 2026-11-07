@@ -3,8 +3,9 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -106,41 +107,50 @@ func TestAViewThatPanicsFailsTheRequestNotTheProcess(t *testing.T) {
 	}
 }
 
-// This PC's own answer is read beside the merged views, and a panic in that read fails the page like a view's:
-// a failure page, not a crashed request, with the panic's value kept out of the body. The control: the same
-// page answers when the read does not panic, and a page of this PC alone never makes the read.
-func TestOwnReadThatPanicsFailsThePageNotTheProcess(t *testing.T) {
-	old, oldSpec := ownReadHook, dataSpec
-	t.Cleanup(func() { ownReadHook, dataSpec = old, oldSpec })
+// On all PCs the Overview and Cost say "This PC's N" with this PC's own count, not the merged one.
+// The merged answer carries this PC's (no second read, and the result cache keeps it): the fixture has other
+// PCs, so the two counts differ.
+func TestAllPCsPagesShowThisPCsOwnCount(t *testing.T) {
+	old := dataSpec
+	t.Cleanup(func() { dataSpec = old })
 	dataSpec.OtherPCs = 3
-	calls := 0
-	var mu sync.Mutex
-	ownReadHook = func(context.Context, string, views.Params, string) (metrics.Result, indexState, error) {
-		mu.Lock()
-		calls++
-		mu.Unlock()
-		panic("secret path /home/someone/x")
-	}
 	h := dataHarness(t)
 	ck := cookieHdr(h.login())
-	for _, path := range []string{"/?machines=all", "/cost?machines=all"} {
-		resp := h.do("GET", path, ck...)
-		b := body(t, resp)
-		if resp.StatusCode != 500 || strings.Contains(b, "secret") || !strings.Contains(visibleText(b), "The view failed") {
-			t.Errorf("GET %s: %d, %.300s", path, resp.StatusCode, visibleText(b))
+	countRE := regexp.MustCompile(`This PC’s ([0-9,]+) (?:prompt|turn|session|recall)s? →`)
+	for _, c := range []struct{ path, view, metric string }{
+		{"/?machines=all", "overview", "recall.hit_rate"},
+		{"/cost?machines=all", "cost", "recall.latency"},
+	} {
+		ctx := context.Background()
+		all, _, err := h.s.data.result(ctx, c.view, views.Params{Machines: "all", Limit: 50}, "")
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	mu.Lock()
-	n := calls
-	mu.Unlock()
-	if n != 2 {
-		t.Errorf("%d own reads, want one for each all-PCs page", n)
-	}
-	if resp := h.do("GET", "/?machines=this", ck...); resp.StatusCode != 200 || func() int { mu.Lock(); defer mu.Unlock(); return calls }() != 2 {
-		t.Errorf("a page of this PC alone: %d, or it read this PC's own answer", resp.StatusCode)
-	}
-	ownReadHook = nil
-	if resp := h.do("GET", "/?machines=all", ck...); resp.StatusCode != 200 {
-		t.Errorf("without the panic the page answers %d", resp.StatusCode)
+		this, _, err := h.s.data.result(ctx, c.view, views.Params{Machines: "this", Limit: 50}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		own := all.ThisPC()
+		if own == nil || own.Metrics[c.metric].Den == nil || *own.Metrics[c.metric].Den != *this.Metrics[c.metric].Den {
+			t.Fatalf("%s: the cached merged result does not carry this PC's answer: %+v", c.path, own)
+		}
+		if *all.Metrics[c.metric].Den == *this.Metrics[c.metric].Den {
+			t.Fatalf("%s: fixture: merged and own counts are both %d", c.path, *this.Metrics[c.metric].Den)
+		}
+		resp := h.do("GET", c.path, ck...)
+		text := visibleText(body(t, resp))
+		ms := countRE.FindAllStringSubmatch(text, -1)
+		if resp.StatusCode != 200 || len(ms) == 0 {
+			t.Fatalf("GET %s: %d, no \"This PC's N\" link in %.300s", c.path, resp.StatusCode, text)
+		}
+		for _, m := range ms {
+			n := strings.ReplaceAll(m[1], ",", "")
+			if n == strconv.FormatInt(*all.Metrics[c.metric].Den, 10) {
+				t.Errorf("GET %s: %q shows the merged count", c.path, m[0])
+			}
+		}
+		if want := "This PC’s " + strconv.FormatInt(*this.Metrics[c.metric].Den, 10) + " prompts →"; !strings.Contains(text, want) {
+			t.Errorf("GET %s: no %q in %.300s", c.path, want, text)
+		}
 	}
 }
