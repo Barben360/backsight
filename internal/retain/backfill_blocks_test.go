@@ -83,19 +83,19 @@ func TestPricesAndCost(t *testing.T) {
 		t.Errorf("setup's openai default needs its price: %+v", l)
 	}
 	for model, want := range map[string]Prices{
-		"claude-haiku-5-5":  {Input: 0.10, Cached: 0.01, Output: 0.50},
-		"Claude-Haiku-4-5":  {Input: 1, Cached: 0.10, Output: 5},
-		"claude-sonnet-5-5": {Input: 2, Cached: 0.10, Output: 10},
-		"claude-opus-5-5":   {Input: 4, Cached: 0.20, Output: 20},
-		"claude-fable-5-1":  {Input: 10, Cached: 0.25, Output: 50},
+		"claude-haiku-5-5":  {Input: 0.10, Cached: 0.01, Output: 0.50, Write: 0.125},
+		"Claude-Haiku-4-5":  {Input: 1, Cached: 0.10, Output: 5, Write: 1.25},
+		"claude-sonnet-5-5": {Input: 2, Cached: 0.10, Output: 10, Write: 2.5},
+		"claude-opus-5-5":   {Input: 4, Cached: 0.20, Output: 20, Write: 5},
+		"claude-fable-5-1":  {Input: 10, Cached: 0.25, Output: 50, Write: 12.5},
 	} {
 		want.Currency = "USD"
 		if got := PricesFor(model, 0, 0, 0, "USD"); got != want {
 			t.Errorf("%s: got %+v, want %+v", model, got, want)
 		}
 	}
-	// 1M fresh + 1M cached input and 1M output on setup's anthropic default.
-	if got := PricesFor("claude-haiku-5-5", 0, 0, 0, "USD").Cost(2_000_000, 1_000_000, 1_000_000, 0); got < 0.6099 || got > 0.6101 {
+	// 1M fresh input (at the 0.125 write price) + 1M cached + 1M output on setup's anthropic default.
+	if got := PricesFor("claude-haiku-5-5", 0, 0, 0, "USD").Cost(2_000_000, 1_000_000, 1_000_000, 0); got < 0.6349 || got > 0.6351 {
 		t.Errorf("haiku 5.5 cost %v", got)
 	}
 	if PricesFor("some-local-model", 0, 0, 0, "USD").Known() {
