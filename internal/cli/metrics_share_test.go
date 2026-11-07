@@ -1082,7 +1082,9 @@ func TestFetchCacheStaysLoadableWithPaddedDocuments(t *testing.T) {
 }
 
 func TestWithinCacheBudget(t *testing.T) {
-	mk := func(name string, n int) machines.CachedDoc { return machines.CachedDoc{Name: name, Raw: strings.Repeat("a", n)} }
+	mk := func(name string, n int) machines.CachedDoc {
+		return machines.CachedDoc{Name: name, Raw: strings.Repeat("a", n)}
+	}
 	docs := []machines.CachedDoc{mk("a", 100), mk("b", 100), mk("c", 10), mk("d", 100)}
 	kept, over := withinCacheBudget(docs, func(d machines.CachedDoc) machines.CachedDoc { return d }, 260)
 	names := func(l []machines.CachedDoc) (s string) {
