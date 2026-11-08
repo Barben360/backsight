@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +24,7 @@ import (
 
 // briefingTriggerMarker records the binary version and floor of the last
 // reconcile that left every page right.
-func briefingTriggerMarker(d paths.Dirs) string { return filepath.Join(d.State, "briefing-trigger") }
+func briefingTriggerMarker(d paths.Dirs) string { return d.BriefingTriggerFile() }
 
 func briefingTriggerKey(cfg config.Config) string {
 	return buildinfo.Version + " " + strconv.Itoa(cfg.Recall.BriefingRefreshInterval.Seconds())

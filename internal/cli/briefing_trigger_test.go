@@ -42,6 +42,9 @@ func TestTickGivesBriefingPagesTheFloorOncePerVersion(t *testing.T) {
 	if p := triggerPatches(); len(p) != 1 || p[0] != "PATCH "+page+" "+floorPATCH {
 		t.Fatalf("want one PATCH of the backsight page with the whole trigger, got %q", p)
 	}
+	if d := pathsOf(home); !ownEntry(d, d.State, "briefing-trigger") {
+		t.Error("uninstall would leave the marker behind")
+	}
 	if !strings.Contains(out, `"briefing_triggers": "1 briefing page(s) given the 6h refresh floor"`) {
 		t.Errorf("tick result:\n%s", out)
 	}
