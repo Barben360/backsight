@@ -349,4 +349,10 @@ func TestStrategiesKeepOutcomesAndDropProcessSteps(t *testing.T) {
 			t.Errorf("%s strategy still asks for every delivered state: %s", name, text)
 		}
 	}
+	// The state kind is labelled with the same wording.
+	for _, v := range kindValues {
+		if v[0] == "state" && v[1] != "A delivered outcome (merged, released or configured), and where." {
+			t.Errorf("state kind: %q", v[1])
+		}
+	}
 }
