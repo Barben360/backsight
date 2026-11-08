@@ -53,6 +53,10 @@ type State struct {
 	Unavailable   bool   `json:"unavailable_notified"` // the visible failure was shown
 	LastAssistant string `json:"last_assistant"`       // the last reply, recorded at Stop
 	SubagentDone  bool   `json:"subagent_done"`        // a subagent finished since the last prompt
+	// BriefingRefreshedAt: the page's last_refreshed_at when BriefingPage
+	// was given; a compaction gives the page again only once it changed
+	// (decision 0083 C5).
+	BriefingRefreshedAt string `json:"briefing_refreshed_at,omitempty"`
 	// FailureSigs: error signatures the failure hook already looked up
 	// this session (a repeated failure is not injected twice).
 	FailureSigs []string `json:"failure_sigs,omitempty"`

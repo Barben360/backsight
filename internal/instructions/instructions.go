@@ -182,6 +182,9 @@ const BriefingQuery = "Briefing for an assistant starting a new work session on 
 const (
 	BriefingEmpty = "Memory is empty: it fills from this session (first facts a few minutes after the session ends or goes idle for 30 min)."
 	BriefingRaw   = "(raw facts: the memory is still being consolidated)"
+	// CompactUnchanged replaces the briefing after a compaction when the
+	// page did not change since it was given (decision 0083 C5).
+	CompactUnchanged = "Memory briefing unchanged since this session started: memory_search finds what the summary lost."
 )
 
 // FirstSessionNotice is shown once after setup, above the status line.

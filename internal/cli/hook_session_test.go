@@ -143,19 +143,113 @@ func TestResumeAndClearGiveTheGuideOnly(t *testing.T) {
 	}
 }
 
-func TestCompactReplaysRecentInjectionsAndStores(t *testing.T) {
-	home := hookHome(t)
+// pageAt is the project's page as last refreshed at the given time.
+func pageAt(id, content, refreshed string) string {
+	raw, _ := json.Marshal(map[string]any{"id": id, "content": content, "tags": []string{"project:billing"}, "last_refreshed_at": refreshed})
+	return string(raw)
+}
+
+// compactSession: a session briefed from the page refreshed at t1, then
+// shown eight memories and given two notes.
+func compactSession(t *testing.T, home string) {
+	const t1 = "2026-10-25T09:00:00.000000+00:00"
+	t.Helper()
+	id := briefingModelID("billing")
+	mentalModels[id] = pageAt(id, "## Open items\n- Migrate the export job (2026-10-24)", t1)
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if st, _ := sessions(home).Load("s1"); st.BriefingRefreshedAt != t1 {
+		t.Fatalf("startup recorded the page refreshed at %q, want %q", st.BriefingRefreshedAt, t1)
+	}
 	_ = sessions(home).Update("s1", func(st *session.State) error {
 		for i := 1; i <= 8; i++ {
 			st.Injected = append(st.Injected, session.Injection{ID: "m" + itoa(i), Text: "memory " + itoa(i), Project: "billing", Prompt: i})
+			st.Seen = append(st.Seen, "m"+itoa(i))
 		}
-		st.Stored = []string{"note:abc"}
+		st.Stored = []string{"note:f94fc55d-1111-4222-8333-444455556666", "note:0a1b2c3d-1111-4222-8333-444455556666"}
 		return nil
 	})
-	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "compact", "cwd": filepath.Join(home, "billing")})
-	c := h.Specific.Context
-	if !strings.HasPrefix(c, instructions.Guide) || !strings.Contains(c, "memory 8") || !strings.Contains(c, "memory 3") || strings.Contains(c, "memory 2\n") || !strings.Contains(c, "note:abc") {
-		t.Errorf("compact:\n%s", c)
+}
+
+func compact(t *testing.T, home string) string {
+	t.Helper()
+	return fire(t, "session-start", map[string]any{"session_id": "s1", "source": "compact", "cwd": filepath.Join(home, "billing")}).Specific.Context
+}
+
+// Decision 0083 C5: a compaction under an unchanged page gives the guide,
+// one line and the stores, not the page or the memories again; the seen
+// set is released, since nothing of it was replayed.
+func TestCompactSkipsAnUnchangedBriefing(t *testing.T) {
+	home := hookHome(t)
+	compactSession(t, home)
+	c := compact(t, home)
+	if !strings.HasPrefix(c, instructions.Guide) || strings.Contains(c, "Migrate the export job") || strings.Contains(c, "memory 8") ||
+		!strings.Contains(c, instructions.CompactUnchanged) {
+		t.Errorf("compact under an unchanged page:\n%s", c)
+	}
+	if n := len([]rune(instructions.CompactUnchanged)); n > 100 {
+		t.Errorf("the unchanged line is %d characters", n)
+	}
+	st, _ := sessions(home).Load("s1")
+	if len(st.Seen) != 0 || !strings.Contains(st.BriefingPage, "Migrate the export job") {
+		t.Errorf("after the compaction: seen %v, page %q", st.Seen, st.BriefingPage)
+	}
+}
+
+// A page the server refreshed since the session's briefing comes again, as
+// it reads now, with the last memories shown; the session records it.
+func TestCompactGivesARefreshedBriefingAndTheLastMemories(t *testing.T) {
+	home := hookHome(t)
+	compactSession(t, home)
+	id := briefingModelID("billing")
+	t2 := time.Now().Add(-2 * time.Hour).UTC().Format("2006-01-02T15:04:05.000000+00:00")
+	mentalModels[id] = pageAt(id, "## Open items\n- Ship the invoice export", t2)
+	c := compact(t, home)
+	if !strings.HasPrefix(c, instructions.Guide) || !strings.Contains(c, "> - Ship the invoice export") || !strings.Contains(c, "2h ago") ||
+		strings.Contains(c, "Migrate the export job") || strings.Contains(c, instructions.CompactUnchanged) ||
+		!strings.Contains(c, "memory 8") || !strings.Contains(c, "memory 3") || strings.Contains(c, "memory 2\n") {
+		t.Errorf("compact under a refreshed page:\n%s", c)
+	}
+	st, _ := sessions(home).Load("s1")
+	if st.BriefingRefreshedAt != t2 || !strings.Contains(st.BriefingPage, "Ship the invoice export") || strings.Join(st.Seen, ",") != "m3,m4,m5,m6,m7,m8" {
+		t.Errorf("after the compaction: refreshed %q, page %q, seen %v", st.BriefingRefreshedAt, st.BriefingPage, st.Seen)
+	}
+	// The next compaction under the same page skips it.
+	if c := compact(t, home); strings.Contains(c, "Ship the invoice export") || !strings.Contains(c, instructions.CompactUnchanged) {
+		t.Errorf("second compaction:\n%s", c)
+	}
+}
+
+// A page that appeared since a session briefed from the recent memories is
+// given at the next compaction.
+func TestCompactGivesAPageCreatedSinceTheStart(t *testing.T) {
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	id := briefingModelID("billing")
+	mentalModels[id] = pageJSON(id, "## Open items\n- Ship the invoice export")
+	if c := compact(t, home); !strings.Contains(c, "Ship the invoice export") || !strings.Contains(c, "Billing keeps PostgreSQL 16.") {
+		t.Errorf("compact after the page was written:\n%s", c)
+	}
+}
+
+// When the page cannot be read (no page, server down), the compaction
+// has no news to give: the guide and the line.
+func TestCompactWithoutAPageReadGivesNoBriefing(t *testing.T) {
+	home := hookHome(t)
+	compactSession(t, home)
+	delete(mentalModels, briefingModelID("billing"))
+	if c := compact(t, home); strings.Contains(c, "Migrate the export job") || strings.Contains(c, "memory 8") || !strings.Contains(c, instructions.CompactUnchanged) {
+		t.Errorf("compact with no page:\n%s", c)
+	}
+}
+
+// The stores of this session are named by their short ids, page or not.
+func TestCompactNamesStoresByShortID(t *testing.T) {
+	home := hookHome(t)
+	compactSession(t, home)
+	c := compact(t, home)
+	if !strings.Contains(c, "Stored this session: f94fc55d, 0a1b2c3d") || strings.Contains(c, "f94fc55d-1111") || strings.Contains(c, "note:") {
+		t.Errorf("stored line:\n%s", c)
 	}
 }
 
@@ -436,17 +530,14 @@ func TestAOneLinePageIsClipped(t *testing.T) {
 	}
 }
 
-// The page survives a compaction and reaches subagents (they got the
-// recent-observation briefing's top items before 0060).
-func TestThePageReachesCompactionAndSubagents(t *testing.T) {
+// The page reaches subagents (they got the recent-observation briefing's
+// top items before 0060), also after a compaction that skipped it.
+func TestThePageReachesSubagents(t *testing.T) {
 	home := hookHome(t)
 	id := briefingModelID("billing")
 	mentalModels[id] = pageJSON(id, "## Open items\n- Migrate the export job (2026-10-24)")
 	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	c := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "compact", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(c.Specific.Context, "Migrate the export job") {
-		t.Errorf("compaction: %q", c.Specific.Context)
-	}
+	compact(t, home)
 	s := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
 	if !strings.Contains(s.Specific.Context, "Migrate the export job") {
 		t.Errorf("subagent: %q", s.Specific.Context)

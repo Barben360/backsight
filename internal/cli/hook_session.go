@@ -105,31 +105,20 @@ func (h *hookEnv) startOnSession() {
 
 // sessionStart (SPEC §6.2): guide always; at startup also the briefing, the
 // env file, the banner and the one-time notice; after a compaction the
-// replay of recent injections and stores.
+// briefing only once it changed (compactStart).
 func (h *hookEnv) sessionStart() []byte {
 	h.startSessionTurn()
 	switch h.in.Source {
 	case "startup", "":
 	case "compact":
-		replay := h.compactReplay()
-		// After a compaction only what was replayed is still in context:
-		// the rest of the seen set may be recalled again.
-		h.updateSession(func(st *session.State) error {
-			var keep []string
-			for _, in := range st.Injected[max(0, len(st.Injected)-compactReplay):] {
-				keep = append(keep, in.ID)
-			}
-			st.Seen = keep
-			return nil
-		})
-		return contextOutput("SessionStart", h.texts().Guide+replay, "")
+		return h.compactStart()
 	default: // resume, clear, fork: clear and fork start a new session id
 		h.writeEnvFile()
 		return contextOutput("SessionStart", h.texts().Guide, "")
 	}
 	h.writeEnvFile()
 	name := safeProject(h.project)
-	var text, source string
+	var text, source, refreshed string
 	var items []session.Injection
 	var err error
 	// An excluded project gets no briefing page, and its banner says it is
@@ -143,7 +132,7 @@ func (h *hookEnv) sessionStart() []byte {
 	case h.breakerOpen(): // the server failed again and again: no calls for a while
 		banner, unavailable = instructions.MemoryUnavailable(name, "server failing, retried in a few minutes"), true
 	default:
-		text, items, source, err = h.briefing(optedOut)
+		text, items, source, refreshed, err = h.briefing(optedOut)
 		answered = err == nil
 		h.journalShows("briefing", itemsFromInjections(items)) // shown, whether the session state is written or not
 		switch {
@@ -192,7 +181,7 @@ func (h *hookEnv) sessionStart() []byte {
 		st.Project, st.Remote, st.ProjectExplicit = h.project, h.remote(), h.resolver.Explicit(h.cwd)
 		st.Unavailable = st.Unavailable || unavailable
 		if source == "model" {
-			st.BriefingPage = text
+			st.BriefingPage, st.BriefingRefreshedAt = text, refreshed
 		}
 		for _, it := range items {
 			if !slices.Contains(st.Seen, it.ID) {
@@ -218,7 +207,7 @@ func (h *hookEnv) sessionStart() []byte {
 
 // briefing: the project's most recently updated observations, else its
 // latest raw facts (backfill), else the empty-memory line.
-func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injection, source string, err error) {
+func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injection, source, refreshed string, err error) {
 	ctx, cancel := context.WithTimeout(h.ctx, briefingTimeout)
 	defer cancel()
 	// An excluded project gets no page: creating one would send its name to
@@ -228,10 +217,10 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 		// The page read has its own short budget: a slow server must leave
 		// the fallback briefing its time.
 		mctx, mcancel := context.WithTimeout(ctx, briefingModelTimeout)
-		text, ok, absent := h.modelBriefing(mctx)
+		text, refreshed, ok, absent := h.modelBriefing(mctx)
 		mcancel()
 		if ok {
-			return text, nil, "model", nil
+			return text, nil, "model", refreshed, nil
 		}
 		missing = absent
 	}
@@ -249,7 +238,7 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 		}
 		pcancel()
 	}
-	return text, items, source, err
+	return text, items, source, "", err
 }
 
 // recentBriefing is the E8 briefing: the project's most recent observations
@@ -296,18 +285,19 @@ func (h *hookEnv) recentBriefing(ctx context.Context) (text string, items []sess
 func briefingModelID(project string) string { return retain.BriefingModelID(project) }
 
 // modelBriefing is the project's mental model, cut at a line boundary;
-// absent reports a project without one (the caller creates it: the server
+// refreshed is the page's last_refreshed_at as the server wrote it; absent
+// reports a project without one (the caller creates it: the server
 // writes it in the background, then refreshes it after each consolidation
 // of the project's memories). Any failure falls back to E8.
-func (h *hookEnv) modelBriefing(ctx context.Context) (text string, ok, absent bool) {
+func (h *hookEnv) modelBriefing(ctx context.Context) (text, refreshed string, ok, absent bool) {
 	m, err := h.client.GetMentalModel(ctx, h.cfg.Server.Bank, briefingModelID(h.project))
 	var apiErr *hindsight.APIError
 	if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
-		return "", false, true
+		return "", "", false, true
 	}
 	content := strings.TrimSpace(m.Content)
 	if err != nil || content == "" {
-		return "", false, false
+		return "", "", false, false
 	}
 	age := ""
 	if t, err := time.Parse(time.RFC3339Nano, m.LastRefreshedAt); err == nil {
@@ -334,7 +324,7 @@ func (h *hookEnv) modelBriefing(ctx context.Context) (text string, ok, absent bo
 		b.WriteString("> " + line + "\n")
 	}
 	b.WriteString(instructions.BriefingModelEnd)
-	return b.String(), true, false
+	return b.String(), m.LastRefreshedAt, true, false
 }
 
 // writeEnvFile gives the CLI fallback its project and session (E15).
@@ -380,28 +370,65 @@ func (h *hookEnv) firstSession() bool {
 	return first
 }
 
-// compactReplay: the last injected memories and what was stored this
-// session, so a compaction does not lose them.
-func (h *hookEnv) compactReplay() string {
-	st, err := h.store.Load(h.in.SessionID)
-	if err != nil || (len(st.Injected) == 0 && len(st.Stored) == 0 && st.BriefingPage == "") {
-		return ""
-	}
+// compactStart (decision 0083 C5): the guide; the briefing page only when
+// the server refreshed it since this session was given it, as it reads now,
+// and with it the last memories shown, else one line; what was stored this
+// session always, by short id.
+func (h *hookEnv) compactStart() []byte {
+	st, _ := h.store.Load(h.in.SessionID)
+	page, refreshed, changed := h.compactPage(st)
 	var b strings.Builder
-	if st.BriefingPage != "" {
-		b.WriteString("\n\n" + st.BriefingPage + "\n")
-	}
-	if len(st.Injected) > 0 {
-		b.WriteString("\n\nMemories shown earlier in this session " + instructions.HintsLine + ":\n")
-		for _, in := range st.Injected[max(0, len(st.Injected)-compactReplay):] {
-			fmt.Fprintf(&b, "- [%s] %s\n", safeProject(in.Project), clip(in.Text, briefingItemChars))
+	var keep []string
+	switch {
+	case changed:
+		b.WriteString("\n\n" + page + "\n")
+		if recent := st.Injected[max(0, len(st.Injected)-compactReplay):]; len(recent) > 0 {
+			b.WriteString("\n\nMemories shown earlier in this session " + instructions.HintsLine + ":\n")
+			for _, in := range recent {
+				fmt.Fprintf(&b, "- [%s] %s\n", safeProject(in.Project), clip(in.Text, briefingItemChars))
+				keep = append(keep, in.ID)
+			}
 		}
+	case st.BriefingPage != "" || len(st.Injected) > 0:
+		b.WriteString("\n\n" + instructions.CompactUnchanged + "\n")
 	}
 	if len(st.Stored) > 0 {
-		stored := st.Stored[max(0, len(st.Stored)-compactStores):]
+		var stored []string
+		for _, doc := range st.Stored[max(0, len(st.Stored)-compactStores):] {
+			stored = append(stored, safeProject(shortID(strings.TrimPrefix(doc, "note:"))))
+		}
 		fmt.Fprintf(&b, "\nStored this session: %s\n", strings.Join(stored, ", "))
 	}
-	return strings.TrimRight(b.String(), "\n")
+	// After a compaction only what was replayed is still in context: the
+	// rest of the seen set may be recalled again.
+	h.updateSession(func(st *session.State) error {
+		st.Seen = keep
+		if changed {
+			st.BriefingPage, st.BriefingRefreshedAt = page, refreshed
+		}
+		return nil
+	})
+	return contextOutput("SessionStart", h.texts().Guide+strings.TrimRight(b.String(), "\n"), "")
+}
+
+// compactPage reads the project's page again, as the startup briefing
+// does, and reports whether it changed since this session was given it, or
+// appeared since a briefing from the recent memories. A page that cannot be
+// read brings no news.
+func (h *hookEnv) compactPage(st session.State) (page, refreshed string, changed bool) {
+	if h.cfg.Recall.Briefing != "model" || h.maintenance() || h.breakerOpen() {
+		return "", "", false
+	}
+	if optedOut, _ := h.resolver.OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths); optedOut {
+		return "", "", false
+	}
+	ctx, cancel := context.WithTimeout(h.ctx, briefingModelTimeout)
+	defer cancel()
+	page, refreshed, ok, _ := h.modelBriefing(ctx)
+	if !ok || (st.BriefingPage != "" && refreshed == st.BriefingRefreshedAt) {
+		return "", "", false
+	}
+	return page, refreshed, true
 }
 
 // subagentStart: a short guide and the top briefing items, no network.
