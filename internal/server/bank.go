@@ -24,8 +24,13 @@ const (
 		"decisions and their reasons, corrections, conventions, pitfalls and fixes, and what was delivered."
 )
 
+// rules: one fact per delivered outcome, no process steps (commits,
+// pushes, branches, CI, PRs opened): the conversation and git hold them,
+// and each costs extraction and consolidation (decision 0083 C6).
 const rules = `Write every fact in English, whatever the language of the source. Keep identifiers, file paths, commands, versions, URLs, issue and pull request numbers, and quoted user wording exactly as written.
-Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered states (what was shipped, merged or configured, and where), and lessons.
+Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered outcomes, and lessons.
+Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.
+Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.
 Do not extract plans, hypotheses, guesses, intermediate debugging steps, abandoned approaches, or anything the source later contradicts; keep only the final outcome.
 One fact per statement, self-contained: name the project, component or tool it is about.
 Use absolute dates (YYYY-MM-DD) taken from the source timestamps, never relative ones such as yesterday or last week.

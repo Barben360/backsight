@@ -28,7 +28,7 @@ func TestSizes(t *testing.T) {
 		{"gate reason", GateReason, 400},
 		{"subagent guide", SubagentGuide, 300},
 		{"search description", SearchDescription, 1000},
-		{"store description", StoreDescription, 1400},
+		{"store description", StoreDescription, 1500}, // v15 adds the merges/releases/CI rule; 0083 C7 cuts it
 		{"read description", ReadDescription, 300},
 		{"pointer line", Pointer([]string{"https://github.com/o/r/issues/1", "https://github.com/o/r/pull/2", "o/r#3"}), 300},
 	} {
@@ -59,7 +59,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v14" {
+	if Version != "v15" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -151,18 +151,47 @@ func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
 	}
 }
 
-// Close the loop: shipped work and contradicted memories become one dated
-// fact naming the old claim; a contradicted similar memory is updated.
+// Close the loop: a recalled open item that is settled and a contradicted
+// memory become one dated fact naming the old claim; a contradicted
+// similar memory is updated. Shipped work alone is no reason to store
+// (v15, decision 0083 C6).
 func TestStoreDescriptionClosesTheLoop(t *testing.T) {
-	for _, want := range []string{"Close the loop", "PR merged, issue closed or abandoned, root cause found", "contradicted by the code or the user",
-		"ONE dated fact", "names the old claim in its own words", "replaces open item", "kind correction", "updates it rather than adding a parallel fact"} {
+	for _, want := range []string{"Close the loop", "when a recalled open item is settled (shipped, abandoned, root cause found)",
+		"contradicted by the code or the user", "ONE dated fact", "names the old claim in its own words", "replaces open item", "kind correction",
+		"updates it rather than adding a parallel fact"} {
 		if !strings.Contains(StoreDescription, want) {
 			t.Errorf("store description lacks %q", want)
 		}
 	}
-	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
-		if !strings.Contains(s, "naming the old claim") {
-			t.Errorf("%s lacks the close-the-loop line", name)
+	if strings.Contains(StoreDescription, "when work ships") {
+		t.Errorf("store description still closes the loop on any shipped work: %s", StoreDescription)
+	}
+	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide, "guide (cite)": GuideCite, "short guide (cite)": ShortGuideCite} {
+		if !strings.Contains(s, "naming the old claim") || !strings.Contains(s, "settled open item") {
+			t.Errorf("%s lacks the close-the-loop line: %s", name, s)
+		}
+		if strings.Contains(s, "when work ships") {
+			t.Errorf("%s still closes the loop on any shipped work: %s", name, s)
+		}
+	}
+}
+
+// v15 (decision 0083 C6): merges, releases and CI status are left to the
+// conversation, which records them; a delivered state is stored only with
+// what the conversation would not make obvious.
+func TestStoreTextsLeaveProcessStatusToTheConversation(t *testing.T) {
+	for _, want := range []string{"no merges, releases or CI status (the conversation has them)",
+		"a delivered state only with a reason or location the conversation lacks"} {
+		if !strings.Contains(StoreDescription, want) {
+			t.Errorf("store description lacks %q", want)
+		}
+	}
+	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide, "guide (cite)": GuideCite, "short guide (cite)": ShortGuideCite} {
+		if !strings.Contains(s, "not merges, releases or CI status") {
+			t.Errorf("%s does not leave merges, releases and CI status out: %s", name, s)
+		}
+		if strings.Contains(s, "delivered states") {
+			t.Errorf("%s still asks to store every delivered state: %s", name, s)
 		}
 	}
 }
@@ -390,6 +419,7 @@ var wordings = map[string]string{
 	"v12": "8e8aec126cbede943fcee5c75d31a2a9e781059316444c66255602ae4c94c9a0",
 	"v13": "daf579e2e998c49a849a2c7d5f27ba20b181e5261ea1ce3aa80f026b980110bb",
 	"v14": "38d36fbc00507212af4d086fc7499522dcd948cba1894be8c6c9bc9d5f6ca8ff",
+	"v15": "1c8774365de706f728d5ffd77598677ea22f235b0b8654c6ded8b6c5540f69ec",
 }
 
 func wordingHash() string {

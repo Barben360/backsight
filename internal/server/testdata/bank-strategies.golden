@@ -1,0 +1,48 @@
+## conversation
+Write every fact in English, whatever the language of the source. Keep identifiers, file paths, commands, versions, URLs, issue and pull request numbers, and quoted user wording exactly as written.
+Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered outcomes, and lessons.
+Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.
+Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.
+Do not extract plans, hypotheses, guesses, intermediate debugging steps, abandoned approaches, or anything the source later contradicts; keep only the final outcome.
+One fact per statement, self-contained: name the project, component or tool it is about.
+Use absolute dates (YYYY-MM-DD) taken from the source timestamps, never relative ones such as yesterday or last week.
+Never record secrets, tokens, passwords or keys, even partially.
+Label each fact with its kind.
+The source is a coding session between a developer and an AI coding agent: what the developer asked, approved or corrected carries more weight than what the agent proposed.
+
+## document
+Write every fact in English, whatever the language of the source. Keep identifiers, file paths, commands, versions, URLs, issue and pull request numbers, and quoted user wording exactly as written.
+Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered outcomes, and lessons.
+Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.
+Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.
+Do not extract plans, hypotheses, guesses, intermediate debugging steps, abandoned approaches, or anything the source later contradicts; keep only the final outcome.
+One fact per statement, self-contained: name the project, component or tool it is about.
+Use absolute dates (YYYY-MM-DD) taken from the source timestamps, never relative ones such as yesterday or last week.
+Never record secrets, tokens, passwords or keys, even partially.
+Label each fact with its kind.
+The source is a note someone chose to store: keep every durable statement in it, with its reason.
+
+## subagent
+Write every fact in English, whatever the language of the source. Keep identifiers, file paths, commands, versions, URLs, issue and pull request numbers, and quoted user wording exactly as written.
+Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered outcomes, and lessons.
+Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.
+Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.
+Do not extract plans, hypotheses, guesses, intermediate debugging steps, abandoned approaches, or anything the source later contradicts; keep only the final outcome.
+One fact per statement, self-contained: name the project, component or tool it is about.
+Use absolute dates (YYYY-MM-DD) taken from the source timestamps, never relative ones such as yesterday or last week.
+Never record secrets, tokens, passwords or keys, even partially.
+Label each fact with its kind.
+The source is the final report of a sub-agent. A report that only says work is in progress, being monitored or waiting, with no finding, cause, decision or delivered result, holds no fact. Keep findings with their cause, decisions with their reason, and what was delivered and where.
+
+## import
+Write every fact in English, whatever the language of the source. Keep identifiers, file paths, commands, versions, URLs, issue and pull request numbers, and quoted user wording exactly as written.
+Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered outcomes, and lessons.
+Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.
+Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.
+Do not extract plans, hypotheses, guesses, intermediate debugging steps, abandoned approaches, or anything the source later contradicts; keep only the final outcome.
+One fact per statement, self-contained: name the project, component or tool it is about.
+Use absolute dates (YYYY-MM-DD) taken from the source timestamps, never relative ones such as yesterday or last week.
+Never record secrets, tokens, passwords or keys, even partially.
+Label each fact with its kind.
+The source is a file imported from another memory or notes tool. Keep durable statements (decisions, conventions, pitfalls, facts about people, projects and tools) with their reason. A log line, a status, a to-do or a draft without a conclusion holds no fact.
+

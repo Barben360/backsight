@@ -305,3 +305,48 @@ func TestApplyNewTemplateSendsTheImportStrategy(t *testing.T) {
 		t.Errorf("patched strategies = %v %v, want import", strategies, err)
 	}
 }
+
+// strategyText is the instructions of every retain strategy the template
+// sends, by name, in a fixed order.
+func strategyText(t *testing.T) []byte {
+	t.Helper()
+	strategies, _ := Current().Config["retain_strategies"].(map[string]any)
+	var b strings.Builder
+	for _, name := range []string{"conversation", "document", "subagent", "import"} {
+		s, _ := strategies[name].(map[string]any)
+		text, _ := s["retain_custom_instructions"].(string)
+		if text == "" {
+			t.Fatalf("strategy %s has no instructions", name)
+		}
+		b.WriteString("## " + name + "\n" + text + "\n\n")
+	}
+	return []byte(b.String())
+}
+
+// The instructions the bank is given, as text, so a wording change shows
+// in review (go test ./internal/server -run TestStrategyInstructionsGolden -update).
+func TestStrategyInstructionsGolden(t *testing.T) {
+	golden(t, "bank-strategies.golden", strategyText(t))
+}
+
+// Decision 0083 C6: one fact per delivered outcome and no process steps,
+// in every strategy; the old item asking for every delivered state ("what
+// was shipped, merged or configured") is gone.
+func TestStrategiesKeepOutcomesAndDropProcessSteps(t *testing.T) {
+	strategies, _ := Current().Config["retain_strategies"].(map[string]any)
+	for _, name := range []string{"conversation", "document", "subagent", "import"} {
+		s, _ := strategies[name].(map[string]any)
+		text, _ := s["retain_custom_instructions"].(string)
+		for _, want := range []string{
+			"Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.",
+			"Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s strategy lacks %q", name, want)
+			}
+		}
+		if strings.Contains(text, "delivered states (what was shipped, merged or configured, and where)") {
+			t.Errorf("%s strategy still asks for every delivered state: %s", name, text)
+		}
+	}
+}
