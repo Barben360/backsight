@@ -233,6 +233,9 @@ func emitNoteEvents(stateDir string, fr retain.FlushResult) {
 	for _, ev := range noteEvents(fr) {
 		tw.Emit(ev)
 	}
+	for _, sk := range fr.Skipped { // as SubagentStop counts the reports it drops
+		tw.Emit(telemetry.Raw{Name: "subagent_report_skipped", Fields: map[string]any{"length": sk.Length, "agent_type": sk.AgentType, "at": "flush"}})
+	}
 }
 
 type flushReport struct {

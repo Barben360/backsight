@@ -30,9 +30,12 @@ import (
 func notesOutbox(d paths.Dirs) retain.Outbox { return retain.NotesOutbox(d) }
 
 // notesOutboxFor is the notes outbox with the size limits of hooks.outbox_warn_mb
-// and hooks.outbox_max_mb: use it wherever notes are appended.
+// and hooks.outbox_max_mb, and the report gate of hooks.subagent_report_min_chars:
+// use it wherever notes are appended or flushed.
 func notesOutboxFor(d paths.Dirs, cfg config.Config) retain.Outbox {
-	return retain.NotesOutbox(d).WithLimitsMB(cfg.Hooks.OutboxWarnMB, cfg.Hooks.OutboxMaxMB)
+	ob := retain.NotesOutbox(d).WithLimitsMB(cfg.Hooks.OutboxWarnMB, cfg.Hooks.OutboxMaxMB)
+	ob.ReportMinChars = cfg.Hooks.SubagentReportMinChars // what it flushes follows the report gate
+	return ob
 }
 
 type storeResult struct {

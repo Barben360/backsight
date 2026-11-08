@@ -133,6 +133,11 @@ type Outbox struct {
 	// instead of lockWait after it began: a caller with a hard deadline
 	// of its own (the SubagentStop hook's child) passes what it can spend.
 	LockDeadline time.Time
+	// ReportMinChars: hooks.subagent_report_min_chars. A subagent report
+	// queued by an older binary, or set aside and given another try, that
+	// fails the report gate is dropped at flush instead of sent
+	// (KeepsSubagentReport); 0 drops only an empty one.
+	ReportMinChars int
 }
 
 // WithLimitsMB returns o with the limits of hooks.outbox_warn_mb and
@@ -263,6 +268,16 @@ type FlushResult struct {
 	// ones sent, set aside, and the one whose failure stopped it (it stays
 	// queued, Retry). The notes after it were not tried.
 	Outcomes []NoteOutcome `json:"-"`
+	// Skipped: the subagent reports dropped without a send, under the
+	// report gate (ReportMinChars).
+	Skipped []SkippedReport `json:"-"`
+}
+
+// SkippedReport is a subagent report a flush dropped under the report
+// gate: its document, its length bucket (ReportLengthBucket), its agent
+// type. Never its text.
+type SkippedReport struct {
+	Document, Length, AgentType string
 }
 
 // NoteOutcome is one note a flush tried: its document, Sent, Quarantined or
@@ -295,6 +310,12 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 	failed := map[string]Note{} // kept with its new attempt count
 	var gateErr error
 	for _, n := range notes {
+		if n.Source == "subagent" && !KeepsSubagentReport(n.Content, o.ReportMinChars) {
+			// A status report: dropped, as SubagentStop drops it now.
+			res.Skipped = append(res.Skipped, SkippedReport{Document: n.DocumentID, Length: ReportLengthBucket(n.Content), AgentType: n.AgentType})
+			done[n.OperationID] = true
+			continue
+		}
 		if o.Gate != nil {
 			if gateErr = o.Gate(); gateErr != nil {
 				break // this note and the rest stay as they are
