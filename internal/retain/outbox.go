@@ -49,7 +49,7 @@ type Note struct {
 	// rule's source), kept in the document's metadata with the project so
 	// the decision survives this machine's state (decision 0072).
 	Attribution string `json:"attribution,omitempty"`
-	// Session: the Claude Code session a note was stored from ("" from a
+	// Session: the Claude Code session a note or a subagent report came from ("" from a
 	// shell), kept in the document's metadata so `memory notes` shows it.
 	Session string `json:"session,omitempty"`
 	// Replaces and Evidence: the memories a correction reported wrong or
@@ -66,7 +66,7 @@ func NewSubagentNote(bank, sid, agentID, agentType, project, content string, at 
 	doc := "subagent:" + sid + ":" + agentID
 	sum := sha256.Sum256([]byte(content))
 	return Note{OperationID: uuid5(nsBacksight, bank+"\n"+doc+"\n"+hex.EncodeToString(sum[:])), DocumentID: doc,
-		Source: "subagent", AgentType: agentType, Project: project, Content: content, CreatedAt: at.UTC()}
+		Source: "subagent", AgentType: agentType, Project: project, Content: content, CreatedAt: at.UTC(), Session: sid}
 }
 
 func NewNote(bank, kind, project, content string, at time.Time) Note {
@@ -94,6 +94,9 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 		}
 		if n.Attribution != "" {
 			item.Metadata["attribution"], item.Metadata["project"] = n.Attribution, n.Project
+		}
+		if n.Session != "" { // the same key as a note's: the audit reads one
+			item.Metadata["session"] = n.Session
 		}
 		return item
 	}

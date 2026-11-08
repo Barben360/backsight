@@ -23,6 +23,7 @@ func Stale(l Ledger, shows int, at time.Time) StaleLists {
 	res := StaleLists{NeverUsed: []string{}, Hidden: []string{}, Reported: []string{}}
 	for id, m := range l.Memories {
 		switch {
+		case IsBriefingPage(id): // a page, no memory to review
 		case m.Hidden != nil && at.Sub(m.Hidden.Since) >= StaleHidden:
 			res.Hidden = append(res.Hidden, id)
 		case m.Hidden != nil:

@@ -8,6 +8,25 @@ import (
 	"time"
 )
 
+// "page" names the briefing page shown in the session, shown once or
+// again; with no page shown it names nothing, and with two pages (a
+// session that changed project) it is ambiguous (decision 0083 C8).
+func TestResolveThePage(t *testing.T) {
+	pageA, pageB := BriefingPagePrefix+"alpha-1a2b3c4d", BriefingPagePrefix+"beta-5e6f7a8b"
+	if id, err := Resolve(PageRef, []Show{{ID: idA}, {ID: pageA}, {ID: pageA}}); err != nil || id != pageA {
+		t.Errorf("one page: %q %v", id, err)
+	}
+	if _, err := Resolve(PageRef, []Show{{ID: idA}}); !errors.Is(err, ErrUnknown) {
+		t.Errorf("no page: %v", err)
+	}
+	if _, err := Resolve(PageRef, []Show{{ID: pageA}, {ID: pageB}}); !errors.Is(err, ErrAmbiguous) {
+		t.Errorf("two pages: %v", err)
+	}
+	if id, err := Resolve(pageB, []Show{{ID: pageA}, {ID: pageB}}); err != nil || id != pageB {
+		t.Errorf("a whole page id: %q %v", id, err)
+	}
+}
+
 const (
 	idA  = "aaaaaaaa-0000-4000-8000-000000000001"
 	idA2 = "aaaaaaaa-1111-4000-8000-000000000002"

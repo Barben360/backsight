@@ -25,9 +25,13 @@ import (
 const shortIDChars = 8
 
 // shortID is the id the agent sees next to a memory: its first 8
-// characters.
+// characters; for a briefing page, "page" (feedback.PageRef), which
+// memory_credit resolves to the page shown.
 func shortID(id string) string {
-	if len(id) > shortIDChars {
+	switch {
+	case feedback.IsBriefingPage(id):
+		return feedback.PageRef
+	case len(id) > shortIDChars:
 		return id[:shortIDChars]
 	}
 	return id

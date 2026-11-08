@@ -382,6 +382,10 @@ func TestSubagentNoteItem(t *testing.T) {
 		it.Metadata["source"] != "subagent" || it.Metadata["agent_type"] != "Explore" {
 		t.Errorf("%+v %+v", n, it)
 	}
+	// the session it came from, in the metadata key a note uses
+	if n.Session != "s1" || it.Metadata["session"] != "s1" {
+		t.Errorf("session: %q %v", n.Session, it.Metadata)
+	}
 }
 
 func TestOutboxLimitsDefaultsAndMB(t *testing.T) {

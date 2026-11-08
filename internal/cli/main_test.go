@@ -127,6 +127,8 @@ func TestMain(m *testing.M) {
 		cleanup()
 		os.Exit(code)
 	}
+	// Tests run from a Claude Code session: its id must not name their notes.
+	_ = os.Unsetenv("CLAUDE_CODE_SESSION_ID")
 	composeRunner = refuseDocker{}
 	nativeSys, nativeTools, nativeAsk, nativeDetach = refuseSys{}, refuseTools{}, refuseAsk, refuseDetach
 	// A Native built without Ask (setup's, doctor's) asks server's own

@@ -67,6 +67,49 @@ func TestContradictedWithoutOutcomes(t *testing.T) {
 	}
 }
 
+// TestBlockYield: the held turns whose agent then credited a memory (used
+// or confirmed), out of the held turns of the window and project; by
+// outcome, and by path (a block on two paths counts in each, each judged
+// on its own blocks). Without a block: no data.
+func TestBlockYield(t *testing.T) {
+	const id = "stopcheck.block_yield"
+	x := newFx(t, fxNow)
+	if m := x.metrics([]string{id}, x.query(7))[id]; m.Status != StatusNoData || m.Reason != ReasonNoEvents {
+		t.Errorf("no block: status %q reason %q, want no_data, no_events", m.Status, m.Reason)
+	}
+	block := func(i int, project, outcome string, paths ...string) {
+		x.tel(fxNow.Add(-time.Duration(i+1)*time.Minute), telemetry.StopBlock{Outcome: outcome, Paths: paths, Shown: 1}, fmt.Sprintf("s%d", i), project)
+	}
+	for i := range 20 {
+		block(i, "alpha", "used", "search") // 20 search blocks credited
+	}
+	block(20, "alpha", "confirmed", "prompt", "search")
+	block(21, "alpha", "none", "prompt")
+	block(22, "alpha", "refused", "prompt")
+	block(23, "alpha", "corrected", "briefing")
+	block(24, "beta", "used", "prompt")                                                                                // another project
+	x.tel(fxNow.Add(-9*24*time.Hour), telemetry.StopBlock{Outcome: "used", Paths: []string{"prompt"}}, "old", "alpha") // before the window
+	q := x.query(7)
+	q.Project = "alpha"
+	m := x.metrics([]string{id}, q)[id]
+	if m.Num == nil || *m.Num != 21 || m.Den == nil || *m.Den != 24 {
+		t.Fatalf("num/den %v/%v, want 21/24", m.Num, m.Den)
+	}
+	if got := fmt.Sprint(m.Extra["by_outcome"]); got != "map[confirmed:1 corrected:1 none:1 refused:1 used:20]" {
+		t.Errorf("by_outcome %s", got)
+	}
+	paths, _ := m.Extra["by_path"].(map[string]pathStat)
+	if s := paths["search"]; s.Num != 21 || s.Den != 21 || s.Status != StatusOK {
+		t.Errorf("search %+v, want 21/21 judged", s)
+	}
+	if s := paths["prompt"]; s.Num != 1 || s.Den != 3 || s.Status != StatusTooFew {
+		t.Errorf("prompt %+v, want 1/3, too few", s)
+	}
+	if s := paths["briefing"]; s.Num != 0 || s.Den != 1 {
+		t.Errorf("briefing %+v, want 0/1", s)
+	}
+}
+
 // shows journals count prompt-path shows lines of one memory a minute apart
 // back from at; flagged gets the flags.
 func (x *fx) promptLines(at time.Time, session, path string, count int, flags func(i int) []string) {

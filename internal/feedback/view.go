@@ -70,12 +70,28 @@ var (
 var prefixRE = regexp.MustCompile(`^[0-9a-f]{8}[0-9a-f-]*$`)
 
 // Resolve is the shown id ref names: the id itself, or a prefix of at
-// least 8 lowercase hex characters that exactly one shown id starts with.
+// least 8 lowercase hex characters that exactly one shown id starts with,
+// or PageRef for the one briefing page shown.
 func Resolve(ref string, shown []Show) (string, error) {
 	for _, s := range shown {
 		if s.ID == ref {
 			return ref, nil
 		}
+	}
+	if ref == PageRef {
+		match := ""
+		for _, s := range shown {
+			if IsBriefingPage(s.ID) && s.ID != match {
+				if match != "" {
+					return "", ErrAmbiguous
+				}
+				match = s.ID
+			}
+		}
+		if match == "" {
+			return "", ErrUnknown
+		}
+		return match, nil
 	}
 	if !prefixRE.MatchString(ref) {
 		return "", ErrUnknown
@@ -98,11 +114,32 @@ func Resolve(ref string, shown []Show) (string, error) {
 // Check is what the end of a turn needs to know about one agent: the
 // memories shown to it, whether it declared (a memory_credit call of the
 // turn), whether it was already asked to, and what it declared.
+// BlockPaths and BlockShown: the paths of the shows before the turn's
+// first block, each once, in the order first shown, and how many
+// memories they showed, a briefing page left out (it never holds a turn);
+// Verdicts: the verdicts it declared, each once; LastStop: the outcome of
+// the turn's latest stop for the agent, "" before any.
 type Check struct {
 	Shown             []Show
 	Declared, Blocked bool
 	None              bool     // the turn's only declaration was none
 	Credited          []string // the ids its used credits named
+	BlockPaths        []string
+	BlockShown        int
+	Verdicts          []string
+	LastStop          string
+}
+
+// distinctIDs counts the memories of shown, each once, briefing pages
+// left out.
+func distinctIDs(shown []Show) int {
+	seen := map[string]bool{}
+	for _, s := range shown {
+		if !IsBriefingPage(s.ID) {
+			seen[s.ID] = true
+		}
+	}
+	return len(seen)
 }
 
 // CheckTurn is turn's check for agent ("" is the main agent) of session;
@@ -111,22 +148,33 @@ type Check struct {
 // be credited, but a store asks for no declaration.
 func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) Check {
 	var c Check
-	for _, s := range Shows(events, session) {
-		if s.Path == PathStore {
-			continue
-		}
-		if s.Agent == agent && (s.Turn == turn || withBriefing && agent == "" && s.Turn == "") {
-			c.Shown = append(c.Shown, s)
-		}
-	}
+	var paths []string // of the shows so far
 	none, credited := false, false
 	for _, e := range events {
-		if e.Session != session || e.Turn != turn || e.Agent != agent {
+		if e.Session != session {
+			continue
+		}
+		if e.Kind == "shows" {
+			if e.Path == PathStore || e.Agent != agent || (e.Turn != turn && (!withBriefing || agent != "" || e.Turn != "")) {
+				continue
+			}
+			shows := ShowsOf(e)
+			c.Shown = append(c.Shown, shows...)
+			memory := slices.ContainsFunc(shows, func(s Show) bool { return !IsBriefingPage(s.ID) })
+			if memory && !slices.Contains(paths, e.Path) {
+				paths = append(paths, e.Path)
+			}
+			continue
+		}
+		if e.Turn != turn || e.Agent != agent {
 			continue
 		}
 		switch {
 		case e.Kind == "credit":
 			c.Declared = true
+			if !slices.Contains(c.Verdicts, e.Verdict) {
+				c.Verdicts = append(c.Verdicts, e.Verdict)
+			}
 			none = none || e.Verdict == "none"
 			credited = credited || len(e.IDs) > 0
 			if e.Verdict != "used" {
@@ -137,7 +185,13 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 					c.Credited = append(c.Credited, id)
 				}
 			}
-		case e.Kind == "stop" && e.Outcome == "blocked":
+		case e.Kind == "stop" && e.Outcome != "blocked":
+			c.LastStop = e.Outcome
+		case e.Kind == "stop":
+			c.LastStop = e.Outcome
+			if !c.Blocked {
+				c.BlockPaths, c.BlockShown = slices.Clone(paths), distinctIDs(c.Shown)
+			}
 			c.Blocked = true
 		}
 	}

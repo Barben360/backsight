@@ -38,7 +38,9 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	// The briefing is shown before the first prompt: the first turn's.
 	c := feedback.CheckTurn(events, h.in.SessionID, t.ID, agent, agent == "" && t.N == 1 && !t.Machine)
 	ids := shownIDs(c.Shown)
-	if len(ids) == 0 {
+	// A briefing page alone asks for nothing: it can be credited, but it
+	// holds no turn (decision 0083 C8).
+	if !slices.ContainsFunc(ids, func(id string) bool { return !feedback.IsBriefingPage(id) }) {
 		return nil
 	}
 	reply := h.in.LastAssistantMessage
@@ -60,13 +62,19 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	}
 	afterBlock := c.Blocked && (outcome == "declared" || outcome == "undeclared")
 	h.journalStop(t.ID, agent, outcome, mode, len(ids), c.Flags(reply, texts), afterBlock)
+	if afterBlock && c.LastStop == "blocked" { // once per block: the stop after it
+		h.tw.Emit(telemetry.StopBlock{Outcome: blockOutcome(c), Paths: c.BlockPaths, Shown: c.BlockShown, Subagent: agent != ""})
+	}
 	if outcome != "blocked" {
 		return nil
 	}
 	reason := instructions.StopCheckHeader
 	for _, id := range ids {
 		text := "(text not kept)"
-		if s := texts[id]; s != "" {
+		switch s := texts[id]; {
+		case feedback.IsBriefingPage(id):
+			text = "(the briefing page)"
+		case s != "":
 			text = strconv.Quote(clip(s, stopReasonChars))
 		}
 		reason += "\n- " + safeProject(shortID(id)) + " " + text
@@ -79,6 +87,23 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 func (h *hookEnv) journalStop(turn, agent, outcome, mode string, shown int, flags []string, afterBlock bool) {
 	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "stop", Turn: turn, Agent: agent, Outcome: outcome, StopCheck: mode, Flags: flags}))
 	h.tw.Emit(telemetry.CreditCheck{Outcome: outcome, Shown: shown, Flags: flags, AfterBlock: afterBlock})
+}
+
+// blockOutcome is what a blocked turn's agent then declared: a memory
+// used, else one confirmed, else one reported wrong or outdated
+// (corrected), else none; refused when it declared nothing.
+func blockOutcome(c feedback.Check) string {
+	switch {
+	case slices.Contains(c.Verdicts, "used"):
+		return "used"
+	case slices.Contains(c.Verdicts, "confirmed"):
+		return "confirmed"
+	case slices.Contains(c.Verdicts, "wrong"), slices.Contains(c.Verdicts, "outdated"):
+		return "corrected"
+	case c.Declared:
+		return "none"
+	}
+	return "refused"
 }
 
 // shownIDs is each memory shown once, in the order first shown.

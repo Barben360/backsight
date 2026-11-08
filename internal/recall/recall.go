@@ -106,6 +106,10 @@ type Result struct {
 	Hits   []Hit                `json:"hits"`
 	Scopes map[string]ScopeMeta `json:"scopes"`
 	Raw    bool                 `json:"raw"`
+	// QueryHits: for each query, in the order given, how many of Hits its
+	// answers held (a hit two queries found counts for both; a blank
+	// query, never sent, 0).
+	QueryHits []int `json:"query_hits"`
 }
 
 type scope struct {
@@ -204,7 +208,30 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 	if q.Limit > 0 && len(res.Hits) > q.Limit {
 		res.Hits = res.Hits[:q.Limit]
 	}
+	res.QueryHits = queryHits(answers, len(q.Queries), res.Hits)
 	return res
+}
+
+// queryHits counts, for each of n queries, the hits its answers held.
+func queryHits(answers []answer, n int, hits []Hit) []int {
+	found := make([]map[string]bool, n)
+	for _, a := range answers {
+		if found[a.query] == nil {
+			found[a.query] = map[string]bool{}
+		}
+		for _, r := range a.hits {
+			found[a.query][r.ID] = true
+		}
+	}
+	counts := make([]int, n)
+	for i := range counts {
+		for _, h := range hits {
+			if found[i][h.ID] {
+				counts[i]++
+			}
+		}
+	}
+	return counts
 }
 
 // adjust applies Engine.Adjust to the merged hits, after the floors on
@@ -265,6 +292,7 @@ func round4(v float64) float64 { return math.Round(v*10000)/10000 + 0 }
 
 type answer struct {
 	scope string
+	query int                   // its index in the queries asked
 	hits  []hindsight.RecallHit // non-empty text only
 	err   error
 	ms    int
@@ -289,12 +317,13 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 	type job struct {
 		scope scope
 		query string
+		index int
 	}
 	var jobs []job
 	for _, s := range scopes {
-		for _, text := range queries {
+		for i, text := range queries {
 			if text = strings.TrimSpace(text); text != "" {
-				jobs = append(jobs, job{s, text})
+				jobs = append(jobs, job{s, text, i})
 			}
 		}
 	}
@@ -316,7 +345,7 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 					hits = append(hits, h)
 				}
 			}
-			answers[i] = answer{scope: j.scope.name, hits: hits, err: err, ms: int(time.Since(start).Milliseconds())}
+			answers[i] = answer{scope: j.scope.name, query: j.index, hits: hits, err: err, ms: int(time.Since(start).Milliseconds())}
 		}()
 	}
 	wg.Wait()

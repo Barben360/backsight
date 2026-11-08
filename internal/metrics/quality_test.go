@@ -1018,3 +1018,44 @@ func TestUsedTurnRateCreditBeatsNone(t *testing.T) {
 		t.Errorf("used.turn_rate = %d/%d, want 1/2", num(u), den(u))
 	}
 }
+
+// A briefing page shown, credited or never declared, changes none of the
+// numbers on memories: not the rank of the memories used, not the mix of
+// outcomes, not the memories listed (decision 0083 C8).
+func TestBriefingPageShowsLeaveMemoryFiguresAlone(t *testing.T) {
+	page := feedback.BriefingPagePrefix + "alpha-1a2b3c4d"
+	build := func(withPage bool) *fx {
+		x := newFx(t, fxNow)
+		at := fxNow.Add(-3 * time.Hour)
+		x.turnEvent(at.Add(-time.Second), "s1", "alpha")
+		keys := x.shows(at, "s1", fxTurn, "", "alpha", "prompt", "", "m1", "m2")
+		x.credit(at.Add(time.Minute), "s1", "", "alpha", "used", "m1")
+		outcomes := map[string]string{keys[0]: feedback.OutcomeCredit, keys[1]: feedback.OutcomeShown}
+		ledger := feedback.Ledger{Memories: map[string]feedback.Entry{"m1": {Shown: 1, Credits: 1}, "m2": {Shown: 1}}}
+		if withPage {
+			credited := x.shows(at.Add(-2*time.Second), "s1", "", "", "alpha", "briefing", "alpha", page)
+			x.credit(at.Add(2*time.Minute), "s1", "", "alpha", "used", page)
+			x.turnEvent(at.Add(time.Hour-time.Second), "s2", "alpha")
+			undeclared := x.shows(at.Add(time.Hour-2*time.Second), "s2", "", "", "alpha", "briefing", "alpha", page)
+			outcomes[credited[0]], outcomes[undeclared[0]] = feedback.OutcomeCredit, feedback.OutcomeUnknown
+			ledger.Memories[page] = feedback.Entry{Shown: 2, Credits: 1}
+		}
+		x.settle(fxNow.Add(-time.Minute), outcomes)
+		x.ledger(ledger)
+		return x
+	}
+	figures := func(x *fx) string {
+		q := x.query(7)
+		q.Dev = true
+		rank := x.metrics([]string{"used.rank"}, q)["used.rank"]
+		mix, _ := json.Marshal(x.run("quality", q).Tables.OutcomeMix)
+		var ids []string
+		for _, m := range x.run("memories", x.query(7)).Tables.Memories {
+			ids = append(ids, m.ID)
+		}
+		return fmt.Sprintf("rank %s %v %v\nmix %s\nmemories %v", rank.Status, num(rank), rank.Extra["histogram"], mix, ids)
+	}
+	if without, with := figures(build(false)), figures(build(true)); with != without {
+		t.Errorf("a briefing page changed the figures\nwithout: %s\n   with: %s", without, with)
+	}
+}

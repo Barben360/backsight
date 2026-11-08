@@ -50,6 +50,7 @@ const (
 	fIDs                 // an array of ids: its length, and one tel_ids row each
 	fFlags               // an array of shape strings, sorted and comma-joined
 	fSHA256              // a string, a lower-case hex SHA-256, else NULL
+	fZeros               // an array of integers: how many are 0
 )
 
 type fspec struct {
@@ -111,6 +112,9 @@ var telKinds = map[string]telKind{
 		{key: "hits", kind: fInt},
 		{key: "ok", kind: fBool},
 		{key: "live", kind: fClosed, set: liveKinds},
+		{key: "queries_n", kind: fInt},
+		{key: "query_hits", col: "queries_none_returned", kind: fZeros},
+		{key: "result_chars", kind: fInt},
 	}},
 	// tool_use: ids is the count; memory_ids, the ids themselves.
 	"tool_use": {table: "tel_tool_use", n: true, fields: []fspec{
@@ -128,6 +132,12 @@ var telKinds = map[string]telKind{
 		{key: "shown", kind: fInt},
 		{key: "flags", kind: fFlags},
 		{key: "after_block", kind: fBool},
+	}},
+	"stop_block": {table: "tel_stop_block", fields: []fspec{
+		{key: "outcome", kind: fClosed, set: blockOutcomes, req: true},
+		{key: "paths", kind: fFlags},
+		{key: "shown", kind: fInt},
+		{key: "subagent", kind: fBool},
 	}},
 	"retire": {table: "tel_retire", fields: []fspec{
 		{key: "action", kind: fClosed, set: retireActions, req: true},
@@ -280,6 +290,8 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		case fFlags:
 			flags, _ := d.strs(f.key)
 			v = flagsValue(flags)
+		case fZeros:
+			v = d.zeros(f.key)
 		}
 		if d.err != "" {
 			return nil, 0, d.err
@@ -527,6 +539,27 @@ func (d *lineDec) strs(key string) ([]string, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// zeros is how many integers of the field's array are 0, nil when
+// absent; anything but an array of integers is a bad type.
+func (d *lineDec) zeros(key string) any {
+	r, ok := d.raw(key)
+	if !ok {
+		return nil
+	}
+	var ns []int64
+	if r[0] != '[' || json.Unmarshal(r, &ns) != nil {
+		d.badType()
+		return nil
+	}
+	n := int64(0)
+	for _, v := range ns {
+		if v == 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // ts is the line's time in unix ms: a string in RFC 3339.

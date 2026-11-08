@@ -66,7 +66,13 @@ func fullFx(t *testing.T) *fx {
 				telemetry.Briefing{IDs: []string{"b1"}, Chars: 900 + 100*(i%40), Source: "observations"}, fmt.Sprintf("%s-brief-%d", wk.tag, i), "alpha")
 		}
 		for i := range 30 {
-			x.tel(wk.end.Add(-time.Duration(i+1)*time.Hour-55*time.Minute), telemetry.Tool{Name: "memory_search", MS: 300 + 10*i, Hits: i % 4, OK: true}, wk.tag+"-typed-0", "alpha")
+			x.tel(wk.end.Add(-time.Duration(i+1)*time.Hour-55*time.Minute), telemetry.Tool{Name: "memory_search", MS: 300 + 10*i, Hits: i % 4, OK: true,
+				QueriesN: 2, QueryHits: []int{i % 4, 0}, ResultChars: 400 + 10*i}, wk.tag+"-typed-0", "alpha")
+		}
+		for i := range 24 { // the end-of-turn blocks, as their turns ended again
+			outcome := []string{"used", "confirmed", "corrected", "none", "refused", "used"}[i%6]
+			paths := [][]string{{"prompt"}, {"prompt", "search"}, {"search"}}[i%3]
+			x.tel(wk.end.Add(-time.Duration(i+1)*time.Hour-57*time.Minute), telemetry.StopBlock{Outcome: outcome, Paths: paths, Shown: 1 + i%3}, wk.tag+"-typed-0", "alpha")
 		}
 		// declared turns: 15 credit both memories used, 10 report them wrong
 		for i := range wk.turnsN {

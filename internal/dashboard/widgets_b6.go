@@ -339,8 +339,8 @@ func (d PageData) bankDevOf(r *metrics.Result) *BankDev {
 
 // QualityDev are the developer cards of the Quality page beside the ranking.
 type QualityDev struct {
-	Contradicted, SetChanged Card
-	Lang                     LangCard
+	Contradicted, SetChanged, Blocks Card
+	Lang                             LangCard
 }
 
 // LangCard is the language test: how often prompts of each language got
@@ -422,6 +422,19 @@ func (d PageData) qualityDevOf(r *metrics.Result) *QualityDev {
 	if m := d.view(r, "boost.set_changed"); m.Found && slices.Contains(m.M.Tags, "partial") {
 		dev.SetChanged.Extras = []string{"Recalls from before the learned ranking was recorded are not counted, so this reads low until the index is rebuilt (backsight stats index rebuild)."}
 	}
+
+	dev.Blocks = d.devFigure(r, "stopcheck.block_yield", "Held turns that then credited a memory",
+		func(num, den int64) string { return l.Int(num) + " of " + l.Int(den) + " held turns" })
+	if m := d.view(r, "stopcheck.block_yield"); m.Found {
+		if by, ok := extraAs[map[string]int64](m.M, "by_outcome"); ok {
+			var parts []string
+			for _, o := range []string{"used", "confirmed", "corrected", "none", "refused"} {
+				parts = append(parts, o+" "+l.Int(by[o]))
+			}
+			dev.Blocks.Extras = []string{"After the question: " + strings.Join(parts, ", ") + "."}
+		}
+	}
+	dev.Blocks.Hint, dev.Blocks.HintCmd = "By where the memories were shown:", "backsight stats quality --dev"
 
 	dev.Lang = d.langOf(r)
 	return dev

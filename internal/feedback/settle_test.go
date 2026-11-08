@@ -732,3 +732,26 @@ func TestConfirmedCreditsBoostLikeUsedOnes(t *testing.T) {
 		t.Errorf("confirmed boost %v, used boost %v: want equal and positive", b, used.Boost("m1", p, at(300)))
 	}
 }
+
+// A briefing page shown first in a declared turn and not credited is
+// shown, never a confident miss; credited, it is a credit (decision 0083
+// C8).
+func TestABriefingPageIsNeverAMiss(t *testing.T) {
+	page := BriefingPagePrefix + "billing-1a2b3c4d"
+	t0 := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
+	p := Params{ConfidentRank: 2, TurnTimeout: TurnTimeout}
+	turn := func(sess, verdict string, ids ...string) []Event {
+		return []Event{
+			{Kind: "shows", Session: sess, TS: t0, Path: "briefing", Items: []Item{{ID: page, Rank: 1, RefreshedAt: "2026-11-08T06:00:00Z"}}},
+			{Kind: "turn", Session: sess, Turn: "p-1", TS: t0.Add(time.Minute)},
+			{Kind: "credit", Session: sess, Turn: "p-1", Verdict: verdict, IDs: ids, TS: t0.Add(2 * time.Minute)},
+			{Kind: "stop", Session: sess, Turn: "p-1", Outcome: "declared", TS: t0.Add(3 * time.Minute)},
+		}
+	}
+	if got, _ := Decide(turn("s1", "none"), p, t0.Add(time.Hour)); len(got) != 1 || got[0].Outcome != OutcomeShown {
+		t.Errorf("declared none: %+v", got)
+	}
+	if got, _ := Decide(turn("s2", "used", page), p, t0.Add(time.Hour)); len(got) != 1 || got[0].Outcome != OutcomeCredit {
+		t.Errorf("credited: %+v", got)
+	}
+}

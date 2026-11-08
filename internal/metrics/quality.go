@@ -22,7 +22,7 @@ var qualityIDs = []string{
 	"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate",
 	"verdict.wrong_rate",
 	"stale.never_used", "stale.hidden", "stale.reported",
-	"injection.contradicted", "boost.set_changed",
+	"injection.contradicted", "boost.set_changed", "stopcheck.block_yield",
 }
 
 // qualityStepOf names the step that fills each id: the family runs only the
@@ -32,7 +32,7 @@ var qualityStepOf = map[string]string{
 	"used.share_confident": "shows", "used.rank": "shows", "used.by_path": "shows", "search.rescue_rate": "shows",
 	"verdict.wrong_rate": "verdicts",
 	"stale.never_used":   "stale", "stale.hidden": "stale", "stale.reported": "stale",
-	"injection.contradicted": stepContradicted, "boost.set_changed": stepSetChanged,
+	"injection.contradicted": stepContradicted, "boost.set_changed": stepSetChanged, "stopcheck.block_yield": stepBlocks,
 }
 
 func init() { registerSteps("quality", qualityIDs, qualityStepOf, quality) }
@@ -47,6 +47,13 @@ const defaultSharePath = "prompt"
 // project of its turn (two bind values: the project twice).
 func sessionProject(a string) string {
 	return fmt.Sprintf(`(? = '' OR EXISTS (SELECT 1 FROM turns tp WHERE tp.session = %[1]s.session AND tp.turn = %[1]s.turn AND tp.project = ?))`, a)
+}
+
+// notPage is the SQL test that column col holds no briefing page's id: a
+// page shown is credited like a memory, but no figure on memories counts
+// it (decision 0083 C8).
+func notPage(col string) string {
+	return "COALESCE(" + col + ", '') NOT LIKE '" + feedback.BriefingPagePrefix + "%'"
 }
 
 // sessionVersion is the binary-version filter of a journal row aliased a:
@@ -99,13 +106,14 @@ func quality(e env, w Window) (map[string]Observation, map[string]Metric, error)
 		{"stale", []string{"stale.never_used", "stale.hidden", "stale.reported"}, "ledger", qualityStale},
 		{stepContradicted, []string{"injection.contradicted"}, "tel_outcome", qualityContradicted},
 		{stepSetChanged, []string{"boost.set_changed"}, "show_sets", qualitySetChanged},
+		{stepBlocks, []string{"stopcheck.block_yield"}, "tel_stop_block", qualityBlocks},
 	} {
 		if !e.runs(s.step) {
 			continue
 		}
 		var found bool
 		var err error
-		if s.step == stepContradicted || s.step == stepSetChanged {
+		if s.step == stepContradicted || s.step == stepSetChanged || s.step == stepBlocks {
 			var none bool
 			none, err = devQualityAbsent(e, s.step)
 			found = !none
@@ -299,7 +307,7 @@ WITH st AS (
 SELECT s.key, COALESCE(s.session, ''), COALESCE(s.turn, ''), COALESCE(s.path, ''), s.rank, s.ts, st.outcome,
        EXISTS (SELECT 1 FROM shows p WHERE p.session = s.session AND p.turn = s.turn AND p.path = 'prompt')
 FROM shows s LEFT JOIN st ON st.key = s.key
-WHERE s.ts >= ? AND s.ts < ? AND s.key IS NOT NULL AND COALESCE(s.path, '') <> ? AND `+sessionProject("s"),
+WHERE s.ts >= ? AND s.ts < ? AND s.key IS NOT NULL AND COALESCE(s.path, '') <> ? AND `+notPage("s.memory_id")+` AND `+sessionProject("s"),
 		since, until, since, until, feedback.PathSources, e.q.Project, e.q.Project)
 	if err != nil {
 		return err
@@ -557,7 +565,7 @@ func (e env) ledger() (feedback.Ledger, error) {
 
 func readLedger(e env) (feedback.Ledger, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `SELECT memory_id, shown, credits, credits_at, misses, misses_at, last_shown, last_credited,
-       wrong, hidden_since, unhidden_at, imported_shown, imported_credits FROM ledger`)
+       wrong, hidden_since, unhidden_at, imported_shown, imported_credits FROM ledger WHERE `+notPage("memory_id"))
 	if err != nil {
 		return feedback.Ledger{}, err
 	}
