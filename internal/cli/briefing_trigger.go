@@ -85,9 +85,8 @@ func reconcileBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Con
 }
 
 // tickBriefingTriggers reconciles once per binary version, floor and
-// request, and
-// again at most hourly while a page failed; "" when it does not run. The
-// caller has checked the server is the joined one.
+// request, and again at most hourly while a page failed; "" when it does
+// not run. The caller has checked the server is the joined one.
 func tickBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Config, cl *hindsight.Client, tw *telemetry.Writer) string {
 	if briefingFor(cfg) != "model" {
 		return ""

@@ -57,7 +57,10 @@ const CreditAsk = "When memories were shown to you this turn, call `memory_credi
 // (MCP instructions, also read by subagents) the turn's credit and what to
 // store, the guide only what concerns the main session's conversation.
 const (
-	shortGuideHead = "The user's long-term memory of past sessions, all projects; each tool's description says when and how to use it. "
+	// The one search trigger kept here: a client that defers the tools'
+	// descriptions, or a compacted context, still has it.
+	shortGuideHead = "The user's long-term memory of past sessions, all projects; each tool's description says when and how to use it. " +
+		"Search before a factual question, a recommendation or a new task. "
 	shortGuideTail = "Store decisions, corrections, conventions, pitfalls and lessons with `memory_store`. " +
 		"User-wide rules override conflicting project facts."
 	emptySearch  = "An empty search: one line «" + NothingLine + "». "
@@ -65,8 +68,9 @@ const (
 		"call `memory_search` first (an issue, PR or link in it: read it first, then search its content)"
 )
 
-// Guide is the SessionStart guide (≤ 1 200 chars, E6): what the tools and
-// the MCP instructions do not say. The same with feedback on or off.
+// Guide is the SessionStart guide (≤ 400 chars since 0083 C7, ≤ 1 200
+// before, E6): what the tools and the MCP instructions do not say. The
+// same with feedback on or off.
 const Guide = "Memory: an issue, PR or link in the prompt: read it first, then search its content. Answer in the user's language. " +
 	"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
 

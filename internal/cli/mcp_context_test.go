@@ -51,7 +51,7 @@ func staticContext(t *testing.T, feedback bool) string {
 // MCP instructions and the tool texts).
 var contextRules = []string{
 	// when and how to search
-	"BEFORE asking the user a factual question or a preference", "recommending an architecture, tool or convention", "starting a task or topic",
+	searchTrigger, "BEFORE asking the user a factual question or a preference", "recommending an architecture, tool or convention", "starting a task or topic",
 	"writing a test or changing something shared", "the user refers to the past", "kip it for trivial edits", "a fact already found this session",
 	"1-4 short keyword queries", "one per angle", "topic + intent word", "never a kind word alone", "a copy of the user's sentence", "date or version",
 	"topic + pitfall / correction", "topic + decision", "topic + convention / correction", "related repositories", "Hits show their kinds",
@@ -70,6 +70,21 @@ var contextRules = []string{
 	// the session
 	"Answer in the user's language", "Never ask the user for a key, token or password", "`backsight secret set`",
 	"An empty search: one line «" + instructions.NothingLine + "»",
+}
+
+// searchTrigger is the one search trigger the MCP instructions keep: a
+// client that defers the tools' descriptions (or a compacted context)
+// still has it.
+const searchTrigger = "Search before a factual question, a recommendation or a new task."
+
+// The MCP instructions themselves, not only the static context, carry the
+// search trigger, with feedback on and off.
+func TestMCPInstructionsKeepTheSearchTrigger(t *testing.T) {
+	for _, extra := range []string{"", "\n[feedback]\nenabled = false\n"} {
+		if got := mcpSessionWith(t, extra).InitializeResult().Instructions; !strings.Contains(got, searchTrigger) {
+			t.Errorf("MCP instructions (config %q) lack the search trigger: %s", extra, got)
+		}
+	}
 }
 
 // The credit rules, only while memory_credit is offered.
