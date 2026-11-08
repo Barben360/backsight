@@ -30,6 +30,19 @@ func TestKeepsSubagentReport(t *testing.T) {
 		{"glued to a word", "Ran step2#3 again.", 400, false},
 		{"a colour code", "Set the border to #fff.", 400, false},
 		{"a scheme alone", "Use https:// only.", 400, false},
+		// Named references, scheme-less GitHub paths, commits.
+		{"PR 205", "Merged PR 205.", 400, true},
+		{"PR#205", "Merged PR#205.", 400, true},
+		{"issue 12", "Closed issue 12 as fixed.", 400, true},
+		{"GH-7", "See GH-7 for the plan.", 400, true},
+		{"lower case pr", "rebased pr 9", 400, true},
+		{"a scheme-less GitHub path", "Opened github.com/o/r/pull/12.", 400, true},
+		{"a short commit", "Pushed 7f50807 to the branch.", 400, true},
+		{"a full commit", "Tagged c66ddda3a1b2c3d4e5f60718293a4b5c6d7e8f90.", 400, true},
+		{"a hex word is no commit", "The deadbeef value is a placeholder.", 400, false},
+		{"a number is no commit", "Read 12345678 rows.", 400, false},
+		{"a word ending in pr is no reference", "Ran the apr 3 report.", 400, false},
+		{"a plain English sentence", "Reading the pool code and the decade of facades before the next step.", 400, false},
 	}
 	for _, c := range cases {
 		if got := KeepsSubagentReport(c.text, c.min); got != c.want {
@@ -39,7 +52,7 @@ func TestKeepsSubagentReport(t *testing.T) {
 }
 
 func TestSubagentGateChangesWithItsThreshold(t *testing.T) {
-	if SubagentGate(400) == SubagentGate(500) {
+	if SubagentGate(400) == SubagentGate(500) || !strings.HasPrefix(SubagentGate(400), "v2:") {
 		t.Error("a new threshold must read as a new gate")
 	}
 	if a, b := SubagentGate(400), SubagentGate(2*200); a != b {

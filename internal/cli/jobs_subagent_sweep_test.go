@@ -31,6 +31,9 @@ type sweepBank struct {
 	writes   []string          // METHOD path, in order
 	unlocked []string          // writes made without the maintenance lock held
 	lockPath string
+	// rewrite: once a document is read, its text becomes this (a resumed
+	// subagent's new report landing between the sweep's read and purge).
+	rewrite map[string]string
 }
 
 type sweepDoc struct {
@@ -40,7 +43,7 @@ type sweepDoc struct {
 
 func newSweepBank(t *testing.T, home string) *sweepBank {
 	t.Helper()
-	b := &sweepBank{docs: map[string]sweepDoc{}, facts: map[string]string{}, lockPath: pathsOf(home).MaintenanceLock()}
+	b := &sweepBank{docs: map[string]sweepDoc{}, facts: map[string]string{}, rewrite: map[string]string{}, lockPath: pathsOf(home).MaintenanceLock()}
 	pointAt(t, home, proxyHindsight(t, fakeHindsight(t), b.answer))
 	return b
 }
@@ -104,6 +107,10 @@ func (b *sweepBank) answer(w http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete {
 			delete(b.docs, id)
 		}
+		if nt, ok := b.rewrite[id]; ok && r.Method == http.MethodGet {
+			delete(b.rewrite, id)
+			b.docs[id] = sweepDoc{text: nt, created: d.created}
+		}
 		text, _ := json.Marshal(d.text)
 		fmt.Fprintf(w, `{"id":%q,"memory_unit_count":%d,"original_text":%s,"document_metadata":{}}`, id, n, text)
 	case r.Method == http.MethodGet && rest == "memories/list":
@@ -130,8 +137,9 @@ func (b *sweepBank) answer(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// sweepFixture: three stubs (with 2, 0 and 1 facts), a long report, a
-// short one with a URL, a stub from the last hour, and a conversation.
+// sweepFixture: three stubs (with 2, 0 and 1 facts), a long report, short
+// ones with a URL and a named PR, an empty text with facts (unread), an
+// empty one without (a stub), and a conversation.
 func sweepFixture(t *testing.T) (string, *sweepBank) {
 	t.Helper()
 	home := devInstall(t, true)
@@ -143,7 +151,9 @@ func sweepFixture(t *testing.T) (string, *sweepBank) {
 	b.add("subagent:s2:a1", "I'm waiting for CI", day, "f3")
 	b.add("subagent:s2:a2", padTo("Found the leak in pool.go: the pool never closed idle conns", 600), day, "f4")
 	b.add("subagent:s3:a1", "Opened https://github.com/o/r/pull/12", day, "f5")
-	b.add("subagent:s4:a1", "Reading y.go", time.Hour)
+	b.add("subagent:s4:a1", "", day, "f7")
+	b.add("subagent:s5:a1", "", day)
+	b.add("subagent:s6:a1", "Merged PR 205", time.Hour)
 	b.add("conversation:s1", "ok", day, "f6")
 	return home, b
 }
@@ -160,23 +170,25 @@ func TestMaintainSweepsTheStubSubagentReportsOncePerGate(t *testing.T) {
 	if code != output.OK && code != output.Partial {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
 	}
-	if !strings.Contains(out, "subagent sweep: 3 short subagent report(s) purged (3 fact(s)) of 5, 1 from the last day not looked at") {
+	if !strings.Contains(out, "subagent sweep: 4 short subagent report(s) purged (3 fact(s)) of 8, 1 with facts but no readable text left") {
 		t.Fatalf("maintain:\n%s", out)
 	}
-	want := []string{"conversation:s1", "subagent:s2:a2", "subagent:s3:a1", "subagent:s4:a1"}
+	want := []string{"conversation:s1", "subagent:s2:a2", "subagent:s3:a1", "subagent:s4:a1", "subagent:s6:a1"}
 	if got := b.docIDs(); !slices.Equal(got, want) {
 		t.Fatalf("documents left %v, want %v", got, want)
 	}
 	// Through the purge path: each fact's observations cleared and the
 	// fact retired, then the documents deleted, all under the lock.
 	writes := strings.Join(b.writes, "\n")
-	for _, w := range []string{"DELETE /memories/f1/observations", "PATCH /memories/f2", "DELETE /memories/f3/observations", "DELETE /documents/subagent:s1:a2"} {
+	for _, w := range []string{"DELETE /memories/f1/observations", "PATCH /memories/f2", "DELETE /memories/f3/observations", "DELETE /documents/subagent:s1:a2", "DELETE /documents/subagent:s5:a1"} {
 		if !strings.Contains(writes, w) {
 			t.Errorf("no %s in the writes:\n%s", w, writes)
 		}
 	}
-	if strings.Contains(writes, "f4") || strings.Contains(writes, "f5") || strings.Contains(writes, "f6") {
-		t.Errorf("a kept document's facts were touched:\n%s", writes)
+	for _, kept := range []string{"f4", "f5", "f6", "f7"} {
+		if strings.Contains(writes, "/"+kept) {
+			t.Errorf("a kept document's fact %s was touched:\n%s", kept, writes)
+		}
 	}
 	if len(b.unlocked) > 0 {
 		t.Errorf("written without the maintenance lock: %v", b.unlocked)
@@ -185,19 +197,15 @@ func TestMaintainSweepsTheStubSubagentReportsOncePerGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var tombs []string
-	for _, tb := range st.TombstonesOf("claude-memory") {
-		tombs = append(tombs, tb.Document)
+	// No tombstone: a resumed subagent may report again under a swept id.
+	if tombs := st.TombstonesOf("claude-memory"); len(tombs) != 0 {
+		t.Errorf("tombstones %+v", tombs)
 	}
-	sort.Strings(tombs)
-	if !slices.Equal(tombs, []string{"subagent:s1:a1", "subagent:s1:a2", "subagent:s2:a1"}) {
-		t.Errorf("tombstones %v", tombs)
-	}
-	if m := st.SubagentSweep; m == nil || m.Purged != 3 || m.Gate != "v1:min_chars=400" {
+	if m := st.SubagentSweep; m == nil || m.Purged != 4 || m.Gate != "v2:min_chars=400" || m.Epoch != 0 {
 		t.Errorf("marker %+v", m)
 	}
 	ev := eventsNamed(t, home, "subagent_sweep")
-	if len(ev) != 1 || ev[0]["status"] != "done" || ev[0]["purged"] != float64(3) || ev[0]["facts"] != float64(3) || ev[0]["checked"] != float64(5) {
+	if len(ev) != 1 || ev[0]["status"] != "done" || ev[0]["purged"] != float64(4) || ev[0]["facts"] != float64(3) || ev[0]["checked"] != float64(8) || ev[0]["unread"] != float64(1) {
 		t.Errorf("events %v", ev)
 	}
 
@@ -212,8 +220,81 @@ func TestMaintainSweepsTheStubSubagentReportsOncePerGate(t *testing.T) {
 	if line := sweep(t, home, false); !strings.Contains(line, "1 short subagent report(s) purged") {
 		t.Errorf("after the threshold changed: %q", line)
 	}
-	if got := b.docIDs(); !slices.Equal(got, []string{"conversation:s1", "subagent:s3:a1", "subagent:s4:a1"}) {
+	if got := b.docIDs(); !slices.Equal(got, []string{"conversation:s1", "subagent:s3:a1", "subagent:s4:a1", "subagent:s6:a1"}) {
 		t.Errorf("documents left %v", got)
+	}
+}
+
+// A subagent resumed after the sweep reports again under its swept id: the
+// report is kept, and the daily look for recreated purged documents leaves
+// it alone.
+func TestASweptReportSentAgainSurvivesThePurgeGuard(t *testing.T) {
+	home, b := sweepFixture(t)
+	if line := sweep(t, home, false); !strings.Contains(line, "4 short subagent report(s) purged") {
+		t.Fatalf("sweep: %q", line)
+	}
+	b.mu.Lock()
+	b.add("subagent:s1:a1", padTo("Resumed: the pool leak was the idle timeout, fixed in pool.go", 600), 0, "f9")
+	b.writes = nil
+	b.mu.Unlock()
+	d := pathsOf(home)
+	_ = guardMaintain(context.Background(), d, home)
+	if !slices.Contains(b.docIDs(), "subagent:s1:a1") {
+		t.Errorf("the purge guard deleted the resumed report; writes:\n%s", strings.Join(b.writes, "\n"))
+	}
+	if line := sweep(t, home, false); line != "" {
+		t.Errorf("a second sweep ran: %q", line)
+	}
+}
+
+// A restore brings the swept reports back: the next sweep after its epoch
+// reached this PC runs again.
+func TestARestoreRunsTheSweepAgain(t *testing.T) {
+	home, b := sweepFixture(t)
+	if line := sweep(t, home, false); !strings.Contains(line, "4 short subagent report(s) purged") {
+		t.Fatalf("sweep: %q", line)
+	}
+	b.mu.Lock()
+	b.add("subagent:s1:a2", "Reading x.go", 48*time.Hour) // restored
+	b.mu.Unlock()
+	if line := sweep(t, home, false); line != "" {
+		t.Fatalf("before the epoch reached this PC: %q", line)
+	}
+	d := pathsOf(home)
+	if err := state.Update(d, "test", func(s *state.State) error {
+		s.RestoreEpoch = &state.RestoreEpoch{Bank: "claude-memory", Epoch: 1}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if line := sweep(t, home, false); !strings.Contains(line, "1 short subagent report(s) purged") {
+		t.Errorf("after the restore: %q", line)
+	}
+	if slices.Contains(b.docIDs(), "subagent:s1:a2") {
+		t.Error("the restored stub is still there")
+	}
+}
+
+// A report rewritten between the sweep's read and its purge (a resumed
+// subagent) is read again under the lock and left.
+func TestTheSweepLeavesAReportThatChangedBeforeItsPurge(t *testing.T) {
+	home, b := sweepFixture(t)
+	b.rewrite["subagent:s1:a2"] = "Reading x.go again"                     // still short, but not what was judged
+	b.rewrite["subagent:s2:a1"] = padTo("Found it: the CI cache key", 600) // now passes
+	if line := sweep(t, home, false); !strings.Contains(line, "2 short subagent report(s) purged (2 fact(s)) of 8") {
+		t.Fatalf("sweep: %q", line)
+	}
+	left := b.docIDs()
+	for _, id := range []string{"subagent:s1:a2", "subagent:s2:a1"} {
+		if !slices.Contains(left, id) {
+			t.Errorf("%s was purged after it changed", id)
+		}
+	}
+	if strings.Contains(strings.Join(b.writes, "\n"), "/memories/f3") {
+		t.Error("the changed report's fact was touched")
+	}
+	if ev := eventsNamed(t, home, "subagent_sweep"); len(ev) != 1 || ev[0]["changed"] != float64(2) {
+		t.Errorf("events %v", ev)
 	}
 }
 
@@ -254,7 +335,7 @@ func TestMaintainSweepWaitsForTheLockTheServerAndTheBackup(t *testing.T) {
 	if err := os.WriteFile(d.ConfigFile(), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if line := sweep(t, home, false); !strings.Contains(line, "3 short subagent report(s) purged") {
+	if line := sweep(t, home, false); !strings.Contains(line, "4 short subagent report(s) purged") {
 		t.Errorf("retry: %q", line)
 	}
 }

@@ -79,7 +79,7 @@ type State struct {
 	RuntimeSwitch *RuntimeSwitch `json:"runtime_switch,omitempty"`
 	// SubagentSweep: the last sweep of the stored subagent reports that
 	// fail the report gate (jobs maintain, decision 0083 C3); it runs again
-	// when the gate or the bank differs.
+	// when the gate, the bank or the restore epoch differs.
 	SubagentSweep *SubagentSweep `json:"subagent_sweep,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
@@ -235,10 +235,12 @@ type PurgeHold struct {
 }
 
 // SubagentSweep records a finished sweep of the subagent reports of Bank
-// that failed Gate (retain.SubagentGate): how many it read and purged.
+// that failed Gate (retain.SubagentGate), at restore epoch Epoch (a
+// restore brings swept reports back): how many it read and purged.
 type SubagentSweep struct {
 	Bank    string    `json:"bank"`
 	Gate    string    `json:"gate"`
+	Epoch   int       `json:"epoch,omitempty"`
 	At      time.Time `json:"at"`
 	Checked int       `json:"checked"`
 	Purged  int       `json:"purged"`
