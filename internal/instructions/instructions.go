@@ -33,8 +33,10 @@ import (
 // v12: a prompt that points at an issue, PR or link is read before searching: the pointer line, the
 // guide and the reminder say so; v13: memory_credit takes the verdict confirmed, for what this
 // session established independently, with its guard and one call per verdict; v14: memory_store
-// shows at most one similar memory, the closest, and its Updated line names it).
-const Version = "v14"
+// shows at most one similar memory, the closest, and its Updated line names it; v15: the guide, the
+// short guide and memory_store leave merges, releases and CI status to the conversation, and close
+// the loop on a settled open item rather than on any shipped work).
+const Version = "v15"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -54,13 +56,13 @@ const (
 		"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
 		"An issue, PR or link in the prompt: read it first, then search its content. " +
 		"Results are hints: verify them. "
-	guideTail = "Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"); when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
+	guideTail = "Store decisions, corrections, conventions, pitfalls, lessons with `memory_store` (user-wide rules: project \"transverse\"), not merges, releases or CI status; a wrong memory or settled open item: a dated fact naming the old claim. " +
 		"User-wide rules override conflicting project facts. Answer in the user's language. " +
 		"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
 	shortGuideHead = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
 		"recommendations, new tasks and references to the past; results are hints to verify"
 	shortGuideTail = "Query = topic + intent word (\"docker subnet pitfall\"), never a kind word alone. " +
-		"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call; when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
+		"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and lessons, one fact per call, not merges, releases or CI status; for a wrong memory or a settled open item, store a dated fact naming the old claim. " +
 		"`memory_read` shows one memory with the facts it was built from."
 	reminderHead = "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, " +
 		"call `memory_search` first (an issue, PR or link in it: read it first, then search its content)"
@@ -211,12 +213,13 @@ const (
 		"Skip it for trivial edits and a fact already found this session. Hits show their kinds [pitfall, state]. Results are hints from past sessions: verify them against the code."
 	StoreDescription = "Store one durable fact in the user's long-term memory. Kinds: decision, correction, convention, pitfall, state, lesson. " +
 		"Rubric: one fact per call, 1-3 sentences, say why, absolute dates (2026-10-24, never \"today\"), exact identifiers; " +
-		"no code dumps, no secrets, nothing about plans or hypotheses. Without project the fact goes to the current project; " +
+		"no code dumps, no secrets, no plans or hypotheses, no merges, releases or CI status (the conversation has them), " +
+		"a delivered state only with a reason or location the conversation lacks. Without project the fact goes to the current project; " +
 		"set project \"transverse\" only for a user-wide rule (it reaches every project). " +
 		"Examples: \"Decision (2026-10-24): billing keeps PostgreSQL 16 because partial indexes are required.\" · " +
 		"\"Pitfall: Hindsight /stats under-counts queued async retains; count /operations instead.\" " +
 		"Non-examples: \"We are looking into the bug\" (not durable) · a 40-line config file (a dump). " +
-		"Close the loop: when work ships (PR merged, issue closed or abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
+		"Close the loop: when a recalled open item is settled (shipped, abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
 		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
 		"State the fact itself, never \"a memory about X was stored\"; split a fact that covers two topics. " +
 		"The most similar memory is returned when it is close: if it contradicts this fact, it updates it rather than adding a parallel fact; print the line the result gives, Updated then, Saved otherwise (if it repeats it, say so in it)."
