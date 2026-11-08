@@ -322,7 +322,7 @@ After editing the override, `backsight server start` recreates the server with i
 
 ## Sessions are not saved
 
-A session is sent when it ends, or by the 15-minute job once its last turn is 30 minutes old. `backsight retain flush` sends every unsent session now.
+A session is sent when it ends, or by the 15-minute job once its last turn is 30 minutes old. New turns of a session already sent wait for 30,000 characters or 6 hours since its last send (`backsight retain waiting` says so); when a session's end could not send them, they go at the latest 6 hours after its last send. `backsight retain flush` sends every unsent session now.
 
 doctor's `writes` check counts what is waiting:
 

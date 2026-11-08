@@ -203,11 +203,15 @@ type Cursor struct {
 	// Legacy is the last record up to which conversation:<sid> holds the
 	// records of every project (sent by a build from before per-project
 	// documents); its later segments carry it as legacy_last_uuid.
-	Legacy      string    `json:"legacy,omitempty"`
-	Bank        string    `json:"bank"`
-	LastTurnAt  time.Time `json:"last_turn_at"`
-	SentAt      time.Time `json:"sent_at"`
-	Quarantined bool      `json:"quarantined"`
+	Legacy     string    `json:"legacy,omitempty"`
+	Bank       string    `json:"bank"`
+	LastTurnAt time.Time `json:"last_turn_at"`
+	SentAt     time.Time `json:"sent_at"`
+	// SentAts: when this PC last sent each project's document, which the
+	// append gate counts from (decision 0083 C1); a cursor an older build
+	// wrote has none, and SentAt stands in.
+	SentAts     map[string]time.Time `json:"sent_ats,omitempty"`
+	Quarantined bool                 `json:"quarantined"`
 	// Backfill: the session started before retain_since; live retain leaves
 	// it to backfill without re-reading it every tick.
 	Backfill bool `json:"backfill,omitempty"`
