@@ -188,6 +188,7 @@ func TestValidate(t *testing.T) {
 		{"breaker failures", func(c *Config) { c.Network.BreakerFailures = 0 }, "network.breaker_failures"},
 		{"breaker pause", func(c *Config) { c.Network.BreakerPauseMin = 0 }, "network.breaker_pause_min"},
 		{"outbox warn zero", func(c *Config) { c.Hooks.OutboxWarnMB = 0 }, "hooks.outbox_warn_mb"},
+		{"subagent report gate negative", func(c *Config) { c.Hooks.SubagentReportMinChars = -1 }, "hooks.subagent_report_min_chars"},
 		{"role unknown", func(c *Config) { c.Server.Role = "client" }, "server.role"},
 		{"server-only host with a remote server", func(c *Config) { c.Server.Role, c.Server.Mode = RoleServer, "remote" }, "server.role"},
 		{"bank empty", func(c *Config) { c.Server.Bank = "" }, "server.bank"},

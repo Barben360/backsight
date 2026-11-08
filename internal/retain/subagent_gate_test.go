@@ -1,0 +1,56 @@
+package retain
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestKeepsSubagentReport(t *testing.T) {
+	pad := func(s string, n int) string { return s + strings.Repeat(".", n-len(s)) }
+	cases := []struct {
+		name string
+		text string
+		min  int
+		want bool
+	}{
+		{"a status stub", "Keep going with block 2, reading pool.go now.", 400, false},
+		{"120 characters with a pull request URL", pad("Opened https://github.com/o/r/pull/12 for the fix", 120), 400, true},
+		{"120 characters with an issue number", pad("Filed #214 for the leak", 120), 400, true},
+		{"an owner/repo reference", pad("Fixed in Barben360/backsight#223", 120), 400, true},
+		{"600 characters", strings.Repeat("a", 600), 400, true},
+		{"exactly the threshold", strings.Repeat("é", 400), 400, true}, // characters, not bytes
+		{"one below the threshold", strings.Repeat("é", 399), 400, false},
+		{"padding does not count", "  " + strings.Repeat("a", 399) + "\n\n", 400, false},
+		{"a lower threshold from the config", strings.Repeat("a", 120), 100, true},
+		{"a higher threshold from the config", strings.Repeat("a", 600), 1000, false},
+		{"zero keeps every report", "ok", 0, true},
+		{"empty never passes", "   ", 0, false},
+		// Not references: an HTML entity, a word glued to the number, a colour, a bare scheme.
+		{"an HTML entity", "Escaped &#123; in the template.", 400, false},
+		{"glued to a word", "Ran step2#3 again.", 400, false},
+		{"a colour code", "Set the border to #fff.", 400, false},
+		{"a scheme alone", "Use https:// only.", 400, false},
+	}
+	for _, c := range cases {
+		if got := KeepsSubagentReport(c.text, c.min); got != c.want {
+			t.Errorf("%s: kept %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSubagentGateChangesWithItsThreshold(t *testing.T) {
+	if SubagentGate(400) == SubagentGate(500) {
+		t.Error("a new threshold must read as a new gate")
+	}
+	if a, b := SubagentGate(400), SubagentGate(2*200); a != b {
+		t.Errorf("the same threshold must read as the same gate: %q, %q", a, b)
+	}
+}
+
+func TestReportLengthBucket(t *testing.T) {
+	for n, want := range map[int]string{0: "<50", 47: "<50", 50: "50-149", 149: "50-149", 150: "150-399", 399: "150-399", 400: "400-999", 4000: "1000+"} {
+		if got := ReportLengthBucket(strings.Repeat("a", n)); got != want {
+			t.Errorf("%d chars: %q, want %q", n, got, want)
+		}
+	}
+}

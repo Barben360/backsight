@@ -90,7 +90,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 		ServerID: serverID, SendsGeneration: generation,
 		Append: retain.AppendGate{MinChars: cfg.Retain.AppendMinChars, MaxWait: cfg.Retain.AppendMaxWaitDuration()},
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
-		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
+		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportMinChars: cfg.Hooks.SubagentReportMinChars, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
 		Attribution: attributor(d, cfg, res)}, nil
 }
 

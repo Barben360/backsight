@@ -99,6 +99,10 @@ type Flusher struct {
 	// NoReports: components.write is off, so SubagentStop keeps no
 	// report and a reconcile rebuilds none.
 	NoReports bool
+	// ReportMinChars: hooks.subagent_report_min_chars, the report gate a
+	// rebuilt report passes as SubagentStop's does (KeepsSubagentReport);
+	// 0 rebuilds every non-empty one.
+	ReportMinChars int
 	// ReportProject names a rebuilt report's project from its directory as
 	// SubagentStop does; nil: Resolver.Project.
 	ReportProject func(cwd string) string
