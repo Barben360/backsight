@@ -88,6 +88,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: res,
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx,
 		ServerID: serverID, SendsGeneration: generation,
+		Append: retain.AppendGate{MinChars: cfg.Retain.AppendMinChars, MaxWait: cfg.Retain.AppendMaxWaitDuration()},
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
 		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
 		Attribution: attributor(d, cfg, res)}, nil
@@ -371,6 +372,8 @@ func waitingText(r waitingReport) string {
 			fmt.Fprintf(&b, "%-38s set aside after the server refused it: backsight retain retry-quarantine --session %s\n", w.Session, w.Session)
 		case retain.WaitNotSettled:
 			fmt.Fprintf(&b, "%-38s still being written (last turn %s ago): it is sent %s after its last turn\n", w.Session, w.Idle.Round(time.Minute), retain.SettleAfter)
+		case retain.WaitAppend:
+			fmt.Fprintf(&b, "%-38s %s: a jobs tick sends it once either is reached, and it goes at once when the session ends\n", w.Session, w.Detail)
 		default:
 			fmt.Fprintf(&b, "%-38s settled (last turn %s ago): the next jobs tick sends it\n", w.Session, w.Idle.Round(time.Minute))
 		}

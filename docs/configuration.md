@@ -14,7 +14,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 
 | Keys | Applies |
 |---|---|
-| `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*`, `feedback.*` | At the next hook or command: the hooks read the file each time. |
+| `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*`, `feedback.*`, `retain.*` | At the next hook or command: the hooks read the file each time. |
 | `llm.*`, `network.*`, `server.ui_port`, the port of `server.url` | After `backsight server render` and `backsight server start`, which write the server's files again and recreate it. Then `backsight server llm check` tests an LLM change. |
 | `backup.*`, `update.*` | At the next daily job, or the next `backup` or `update` command. |
 | `client.retention_days` | At the next `backsight client install` or `backsight client retention`. |
@@ -130,6 +130,15 @@ On a client of another PC's server (`server.mode = "remote"`), the server's host
 | `hooks.subagent_skip` | `["Explore", "statusline-setup", "claude-code-guide"]` | Subagent types that get no memory guide when they start. Their final reports are still sent. |
 | `hooks.outbox_warn_mb` | `50` | Size of the notes queue (notes waiting for the server) at which `backsight store` warns and `backsight doctor` warns. At least 1 and at most `hooks.outbox_max_mb`. |
 | `hooks.outbox_max_mb` | `500` | Size of the notes queue at which it stops taking notes (`backsight store` refuses and `backsight doctor` reports an error), so a server down for long cannot fill the disk. |
+
+## `[retain]`: when a session's new turns are sent
+
+An append to a session already on the server makes it re-read the end of that session and extract its memories again, so small appends recreate the same memories over and over. The background job therefore waits until enough new text has piled up, or enough time has passed. A session's first send, and the send when it ends (or `backsight retain flush`), never wait. See [how-it-works.md](how-it-works.md#when-a-session-is-sent).
+
+| Key | Default | Effect |
+|---|---|---|
+| `retain.append_min_chars` | `20000` | An append goes out once at least this many characters of new turns are waiting. `0` turns the wait off: every append goes out as soon as its turns are settled. At least 0. |
+| `retain.append_max_wait` | `"6h"` | …or once the session's last send is this old (and its turns are settled or 2 h old), whatever the amount. A duration such as `"6h"` or `"90m"`; `"0s"` turns the wait off. |
 
 ## `[backup]`
 

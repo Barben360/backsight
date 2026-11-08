@@ -94,6 +94,7 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 const (
 	WaitNotSettled  = "not_settled" // still being written: it settles SettleAfter after its last turn
 	WaitDue         = "due"         // settled: the next tick or retain flush sends it
+	WaitAppend      = "append_gate" // an append held until enough text or time (AppendGate, Waiter.Detail)
 	WaitQuarantined = "quarantined" // set aside after the server refused it: retain retry-quarantine
 )
 
@@ -104,6 +105,30 @@ type Waiter struct {
 	Project    string        `json:"project,omitempty"`
 	Reason     string        `json:"reason"`
 	Idle       time.Duration `json:"idle_ns,omitempty"` // since its last turn; 0 when quarantined
+	// Detail: for WaitAppend, the gate's rule and where the session is
+	// ("waiting for 20,000 characters or 6 h (5,120 characters pending, ...)").
+	Detail string `json:"detail,omitempty"`
+}
+
+// appendWaits says the append gate holds back the records of recs (the
+// whole transcript) past cur, every one of them as if settled: what the
+// flush would find, from the transcript and cursor alone.
+func (f *Flusher) appendWaits(cur Cursor, sid string, recs []transcript.Record) (string, bool) {
+	if cur.Segments == nil || !state.SameBank(cur.Bank, f.Bank) {
+		return "", false // the flush resyncs: never held
+	}
+	var pending []transcript.Record
+	for _, r := range recs {
+		if r.Start >= cur.Offset {
+			pending = append(pending, r)
+		}
+	}
+	tombs, err := f.tombstones()
+	if err != nil || len(pending) == 0 {
+		return "", false
+	}
+	attrs := f.attribute(sid, pending, attr{project: cur.Project, namedOut: cur.OptOut, namedOutDir: cur.OptOutDir})
+	return f.appendHeld(cur, sid, pending, attrs, tombs, f.Now())
 }
 
 // Waiting lists the sessions of files that live retain still has records
@@ -140,6 +165,11 @@ func (f *Flusher) Waiting(files []string) []Waiter {
 			w.Idle = max(0, f.Now().Sub(recs[len(recs)-1].Timestamp))
 			if w.Idle < SettleAfter {
 				w.Reason = WaitNotSettled
+			}
+			if ok {
+				if detail, held := f.appendWaits(cur, sid, recs); held {
+					w.Reason, w.Detail = WaitAppend, detail
+				}
 			}
 		}
 		out = append(out, w)

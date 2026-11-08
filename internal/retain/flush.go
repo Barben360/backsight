@@ -73,6 +73,9 @@ type Flusher struct {
 	Now         func() time.Time
 	RetainSince time.Time // zero: no boundary
 	Index       *SentIndex
+	// Append holds back small appends to a document the server already
+	// has (decision 0083 C1); zero: every append goes out as before.
+	Append AppendGate
 	// Hold: the bank's restore epoch could not be reconciled, or another
 	// server answers at the joined address (Reconcile): nothing is sent
 	// until a later run reconciles (decisions 0044, 0073).
@@ -295,15 +298,18 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 		return f.save(res, cur, Nothing, "")
 	}
 	send := recs
-	if !opt.Force && now.Sub(recs[len(recs)-1].Timestamp) < SettleAfter {
-		n := 0
-		for n < len(recs) && now.Sub(recs[n].Timestamp) >= LongOpenAfter {
-			n++
-		}
+	if !opt.Force {
+		n := settledCount(recs, now)
 		if n == 0 {
 			return f.save(res, cur, Waiting, "last turn "+now.Sub(recs[len(recs)-1].Timestamp).Round(time.Minute).String()+" ago")
 		}
 		send = recs[:n]
+		// A resync sends what it found missing, as before the gate.
+		if !resync {
+			if detail, held := f.appendHeld(cur, sid, send, attrs, tombs, now); held {
+				return f.save(res, cur, Waiting, detail)
+			}
+		}
 	}
 	if !resync {
 		// A valid cursor numbers the next segments, unless another PC moved
@@ -667,6 +673,10 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	prev := cur.LastUUID // the record before run, when the cursor was at it
 	cur.advance(last, attr{project: project})
 	cur.SentAt = now
+	if cur.SentAts == nil {
+		cur.SentAts = map[string]time.Time{}
+	}
+	cur.SentAts[project] = now
 	cur.Segments[project], cur.LastUUIDs[project] = segNo, last.UUID
 	cur.setDoc(sid, project, doc)
 	f.noteSent(&cur, project, doc, segNo, prev, run[0].UUID, last.UUID, now)
