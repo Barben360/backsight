@@ -95,7 +95,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight stats quality", Drill: "backsight stats sessions --has used",
 		Extra:      []string{"worst_case", "pending", "check_skipped", "subagent_turns"},
 		Question:   "When memory was shown, did Claude use it?",
-		Definition: "Main-agent turns that showed memory and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only confirmed, wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
+		Definition: "Main-agent turns that showed memory (the briefing and the similar memory of a memory_store answer do not count) and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only confirmed, wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
 		Action:     "Recall is noisy. Tighten the recall cut-offs and review the memories that are never used.",
 	},
 	{
@@ -104,7 +104,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight stats quality", Drill: "backsight stats sessions --has undeclared",
 		Extra:      []string{"pending", "check_skipped"},
 		Question:   "Does Claude tell us which memories it used?",
-		Definition: "Main-agent turns that showed memory and ended with a declaration, out of those that ended declared or undeclared. Turns whose check was skipped are counted apart, and turns still open are pending.",
+		Definition: "Main-agent turns that showed memory (not counting the briefing and a memory_store answer's similar memory) and ended with a declaration, out of those that ended declared or undeclared. Turns whose check was skipped are counted apart, and turns still open are pending.",
 		Action:     "Every quality number is unreliable until Claude declares more often. Check that the declaration instructions are in place.",
 	},
 	{

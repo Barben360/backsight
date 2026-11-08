@@ -76,6 +76,7 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 |---|---|---|
 | `recall.min_score` | `0.5` | Relevance floor (the reranker's score, 0 to 1) for a memory to be added to a prompt or to the gate's answer. `memory_search` and `backsight search` use their own floor, 0.4. |
 | `recall.global_min_score` | `0.6` | A higher floor for prompt memories found in the whole memory, outside the current, transverse and related projects. |
+| `recall.store_similar_min_score` | `0.8` | The score (after boost) the most similar memory needs for `memory_store` to show it beside the fact just stored; below it, the answer is the saved line alone. |
 | `recall.prompt_hits` | `3` | At most this many memories added to one prompt. |
 | `recall.query_chars` | `300` | The first characters of your prompt, code blocks removed and secrets redacted, that are searched. |
 | `recall.prompt_chars` | `800` | At most this many characters of memory text added to one prompt. |

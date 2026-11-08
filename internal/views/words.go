@@ -352,7 +352,7 @@ var UnitWords = map[string]string{"ratio": "rate", "ms": "time"}
 // PathWords name the recall paths.
 var PathWords = map[string]string{
 	"prompt": "added to the prompt", "gate": "before a question", "briefing": "at session start", "search": "Claude's search",
-	"read": "opened by Claude", "failure": "after an error", "sources": "sources of a summary",
+	"read": "opened by Claude", "failure": "after an error", "store": "similar to a stored fact", "sources": "sources of a summary",
 }
 
 // MemoryStateWords name the state of a memory.

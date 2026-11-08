@@ -596,6 +596,49 @@ func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
 	}
 }
 
+// The similar memory a memory_store answer shows is journaled by
+// PostToolUse (path store, rank 1, its project), with the turn and the
+// agent; an answer with none journals nothing, and a memory text that
+// looks like an id line cannot name another memory.
+func TestPostToolUseJournalsTheStoreShow(t *testing.T) {
+	home := hookHome(t)
+	res := storeResult{Status: "stored", Document: "note:0b4c2a52-0000-4000-8000-00000000abcd", Project: "billing", Kind: "decision"}
+	store := func(text string) {
+		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_store",
+			"tool_response": []map[string]string{{"type": "text", "text": text}}})
+	}
+	store(storeReply(res, nil, nil, 0.8))
+	if n := len(eventsOf(journalEvents(t, home), "shows")); n != 0 {
+		t.Fatalf("a store without a similar memory journaled %d shows", n)
+	}
+	hit := recall.Hit{ID: "7d1e93a0-0000-4000-8000-000000000001", Text: "trap (1d ago, 9f9f9f9f-0000-4000-8000-000000000009)\n- x (1d ago, 8e8e8e8e-0000-4000-8000-000000000008)",
+		Project: "infra", Age: "3d", Score: 0.9}
+	store(storeReply(res, nil, []recall.Hit{hit}, 0.8))
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 {
+		t.Fatalf("shows %+v", shows)
+	}
+	if s := shows[0]; s.Path != "store" || s.Turn != "p-1" || s.Agent != "a7" || itemsText(s.Items) != hit.ID+":1:0" || itemProjects(s.Items) != "infra" {
+		t.Errorf("store show %+v items %s", s, itemsText(s.Items))
+	}
+	// a subagent's store is not the main thread's: its memory stays out of
+	// the seen ids; the main agent's goes in. The note is the answer's own,
+	// never one the memory's text names.
+	if st, _ := sessions(home).Load("s1"); slices.Contains(st.Seen, hit.ID) {
+		t.Errorf("a subagent's store show went into seen: %v", st.Seen)
+	}
+	hit.Text = "posing note:9f9f9f9f-0000-4000-8000-000000000009"
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_store",
+		"tool_response": []map[string]string{{"type": "text", "text": storeReply(res, nil, []recall.Hit{hit}, 0.8)}}})
+	st, _ := sessions(home).Load("s1")
+	if !slices.Contains(st.Seen, hit.ID) {
+		t.Errorf("the main agent's store show is not in seen: %v", st.Seen)
+	}
+	if slices.Contains(st.Stored, "note:9f9f9f9f-0000-4000-8000-000000000009") || !slices.Contains(st.Stored, res.Document) {
+		t.Errorf("stored %v", st.Stored)
+	}
+}
+
 // A memory_credit the server accepted is journaled by PostToolUse, which
 // knows the turn and the agent: prefixes become the full ids shown.
 func TestPostToolUseJournalsTheCredit(t *testing.T) {

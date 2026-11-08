@@ -302,6 +302,29 @@ func searchTexts(text string) map[string]string {
 	return texts
 }
 
+// storeHitRE: a memory_store answer's similar memory line, whole: its id
+// in the last parenthesis.
+var storeHitRE = regexp.MustCompile(`^- .* \([^()]* ago, ([^\s,()]+)\)\r?$`)
+
+// storeShows is the similar memory memory_store's answer shows (storeReply),
+// rank 1 with the project of the line above it: the lines after the last
+// header, both whole. The memory's text is on one line, so it can pose
+// neither as the header nor as the project.
+func storeShows(text string) []feedback.Item {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 3; i >= 0; i-- {
+		if strings.TrimSuffix(lines[i], "\r") != storeSimilarHeader {
+			continue
+		}
+		g, l := searchGroupRE.FindStringSubmatch(lines[i+1]), storeHitRE.FindStringSubmatch(lines[i+2])
+		if g == nil || l == nil {
+			return nil
+		}
+		return []feedback.Item{{ID: l[1], Rank: 1, Project: g[1]}}
+	}
+	return nil
+}
+
 // readShow is memory_read's id as one unranked item, a short id resolved
 // to the id shown in the session it names, as the server does; nil when
 // the call named nothing that looks like an id, or a short id of several.

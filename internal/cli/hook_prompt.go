@@ -608,8 +608,16 @@ func (h *hookEnv) postToolUse() {
 		return
 	}
 	var ids, notes []string
+	var stored []feedback.Item
 	if strings.HasSuffix(h.in.ToolName, "memory_store") {
-		notes = noteRE.FindAllString(text, -1)
+		// the note's id is on the answer's first lines, never in the
+		// similar memory's text below them
+		head, _, _ := strings.Cut(text, "\n"+storeSimilarHeader+"\n")
+		notes = noteRE.FindAllString(head, -1)
+		stored = storeShows(text)
+		for _, it := range stored {
+			ids = append(ids, it.ID)
+		}
 	} else {
 		ids = uuidRE.FindAllString(text, -1)
 	}
@@ -648,6 +656,8 @@ func (h *hookEnv) postToolUse() {
 		h.journalShows("search", searchShows(text))
 	case strings.HasSuffix(h.in.ToolName, "memory_read"):
 		h.journalShows("read", h.readShow(h.in.ToolInput))
+	case strings.HasSuffix(h.in.ToolName, "memory_store"):
+		h.journalShows(feedback.PathStore, stored)
 	}
 }
 

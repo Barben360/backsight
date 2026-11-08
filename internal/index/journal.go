@@ -17,7 +17,7 @@ const errSchema = "schema"
 
 // The closed sets of the journal: every literal feedback writes today.
 var (
-	showPaths      = []string{"prompt", "gate", "briefing", "search", "read", "failure", feedback.PathSources}
+	showPaths      = []string{"prompt", "gate", "briefing", "search", "read", "failure", feedback.PathStore, feedback.PathSources}
 	settleOutcomes = []string{feedback.OutcomeCredit, feedback.OutcomeMiss, feedback.OutcomeShown, feedback.OutcomeUnknown, feedback.OutcomeForgotten, feedback.ImportComplete}
 	retireOutcomes = []string{"invalidated", "restored", "rewritten", "gone"}
 	retireVerdicts = []string{"wrong", "outdated"}

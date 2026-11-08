@@ -658,7 +658,7 @@ func flowOf(l format.Locale, more string, v MetricView) template.HTML {
 // pathOrder are the recall paths in the order the strip lists them. A path
 // outside it (or none) is drawn on the last row, "elsewhere", under that
 // word and never under its stored value.
-var pathOrder = []string{"prompt", "gate", "briefing", "search", "read", "failure", "sources"}
+var pathOrder = []string{"prompt", "gate", "briefing", "search", "read", "failure", "store", "sources"}
 
 // elsewhere names the row of the shows whose path the page has no word for.
 const elsewhere = "elsewhere"

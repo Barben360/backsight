@@ -187,10 +187,103 @@ func TestMCPStoreShowsSimilarMemoriesAndStores(t *testing.T) {
 	}
 	// the lines to print: Updated, since a similar memory is listed, or Saved
 	for _, want := range []string{"in your final message", "\n> 🧠💾 **Saved (billing · correction)** — <the fact, in a few words>\n",
-		"\n> 🧠🔄 **Updated (billing · correction · replaces <id8 of the memory it updates>)** — <the fact, in a few words>\n"} {
+		"\n> 🧠🔄 **Updated (billing · correction · replaces m9)** — <the fact, in a few words>\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("store answer lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// The store answer lists at most one similar memory: the best one, when its
+// score (after boost) passes recall.store_similar_min_score, its text cut
+// at 200 characters (0083 C4).
+func TestMCPStoreShowsTheOneSimilarMemoryAboveTheBar(t *testing.T) {
+	cs := mcpSession(t)
+	long := strings.Repeat("a", 190) + " PostgreSQL 15 TAIL-NOT-SHOWN " + strings.Repeat("z", 50)
+	recallAnswer = `[{"id":"95959595-0000-4000-8000-000000000001","text":"` + long + `","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-01T09:00:00Z","scores":{"reranker":0.95}},
+		{"id":"70707070-0000-4000-8000-000000000002","text":"Second memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}},
+		{"id":"60606060-0000-4000-8000-000000000003","text":"Third memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.6}}]`
+	before := retained.Load()
+	out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "correction", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
+	if isErr || !strings.Contains(out, "stored (correction, project billing)") || retained.Load() != before+1 {
+		t.Fatalf("%v %d\n%s", isErr, retained.Load()-before, out)
+	}
+	if !strings.Contains(out, "95959595-0000-4000-8000-000000000001") || strings.Contains(out, "70707070") || strings.Contains(out, "60606060") ||
+		strings.Contains(out, "Second memory") || strings.Contains(out, "Third memory") {
+		t.Errorf("want only the 0.95 memory:\n%s", out)
+	}
+	if want := "- " + string([]rune(long)[:199]) + "… ("; !strings.Contains(out, want) || strings.Contains(out, "TAIL-NOT-SHOWN") {
+		t.Errorf("text not cut at 200 characters:\n%s", out)
+	}
+	for _, want := range []string{"in your final message", "\n> 🧠💾 **Saved (billing · correction)** — <the fact, in a few words>\n",
+		"\n> 🧠🔄 **Updated (billing · correction · replaces 95959595)** — <the fact, in a few words>\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("store answer lacks %q:\n%s", want, out)
+		}
+	}
+	// hits under the bar: the saved line alone
+	recallAnswer = `[{"id":"70707070-0000-4000-8000-000000000002","text":"Second memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}},
+		{"id":"60606060-0000-4000-8000-000000000003","text":"Third memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.6}}]`
+	out, isErr = call(t, cs, "memory_store", map[string]any{"kind": "correction", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
+	if isErr || strings.Contains(out, "Similar") || strings.Contains(out, "70707070") || strings.Contains(out, "Updated") ||
+		!strings.Contains(out, "> 🧠💾 **Saved (billing · correction)** — ") {
+		t.Errorf("hits under the bar: %v\n%s", isErr, out)
+	}
+}
+
+// recall.store_similar_min_score moves the bar.
+func TestMCPStoreSimilarBarIsConfigurable(t *testing.T) {
+	cs := mcpSessionWith(t, "\n[recall]\nstore_similar_min_score = 0.6\n")
+	recallAnswer = `[{"id":"70707070-0000-4000-8000-000000000002","text":"Second memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}}]`
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."}); isErr || !strings.Contains(out, "70707070-0000-4000-8000-000000000002") {
+		t.Errorf("a bar of 0.6 hides the 0.7 memory: %v\n%s", isErr, out)
+	}
+}
+
+// The store answers, pinned: with no similar memory it stays under 300
+// characters.
+func TestStoreReplyGolden(t *testing.T) {
+	res := storeResult{Status: "stored", Document: "note:0b4c2a52-0000-4000-8000-00000000abcd", Project: "billing", Kind: "decision"}
+	saved := storeReply(res, nil, nil, 0.8)
+	cliGolden(t, "store-reply-saved.golden", []byte(saved))
+	if n := utf8.RuneCountInString(saved); n > 300 {
+		t.Errorf("no-similar reply is %d characters, want at most 300:\n%s", n, saved)
+	}
+	hits := []recall.Hit{{ID: "7d1e93a0-0000-4000-8000-000000000001", Text: "Billing uses\nPostgreSQL 15.", Project: "billing", Age: "3d", Score: 0.91},
+		{ID: "8e2f04b1-0000-4000-8000-000000000002", Text: "Not shown.", Project: "billing", Age: "1d", Score: 0.85}}
+	similar := storeReply(res, nil, hits, 0.8)
+	cliGolden(t, "store-reply-similar.golden", []byte(similar))
+	if strings.Contains(similar, "Not shown") {
+		t.Errorf("a second similar memory is shown:\n%s", similar)
+	}
+	if got := storeReply(res, nil, hits, 0.95); got != saved {
+		t.Errorf("hits under the bar must give the saved reply:\n%s", got)
+	}
+}
+
+// The memory a store showed is journaled as shown (path store, rank 1),
+// so memory_credit accepts it with any verdict; a memory never shown is
+// still refused (0083 C4).
+func TestCreditAcceptsTheMemoryAStoreShowed(t *testing.T) {
+	cs, home := creditSession(t)
+	recallAnswer = `[{"id":"` + creditA + `","text":"Billing runs PostgreSQL 14.","type":"world","tags":["project:proj"],"scores":{"reranker":0.95}}]`
+	rawFact(creditA, creditB)
+	args := map[string]any{"kind": "state", "text": "Billing runs PostgreSQL 16 since 2026-10-20."}
+	out, isErr := call(t, cs, "memory_store", args)
+	if isErr || !strings.Contains(out, creditA) {
+		t.Fatalf("%v\n%s", isErr, out)
+	}
+	fire(t, "post-tool-use", map[string]any{"session_id": "S", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_store",
+		"tool_input": args, "tool_response": []map[string]string{{"type": "text", "text": out}}})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "store" || itemsText(shows[0].Items) != creditA+":1:0" || itemProjects(shows[0].Items) != "proj" {
+		t.Fatalf("store shows %+v", shows)
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "bbbbbbbb")); !isErr || !strings.Contains(out, "bbbbbbbb: not shown in this session") {
+		t.Errorf("a memory never shown: %v %s", isErr, out)
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("the memory the store showed: %v %s", isErr, out)
 	}
 }
 

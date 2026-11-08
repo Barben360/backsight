@@ -56,13 +56,13 @@ func Compare(e env, versions [2]string, measure string) (Comparison, error) {
 }
 
 // pathRankSQL orders the paths of two shows at the same instant.
-const pathRankSQL = `CASE s.path WHEN 'prompt' THEN 0 WHEN 'gate' THEN 1 WHEN 'search' THEN 2 WHEN 'read' THEN 3 WHEN 'failure' THEN 4 WHEN 'sources' THEN 5 ELSE 6 END`
+const pathRankSQL = `CASE s.path WHEN 'prompt' THEN 0 WHEN 'gate' THEN 1 WHEN 'search' THEN 2 WHEN 'read' THEN 3 WHEN 'failure' THEN 4 WHEN 'sources' THEN 5 WHEN 'store' THEN 6 ELSE 7 END`
 
-// turnPathSQL is the path of the earliest non-briefing show of the main
+// turnPathSQL is the path of the earliest non-briefing, non-store show of the main
 // agent in the turn of the row aliased a, ties in pathRankSQL's order.
 func turnPathSQL(a string) string {
 	return `COALESCE((SELECT s.path FROM shows s WHERE s.session = ` + a + `.session AND s.turn = ` + a + `.turn
-    AND COALESCE(s.agent, '') = '' AND COALESCE(s.path, '') <> 'briefing' AND COALESCE(s.path, '') <> ''
+    AND COALESCE(s.agent, '') = '' AND COALESCE(s.path, '') NOT IN ('briefing', 'store') AND COALESCE(s.path, '') <> ''
   ORDER BY s.ts, ` + pathRankSQL + `, s.path LIMIT 1), 'unknown')`
 }
 
@@ -101,7 +101,7 @@ FROM c WHERE c.at >= ? AND c.at < ?`, since, since, until)
 		rows, err = e.tx.QueryContext(e.ctx, `
 WITH g AS (
   SELECT session, turn, MIN(ts) AS at FROM shows
-  WHERE COALESCE(agent, '') = '' AND COALESCE(path, '') <> 'briefing' AND ts < ?
+  WHERE COALESCE(agent, '') = '' AND COALESCE(path, '') NOT IN ('briefing', 'store') AND ts < ?
   GROUP BY session, turn HAVING MIN(ts) >= ?)
 SELECT COALESCE(g.session, ''), `+turnAttrSQL("g", "project")+`, `+turnAttrSQL("g", "binary_version")+`, g.at, `+turnPathSQL("g")+`,
        EXISTS (SELECT 1 FROM credits c WHERE c.session = g.session AND c.turn = g.turn AND c.verdict = 'used')
