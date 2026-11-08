@@ -88,10 +88,15 @@ func TestVerifyRunsEveryHookTheMCPServerAndARoundTrip(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
 	}
-	for _, h := range plugin.Hooks() {
+	for _, h := range plugin.Hooks(plugin.Wiring{}) {
 		if c := checks["hook "+h.Arg]; c.Status != "ok" {
 			t.Errorf("hook %s: %+v", h.Arg, c)
 		}
+	}
+	// recall.failure_pitfalls is off: the plugin does not wire that hook,
+	// so verify does not run it (decision 0083 C9).
+	if c, ran := checks["hook post-tool-use-failure"]; ran {
+		t.Errorf("off: verify ran the failure hook: %+v", c)
 	}
 	if checks["mcp"].Status != "ok" || !strings.Contains(checks["mcp"].Summary, "and 4 tools") {
 		t.Errorf("mcp: %+v", checks["mcp"])
@@ -221,6 +226,25 @@ func TestVerifyExpectsNoCreditToolWithFeedbackOff(t *testing.T) {
 	code, out, _ := run(t, "verify", "--no-round-trip", "--json")
 	if c := parseVerify(t, out)["mcp"]; code != output.OK || c.Status != "ok" || !strings.Contains(c.Summary, "and 3 tools") {
 		t.Errorf("exit %d %+v\n%s", code, c, out)
+	}
+}
+
+// With recall.failure_pitfalls on, the plugin wires PostToolUseFailure, and
+// verify runs that hook too.
+func TestVerifyRunsTheFailureHookWhenItIsWired(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	asShim(t)
+	appendConfig(t, home, "[recall]\nfailure_pitfalls = true")
+	code, out, _ := run(t, "verify", "--no-round-trip", "--json")
+	checks := parseVerify(t, out)
+	if c := checks["hook post-tool-use-failure"]; code != output.OK || c.Status != "ok" {
+		t.Errorf("exit %d %+v\n%s", code, c, out)
+	}
+	for _, h := range plugin.Hooks(plugin.Wiring{FailurePitfalls: true}) {
+		if c := checks["hook "+h.Arg]; c.Status != "ok" {
+			t.Errorf("hook %s: %+v", h.Arg, c)
+		}
 	}
 }
 

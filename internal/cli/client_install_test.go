@@ -253,13 +253,91 @@ func TestClientInstallLeavesNoDriftAndRecordsTheProfile(t *testing.T) {
 	if st.Client == nil || st.Client.Profile != profile {
 		t.Fatalf("profile not recorded: %+v", st.Client)
 	}
-	if drift := plugin.Drift(d.Data, filepath.Join(profile, "settings.json"), plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, "dev"); len(drift) != 0 {
+	if drift := plugin.Drift(d.Data, filepath.Join(profile, "settings.json"), plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, "dev", plugin.Wiring{}); len(drift) != 0 {
 		t.Errorf("drift right after install: %v", drift)
 	}
 	// doctor checks the recorded profile, not the shell's default one
 	_, out, _ := run(t, "doctor")
 	if !strings.Contains(out, "permission rule in place in "+profile) {
 		t.Errorf("doctor:\n%s", out)
+	}
+}
+
+// recall.failure_pitfalls decides whether client install wires
+// PostToolUseFailure (decision 0083 C9): off by default, so a failed tool
+// call spawns nothing. Flipping it is drift doctor reports until client
+// install runs again, and doctor is clean either way once it has.
+func TestClientInstallWiresTheFailureHookOnlyWhenOn(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	d := pathsOf(home)
+	hooksFile := filepath.Join(d.Data, "marketplace", "plugins", "backsight", "hooks", "hooks.json")
+	wired := func() bool {
+		raw, err := os.ReadFile(hooksFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Contains(string(raw), `"PostToolUseFailure"`) || strings.Contains(string(raw), "post-tool-use-failure")
+	}
+	doctorClient := func() string {
+		_, out, _ := run(t, "doctor")
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "Claude Code wiring drifted") || strings.Contains(line, "permission rule in place in") {
+				return line
+			}
+		}
+		t.Fatalf("no client line in doctor:\n%s", out)
+		return ""
+	}
+	off, err := os.ReadFile(d.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if wired() {
+		t.Error("off: PostToolUseFailure wired")
+	}
+	if l := doctorClient(); !strings.Contains(l, "permission rule in place") {
+		t.Errorf("off, installed off: doctor %q", l)
+	}
+
+	appendConfig(t, home, "[recall]\nfailure_pitfalls = true")
+	if _, out, _ := run(t, "doctor", "--json"); !strings.Contains(out, "recall.failure_pitfalls is on but the plugin does not wire PostToolUseFailure") {
+		t.Errorf("on, installed off: doctor must name the switch:\n%s", out)
+	}
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if !wired() {
+		t.Error("on: PostToolUseFailure not wired")
+	}
+	if l := doctorClient(); !strings.Contains(l, "permission rule in place") {
+		t.Errorf("on, installed on: doctor %q", l)
+	}
+	st, _ := state.Load(d.StateFile())
+	if st.PluginVersion != plugin.Version("dev", filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS)), plugin.Wiring{FailurePitfalls: true}) {
+		t.Errorf("recorded version %s is not the on wiring's", st.PluginVersion)
+	}
+	// An unreadable config has its own check: the switch's state is
+	// unknown, so the wiring installed is no drift.
+	on, _ := os.ReadFile(d.ConfigFile())
+	_ = os.WriteFile(d.ConfigFile(), []byte("[recall\n"), 0o600)
+	if l := doctorClient(); !strings.Contains(l, "permission rule in place") {
+		t.Errorf("unreadable config, installed on: doctor %q", l)
+	}
+	_ = os.WriteFile(d.ConfigFile(), on, 0o600)
+
+	_ = os.WriteFile(d.ConfigFile(), off, 0o600)
+	if l := doctorClient(); !strings.Contains(l, "Claude Code wiring drifted") {
+		t.Errorf("off, installed on: doctor %q", l)
+	}
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if wired() {
+		t.Error("off again: PostToolUseFailure still wired")
 	}
 }
 

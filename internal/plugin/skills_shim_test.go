@@ -29,7 +29,7 @@ func TestSkillsShimUsesForwardSlashesOnWindows(t *testing.T) {
 	withTarget(t, "windows")
 	shim := `C:\Users\Jé & Co\AppData\Local\backsight\bin\current.exe`
 	dir := t.TempDir()
-	if _, err := Generate(dir, shim, "1.2.3"); err != nil {
+	if _, err := Generate(dir, shim, "1.2.3", Wiring{}); err != nil {
 		t.Fatal(err)
 	}
 	word := `'C:/Users/Jé & Co/AppData/Local/backsight/bin/current.exe'`
@@ -75,7 +75,7 @@ func TestSkillsShimUsesForwardSlashesOnWindows(t *testing.T) {
 	// Off Windows a backslash is part of a name: the shim is as given.
 	withTarget(t, "linux")
 	dir = t.TempDir()
-	if _, err := Generate(dir, `/srv/a\b/current`, "1.2.3"); err != nil {
+	if _, err := Generate(dir, `/srv/a\b/current`, "1.2.3", Wiring{}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md")); !strings.Contains(string(raw), `'/srv/a\b/current' pause`) {
@@ -89,7 +89,7 @@ func TestSkillsShimWithSpacesRunsUnderGitBash(t *testing.T) {
 	bash := testtool.Bash(t)
 	fake := testtool.Write(t, filepath.Join(t.TempDir(), "Jé & Co", "bin"), "current", testtool.Fake{})
 	dir := t.TempDir()
-	if _, err := Generate(dir, fake, "1.2.3"); err != nil {
+	if _, err := Generate(dir, fake, "1.2.3", Wiring{}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))

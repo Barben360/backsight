@@ -94,7 +94,7 @@ func TestTroubleshootingNamesEveryDoctorCheck(t *testing.T) {
 	}
 	ids["api_port"], ids["ui_port"] = "preflight.go", "preflight.go"
 	// verify's hook checks are "hook <arg>", one per plugin hook.
-	if len(plugin.Hooks()) == 0 {
+	if len(plugin.Hooks(plugin.Wiring{})) == 0 {
 		t.Fatal("the plugin wires no hook")
 	}
 	ids["hook <arg>"] = "verify.go"

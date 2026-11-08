@@ -148,7 +148,7 @@ func (h *hookEnv) sessionStart() []byte {
 	}
 	if st, err := state.Load(h.dirs.StateFile()); err == nil {
 		settings := claudecode.Locate(h.home, os.Getenv).Settings
-		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version); len(drift) > 0 {
+		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version, plugin.WiringOf(h.cfg)); len(drift) > 0 {
 			banner += "\n" + instructions.DriftLine(drift[0])
 		}
 		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {

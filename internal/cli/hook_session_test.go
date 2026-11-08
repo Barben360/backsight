@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
@@ -306,6 +307,22 @@ func TestSessionStartBannerShowsDrift(t *testing.T) {
 	h = fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
 	if !strings.Contains(h.SystemMessage, "drifted") || !strings.Contains(h.SystemMessage, "backsight client install") || strings.Count(h.SystemMessage, "drifted") != 1 {
 		t.Errorf("banner %q (one drift line wanted)", h.SystemMessage)
+	}
+}
+
+// recall.failure_pitfalls turned on after client install: the session's
+// first line says the failure hook is not wired yet (decision 0083 C9).
+func TestSessionStartBannerNamesAFailureSwitchNotWiredYet(t *testing.T) {
+	home := hookHome(t)
+	shim := filepath.Join(pathsOf(home).Data, "bin", plugin.ShimName(runtime.GOOS))
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.PluginVersion = plugin.Version(buildinfo.Version, shim, plugin.Wiring{})
+		return nil
+	})
+	appendConfig(t, home, "[recall]\nfailure_pitfalls = true")
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.SystemMessage, "Claude Code wiring drifted (recall.failure_pitfalls is on but the plugin does not wire PostToolUseFailure)") {
+		t.Errorf("banner %q", h.SystemMessage)
 	}
 }
 

@@ -211,10 +211,12 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 
 	// 3. The plugin, generated whole in a local marketplace (E1).
 	mkt := filepath.Join(c.dirs.Data, "marketplace")
-	pversion := plugin.Version(buildinfo.Version, shim)
+	// The [recall] failure switch wires PostToolUseFailure or leaves it out.
+	wiring := plugin.WiringOf(c.cfg)
+	pversion := plugin.Version(buildinfo.Version, shim, wiring)
 	pluginChanged := true
 	if !plan {
-		if pluginChanged, err = plugin.Generate(mkt, shim, buildinfo.Version); err != nil {
+		if pluginChanged, err = plugin.Generate(mkt, shim, buildinfo.Version, wiring); err != nil {
 			return res, blocked(err)
 		}
 	}
