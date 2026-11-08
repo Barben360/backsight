@@ -1,6 +1,6 @@
 //go:build linux
 
-package index
+package sqlitedb
 
 import (
 	"os"
@@ -23,7 +23,7 @@ func osFSType(dir string) FSInfo {
 	if magic == 0x65735546 {
 		mt = mountTypeOf(dir)
 	}
-	return classifyLinux(magic, mt)
+	return ClassifyLinux(magic, mt)
 }
 
 // mountTypeOf is the filesystem type of the longest mount point holding dir.
@@ -36,5 +36,5 @@ func mountTypeOf(dir string) string {
 		return ""
 	}
 	defer func() { _ = f.Close() }()
-	return parseMountInfo(f, dir)
+	return ParseMountInfo(f, dir)
 }

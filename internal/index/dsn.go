@@ -1,50 +1,28 @@
 package index
 
 import (
-	"path/filepath"
 	"strconv"
-	"strings"
+
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
-var uriEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
-
-// dsn is the connection string for the index file. WAL needs shared memory,
-// which network and synced folders do not give, so they get the rollback
-// journal (wal false), as does a local folder that failed the WAL probe
-// (useWAL). The rollback journal with synchronous=NORMAL can lose the file
-// on a power cut: it gets FULL, which syncs at each commit (slower, on a
-// file written in batches); NORMAL is for WAL, where the next checkpoint
-// syncs the commits. The writer takes the write lock at BEGIN; the reader
-// never does.
+// dsn is the connection string for the index file (sqlitedb.DSN says
+// why the journal and synchronous follow wal): the rollback journal (wal
+// false) on network and synced folders, as on a local folder that failed
+// the WAL probe (useWAL). The writer takes its own pragmas
+// (sqlitedb.WriterPragmas); the reader keeps SQLite's.
 func dsn(path string, wal, readOnly bool) string {
-	journal, sync := "WAL", "NORMAL"
-	if !wal {
-		journal, sync = "DELETE", "FULL"
-	}
-	q := "_pragma=journal_mode(" + journal + ")" +
-		"&_pragma=busy_timeout(" + busyMS() + ")" +
-		"&_pragma=foreign_keys(on)" +
-		"&_pragma=synchronous(" + sync + ")" +
-		"&_pragma=journal_size_limit(67108864)"
+	extra := sqlitedb.WriterPragmas
 	if readOnly {
-		q += "&mode=ro&_txlock=deferred"
-	} else {
-		q += "&_txlock=immediate" + writerPragmas
+		extra = ""
 	}
-	return fileURI(path) + "?" + q
+	return sqlitedb.DSN(path, sqlitedb.Mode{WAL: wal, ReadOnly: readOnly}, busyWait, extra)
 }
 
-// probeDSN reads a file without changing it: read only, and no pragma
-// that could write (a journal mode). A read-only connection to a WAL file
-// creates the -wal and -shm it lacks and cannot remove them, so an idle
-// WAL file (no -wal: its main file holds every commit) opens immutable:
-// no lock, no journal file.
+// probeDSN reads a file without changing it (sqlitedb.ProbeDSN): an idle
+// WAL file opens immutable.
 func probeDSN(path string, immutable bool) string {
-	q := "?mode=ro&_pragma=busy_timeout(" + busyMS() + ")"
-	if immutable {
-		q += "&immutable=1"
-	}
-	return fileURI(path) + q
+	return sqlitedb.ProbeDSN(path, immutable, busyWait)
 }
 
 // busyMS is busyWait in milliseconds, as busy_timeout takes it.
@@ -52,26 +30,8 @@ func busyMS() string { return strconv.FormatInt(busyWait.Milliseconds(), 10) }
 
 // fileURI is path as a SQLite URI filename, without its query: the one
 // form every DSN of the index uses.
-func fileURI(path string) string { return uriPath(path, filepath.Separator == '\\') }
+func fileURI(path string) string { return sqlitedb.URI(path) }
 
-// uriPath is fileURI for a Windows path (windows) or a POSIX one. A
-// Windows path loses its \\?\ prefix (\\?\UNC\ becomes \\) and takes
-// forward slashes; a drive path stays as it is (file:C:/x). A path that
-// starts with // (a UNC share) gets an empty authority, file:////srv/x:
-// file://srv/x would name srv as the URI's authority, which SQLite
-// refuses. %, ? and # are escaped.
-func uriPath(path string, windows bool) string {
-	if windows {
-		if rest, ok := strings.CutPrefix(path, `\\?\UNC\`); ok {
-			path = `\\` + rest
-		} else if rest, ok := strings.CutPrefix(path, `\\?\`); ok {
-			path = rest
-		}
-		path = strings.ReplaceAll(path, `\`, "/")
-	}
-	path = uriEscaper.Replace(path)
-	if strings.HasPrefix(path, "//") {
-		return "file://" + path
-	}
-	return "file:" + path
-}
+// uriPath is fileURI for a Windows path (windows) or a POSIX one
+// (sqlitedb.URIPath).
+func uriPath(path string, windows bool) string { return sqlitedb.URIPath(path, windows) }

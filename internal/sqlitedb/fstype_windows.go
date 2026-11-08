@@ -1,6 +1,6 @@
 //go:build windows
 
-package index
+package sqlitedb
 
 import "golang.org/x/sys/windows"
 
@@ -15,6 +15,6 @@ var getDriveType = func(root string) uint32 {
 	return windows.GetDriveType(p)
 }
 
-// A UNC path is recognised by classifyPath; a mapped drive (Z:\) looks
+// A UNC path is recognised by ClassifyPath; a mapped drive (Z:\) looks
 // like a local one, so its type is asked of Windows.
-func osFSType(dir string) FSInfo { return winFSType(dir, getDriveType) }
+func osFSType(dir string) FSInfo { return WinFSType(dir, getDriveType) }
