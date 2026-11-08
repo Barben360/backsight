@@ -39,8 +39,8 @@ func (s *briefingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var items []map[string]any
 		for _, id := range s.order {
 			m := map[string]any{"id": id}
-			if r.URL.Query().Get("detail") == "content" { // like the server: metadata leaves it null
-				m["trigger"] = s.models[id]["trigger"]
+			if r.URL.Query().Get("detail") == "content" { // like the server: metadata leaves them null
+				m["trigger"], m["source_query"] = s.models[id]["trigger"], s.models[id]["source_query"]
 			}
 			items = append(items, m)
 		}
@@ -59,7 +59,9 @@ func (s *briefingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var in map[string]any
 		_ = json.Unmarshal(body, &in)
-		s.models[id]["trigger"] = in["trigger"]
+		for k, v := range in {
+			s.models[id][k] = v
+		}
 		_, _ = w.Write([]byte(`{}`))
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -74,7 +76,7 @@ func newBriefingServer(t *testing.T, models map[string]string) (*briefingServer,
 		if err := json.Unmarshal([]byte(trigger), &tr); err != nil {
 			t.Fatal(err)
 		}
-		s.models[id] = map[string]any{"trigger": tr}
+		s.models[id] = map[string]any{"trigger": tr, "source_query": testQuery}
 		s.order = append(s.order, id)
 	}
 	srv := httptest.NewServer(s)
@@ -89,26 +91,27 @@ func newBriefingServer(t *testing.T, models map[string]string) (*briefingServer,
 const (
 	floorTrigger   = `{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600,"refresh_cron":null}`
 	noFloorTrigger = `{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":null}`
-	wantPatchBody  = `{"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`
+	testQuery      = "Briefing for an assistant: 'In force' (rules)."
+	wantPatchBody  = `{"source_query":"Briefing for an assistant: 'In force' (rules).","trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`
 )
 
 func TestReconcileBriefingTriggersPatchesOnlyDriftedPagesOnce(t *testing.T) {
 	ok, drifted := BriefingModelID("billing"), BriefingModelID("ops")
 	s, cl := newBriefingServer(t, map[string]string{ok: floorTrigger, drifted: noFloorTrigger, "team-notes": noFloorTrigger})
 	ctx := context.Background()
-	r, err := ReconcileBriefingTriggers(ctx, cl, "b", BriefingTrigger(21600))
+	r, err := ReconcileBriefingTriggers(ctx, cl, "b", BriefingTrigger(21600), testQuery)
 	if err != nil || r.Checked != 2 || len(r.Patched) != 1 || r.Patched[0] != drifted || len(r.Failed) != 0 {
 		t.Fatalf("first run: %v %+v", err, r)
 	}
 	if len(s.patches) != 1 || s.patches[0] != drifted+" "+wantPatchBody {
 		t.Fatalf("want one PATCH of %s with the whole trigger, got %q", drifted, s.patches)
 	}
-	r, err = ReconcileBriefingTriggers(ctx, cl, "b", BriefingTrigger(21600))
+	r, err = ReconcileBriefingTriggers(ctx, cl, "b", BriefingTrigger(21600), testQuery)
 	if err != nil || r.Checked != 2 || len(r.Patched) != 0 || len(s.patches) != 1 {
 		t.Errorf("second run must patch nothing: %v %+v %q", err, r, s.patches)
 	}
 	// Another floor configured: both pages move to it.
-	r, _ = ReconcileBriefingTriggers(ctx, cl, "b", BriefingTrigger(0))
+	r, _ = ReconcileBriefingTriggers(ctx, cl, "b", BriefingTrigger(0), testQuery)
 	if len(r.Patched) != 2 || !strings.Contains(s.patches[len(s.patches)-1], `"min_refresh_interval_seconds":0}`) {
 		t.Errorf("floor 0: %+v %q", r, s.patches)
 	}
@@ -124,12 +127,12 @@ func TestReconcileBriefingTriggersGoesOnPastAFailedPage(t *testing.T) {
 	s, cl := newBriefingServer(t, map[string]string{a: noFloorTrigger, b: `null`, c: noFloorTrigger})
 	s.order = []string{a, b, c}
 	s.fail[a] = true
-	r, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600))
+	r, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600), testQuery)
 	if err != nil || r.Checked != 3 || len(r.Failed) != 1 || !strings.HasPrefix(r.Failed[0], a+": ") || len(r.Patched) != 2 || r.Patched[0] != b || r.Patched[1] != c {
 		t.Errorf("a failed page must be reported and the others patched (a null trigger included): %v %+v", err, r)
 	}
 	s.listErr = true
-	if _, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600)); err == nil {
+	if _, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600), testQuery); err == nil {
 		t.Error("a failed listing must be an error")
 	}
 }
@@ -141,7 +144,7 @@ func TestReconcileBriefingTriggersCountsADeletedPageAsDone(t *testing.T) {
 	s, cl := newBriefingServer(t, map[string]string{a: noFloorTrigger, b: noFloorTrigger})
 	s.order = []string{a, b}
 	s.gone[a] = true
-	r, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600))
+	r, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600), testQuery)
 	if err != nil || len(r.Failed) != 0 || len(r.Gone) != 1 || r.Gone[0] != a || len(r.Patched) != 1 || r.Patched[0] != b {
 		t.Errorf("deleted page: %v %+v", err, r)
 	}
@@ -170,7 +173,31 @@ func TestNoFloorWantedAcceptsANullFloor(t *testing.T) {
 		t.Error("the comparison changed its arguments")
 	}
 	s, cl := newBriefingServer(t, map[string]string{BriefingModelID("a"): noFloorTrigger})
-	if r, _ := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(0)); len(r.Patched) != 0 || len(s.patches) != 0 {
+	if r, _ := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(0), testQuery); len(r.Patched) != 0 || len(s.patches) != 0 {
 		t.Errorf("floor 0 patched a page with a null floor: %+v", r)
+	}
+}
+
+// 0083 C7: a page whose request is not the current one gets it, with the
+// whole trigger, in the same PATCH; a page already asking it is left be.
+func TestReconcileBriefingsGivesAChangedQuery(t *testing.T) {
+	current, old := BriefingModelID("billing"), BriefingModelID("ops")
+	s, cl := newBriefingServer(t, map[string]string{current: floorTrigger, old: floorTrigger, "team-notes": floorTrigger})
+	s.models[old]["source_query"] = "Briefing for an assistant (v14)."
+	s.models["team-notes"]["source_query"] = "Someone else's page."
+	r, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600), testQuery)
+	if err != nil || r.Checked != 2 || len(r.Patched) != 1 || r.Patched[0] != old {
+		t.Fatalf("want only the page with the old request patched: %v %+v", err, r)
+	}
+	if len(s.patches) != 1 || s.patches[0] != old+" "+wantPatchBody {
+		t.Fatalf("want one PATCH with the current request and the whole trigger, got %q", s.patches)
+	}
+	if r, _ := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600), testQuery); len(r.Patched) != 0 || len(s.patches) != 1 {
+		t.Errorf("the request is current now: nothing to patch: %+v %q", r, s.patches)
+	}
+	// A page with neither: one PATCH carries both.
+	s.models[current]["source_query"], s.models[current]["trigger"] = nil, nil
+	if r, _ := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600), testQuery); len(r.Patched) != 1 || s.patches[1] != current+" "+wantPatchBody {
+		t.Errorf("no request, no trigger: %+v %q", r, s.patches)
 	}
 }

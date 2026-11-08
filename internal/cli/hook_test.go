@@ -86,7 +86,7 @@ func TestHookPrintsTheChildAnswerAndCutsAHang(t *testing.T) {
 	home := hookHome(t)
 	childFromTestBinary(t, "")
 	code, out := runHookCmd(t, `{"session_id":"s1","source":"resume","cwd":"`+testtool.JSONPath(home)+`"}`, "session-start")
-	if code != 0 || !strings.Contains(out, `"hookEventName":"SessionStart"`) || !strings.Contains(out, "memory_search") {
+	if code != 0 || !strings.Contains(out, `"hookEventName":"SessionStart"`) || !strings.Contains(out, "search its content") {
 		t.Fatalf("exit %d: %q", code, out)
 	}
 	childFromTestBinary(t, "hang")

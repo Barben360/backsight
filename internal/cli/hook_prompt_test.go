@@ -273,7 +273,8 @@ func TestRecallHeaderEndsWithTheCreditLine(t *testing.T) {
 
 // feedback.enabled off: memory_credit is not offered, and no text the
 // agent reads names it (session guide, MCP instructions, reminder, recall
-// block, search result); on, each carries the v7 ask.
+// block, search result); on, each carries the v7 ask but the session guide,
+// which sits beside the MCP instructions and leaves it to them (0083 C7).
 func TestCreditAskFollowsFeedback(t *testing.T) {
 	for _, feedback := range []bool{true, false} {
 		home := hookHome(t)
@@ -291,7 +292,7 @@ func TestCreditAskFollowsFeedback(t *testing.T) {
 		search, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres version"}})
 		texts := map[string]string{"guide": guide, "first prompt": first, "mcp instructions": cs.InitializeResult().Instructions, "search": search}
 		for name, text := range texts {
-			if strings.Contains(text, "memory_credit") != feedback {
+			if strings.Contains(text, "memory_credit") != (feedback && name != "guide") {
 				t.Errorf("feedback %v, %s:\n%s", feedback, name, text)
 			}
 		}

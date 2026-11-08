@@ -58,20 +58,29 @@ type BriefingTriggers struct {
 }
 
 // ReconcileBriefingTriggers gives every briefing page of bank whose
-// trigger is not want the whole of want (a partial trigger would reset the
-// others to the server's defaults). A failed page does not stop the
-// others, and a page deleted meanwhile (404) is done; the error is the
-// listing's.
-func ReconcileBriefingTriggers(ctx context.Context, cl *hindsight.Client, bank string, want hindsight.MentalModelTrigger) (BriefingTriggers, error) {
+// trigger is not want, or whose source query is not query (0083 C7), both
+// in one update: the whole of want (a partial trigger would reset the
+// others to the server's defaults) and query, which the page's next
+// refresh is written from. A failed page does not stop the others, and a
+// page deleted meanwhile (404) is done; the error is the listing's.
+func ReconcileBriefingTriggers(ctx context.Context, cl *hindsight.Client, bank string, want hindsight.MentalModelTrigger, query string) (BriefingTriggers, error) {
 	var r BriefingTriggers
 	models, err := cl.MentalModels(ctx, bank)
 	if err != nil {
 		return r, err
 	}
 	var drifted []string
-	r.Checked, drifted = DriftedBriefings(models, want)
+	for _, m := range models {
+		if !strings.HasPrefix(m.ID, BriefingModelPrefix) {
+			continue
+		}
+		r.Checked++
+		if !BriefingTriggerIs(m.Trigger, want) || m.SourceQuery != query {
+			drifted = append(drifted, m.ID)
+		}
+	}
 	for _, id := range drifted {
-		if err := cl.UpdateMentalModelTrigger(ctx, bank, id, want); err != nil {
+		if err := cl.UpdateMentalModel(ctx, bank, id, query, want); err != nil {
 			var apiErr *hindsight.APIError
 			if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
 				r.Gone = append(r.Gone, id) // nothing left to set

@@ -228,7 +228,7 @@ func TestMentalModelTriggerCalls(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		got = append(got, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery+" "+string(body))
 		if r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(`{"items":[{"id":"a","trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600,"refresh_cron":null}},{"id":"b","trigger":{"budget":null,"mode":"full","refresh_after_consolidation":false,"min_refresh_interval_seconds":null}},{"id":"c","trigger":null}]}`))
+			_, _ = w.Write([]byte(`{"items":[{"id":"a","source_query":"qa","trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600,"refresh_cron":null}},{"id":"b","trigger":{"budget":null,"mode":"full","refresh_after_consolidation":false,"min_refresh_interval_seconds":null}},{"id":"c","trigger":null}]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{}`))
@@ -237,12 +237,12 @@ func TestMentalModelTriggerCalls(t *testing.T) {
 	floor := 21600
 	tr := MentalModelTrigger{Budget: "low", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &floor}
 	_ = c.CreateMentalModel(ctx, "b", "p1", "n", "q", []string{"project:p"}, 600, tr)
-	_ = c.UpdateMentalModelTrigger(ctx, "b", "p1", tr)
+	_ = c.UpdateMentalModel(ctx, "b", "p1", "q2", tr)
 	models, err := c.MentalModels(ctx, "b")
 	_, _ = c.MentalModelsMetadata(ctx, "b")
 	want := []string{
 		`POST /v1/default/banks/b/mental-models? {"id":"p1","max_tokens":600,"name":"n","source_query":"q","tags":["project:p"],"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
-		`PATCH /v1/default/banks/b/mental-models/p1? {"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
+		`PATCH /v1/default/banks/b/mental-models/p1? {"source_query":"q2","trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
 		// detail=content: the default listing (metadata) leaves trigger and content null.
 		`GET /v1/default/banks/b/mental-models?detail=content `,
 		// the light listing: no content asked for
@@ -253,6 +253,9 @@ func TestMentalModelTriggerCalls(t *testing.T) {
 	}
 	if len(models) != 3 || models[0].Trigger == nil || !models[0].Trigger.Equal(tr) {
 		t.Fatalf("the wanted trigger not read back: %+v", models)
+	}
+	if models[0].SourceQuery != "qa" || models[1].SourceQuery != "" {
+		t.Errorf("source_query not read back: %q %q", models[0].SourceQuery, models[1].SourceQuery)
 	}
 	if models[1].Trigger == nil || models[1].Trigger.Equal(tr) || models[1].Trigger.MinRefreshIntervalSeconds != nil || models[2].Trigger != nil {
 		t.Errorf("a trigger without the floor, or none, read as the wanted one: %+v %+v", models[1].Trigger, models[2].Trigger)
