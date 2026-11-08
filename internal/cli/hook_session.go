@@ -233,7 +233,7 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 	if missing && err == nil && source != "empty" && otherServer(h.dirs, h.cfg) == nil && sendsGate(h.dirs, h.generation)() == nil {
 		pctx, pcancel := context.WithTimeout(ctx, briefingModelTimeout)
 		if cerr := h.client.CreateMentalModel(pctx, h.cfg.Server.Bank, briefingModelID(h.project), "backsight briefing: "+h.project, instructions.BriefingQuery,
-			[]string{"project:" + h.project}, briefingModelTokens); cerr != nil {
+			[]string{"project:" + h.project}, briefingModelTokens, retain.BriefingTrigger(h.cfg.Recall.BriefingRefreshInterval.Seconds())); cerr != nil {
 			h.tw.Emit(telemetry.Raw{Name: "briefing_page_error", Fields: map[string]any{"error": cerr.Error()}})
 		}
 		pcancel()

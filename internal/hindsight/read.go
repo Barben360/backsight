@@ -235,6 +235,33 @@ type MentalModel struct {
 	Content         string   `json:"content"`
 	Tags            []string `json:"tags"`
 	LastRefreshedAt string   `json:"last_refreshed_at"`
+	// Trigger: nil when the server sent none.
+	Trigger *MentalModelTrigger `json:"trigger"`
+}
+
+// MentalModelTrigger is the part of a mental model's trigger backsight
+// sets. The server holds more fields: an update sent with this one resets
+// them to their defaults, which are the ones backsight creates pages with.
+type MentalModelTrigger struct {
+	Budget                    string `json:"budget"`
+	Mode                      string `json:"mode"`
+	RefreshAfterConsolidation bool   `json:"refresh_after_consolidation"`
+	// MinRefreshIntervalSeconds: the floor between two automatic
+	// refreshes; 0 is no floor, nil (null) the bank's setting.
+	MinRefreshIntervalSeconds *int `json:"min_refresh_interval_seconds"`
+}
+
+// Equal reports whether t sets the same fields as o, a null floor
+// differing from every value (0 included).
+func (t MentalModelTrigger) Equal(o MentalModelTrigger) bool {
+	floor := func(p *int) int {
+		if p == nil {
+			return -1
+		}
+		return *p
+	}
+	return t.Budget == o.Budget && t.Mode == o.Mode && t.RefreshAfterConsolidation == o.RefreshAfterConsolidation &&
+		floor(t.MinRefreshIntervalSeconds) == floor(o.MinRefreshIntervalSeconds)
 }
 
 // GetMentalModel reads one mental model (cached content, no LLM); an
@@ -245,15 +272,29 @@ func (c *Client) GetMentalModel(ctx context.Context, bank, id string) (MentalMod
 }
 
 // CreateMentalModel creates a mental model; the server refreshes it in the
-// background, then again after each consolidation that touches its tags.
-func (c *Client) CreateMentalModel(ctx context.Context, bank, id, name, query string, tags []string, maxTokens int) error {
-	body := map[string]any{"id": id, "name": name, "source_query": query, "tags": tags, "max_tokens": maxTokens,
-		"trigger": map[string]any{"budget": "low", "mode": "full", "refresh_after_consolidation": true}}
+// background, then as its trigger says.
+func (c *Client) CreateMentalModel(ctx context.Context, bank, id, name, query string, tags []string, maxTokens int, trigger MentalModelTrigger) error {
+	body := map[string]any{"id": id, "name": name, "source_query": query, "tags": tags, "max_tokens": maxTokens, "trigger": trigger}
 	return c.do(ctx, http.MethodPost, bankPath(bank, "/mental-models"), nil, body, nil)
 }
 
-// MentalModels lists the bank's mental models.
+// UpdateMentalModelTrigger replaces a mental model's trigger, whole.
+func (c *Client) UpdateMentalModelTrigger(ctx context.Context, bank, id string, trigger MentalModelTrigger) error {
+	return c.do(ctx, http.MethodPatch, bankPath(bank, "/mental-models/"+url.PathEscape(id)), nil, map[string]any{"trigger": trigger}, nil)
+}
+
+// MentalModels lists the bank's mental models with their content and
+// trigger (the default listing, metadata only, leaves both null).
 func (c *Client) MentalModels(ctx context.Context, bank string) ([]MentalModel, error) {
+	var out struct {
+		Items []MentalModel `json:"items"`
+	}
+	return out.Items, c.get(ctx, bankPath(bank, "/mental-models"), url.Values{"detail": {"content"}}, &out)
+}
+
+// MentalModelsMetadata lists the bank's mental models without their
+// content or trigger (ids, tags, refresh times): the light listing.
+func (c *Client) MentalModelsMetadata(ctx context.Context, bank string) ([]MentalModel, error) {
 	var out struct {
 		Items []MentalModel `json:"items"`
 	}

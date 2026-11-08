@@ -12,7 +12,7 @@ import (
 func TestNumericSettingsMatchReleases(t *testing.T) {
 	got := NumericSettings(Default(dirs, "/h"))
 	want := map[string]float64{"recall.min_score": 0.5, "recall.global_min_score": 0.6, "recall.prompt_hits": 3,
-		"recall.session_budget_chars": 6000, "recall.families": 0, "feedback.enabled": 1, "feedback.boost_weight": 0.1}
+		"recall.session_budget_chars": 6000, "recall.families": 0, "recall.briefing_refresh_interval": 21600, "feedback.enabled": 1, "feedback.boost_weight": 0.1}
 	for k, v := range want {
 		if g, ok := got[k]; !ok || g != v {
 			t.Errorf("%s = %v (present %v), want %v", k, g, ok, v)

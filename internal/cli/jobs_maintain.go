@@ -58,6 +58,10 @@ type maintainResult struct {
 	// MemoryDocs: the memory-docs step's line (collectMemoryDocs).
 	MemoryDocs string `json:"memory_docs,omitempty"`
 	MS         int    `json:"ms"`
+
+	// BriefingTriggers: the briefing pages given the refresh floor
+	// (maintainBriefingTriggers), "" when all had it.
+	BriefingTriggers string `json:"briefing_triggers,omitempty"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -131,6 +135,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				res.Rename = maintainRename(cmd.Context(), d)
 			}
 			res.Update = maintainUpdate(cmd.Context(), d)
+			res.BriefingTriggers = maintainBriefingTriggers(cmd.Context(), d, tw)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
@@ -324,6 +329,9 @@ func maintainText(r maintainResult) string {
 	}
 	if r.MemoryDocs != "" {
 		history += ", " + r.MemoryDocs
+	}
+	if r.BriefingTriggers != "" {
+		history += ", " + r.BriefingTriggers
 	}
 	return fmt.Sprintf("%s: %d telemetry file(s) rotated%s, backup %s, re-attribution %s%s, update %s, doctor %s%s (%d ms)\n", r.Status, len(r.Rotated), metrics,
 		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, history, r.MS)

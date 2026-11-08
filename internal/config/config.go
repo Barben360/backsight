@@ -148,6 +148,9 @@ type Recall struct {
 	// Briefing: "model" (a per-project mental model the server keeps,
 	// decision 0060) or "recent" (the 5 latest observations, E8).
 	Briefing string `toml:"briefing" json:"briefing"`
+	// BriefingRefreshInterval: the least time between two refreshes of a
+	// briefing page by the server (decision 0083 C2); 0 is no floor.
+	BriefingRefreshInterval Duration `toml:"briefing_refresh_interval" json:"briefing_refresh_interval"`
 	// Families: search the projects worked on together with the current
 	// one (computed on this machine from the recorded turns) in its
 	// project scope, without its boost (decision 0072). Off until a recall
@@ -302,7 +305,7 @@ func Default(d paths.Dirs, home string) Config {
 		Components: Components{Read: true, Write: true},
 		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
-			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model"},
+			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model", BriefingRefreshInterval: Hours(6)},
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-flash", Currency: "USD"},
 		Embeddings: Embeddings{Preset: "multilingual"},
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
@@ -470,6 +473,9 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	unit("recall.project_boost", r.ProjectBoost)
 	if r.Briefing != "model" && r.Briefing != "recent" {
 		bad("recall.briefing", "%q: \"model\" or \"recent\"", r.Briefing)
+	}
+	if r.BriefingRefreshInterval.d < 0 {
+		bad("recall.briefing_refresh_interval", "%s: 0 (no floor) or more", r.BriefingRefreshInterval)
 	}
 	for key, v := range map[string]int{"recall.prompt_hits": r.PromptHits, "recall.query_chars": r.QueryChars,
 		"recall.prompt_chars": r.PromptChars, "recall.sticky_max": r.StickyMax, "recall.sticky_window_h": r.StickyWindowH,

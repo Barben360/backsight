@@ -29,6 +29,7 @@ feedback.prior_credits             3
 feedback.prior_misses              9
 feedback.share_ledger              1
 feedback.stale_shows               10
+recall.briefing_refresh_interval   21600
 recall.failure_pitfalls            0
 recall.families                    0
 recall.global_min_score            0.6

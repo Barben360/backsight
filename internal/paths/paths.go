@@ -64,6 +64,10 @@ func (d Dirs) DashboardDir() string { return filepath.Join(d.State, "dashboard")
 // tell an older backsight template from a change made on the server.
 func (d Dirs) BankTemplateFile() string { return filepath.Join(d.State, "bank-template.json") }
 
+// BriefingTriggerFile records the binary version and refresh floor the
+// briefing pages were last given (decision 0083 C2).
+func (d Dirs) BriefingTriggerFile() string { return filepath.Join(d.State, "briefing-trigger") }
+
 // RestoreMarker exists while a restore has not finished (decision 0044).
 func (d Dirs) RestoreMarker() string { return filepath.Join(d.State, "restore-incomplete.json") }
 

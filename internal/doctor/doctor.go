@@ -203,6 +203,9 @@ func Run(ctx context.Context, env Env) Report {
 		nowFn = env.Now
 	}
 	bank := checkBank(ctx, cl, tg, env.Dirs, nowFn())
+	if cl != nil && bank.Status != Error && tg.Source == "config" && cfgErr == nil {
+		briefingTriggers(ctx, cl, tg.Bank, cfg, &bank)
+	}
 	add(bank)
 	if cl != nil && bank.Status != Error {
 		add(checkUntagged(ctx, cl, tg.Bank))

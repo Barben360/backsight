@@ -103,6 +103,10 @@ type tickResult struct {
 	// out of the tick (tickIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
 	MS           int    `json:"ms"`
+
+	// BriefingTriggers: the briefing pages given the refresh floor, on the
+	// first tick of a binary version or floor (tickBriefingTriggers).
+	BriefingTriggers string `json:"briefing_triggers,omitempty"`
 }
 
 // clientSetupFailed is the tick's reason when its client cannot be set up
@@ -237,6 +241,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				// once connect started this PC's sends over.
 				if otherServer(d, cfg) == nil && f.StartedOver() == nil {
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
+					res.BriefingTriggers = tickBriefingTriggers(cmd.Context(), d, cfg, f.Client, tw)
 				}
 				res.History = importInTick(cmd.Context(), d, home, cfg)
 				pruneSessions(d)
@@ -317,6 +322,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					// After the sends: a slow server delays this look, never them.
 					res.Purges = guardTick(cmd.Context(), f, cfg)
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
+					res.BriefingTriggers = tickBriefingTriggers(cmd.Context(), d, cfg, f.Client, tw)
 				}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
@@ -376,6 +382,9 @@ func tickText(r tickResult) string {
 	}
 	if r.Purges != "" {
 		msg += ", " + r.Purges
+	}
+	if r.BriefingTriggers != "" {
+		msg += ", " + r.BriefingTriggers
 	}
 	if r.Server != "" {
 		msg += ", " + r.Server
@@ -486,7 +495,7 @@ func briefingFor(cfg config.Config) string {
 // briefing is "recent": the server would keep refreshing them for nothing.
 // Other mental models are never touched. Best effort.
 func pruneBriefings(ctx context.Context, bank, briefing string, cl *hindsight.Client) []string {
-	models, err := cl.MentalModels(ctx, bank)
+	models, err := cl.MentalModelsMetadata(ctx, bank) // every tick: no page content
 	if err != nil {
 		return nil
 	}

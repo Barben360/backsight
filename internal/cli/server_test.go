@@ -336,9 +336,11 @@ var (
 	recentDown         atomic.Bool
 	recentHasEventTime atomic.Bool       // memories/list answers time_field=mentioned_at too
 	mentalModels       map[string]string // id → mental model JSON
-	mentalCalls        []string          // POST/DELETE on mental models, with the body
+	mentalCalls        []string          // POST/PATCH/DELETE on mental models, with the body
 	mentalGetDelay     time.Duration     // a slow page read
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
+	mentalPatchStatus  atomic.Int32      // non-zero: answer a page update with this status
+	mentalLists        []string          // the query of each mental-model listing
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
 	docPatchFails      atomic.Bool       // PATCH /documents/… answers 503
 	queueOnWrite       atomic.Bool       // a document PATCH or DELETE leaves an operation processing (a consolidation)
@@ -409,8 +411,9 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
 	recentHasEventTime.Store(false)
-	mentalModels, mentalCalls, mentalGetDelay = map[string]string{}, nil, 0
+	mentalModels, mentalCalls, mentalGetDelay, mentalLists = map[string]string{}, nil, 0, nil
 	mentalCreateStatus.Store(0)
+	mentalPatchStatus.Store(0)
 	docDeleteFails.Store(false)
 	docPatchFails.Store(false)
 	queueOnWrite.Store(false)
@@ -648,6 +651,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			body, _ := io.ReadAll(r.Body)
 			switch {
 			case r.Method == http.MethodGet && id == "":
+				mentalLists = append(mentalLists, r.URL.RawQuery)
 				var items []string
 				for _, m := range mentalModels {
 					items = append(items, m)
@@ -670,10 +674,21 @@ func fakeHindsight(t *testing.T) (port int) {
 			case r.Method == http.MethodPost && mentalCreateStatus.Load() != 0:
 				mentalCalls = append(mentalCalls, r.Method+" "+id+" "+string(body))
 				w.WriteHeader(int(mentalCreateStatus.Load()))
+			case r.Method == http.MethodPatch && mentalPatchStatus.Load() != 0:
+				mentalCalls = append(mentalCalls, r.Method+" "+id+" "+string(body))
+				w.WriteHeader(int(mentalPatchStatus.Load()))
 			default:
 				mentalCalls = append(mentalCalls, r.Method+" "+id+" "+string(body))
 				if r.Method == http.MethodDelete {
 					delete(mentalModels, id)
+				}
+				if m, ok := mentalModels[id]; ok && r.Method == http.MethodPatch { // a trigger update replaces it
+					var cur, in map[string]any
+					_ = json.Unmarshal([]byte(m), &cur)
+					_ = json.Unmarshal(body, &in)
+					cur["trigger"] = in["trigger"]
+					raw, _ := json.Marshal(cur)
+					mentalModels[id] = string(raw)
 				}
 				_, _ = w.Write([]byte(`{"operation_id":"op1"}`))
 			}

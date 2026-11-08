@@ -219,3 +219,60 @@ func TestHistoryReadsChanges(t *testing.T) {
 		t.Errorf("want NotFound, got %v", err)
 	}
 }
+
+// The trigger is sent whole (a partial one resets the other fields to the
+// server's defaults), and read back from a listing that asks for it.
+func TestMentalModelTriggerCalls(t *testing.T) {
+	var got []string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery+" "+string(body))
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"items":[{"id":"a","trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600,"refresh_cron":null}},{"id":"b","trigger":{"budget":null,"mode":"full","refresh_after_consolidation":false,"min_refresh_interval_seconds":null}},{"id":"c","trigger":null}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	})
+	ctx := context.Background()
+	floor := 21600
+	tr := MentalModelTrigger{Budget: "low", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &floor}
+	_ = c.CreateMentalModel(ctx, "b", "p1", "n", "q", []string{"project:p"}, 600, tr)
+	_ = c.UpdateMentalModelTrigger(ctx, "b", "p1", tr)
+	models, err := c.MentalModels(ctx, "b")
+	_, _ = c.MentalModelsMetadata(ctx, "b")
+	want := []string{
+		`POST /v1/default/banks/b/mental-models? {"id":"p1","max_tokens":600,"name":"n","source_query":"q","tags":["project:p"],"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
+		`PATCH /v1/default/banks/b/mental-models/p1? {"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
+		// detail=content: the default listing (metadata) leaves trigger and content null.
+		`GET /v1/default/banks/b/mental-models?detail=content `,
+		// the light listing: no content asked for
+		`GET /v1/default/banks/b/mental-models? `,
+	}
+	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("err %v\ngot:\n%s\nwant:\n%s", err, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if len(models) != 3 || models[0].Trigger == nil || !models[0].Trigger.Equal(tr) {
+		t.Fatalf("the wanted trigger not read back: %+v", models)
+	}
+	if models[1].Trigger == nil || models[1].Trigger.Equal(tr) || models[1].Trigger.MinRefreshIntervalSeconds != nil || models[2].Trigger != nil {
+		t.Errorf("a trigger without the floor, or none, read as the wanted one: %+v %+v", models[1].Trigger, models[2].Trigger)
+	}
+	zero, other := 0, 3600
+	for _, d := range []MentalModelTrigger{
+		{Budget: "mid", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &floor},
+		{Budget: "low", Mode: "delta", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &floor},
+		{Budget: "low", Mode: "full", RefreshAfterConsolidation: false, MinRefreshIntervalSeconds: &floor},
+		{Budget: "low", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &other},
+		{Budget: "low", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &zero},
+		{Budget: "low", Mode: "full", RefreshAfterConsolidation: true},
+	} {
+		if d.Equal(tr) {
+			t.Errorf("%+v equals the wanted trigger", d)
+		}
+	}
+	// 0 (no floor) is a value, not the server's null fallback.
+	noFloor := MentalModelTrigger{Budget: "low", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &zero}
+	if noFloor.Equal(MentalModelTrigger{Budget: "low", Mode: "full", RefreshAfterConsolidation: true}) {
+		t.Error("an explicit 0 equals a null floor")
+	}
+}

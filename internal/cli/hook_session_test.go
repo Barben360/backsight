@@ -355,7 +355,8 @@ func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
 	}
 	id := briefingModelID("billing")
 	if c := mentalCalls[0]; !strings.HasPrefix(c, "POST  ") || !strings.Contains(c, `"id":"`+id+`"`) || !strings.Contains(c, `"tags":["project:billing"]`) ||
-		!strings.Contains(c, `"refresh_after_consolidation":true`) || !strings.Contains(c, `"budget":"low"`) || !strings.Contains(c, `"max_tokens":600`) {
+		!strings.Contains(c, `"refresh_after_consolidation":true`) || !strings.Contains(c, `"budget":"low"`) || !strings.Contains(c, `"max_tokens":600`) ||
+		!strings.Contains(c, `"min_refresh_interval_seconds":21600`) {
 		t.Errorf("create: %s", c)
 	}
 	refreshed := time.Now().Add(-3 * time.Hour).UTC().Format("2006-01-02T15:04:05.000000+00:00")
@@ -371,6 +372,19 @@ func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
 	}
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"source":"model"`) {
 		t.Errorf("telemetry:\n%s", tel)
+	}
+}
+
+// Decision 0083 C2: the page is created with the configured refresh floor.
+func TestBriefingPageGetsTheConfiguredFloor(t *testing.T) {
+	home := hookHome(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[recall]\nbriefing_refresh_interval = \"90m\"\n")...), 0o600)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if len(mentalCalls) != 1 || !strings.Contains(mentalCalls[0], `"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":5400}`) {
+		t.Errorf("create: %q", mentalCalls)
 	}
 }
 
