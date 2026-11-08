@@ -70,7 +70,7 @@ func aHome(t *testing.T) (home, bin string) {
 	writeExec(t, filepath.Join(home, "backsight"), aFakeBacksight)
 	writeExec(t, filepath.Join(bin, "hook"), aFakeHook)
 	writeExec(t, filepath.Join(bin, "curl"), "#!/bin/sh\nexit ${CURL_RC:-28}\n")
-	if _, err := plugin.Generate(filepath.Join(home, "data", "marketplace"), filepath.Join(bin, "hook"), "0.940.0"); err != nil {
+	if _, err := plugin.Generate(filepath.Join(home, "data", "marketplace"), filepath.Join(bin, "hook"), "0.940.0", plugin.Wiring{}); err != nil {
 		t.Fatal(err)
 	}
 	writeLines(t, filepath.Join(home, "state", "reach.json"), `{"last_ok":"2026-10-29T03:00:00Z","failing_since":"2026-10-29T04:00:00Z"}`)

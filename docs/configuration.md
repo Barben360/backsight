@@ -14,7 +14,8 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 
 | Keys | Applies |
 |---|---|
-| `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*`, `feedback.*`, `retain.*` | At the next hook or command: the hooks read the file each time. |
+| `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*`, `feedback.*`, `retain.*` | At the next hook or command: the hooks read the file each time. Except `recall.failure_pitfalls`: see the next line. |
+| `recall.failure_pitfalls` | After `backsight client install`, which wires the `PostToolUseFailure` hook only when it is `true` (off, a failed tool call starts no backsight process). Until then, `backsight doctor` and the session's first line report the wiring as drifted. |
 | `llm.*`, `network.*`, `server.ui_port`, the port of `server.url` | After `backsight server render` and `backsight server start`, which write the server's files again and recreate it. Then `backsight server llm check` tests an LLM change. |
 | `backup.*`, `update.*` | At the next daily job, or the next `backup` or `update` command. |
 | `client.retention_days` | At the next `backsight client install` or `backsight client retention`. |
@@ -90,7 +91,7 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | `recall.session_budget_chars` | `6000` | Memory text the prompt hook may add over a whole session; recall stops once it is spent. |
 | `recall.briefing` | `"model"` | The briefing at session start. `"model"`: a page the server keeps per project from its memories (one LLM call to refresh it after new memories). `"recent"`: the project's 5 most recent memories, no LLM call. |
 | `recall.families` | `false` | Search the projects you work on together with the current one (worked out on this machine from your sessions, listed by `backsight projects`) in its project scope, like `related`, without its boost. Off until it is shown to improve recall. |
-| `recall.failure_pitfalls` | `false` | When a tool call fails (`Bash`, `Edit`, `Write`, `MultiEdit`, `WebFetch` or an MCP server's tool), search the memory for that failure and hand Claude up to 2 memories scoring at least 0.8, once per kind of error and session, within `recall.session_budget_chars`. Off until it is shown to help. **Needs v0.1.6-m5 or newer:** an older backsight refuses a `config.toml` with a key it does not know, so remove the line before installing an older version. A failed `backsight update apply` is not affected: its rollback puts back the `config.toml` you had before the update. backsight never writes this key. |
+| `recall.failure_pitfalls` | `false` | When a tool call fails (`Bash`, `Edit`, `Write`, `MultiEdit`, `WebFetch` or an MCP server's tool), search the memory for that failure and hand Claude up to 2 memories scoring at least 0.8, once per kind of error and session, within `recall.session_budget_chars`. Off until it is shown to help. After changing it, run `backsight client install`: the hook is wired only while this is `true`. **Needs v0.1.6-m5 or newer:** an older backsight refuses a `config.toml` with a key it does not know, so remove the line before installing an older version. A failed `backsight update apply` is not affected: its rollback puts back the `config.toml` you had before the update. backsight never writes this key. |
 
 ## `[llm]`: the model that extracts memories
 

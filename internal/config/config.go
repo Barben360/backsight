@@ -160,6 +160,11 @@ type Recall struct {
 	FailurePitfalls bool `toml:"failure_pitfalls" json:"failure_pitfalls"`
 }
 
+// FailurePitfallsKey names Recall.FailurePitfalls for messages: client
+// install wires PostToolUseFailure only when it is true, and the wiring
+// drift names it when it flipped since (decision 0083 C9).
+const FailurePitfallsKey = "recall.failure_pitfalls"
+
 type LLM struct {
 	Provider string `toml:"provider" json:"provider"`
 	Model    string `toml:"model" json:"model"`

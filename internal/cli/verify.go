@@ -133,7 +133,7 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 	if configDir != "" {
 		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	for _, h := range plugin.Hooks() {
+	for _, h := range plugin.Hooks(plugin.WiringOf(cfg)) {
 		add(verifyHook(ctx, sd, shim, env, h, sid, work))
 	}
 	add(verifyMCP(ctx, shim, env, work, cfg.Feedback.Enabled))

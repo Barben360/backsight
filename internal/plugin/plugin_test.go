@@ -39,7 +39,7 @@ type hooksFile struct {
 
 func TestGenerateWritesAMarketplaceWithOnePlugin(t *testing.T) {
 	dir := t.TempDir()
-	changed, err := Generate(dir, "/opt/backsight/bin/current", "1.2.3")
+	changed, err := Generate(dir, "/opt/backsight/bin/current", "1.2.3", Wiring{})
 	if err != nil || !changed {
 		t.Fatalf("changed %v err %v", changed, err)
 	}
@@ -78,7 +78,7 @@ func TestGenerateWritesAMarketplaceWithOnePlugin(t *testing.T) {
 // the supervisor's child deadline.
 func TestHooksCoverEveryEventInExecForm(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Generate(dir, "/opt/backsight/bin/current", "1.2.3"); err != nil {
+	if _, err := Generate(dir, "/opt/backsight/bin/current", "1.2.3", Wiring{FailurePitfalls: true}); err != nil {
 		t.Fatal(err)
 	}
 	var hf hooksFile
@@ -124,15 +124,15 @@ func TestHooksCoverEveryEventInExecForm(t *testing.T) {
 
 func TestGenerateIsIdempotentAndRewritesOnChange(t *testing.T) {
 	dir := t.TempDir()
-	_, _ = Generate(dir, "/a/current", "1.2.3")
-	if changed, err := Generate(dir, "/a/current", "1.2.3"); err != nil || changed {
+	_, _ = Generate(dir, "/a/current", "1.2.3", Wiring{})
+	if changed, err := Generate(dir, "/a/current", "1.2.3", Wiring{}); err != nil || changed {
 		t.Errorf("second run changed %v err %v", changed, err)
 	}
-	if changed, _ := Generate(dir, "/b/current", "1.2.3"); !changed {
+	if changed, _ := Generate(dir, "/b/current", "1.2.3", Wiring{}); !changed {
 		t.Error("a new shim path must rewrite")
 	}
 	_ = os.WriteFile(filepath.Join(dir, "plugins", "backsight", "stray.txt"), []byte("x"), 0o600)
-	if _, err := Generate(dir, "/b/current", "1.2.3"); err != nil {
+	if _, err := Generate(dir, "/b/current", "1.2.3", Wiring{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "plugins", "backsight", "stray.txt")); err == nil {
@@ -141,14 +141,14 @@ func TestGenerateIsIdempotentAndRewritesOnChange(t *testing.T) {
 }
 
 func TestDevBuildsGetAContentVersion(t *testing.T) {
-	a, b := Version("dev", "/a/current"), Version("dev", "/b/current")
-	if !strings.HasPrefix(a, "0.0.0-dev+") || a == b || Version("dev", "/a/current") != a {
+	a, b := Version("dev", "/a/current", Wiring{}), Version("dev", "/b/current", Wiring{})
+	if !strings.HasPrefix(a, "0.0.0-dev+") || a == b || Version("dev", "/a/current", Wiring{}) != a {
 		t.Errorf("%q %q", a, b)
 	}
 	// a release too: the shim path is in the generated files, so a moved data
 	// directory must be an update Claude Code applies
-	r1, r2 := Version("1.2.3", "/a/current"), Version("1.2.3", "/b/current")
-	if !strings.HasPrefix(r1, "1.2.3+") || r1 == r2 || Version("1.2.3+meta", "/a") != "1.2.3+meta."+strings.TrimPrefix(Version("1.2.3", "/a"), "1.2.3+") {
+	r1, r2 := Version("1.2.3", "/a/current", Wiring{}), Version("1.2.3", "/b/current", Wiring{})
+	if !strings.HasPrefix(r1, "1.2.3+") || r1 == r2 || Version("1.2.3+meta", "/a", Wiring{}) != "1.2.3+meta."+strings.TrimPrefix(Version("1.2.3", "/a", Wiring{}), "1.2.3+") {
 		t.Errorf("%q %q", r1, r2)
 	}
 }
@@ -161,7 +161,7 @@ func TestExactToolNamesEventsAndTimeouts(t *testing.T) {
 		t.Errorf("tool names %v", ToolNames)
 	}
 	dir := t.TempDir()
-	_, _ = Generate(dir, "/s", "1.2.3")
+	_, _ = Generate(dir, "/s", "1.2.3", Wiring{FailurePitfalls: true})
 	var hf hooksFile
 	read(t, filepath.Join(dir, "plugins", "backsight", "hooks", "hooks.json"), &hf)
 	exact := map[string]string{ // event/matcher -> backsight event, timeout
@@ -193,21 +193,89 @@ func TestExactToolNamesEventsAndTimeouts(t *testing.T) {
 }
 
 // memory_credit joins the allowed tools, and the plugin is regenerated for
-// it: its version hash follows layout 5.
+// it: its version hash follows the layout. Layout 6 (decision 0083 C9)
+// dropped PostToolUseFailure unless recall.failure_pitfalls is on, which
+// adds a line to the hash.
 func TestPluginAllowsTheCreditTool(t *testing.T) {
 	if len(ToolNames) != 4 || ToolNames[3] != "mcp__plugin_backsight_memory__memory_credit" {
 		t.Errorf("tool names %v", ToolNames)
 	}
-	// sha256("5\n/s")[:6]; layout 4 gave another hash
-	if got := Version("1.2.3", "/s"); got != "1.2.3+a8128dd31978" {
+	// sha256("6\n/s")[:6]; layout 5 gave a8128dd31978
+	if got := Version("1.2.3", "/s", Wiring{}); got != "1.2.3+31fb2a44e564" {
 		t.Errorf("version %s", got)
+	}
+	// sha256("6\n/s\nPostToolUseFailure")[:6]
+	if got := Version("1.2.3", "/s", Wiring{FailurePitfalls: true}); got != "1.2.3+def4569f6ab3" {
+		t.Errorf("version with failure pitfalls %s", got)
+	}
+}
+
+// recall.failure_pitfalls decides whether PostToolUseFailure is wired
+// (decision 0083 C9): off, a failed tool call spawns no hook process; on,
+// the hook is wired as before. Flipping it is a new plugin version, so
+// Claude Code applies the change.
+func TestFailureHookIsWiredOnlyWhenFailurePitfallsIsOn(t *testing.T) {
+	dir := t.TempDir()
+	hooksOf := func() hooksFile {
+		var hf hooksFile
+		read(t, filepath.Join(dir, "plugins", "backsight", "hooks", "hooks.json"), &hf)
+		return hf
+	}
+	versionOf := func() string {
+		var pj struct{ Version string }
+		read(t, filepath.Join(dir, "plugins", "backsight", ".claude-plugin", "plugin.json"), &pj)
+		return pj.Version
+	}
+	if _, err := Generate(dir, "/s", "1.2.3", Wiring{}); err != nil {
+		t.Fatal(err)
+	}
+	off := hooksOf()
+	if _, wired := off.Hooks["PostToolUseFailure"]; wired {
+		t.Errorf("off: PostToolUseFailure wired: %+v", off.Hooks["PostToolUseFailure"])
+	}
+	if len(off.Hooks) != 8 {
+		t.Errorf("off: %d events, want the 8 others", len(off.Hooks))
+	}
+	offVersion := versionOf()
+	changed, err := Generate(dir, "/s", "1.2.3", Wiring{FailurePitfalls: true})
+	if err != nil || !changed {
+		t.Fatalf("turning it on must rewrite the plugin: changed %v err %v", changed, err)
+	}
+	g := hooksOf().Hooks["PostToolUseFailure"]
+	if len(g) != 1 || g[0].Matcher != "Bash|Edit|Write|MultiEdit|WebFetch|mcp__.*" || strings.Join(g[0].Hooks[0].Args, " ") != "hook post-tool-use-failure" {
+		t.Errorf("on: PostToolUseFailure %+v", g)
+	}
+	if on := versionOf(); on == offVersion || on != Version("1.2.3", "/s", Wiring{FailurePitfalls: true}) {
+		t.Errorf("on: version %s, off was %s", on, offVersion)
+	}
+	if changed, _ := Generate(dir, "/s", "1.2.3", Wiring{}); !changed || versionOf() != offVersion {
+		t.Error("turning it off again must rewrite the plugin back")
+	}
+}
+
+// verify runs the hooks the plugin wires, no more.
+func TestHooksFollowTheWiring(t *testing.T) {
+	args := func(w Wiring) string {
+		var out []string
+		for _, h := range Hooks(w) {
+			out = append(out, h.Arg)
+		}
+		return strings.Join(out, " ")
+	}
+	base := "session-start user-prompt-submit pre-tool-use post-tool-use "
+	rest := "subagent-start subagent-stop stop session-end"
+	if got := args(Wiring{}); got != base+rest {
+		t.Errorf("off: %s", got)
+	}
+	if got := args(Wiring{FailurePitfalls: true}); got != base+"post-tool-use-failure "+rest {
+		t.Errorf("on: %s", got)
 	}
 }
 
 func TestANewBinaryVersionRewritesThePlugin(t *testing.T) {
 	dir := t.TempDir()
-	_, _ = Generate(dir, "/s", "1.2.3")
-	if changed, _ := Generate(dir, "/s", "1.2.4"); !changed {
+	_, _ = Generate(dir, "/s", "1.2.3", Wiring{})
+	if changed, _ := Generate(dir, "/s", "1.2.4", Wiring{}); !changed {
 		t.Fatal("not rewritten")
 	}
 	var pj struct{ Version string }
@@ -245,7 +313,7 @@ func frontmatter(t *testing.T, name, s string) map[string]string {
 // skill may run exactly the backsight commands it names, nothing broader.
 func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Generate(dir, "/opt/b/current", "1.2.3"); err != nil {
+	if _, err := Generate(dir, "/opt/b/current", "1.2.3", Wiring{}); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
@@ -309,7 +377,7 @@ func TestSkillsQuoteAShimThatNeedsIt(t *testing.T) {
 		"/home/o'brien/.local/share/backsight/bin/current":           `'/home/o'\''brien/.local/share/backsight/bin/current'`,
 	} {
 		dir := t.TempDir()
-		if _, err := Generate(dir, shim, "1.2.3"); err != nil {
+		if _, err := Generate(dir, shim, "1.2.3", Wiring{}); err != nil {
 			t.Fatal(err)
 		}
 		raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))

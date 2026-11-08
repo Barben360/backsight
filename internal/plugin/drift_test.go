@@ -38,23 +38,73 @@ func TestDrift(t *testing.T) {
 	_ = os.WriteFile(target, []byte("bin"), 0o755)
 	shim := makeShim(t, data, target)
 	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+strings.Join(ToolNames, `","`)+`"]}}`), 0o600)
-	installed := Installed{Version: Version("1.2.3", shim), ShimTarget: target}
-	if got := Drift(data, settings, installed, "1.2.3"); len(got) != 0 {
+	installed := Installed{Version: Version("1.2.3", shim, Wiring{}), ShimTarget: target}
+	if got := Drift(data, settings, installed, "1.2.3", Wiring{}); len(got) != 0 {
 		t.Errorf("no drift expected: %v", got)
 	}
-	if got := Drift(data, settings, installed, "1.3.0"); len(got) != 1 || !strings.Contains(got[0], "plugin") {
+	if got := Drift(data, settings, installed, "1.3.0", Wiring{}); len(got) != 1 || !strings.Contains(got[0], "plugin") {
 		t.Errorf("binary updated, plugin not: %v", got)
 	}
 	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+ToolNames[0]+`"]}}`), 0o600)
-	if got := Drift(data, settings, installed, "1.2.3"); len(got) != 1 || !strings.Contains(got[0], "permission") {
+	if got := Drift(data, settings, installed, "1.2.3", Wiring{}); len(got) != 1 || !strings.Contains(got[0], "permission") {
 		t.Errorf("permission rule incomplete: %v", got)
 	}
 	_ = os.Remove(shim)
-	if got := Drift(data, settings, installed, "1.2.3"); len(got) != 2 || !strings.Contains(got[1], "shim") {
+	if got := Drift(data, settings, installed, "1.2.3", Wiring{}); len(got) != 2 || !strings.Contains(got[1], "shim") {
 		t.Errorf("shim missing: %v", got)
 	}
-	if got := Drift(data, settings, Installed{}, "1.2.3"); len(got) != 0 {
+	if got := Drift(data, settings, Installed{}, "1.2.3", Wiring{}); len(got) != 0 {
 		t.Errorf("never installed: no drift to report: %v", got)
+	}
+}
+
+// A caller that cannot read the config takes the wiring the installed
+// version was generated with.
+func TestInstalledWiringFollowsTheVersion(t *testing.T) {
+	data := t.TempDir()
+	shim := filepath.Join(data, "bin", ShimName(runtime.GOOS))
+	on := Wiring{FailurePitfalls: true}
+	if got := InstalledWiring(data, Installed{Version: Version("1.2.3", shim, on)}, "1.2.3"); got != on {
+		t.Errorf("installed on: %+v", got)
+	}
+	for _, v := range []string{Version("1.2.3", shim, Wiring{}), Version("1.0.0", shim, on), "0.0.0-old", ""} {
+		if got := InstalledWiring(data, Installed{Version: v}, "1.2.3"); got != (Wiring{}) {
+			t.Errorf("installed %q: %+v", v, got)
+		}
+	}
+}
+
+// recall.failure_pitfalls flipped since client install: the plugin's
+// PostToolUseFailure hook no longer matches it, and the drift says which
+// switch and which way (doctor and the SessionStart line send to client
+// install).
+func TestDriftNamesAFlippedFailureSwitch(t *testing.T) {
+	data := t.TempDir()
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	target := filepath.Join(data, "bin", "v1", "backsight")
+	_ = os.MkdirAll(filepath.Dir(target), 0o755)
+	_ = os.WriteFile(target, []byte("bin"), 0o755)
+	shim := makeShim(t, data, target)
+	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+strings.Join(ToolNames, `","`)+`"]}}`), 0o600)
+	on, off := Wiring{FailurePitfalls: true}, Wiring{}
+	for _, c := range []struct {
+		installed, now Wiring
+		want           string
+	}{
+		{off, on, "recall.failure_pitfalls is on but the plugin does not wire PostToolUseFailure"},
+		{on, off, "recall.failure_pitfalls is off but the plugin still wires PostToolUseFailure"},
+	} {
+		in := Installed{Version: Version("1.2.3", shim, c.installed), ShimTarget: target}
+		if got := Drift(data, settings, in, "1.2.3", c.now); len(got) != 1 || got[0] != c.want {
+			t.Errorf("installed %+v, now %+v: %q", c.installed, c.now, got)
+		}
+		if got := Drift(data, settings, in, "1.2.3", c.installed); len(got) != 0 {
+			t.Errorf("installed and now %+v: %q", c.installed, got)
+		}
+		// another binary as well: the version line, not the switch's
+		if got := Drift(data, settings, in, "1.3.0", c.now); len(got) != 1 || !strings.Contains(got[0], "is not this binary's") {
+			t.Errorf("new binary, flipped switch: %q", got)
+		}
 	}
 }
 
@@ -70,8 +120,8 @@ func TestDriftShimTargetsAndSettingsFiles(t *testing.T) {
 	shim := makeShim(t, data, v2)
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+strings.Join(ToolNames, `","`)+`"]}}`), 0o600)
-	in := Installed{Version: Version("1.2.3", shim), ShimTarget: v1}
-	got := Drift(data, settings, in, "1.2.3")
+	in := Installed{Version: Version("1.2.3", shim, Wiring{}), ShimTarget: v1}
+	got := Drift(data, settings, in, "1.2.3", Wiring{})
 	if runtime.GOOS == "windows" {
 		// the shim is a copy: only its presence is checked, hashing two
 		// binaries would blow the SessionStart budget
@@ -83,25 +133,25 @@ func TestDriftShimTargetsAndSettingsFiles(t *testing.T) {
 			t.Errorf("shim on another version: %v", got)
 		}
 		in.ShimTarget = ""
-		if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
+		if got := Drift(data, settings, in, "1.2.3", Wiring{}); len(got) != 0 {
 			t.Errorf("no recorded target: %v", got)
 		}
 		// a data directory reached through a symlink resolves to the same target
 		link := filepath.Join(t.TempDir(), "data-link")
 		_ = os.Symlink(data, link)
 		in.ShimTarget = filepath.Join(link, "bin", "v2", "backsight")
-		if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
+		if got := Drift(data, settings, in, "1.2.3", Wiring{}); len(got) != 0 {
 			t.Errorf("symlinked data dir: %v", got)
 		}
 	}
 	for _, doc := range []string{"", "{not json"} {
 		_ = os.WriteFile(settings, []byte(doc), 0o600)
-		if got := Drift(data, settings, in, "1.2.3"); len(got) != 1 || !strings.Contains(got[0], "permission") {
+		if got := Drift(data, settings, in, "1.2.3", Wiring{}); len(got) != 1 || !strings.Contains(got[0], "permission") {
 			t.Errorf("settings %q: %v", doc, got)
 		}
 	}
 	_ = os.Remove(settings)
-	if got := Drift(data, settings, in, "1.2.3"); len(got) != 1 {
+	if got := Drift(data, settings, in, "1.2.3", Wiring{}); len(got) != 1 {
 		t.Errorf("settings missing: %v", got)
 	}
 }

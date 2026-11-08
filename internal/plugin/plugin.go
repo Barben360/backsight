@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/instructions"
 )
@@ -28,7 +29,7 @@ const (
 	Server      = "memory"
 	// layout changes whenever the generated files change shape, so dev
 	// builds get a new plugin version.
-	layout = "5"
+	layout = "6"
 )
 
 // ToolNames are the four memory tools as Claude Code names them.
@@ -44,20 +45,39 @@ var ToolNames = []string{
 type event struct {
 	name, matcher, arg string
 	timeout            int
+	failure            bool // wired only with the [recall] failure switch
 }
 
+// Wiring is what the generated hooks depend on beside the binary and the
+// shim: the config switches that wire a hook or leave it out.
+type Wiring struct {
+	// FailurePitfalls is the [recall] failure switch: off, PostToolUseFailure
+	// is not wired, so a failed tool call spawns no hook process (decision
+	// 0083 C9). Flipping it takes a client install, which doctor asks for.
+	FailurePitfalls bool
+}
+
+// WiringOf is the wiring cfg asks for.
+func WiringOf(cfg config.Config) Wiring {
+	return Wiring{FailurePitfalls: cfg.Recall.FailurePitfalls}
+}
+
+// wires says whether the plugin generated for w has e.
+func (w Wiring) wires(e event) bool { return !e.failure || w.FailurePitfalls }
+
 var events = []event{
-	{"SessionStart", "startup", "session-start", 10},
-	{"SessionStart", "resume|clear|compact|fork", "session-start", 5},
-	{"UserPromptSubmit", "", "user-prompt-submit", 25},
-	{"PreToolUse", "AskUserQuestion", "pre-tool-use", 10},
-	{"PostToolUse", "mcp__plugin_" + Name + "_" + Server + "__.*", "post-tool-use", 2},
-	// A failed tool call: the pitfalls memory knows about it (off by default, see docs/configuration.md).
-	{"PostToolUseFailure", "Bash|Edit|Write|MultiEdit|WebFetch|mcp__.*", "post-tool-use-failure", 10},
-	{"SubagentStart", "", "subagent-start", 5},
-	{"SubagentStop", "", "subagent-stop", 5},
-	{"Stop", "", "stop", 5},
-	{"SessionEnd", "", "session-end", 1}, // 1.5 s total, not raisable from a plugin (C06)
+	{"SessionStart", "startup", "session-start", 10, false},
+	{"SessionStart", "resume|clear|compact|fork", "session-start", 5, false},
+	{"UserPromptSubmit", "", "user-prompt-submit", 25, false},
+	{"PreToolUse", "AskUserQuestion", "pre-tool-use", 10, false},
+	{"PostToolUse", "mcp__plugin_" + Name + "_" + Server + "__.*", "post-tool-use", 2, false},
+	// A failed tool call: the pitfalls memory knows about it. Wired only
+	// with the [recall] failure switch (off by default, see docs/configuration.md).
+	{"PostToolUseFailure", "Bash|Edit|Write|MultiEdit|WebFetch|mcp__.*", "post-tool-use-failure", 10, true},
+	{"SubagentStart", "", "subagent-start", 5, false},
+	{"SubagentStop", "", "subagent-stop", 5, false},
+	{"Stop", "", "stop", 5, false},
+	{"SessionEnd", "", "session-end", 1, false}, // 1.5 s total, not raisable from a plugin (C06)
 }
 
 // Hook is one backsight hook command the plugin wires, with Claude Code's
@@ -67,12 +87,13 @@ type Hook struct {
 	Timeout    int
 }
 
-// Hooks lists each hook command once (verify runs every one).
-func Hooks() []Hook {
+// Hooks lists each hook command the plugin generated for w wires, once
+// (verify runs every one).
+func Hooks(w Wiring) []Hook {
 	var out []Hook
 	seen := map[string]bool{}
 	for _, e := range events {
-		if !seen[e.arg] {
+		if w.wires(e) && !seen[e.arg] {
 			seen[e.arg] = true
 			out = append(out, Hook{Event: e.name, Arg: e.arg, Timeout: e.timeout})
 		}
@@ -81,10 +102,15 @@ func Hooks() []Hook {
 }
 
 // Version is the plugin version: the binary's, plus a hash of what the
-// generated files depend on (the shim path), so any change to them is an
-// update Claude Code applies (a moved data directory included).
-func Version(binary, shim string) string {
-	sum := sha256.Sum256([]byte(layout + "\n" + shim))
+// generated files depend on (the shim path, the wiring), so any change to
+// them is an update Claude Code applies (a moved data directory or a
+// flipped [recall] failure switch included).
+func Version(binary, shim string, w Wiring) string {
+	in := layout + "\n" + shim
+	if w.FailurePitfalls {
+		in += "\nPostToolUseFailure"
+	}
+	sum := sha256.Sum256([]byte(in))
 	h := hex.EncodeToString(sum[:6])
 	if binary == "" || binary == "dev" {
 		return "0.0.0-dev+" + h
@@ -108,7 +134,7 @@ func ShimName(goos string) string {
 
 // files is the generated tree, relative to the marketplace directory.
 // Skills name the shim with forward slashes on Windows (skillShim).
-func files(shim, version string) (map[string][]byte, error) {
+func files(shim, version string, w Wiring) (map[string][]byte, error) {
 	type hookCmd struct {
 		Type    string   `json:"type"`
 		Command string   `json:"command"`
@@ -121,6 +147,9 @@ func files(shim, version string) (map[string][]byte, error) {
 	}
 	hooks := map[string][]group{}
 	for _, e := range events {
+		if !w.wires(e) {
+			continue
+		}
 		hooks[e.name] = append(hooks[e.name], group{Matcher: e.matcher, Hooks: []hookCmd{{"command", shim, []string{"hook", e.arg}, e.timeout}}})
 	}
 	docs := map[string]any{
@@ -169,10 +198,11 @@ func skillShim(goos, shim string) string {
 var owned = []string{".claude-plugin", "plugins"}
 
 // Generate writes the marketplace into dir; changed says whether anything
-// differed. The new tree is written beside dir and swapped in, so Claude
-// Code (which reads the plugin from this folder) never sees half of it.
-func Generate(dir, shim, binaryVersion string) (bool, error) {
-	want, err := files(shim, Version(binaryVersion, shim))
+// differed; w decides the optional hooks. The new tree is written beside
+// dir and swapped in, so Claude Code (which reads the plugin from this
+// folder) never sees half of it.
+func Generate(dir, shim, binaryVersion string, w Wiring) (bool, error) {
+	want, err := files(shim, Version(binaryVersion, shim, w), w)
 	if err != nil {
 		return false, err
 	}
