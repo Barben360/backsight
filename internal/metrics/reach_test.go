@@ -318,7 +318,7 @@ func TestSearchEmptyRateCountsQueriesAndAnswerSize(t *testing.T) {
 	x.tel(at(4), telemetry.Tool{Name: "memory_search", QueriesN: 2, QueryHits: []int{0, 0}, ResultChars: 50}, "s", "alpha")
 	x.tel(at(5), telemetry.Tool{Name: "memory_read", OK: true, ResultChars: 4000}, "s", "alpha")
 	m := reachOf(x, x.query(7))["search.empty_rate"]
-	if m.Extra["queries"] != int64(4) || m.Extra["empty_queries"] != int64(3) || m.Extra["chars_per_search"] != int64(500) || m.Extra["failed"] != int64(1) {
+	if m.Extra["queries"] != int64(4) || m.Extra["queries_none_returned"] != int64(3) || m.Extra["chars_per_search"] != int64(500) || m.Extra["failed"] != int64(1) {
 		t.Errorf("extra %v, want 4 queries, 3 empty, 500 chars per search, 1 failed", m.Extra)
 	}
 	y := newFx(t, fxNow)

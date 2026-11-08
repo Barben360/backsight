@@ -3,10 +3,11 @@
 -- ingested before has NULL in the new columns, as a line written before
 -- the fields does. Types as 0001's header.
 
--- tel_tool: a memory_search's queries and how many of them found none of
--- the hits returned, and every tool's answer size in characters.
+-- tel_tool: a memory_search's queries and how many of them had none of
+-- their hits among those returned (not "found nothing": a query's hits
+-- may all rank below the others'), and every tool's answer size.
 ALTER TABLE tel_tool ADD COLUMN queries_n INTEGER;
-ALTER TABLE tel_tool ADD COLUMN queries_empty INTEGER;
+ALTER TABLE tel_tool ADD COLUMN queries_none_returned INTEGER;
 ALTER TABLE tel_tool ADD COLUMN result_chars INTEGER;
 
 -- One row per end-of-turn block, written when the blocked turn ended

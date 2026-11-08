@@ -37,7 +37,7 @@ var released = map[string]string{
 	"0001-initial":    "37f78317d2a3e98e9bf642e31337171222f525d2ecb7c6bf1b1d115097a9d331",
 	"0002-collection": "71de9e2b47e97357ff58bd793ef4214e6a5b2aff71999383539b5b74278c9500",
 	"0003-machines":   "56ecc20ae3dc7e45e6d287313addffac6f277b8fe741019da27a000167f766ef",
-	"0004-telemetry":  "c92313d02cb9c7a6a5e771ee59a3b7cd2ec035a901c287af26dd300d2344b54e",
+	"0004-telemetry":  "aaf75e2f8a157bcb6bbd81f2ffad7baa37049dba73b543277596a87b347f98c1",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -49,7 +49,7 @@ var schemaTables = []struct{ name, cols string }{
 	{"tel_reply", rowKey + "ts session project binary_version v n credit searched"},
 	{"tel_briefing", rowKey + "ts session project binary_version v ids_n chars source"},
 	{"tel_briefing_outcome", rowKey + "ts session project binary_version v used_n"},
-	{"tel_tool", rowKey + "ts session project binary_version v name ms hits ok live queries_n queries_empty result_chars"},
+	{"tel_tool", rowKey + "ts session project binary_version v name ms hits ok live queries_n queries_none_returned result_chars"},
 	{"tel_tool_use", rowKey + "ts session project binary_version v n name ids_n subagent"},
 	{"tel_credit", rowKey + "ts session project binary_version v verdict ids_n ok"},
 	{"tel_credit_check", rowKey + "ts session project binary_version v outcome shown flags after_block"},
@@ -180,7 +180,7 @@ var (
 		"memories": "INTEGER", "bucket": "INTEGER", "input": "INTEGER", "output": "INTEGER", "cached": "INTEGER",
 		"thoughts": "INTEGER", "requests": "INTEGER", "complete": "INTEGER", "created_at": "INTEGER",
 		"updated_at": "INTEGER", "retries": "INTEGER", "units": "INTEGER", "no_units": "INTEGER", "count": "INTEGER",
-		"forgotten": "INTEGER", "queries_n": "INTEGER", "queries_empty": "INTEGER", "result_chars": "INTEGER",
+		"forgotten": "INTEGER", "queries_n": "INTEGER", "queries_none_returned": "INTEGER", "result_chars": "INTEGER",
 
 		"os": "TEXT", "first_seen": "TEXT", "until_day": "TEXT", "version": "TEXT", "mtime": "INTEGER",
 		"fetched_at": "INTEGER", "noon": "INTEGER", "prompts": "INTEGER",

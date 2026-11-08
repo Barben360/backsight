@@ -29,7 +29,7 @@ type shownCount struct {
 func showCounts(e env, w Window) ([]shownCount, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT memory_id, COUNT(*) FROM shows
-WHERE memory_id IS NOT NULL AND memory_id <> '' AND ts >= ? AND ts < ? AND `+projectClause+`
+WHERE memory_id IS NOT NULL AND memory_id <> '' AND `+notPage("memory_id")+` AND ts >= ? AND ts < ? AND `+projectClause+`
 GROUP BY memory_id ORDER BY COUNT(*) DESC, memory_id`,
 		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {
@@ -139,7 +139,7 @@ func bankActiveShare(e env, w Window, obs map[string]Observation, met map[string
 	sinceDay := w.Since.UTC().Format(dateLayout)
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT d.memory_id IS NOT NULL, d.created_day, (SELECT MIN(f.ts) FROM shows f WHERE f.memory_id = c.memory_id)
-FROM (SELECT DISTINCT memory_id FROM shows WHERE memory_id IS NOT NULL AND memory_id <> '' AND ts >= ? AND ts < ?) c
+FROM (SELECT DISTINCT memory_id FROM shows WHERE memory_id IS NOT NULL AND memory_id <> '' AND `+notPage("memory_id")+` AND ts >= ? AND ts < ?) c
 LEFT JOIN memory_doc d ON d.memory_id = c.memory_id
 ORDER BY c.memory_id`, w.Since.UnixMilli(), w.Until.UnixMilli())
 	if err != nil {

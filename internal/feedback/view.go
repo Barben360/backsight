@@ -70,12 +70,28 @@ var (
 var prefixRE = regexp.MustCompile(`^[0-9a-f]{8}[0-9a-f-]*$`)
 
 // Resolve is the shown id ref names: the id itself, or a prefix of at
-// least 8 lowercase hex characters that exactly one shown id starts with.
+// least 8 lowercase hex characters that exactly one shown id starts with,
+// or PageRef for the one briefing page shown.
 func Resolve(ref string, shown []Show) (string, error) {
 	for _, s := range shown {
 		if s.ID == ref {
 			return ref, nil
 		}
+	}
+	if ref == PageRef {
+		match := ""
+		for _, s := range shown {
+			if IsBriefingPage(s.ID) && s.ID != match {
+				if match != "" {
+					return "", ErrAmbiguous
+				}
+				match = s.ID
+			}
+		}
+		if match == "" {
+			return "", ErrUnknown
+		}
+		return match, nil
 	}
 	if !prefixRE.MatchString(ref) {
 		return "", ErrUnknown
@@ -100,7 +116,9 @@ func Resolve(ref string, shown []Show) (string, error) {
 // turn), whether it was already asked to, and what it declared.
 // BlockPaths and BlockShown: the paths of the shows before the turn's
 // first block, each once, in the order first shown, and how many
-// memories they showed; Verdicts: the verdicts it declared, each once.
+// memories they showed, a briefing page left out (it never holds a turn);
+// Verdicts: the verdicts it declared, each once; LastStop: the outcome of
+// the turn's latest stop for the agent, "" before any.
 type Check struct {
 	Shown             []Show
 	Declared, Blocked bool
@@ -109,13 +127,17 @@ type Check struct {
 	BlockPaths        []string
 	BlockShown        int
 	Verdicts          []string
+	LastStop          string
 }
 
-// distinctIDs counts the memories of shown, each once.
+// distinctIDs counts the memories of shown, each once, briefing pages
+// left out.
 func distinctIDs(shown []Show) int {
 	seen := map[string]bool{}
 	for _, s := range shown {
-		seen[s.ID] = true
+		if !IsBriefingPage(s.ID) {
+			seen[s.ID] = true
+		}
 	}
 	return len(seen)
 }
@@ -138,7 +160,8 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 			}
 			shows := ShowsOf(e)
 			c.Shown = append(c.Shown, shows...)
-			if len(shows) > 0 && !slices.Contains(paths, e.Path) {
+			memory := slices.ContainsFunc(shows, func(s Show) bool { return !IsBriefingPage(s.ID) })
+			if memory && !slices.Contains(paths, e.Path) {
 				paths = append(paths, e.Path)
 			}
 			continue
@@ -162,7 +185,10 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 					c.Credited = append(c.Credited, id)
 				}
 			}
-		case e.Kind == "stop" && e.Outcome == "blocked":
+		case e.Kind == "stop" && e.Outcome != "blocked":
+			c.LastStop = e.Outcome
+		case e.Kind == "stop":
+			c.LastStop = e.Outcome
 			if !c.Blocked {
 				c.BlockPaths, c.BlockShown = slices.Clone(paths), distinctIDs(c.Shown)
 			}

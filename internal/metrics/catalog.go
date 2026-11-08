@@ -84,9 +84,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "search.empty_rate", Label: "Searches that found nothing", Unit: "ratio", Direction: "down", MinN: 20,
 		Relative: true, CI: "wilson", Scope: "machine", Source: "telemetry", Family: "reach", Series: "daily", Command: "backsight stats quality",
-		Extra:      []string{"failed", "queries", "empty_queries", "chars_per_search"},
+		Extra:      []string{"failed", "queries", "queries_none_returned", "chars_per_search"},
 		Question:   "How often does a memory search come back empty?",
-		Definition: "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart. Beside it, from the calls that recorded them: the queries asked, those that found none of the memories returned, and the characters a search answer adds to Claude's context, on average.",
+		Definition: "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart. Beside it, from the calls that recorded them: the queries asked; the queries none of whose hits were returned (a query that found memories, all of them ranked out by the other queries' or under the cut-off, counts here: it is not a query that found nothing); and the characters a search answer adds to Claude's context, on average.",
 		Action:     "Gaps in memory: what Claude looks for is not stored.",
 	},
 	{

@@ -385,8 +385,16 @@ func TestStopNeverBlocksForABriefingPageAlone(t *testing.T) {
 	journalShow(t, j2, "", "", "briefing", page)
 	journalShow(t, j2, "u-1", "", "prompt", stopIDA)
 	d, reason, _ := stopHook(t, "stop", map[string]any{"session_id": "s2", "cwd": home, "last_assistant_message": "done"})
-	if d != "block" || !strings.Contains(reason, "\n- "+page+" (the briefing page)\n") || !strings.Contains(reason, "\n- 0b4c2a52 ") {
+	if d != "block" || !strings.Contains(reason, "\n- page (the briefing page)\n") || !strings.Contains(reason, "\n- 0b4c2a52 ") {
 		t.Errorf("page and memory: %q\n%s", d, reason)
+	}
+	// The block's record leaves the page out: it never held the turn.
+	if _, _, out := stopHook(t, "stop", map[string]any{"session_id": "s2", "cwd": home, "last_assistant_message": "done"}); out != nil {
+		t.Fatalf("second stop answered %s", out)
+	}
+	evs := eventsNamed(t, home, "stop_block")
+	if len(evs) != 1 || fmt.Sprint(evs[0]["paths"]) != "[prompt]" || evs[0]["shown"] != float64(1) {
+		t.Errorf("stop_block %v, want paths [prompt], shown 1", evs)
 	}
 }
 
@@ -442,6 +450,15 @@ func TestStopBlockOutcomesAreTelemetered(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("stop_block events\n got %v\nwant %v", got, want)
+	}
+	// A third stop of a held turn reports nothing again: one event per block.
+	for _, sess := range []string{"used", "refused"} {
+		if d := stop(sess); d != "" {
+			t.Fatalf("%s third stop: %q", sess, d)
+		}
+	}
+	if n := len(eventsNamed(t, home, "stop_block")); n != 5 {
+		t.Errorf("%d stop_block events after third stops, want 5", n)
 	}
 	// A subagent's block: its own paths, and the flag.
 	j := showTurn(t, home, "sub", "t-2", 2, false)

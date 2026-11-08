@@ -399,8 +399,8 @@ func TestBriefingPageIsShownAndCreditable(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"id": id, "content": "## Open items\n- Migrate the export job", "tags": []string{"project:billing"}, "last_refreshed_at": refreshed})
 	mentalModels[id] = string(raw)
 	h := fire(t, "session-start", map[string]any{"session_id": "S", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(h.Specific.Context, "[billing · "+id+"]") {
-		t.Errorf("the page's id is not in the briefing:\n%s", h.Specific.Context)
+	if !strings.Contains(h.Specific.Context, "[billing · page] Where you left off") || strings.Contains(h.Specific.Context, id) {
+		t.Errorf("the page's short tag is not in the briefing, or its long id is:\n%s", h.Specific.Context)
 	}
 	shows := eventsOf(journalEvents(t, home), "shows")
 	if len(shows) != 1 || shows[0].Path != "briefing" || shows[0].Turn != "" || len(shows[0].Items) != 1 {
@@ -414,16 +414,20 @@ func TestBriefingPageIsShownAndCreditable(t *testing.T) {
 	t.Cleanup(func() { mcpParentPID = 0 })
 	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "billing"), Project: "billing", At: time.Now()})
 	cs := mcpConnect(t, home)
-	wrong := map[string]any{"ids": []string{id}, "verdict": "wrong", "correction": "The export job is migrated.", "evidence": "the user said so"}
+	wrong := map[string]any{"ids": []string{"page"}, "verdict": "wrong", "correction": "The export job is migrated.", "evidence": "the user said so"}
 	if out, isErr := call(t, cs, "memory_credit", wrong); !isErr || !strings.Contains(out, "briefing page") {
 		t.Errorf("a page retired: %v %s", isErr, out)
 	}
-	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{id}})
-	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, id) {
+	// "page", as the tag shows it, names the page shown; its whole id too.
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"page"}})
+	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, "(billing · page)") {
 		t.Fatalf("credit: %v %s", isErr, out)
 	}
+	if full, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{id}}); isErr || !strings.HasPrefix(full, "Credited.") {
+		t.Errorf("credit by the whole id: %v %s", isErr, full)
+	}
 	fire(t, "post-tool-use", map[string]any{"session_id": "S", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
-		"tool_input": map[string]any{"ids": []string{id}}, "tool_response": []map[string]string{{"type": "text", "text": out}}})
+		"tool_input": map[string]any{"ids": []string{"page"}}, "tool_response": []map[string]string{{"type": "text", "text": out}}})
 	credits := eventsOf(journalEvents(t, home), "credit")
 	if len(credits) != 1 || credits[0].Verdict != "used" || strings.Join(credits[0].IDs, ",") != id {
 		t.Fatalf("credits %+v", credits)
@@ -443,7 +447,7 @@ func TestBriefingPageWithoutAnIDIsNotRecorded(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"content": "## Open items\n- Migrate the export job", "last_refreshed_at": time.Now().UTC().Format(time.RFC3339)})
 	mentalModels[id] = string(raw)
 	h := fire(t, "session-start", map[string]any{"session_id": "S", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(h.Specific.Context, "Migrate the export job") || strings.Contains(h.Specific.Context, "· backsight-brief-") {
+	if !strings.Contains(h.Specific.Context, "Migrate the export job") || strings.Contains(h.Specific.Context, "· page]") {
 		t.Errorf("briefing:\n%s", h.Specific.Context)
 	}
 	if shows := eventsOf(journalEvents(t, home), "shows"); len(shows) != 0 {

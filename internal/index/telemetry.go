@@ -113,7 +113,7 @@ var telKinds = map[string]telKind{
 		{key: "ok", kind: fBool},
 		{key: "live", kind: fClosed, set: liveKinds},
 		{key: "queries_n", kind: fInt},
-		{key: "query_hits", col: "queries_empty", kind: fZeros},
+		{key: "query_hits", col: "queries_none_returned", kind: fZeros},
 		{key: "result_chars", kind: fInt},
 	}},
 	// tool_use: ids is the count; memory_ids, the ids themselves.

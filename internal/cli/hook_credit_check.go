@@ -62,7 +62,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	}
 	afterBlock := c.Blocked && (outcome == "declared" || outcome == "undeclared")
 	h.journalStop(t.ID, agent, outcome, mode, len(ids), c.Flags(reply, texts), afterBlock)
-	if afterBlock {
+	if afterBlock && c.LastStop == "blocked" { // once per block: the stop after it
 		h.tw.Emit(telemetry.StopBlock{Outcome: blockOutcome(c), Paths: c.BlockPaths, Shown: c.BlockShown, Subagent: agent != ""})
 	}
 	if outcome != "blocked" {

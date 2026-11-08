@@ -161,7 +161,7 @@ WITH st AS (
   WHERE key IS NOT NULL AND show_at >= ? AND show_at < ? GROUP BY key)
 SELECT s.key, COALESCE(s.path, ''), MIN(s.ts), st.outcome
 FROM shows s LEFT JOIN st ON st.key = s.key
-WHERE s.ts >= ? AND s.ts < ? AND s.key IS NOT NULL AND COALESCE(s.path, '') <> ? AND (? = '' OR s.path = ?) AND `+sessionProject("s")+`
+WHERE s.ts >= ? AND s.ts < ? AND s.key IS NOT NULL AND COALESCE(s.path, '') <> ? AND (? = '' OR s.path = ?) AND `+notPage("s.memory_id")+` AND `+sessionProject("s")+`
 GROUP BY s.key`,
 		since, until, since, until, feedback.PathSources, e.q.Path, e.q.Path, e.q.Project, e.q.Project)
 	if err != nil {

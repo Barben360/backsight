@@ -31,7 +31,7 @@ var catalogRows = []catalogRow{
 	{"recall.empty_reasons", "Why prompts got nothing", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "reach", "daily", "backsight stats quality", "empty,skips"},
 	{"recall.by_lang", "Prompts that got memory, by language", "ratio", "up", 20, none, none, "test", false, false, "wilson", "machine", true, "reach", "none", "backsight stats quality --dev", "by_lang,test"},
 	{"search.rate", "Prompts where Claude searched memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", ""},
-	{"search.empty_rate", "Searches that found nothing", "ratio", "down", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", "failed,queries,empty_queries,chars_per_search"},
+	{"search.empty_rate", "Searches that found nothing", "ratio", "down", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", "failed,queries,queries_none_returned,chars_per_search"},
 	{"used.turn_rate", "Turns where Claude used memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "quality", "daily", "backsight stats sessions --has used", "worst_case,pending,check_skipped,subagent_turns"},
 	{"declare.coverage", "Turns where Claude said what it used", "ratio", "up", 20, 0.80, none, "hi", false, false, "wilson", "machine", false, "quality", "daily", "backsight stats sessions --has undeclared", "pending,check_skipped"},
 	{"used.rubber_stamp", "Turns where every memory was marked used", "ratio", "down", 30, 0.80, none, "lo", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},

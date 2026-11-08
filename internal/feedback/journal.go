@@ -49,6 +49,10 @@ type Item struct {
 // no memory a verdict retires or a review lists.
 const BriefingPagePrefix = "backsight-brief-"
 
+// PageRef is how a briefing page is shown and named: Resolve takes it for
+// the one page shown in the session, as a short id for a memory.
+const PageRef = "page"
+
 // IsBriefingPage reports whether id is a briefing page's.
 func IsBriefingPage(id string) bool { return strings.HasPrefix(id, BriefingPagePrefix) }
 
