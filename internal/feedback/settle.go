@@ -82,7 +82,9 @@ const PathSources = "sources"
 
 // PathStore: the similar memory a memory_store answer showed (0083 C4),
 // journaled so memory_credit accepts it. It settles like any show but is
-// never a miss, and the end-of-turn check does not ask about it.
+// never a miss, the end-of-turn check does not ask about it, and the
+// ledger counts it only credited: a store showing a memory is no recall,
+// so it never makes it "shown often, never used".
 const PathStore = "store"
 
 // missPath: a show on this path can be a confident miss. The briefing,
@@ -187,7 +189,11 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 		case s.Rank >= 1 && s.Rank <= p.ConfidentRank && missPath(s.Path):
 			outcome = OutcomeMiss
 		}
-		settled = append(settled, Settled{Key: s.Key, ID: s.ID, At: s.At, Outcome: outcome})
+		st := Settled{Key: s.Key, ID: s.ID, At: s.At, Outcome: outcome}
+		if s.Path == PathStore {
+			st.Path = PathStore
+		}
+		settled = append(settled, st)
 	}
 	return settled, late
 }

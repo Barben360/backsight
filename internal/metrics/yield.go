@@ -266,7 +266,8 @@ func (r *yieldRun) latestComplete() *yieldWeek {
 	return nil
 }
 
-// readUsedWithoutRow sorts the memories credited used in the weeks' span:
+// readUsedWithoutRow sorts the memories credited used in the weeks' span
+// (briefing pages aside):
 // with a day-list row (resolved), or without one: gone (X's coverage),
 // pending (first shown after the days listed, in no complete week) or
 // unresolved.
@@ -279,7 +280,7 @@ func readUsedWithoutRow(e env, w Window, r *yieldRun) error {
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT x.has, CASE WHEN x.has THEN NULL ELSE (SELECT MIN(f.ts) FROM shows f WHERE f.memory_id = x.memory_id) END
 FROM (SELECT c.memory_id, EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id) AS has
-FROM (SELECT DISTINCT memory_id FROM credits WHERE verdict = 'used' AND memory_id IS NOT NULL AND ts >= ? AND ts < ?) c) x
+FROM (SELECT DISTINCT memory_id FROM credits WHERE verdict = 'used' AND memory_id IS NOT NULL AND `+notPage("memory_id")+` AND ts >= ? AND ts < ?) c) x
 ORDER BY x.memory_id`, from, w.Until.UnixMilli())
 	if err != nil {
 		return err

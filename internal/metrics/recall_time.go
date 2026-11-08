@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/session"
 )
 
@@ -272,7 +273,8 @@ ORDER BY created_at, ts, operation_id`, minT1-opSkew.Milliseconds(), minT1-opSke
 }
 
 // readRecalls sets T3: the first show at or after T2 of a memory whose
-// document is a session's (an observation has none).
+// document is a session's (an observation has none); a memory_store reply
+// showing it is no recall (0083 C4).
 func readRecalls(e env, by map[string]*recallSession) error {
 	minT2 := int64(-1)
 	for _, s := range by {
@@ -322,7 +324,7 @@ WHERE rn = 1 AND document IS NOT NULL`, ids[:n]...)
 		return nil
 	}
 	shows, err := e.tx.QueryContext(e.ctx, `
-SELECT memory_id, ts FROM shows WHERE memory_id IS NOT NULL AND ts >= ? ORDER BY ts, source_file, "offset", pos`, minT2)
+SELECT memory_id, ts FROM shows WHERE memory_id IS NOT NULL AND ts >= ? AND COALESCE(path, '') <> ? ORDER BY ts, source_file, "offset", pos`, minT2, feedback.PathStore)
 	if err != nil {
 		return err
 	}
@@ -340,14 +342,14 @@ SELECT memory_id, ts FROM shows WHERE memory_id IS NOT NULL AND ts >= ? ORDER BY
 	return shows.Err()
 }
 
-// readUnresolved counts the memories shown in the window that no day list
-// has given a row: gone when the record covers their first show's day (they
+// readUnresolved counts the memories shown in the window (store replies
+// and briefing pages aside) that no day list has given a row: gone when the record covers their first show's day (they
 // were forgotten before it was listed), unresolved otherwise.
 func readUnresolved(e env, w Window, run *recallRun) error {
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT (SELECT MIN(f.ts) FROM shows f WHERE f.memory_id = c.memory_id)
-FROM (SELECT memory_id FROM shows WHERE memory_id IS NOT NULL AND ts >= ? AND ts < ? GROUP BY memory_id) c
-WHERE NOT EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id)`, w.Since.UnixMilli(), w.Until.UnixMilli())
+FROM (SELECT memory_id FROM shows WHERE memory_id IS NOT NULL AND ts >= ? AND ts < ? AND COALESCE(path, '') <> ? AND `+notPage("memory_id")+` GROUP BY memory_id) c
+WHERE NOT EXISTS (SELECT 1 FROM memory_docs d WHERE d.memory_id = c.memory_id)`, w.Since.UnixMilli(), w.Until.UnixMilli(), feedback.PathStore)
 	if err != nil {
 		return err
 	}

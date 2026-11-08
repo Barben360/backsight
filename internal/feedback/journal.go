@@ -59,13 +59,15 @@ func IsBriefingPage(id string) bool { return strings.HasPrefix(id, BriefingPageP
 // Settled is the outcome a settle gave one show: credit, confident_miss,
 // shown or unknown. Key names the show (session, turn, call, id). An
 // import event's items are Settled too, shown or credit, with the show's
-// rank.
+// rank. Path is the show's path for a memory_store reply's (PathStore),
+// which the ledger counts only credited; empty for every other path.
 type Settled struct {
 	Key     string    `json:"key"`
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
 	Outcome string    `json:"outcome"`
 	Rank    int       `json:"rank,omitempty"`
+	Path    string    `json:"path,omitempty"`
 }
 
 // Event is one journal line. Kind is turn, shows, credit, stop, settle,

@@ -11,7 +11,8 @@ const helpedRows = 3
 
 // helped is the overview's "Helped most": the memories with the most
 // credits of verdict used in w (the window the view is read over), ties
-// broken by more shows in w (sources answers are not shows), then by id. A
+// broken by more shows in w (sources answers are not shows), then by id;
+// briefing pages are no memories (0083 C8). A
 // window with none reads an empty list. The project filter is the credit's
 // and the show's own.
 func helped(e env, w Window) ([]HelpedRow, error) {
@@ -21,7 +22,7 @@ SELECT c.memory_id, COUNT(*) AS used,
        (SELECT COUNT(*) FROM shows s WHERE s.memory_id = c.memory_id AND s.ts >= ? AND s.ts < ? AND COALESCE(s.path, '') <> ?
           AND (? = '' OR s.project = ?)) AS shown
 FROM credits c
-WHERE c.verdict = 'used' AND c.memory_id IS NOT NULL AND c.memory_id <> '' AND c.ts >= ? AND c.ts < ? AND (? = '' OR c.project = ?)
+WHERE c.verdict = 'used' AND c.memory_id IS NOT NULL AND c.memory_id <> '' AND `+notPage("c.memory_id")+` AND c.ts >= ? AND c.ts < ? AND (? = '' OR c.project = ?)
 GROUP BY c.memory_id ORDER BY used DESC, shown DESC, c.memory_id LIMIT ?`,
 		since, until, feedback.PathSources, p, p, since, until, p, p, helpedRows)
 	if err != nil {

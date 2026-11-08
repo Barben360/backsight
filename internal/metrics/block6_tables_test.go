@@ -83,6 +83,21 @@ func TestHelpedMost(t *testing.T) {
 	}
 }
 
+// A briefing page credited used most is no memory: "Helped most" leaves
+// it out (decision 0083 C8).
+func TestHelpedLeavesPagesOut(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.usedCredits(paris(27, 9, 0), feedback.BriefingPagePrefix+"alpha-1a2b3c4d", 9)
+	x.usedCredits(paris(27, 9, 0), "mem-a", 2)
+	var got []string
+	for _, r := range x.run("overview", x.query(7)).Tables.Helped {
+		got = append(got, r.Memory)
+	}
+	if want := []string{"mem-a"}; !slices.Equal(got, want) {
+		t.Errorf("helped = %v, want %v", got, want)
+	}
+}
+
 // TestHelpedTiesBreakByID: equal used and shown fall back to the id.
 func TestHelpedTiesBreakByID(t *testing.T) {
 	x := newFx(t, fxNow)

@@ -105,7 +105,8 @@ type tickResult struct {
 	MS           int    `json:"ms"`
 
 	// BriefingTriggers: the briefing pages given the refresh floor, on the
-	// first tick of a binary version or floor (tickBriefingTriggers).
+	// first tick of a binary version, floor, request, bank or restore epoch
+	// (tickBriefingTriggers).
 	BriefingTriggers string `json:"briefing_triggers,omitempty"`
 }
 

@@ -1,12 +1,20 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // noFloor: a page made before decision 0083 C2.
@@ -146,6 +154,109 @@ func TestMaintainReconcilesBriefingTriggers(t *testing.T) {
 	run(t, "jobs", "maintain")
 	if p := triggerPatches(); len(p) != 1 {
 		t.Errorf("briefing = recent: %q", p)
+	}
+}
+
+// jobs maintain gives the pages their floor before the subagent sweep
+// (whose purges make the server consolidate, which refreshes the pages)
+// and before the update check (an update applied must not leave this
+// binary's request on the pages) (decision 0083 C2, C3).
+func TestMaintainReconcilesBriefingTriggersFirst(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600)
+	page := briefingModelID("billing")
+	mentalModels[page] = oldPage(page)
+	var mu sync.Mutex
+	var log []string
+	note := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		log = append(log, s)
+	}
+	fakeHook = func(r *http.Request) { note(r.Method + " " + r.URL.Path) }
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		note("update check")
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(gh.Close)
+	old := githubAPI
+	githubAPI = gh.URL
+	t.Cleanup(func() { githubAPI = old })
+	run(t, "jobs", "maintain")
+	mu.Lock()
+	defer mu.Unlock()
+	first := func(match func(string) bool) int { return slices.IndexFunc(log, match) }
+	patch := first(func(s string) bool {
+		return strings.HasPrefix(s, "PATCH ") && strings.Contains(s, "/mental-models/"+page)
+	})
+	sweep := first(func(s string) bool { return strings.HasPrefix(s, "GET ") && strings.HasSuffix(s, "/documents") })
+	update := first(func(s string) bool { return s == "update check" })
+	if patch < 0 || sweep < 0 || update < 0 {
+		t.Fatalf("patch %d, sweep listing %d, update check %d: a step did not run\n%s", patch, sweep, update, strings.Join(log, "\n"))
+	}
+	if patch > sweep || patch > update {
+		t.Errorf("the pages were reconciled after the sweep or the update check\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// A restore (a new restore epoch) or another bank makes the next tick
+// reconcile again, without waiting for jobs maintain: the pages may be
+// older than the marker says.
+func TestTickReconcilesBriefingTriggersAfterARestoreOrABankChange(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	recentHasEventTime.Store(true)
+	recentByTag["project:billing"] = `[{"id":"a","text":"t","mentioned_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]`
+	page := briefingModelID("billing")
+	mentalModels[page] = oldPage(page)
+	run(t, "jobs", "tick")
+	if p := triggerPatches(); len(p) != 1 {
+		t.Fatalf("first tick: %q", p)
+	}
+	mentalModels[page] = oldPage(page) // the restored server holds the page as it was
+	run(t, "jobs", "tick")
+	if p := triggerPatches(); len(p) != 1 {
+		t.Fatalf("no restore, same marker: %q", p)
+	}
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retain.WriteEpoch(context.Background(), clientOn(port), cfg.Server.Bank, retain.Epoch{Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	run(t, "jobs", "tick") // its epoch step reads the restore, then the pages are reconciled
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.EpochOf(cfg.Server.Bank) != 1 {
+		t.Fatalf("the tick did not take the restore: %+v", st.RestoreEpoch)
+	}
+	if p := triggerPatches(); len(p) != 2 || p[1] != "PATCH "+page+" "+patchBody(briefingQuery) {
+		t.Fatalf("after a restore the tick did not reconcile: %q", p)
+	}
+	run(t, "jobs", "tick")
+	if p := triggerPatches(); len(p) != 2 {
+		t.Fatalf("the restore was reconciled twice: %q", p)
+	}
+	mentalModels[page] = oldPage(page)
+	path := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(path)
+	_ = os.WriteFile(path, []byte(strings.Replace(string(raw), "[server]", "[server]\nbank = \"team-memory\"", 1)), 0o600)
+	if c, _, _ := loadServerConfig(); c.Server.Bank != "team-memory" {
+		t.Fatalf("the bank did not change: %q", c.Server.Bank)
+	}
+	// The same epoch number on the other bank: the bank alone tells them apart.
+	if err := retain.WriteEpoch(context.Background(), clientOn(port), "team-memory", retain.Epoch{Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	run(t, "jobs", "tick")
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.EpochOf("team-memory") != 1 {
+		t.Fatalf("the tick did not take the other bank's epoch: %+v", st.RestoreEpoch)
+	}
+	if p := triggerPatches(); len(p) != 3 {
+		t.Errorf("another bank: the tick did not reconcile: %q", p)
 	}
 }
 
