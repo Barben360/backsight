@@ -75,9 +75,11 @@ func TestCompactionReleasesMemoriesNoLongerInContext(t *testing.T) {
 		st.Seen = append(st.Seen, "searched-only")
 		return nil
 	})
+	// No page to compare: nothing is replayed, so all of it may be recalled
+	// again (the replay case: TestCompactGivesARefreshedBriefingAndTheLastMemories).
 	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "compact", "cwd": home})
 	st, _ := sessions(home).Load("s1")
-	if strings.Join(st.Seen, ",") != "m3,m4,m5,m6,m7,m8" {
+	if len(st.Seen) != 0 {
 		t.Errorf("seen after compaction %v", st.Seen)
 	}
 }

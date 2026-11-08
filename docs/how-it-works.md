@@ -21,7 +21,7 @@ Hooks never block Claude Code. When the server is down or slow, recall is skippe
 ## At session start
 
 - **The memory guide**: a short text (about 1,200 characters) telling Claude when to search and store, to read an issue or link the prompt points at before searching, to report the memories it used with `memory_credit`, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
-- **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force. After a compaction, the briefing and the last memories shown are given again.
+- **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force. After a compaction, the briefing and the last memories shown are given again only when the server refreshed the page since the session got it; otherwise one line says it is unchanged. The ids of the notes stored this session come back either way. A resume, `/clear` or a fork gives the guide only.
 - **The status line** you see, such as `🧠 backsight · 🗂️ my-project` ([daily-use.md](daily-use.md#the-line-at-session-start)).
 
 ## On each prompt
@@ -129,7 +129,7 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | Claude Code event | When | backsight does | Time limit |
 |---|---|---|---|
 | `SessionStart` (startup) | A new session | The guide, the briefing, the status line. | 10 s |
-| `SessionStart` (resume, clear, compact, fork) | The session goes on | The guide; after a compaction, the briefing and last memories again. | 5 s |
+| `SessionStart` (resume, clear, compact, fork) | The session goes on | The guide; after a compaction, the briefing and last memories again if the page changed, and the ids stored this session. | 5 s |
 | `UserPromptSubmit` | Each prompt | Recall, reminder, nudge, save prompt. | 25 s |
 | `PreToolUse` (`AskUserQuestion`) | Claude asks you a question | The question gate. | 10 s |
 | `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge; records the memories a search or a read showed, and the ones Claude credited with `memory_credit`. | 2 s |
