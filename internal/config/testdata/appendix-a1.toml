@@ -34,6 +34,7 @@ sticky_window_h = 24
 project_boost = 0.05
 session_budget_chars = 6000
 briefing = "model"
+briefing_refresh_interval = "6h"
 [llm]
 provider = "deepseek"
 model = "deepseek-flash"

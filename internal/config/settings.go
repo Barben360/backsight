@@ -10,7 +10,7 @@ import (
 
 // NumericSettings is every numeric field of the [recall] and [feedback]
 // tables, keyed recall.<key> and feedback.<key> (their toml keys); a
-// boolean reads 0 or 1 and a string is left out.
+// boolean reads 0 or 1, a duration its seconds, and a string is left out.
 func NumericSettings(cfg Config) map[string]float64 {
 	out := map[string]float64{}
 	for _, t := range []struct {
@@ -24,6 +24,10 @@ func NumericSettings(cfg Config) map[string]float64 {
 				continue
 			}
 			f := rv.Field(i)
+			if d, ok := f.Interface().(Duration); ok {
+				out[t.prefix+key] = float64(d.Seconds())
+				continue
+			}
 			switch f.Kind() {
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 				out[t.prefix+key] = float64(f.Int())

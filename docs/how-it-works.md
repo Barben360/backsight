@@ -126,6 +126,8 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 
 At about 4 characters per token, a full session costs at most 3,000 to 4,000 tokens of context. `backsight stats` shows what the prompt hook actually added per session.
 
+**The server's LLM.** Besides extraction and consolidation, the server rewrites a project's briefing page after a consolidation of its memories, at most once per `recall.briefing_refresh_interval` (6 h by default): one rewrite reads the project's memories (about 130,000 input tokens on a well-filled memory). Memories consolidated sooner wait for the next rewrite; the page is only read at session start, never rewritten then. Pages made by an earlier version get this floor at the first `jobs tick` after an update, `jobs maintain` sets it again every day, and doctor's `bank` check names a page without it.
+
 ## Hooks
 
 | Claude Code event | When | backsight does | Time limit |

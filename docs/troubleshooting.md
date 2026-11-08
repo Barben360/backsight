@@ -343,6 +343,7 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 - A wrong or expired key: `backsight secret set llm_api_key`, then `backsight server render` and `backsight server start`.
 - With Ollama on Linux, the server cannot connect: Ollama listens only on `127.0.0.1` by default. See [Local models with Ollama](install.md#local-models-with-ollama).
 - `backsight stats` shows the extraction tokens and cost of the last days.
+- doctor's `bank` check says "briefing page(s) refresh without the … floor": those pages are rewritten by the server's LLM after every consolidation instead of once per `recall.briefing_refresh_interval`. `backsight jobs maintain` gives them the floor (it does so every day, and the first `jobs tick` after an update does too); on a shared server, set the same interval on every machine.
 - A backfill paused on its budget: `backsight retain backfill --plan`, then `backsight retain backfill --max-cost <higher>`.
 
 ## An import is paused or not moving

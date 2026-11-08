@@ -40,7 +40,7 @@ func tomlKeys(prefix string, v reflect.Value) map[string]reflect.Value {
 			continue
 		}
 		key := prefix + tag
-		if f := v.Field(i); f.Kind() == reflect.Struct {
+		if f := v.Field(i); f.Kind() == reflect.Struct && f.Type() != reflect.TypeOf(Duration{}) {
 			for k, fv := range tomlKeys(key+".", f) {
 				out[k] = fv
 			}
@@ -53,6 +53,9 @@ func tomlKeys(prefix string, v reflect.Value) map[string]reflect.Value {
 
 // literal renders a default as the reference writes it: TOML syntax.
 func literal(v reflect.Value) string {
+	if d, ok := v.Interface().(Duration); ok {
+		return strconv.Quote(d.String())
+	}
 	switch v.Kind() {
 	case reflect.String:
 		return strconv.Quote(filepath.ToSlash(v.String())) // the reference writes "<data>/backups" on every OS

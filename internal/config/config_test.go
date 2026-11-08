@@ -87,6 +87,30 @@ func TestFailurePitfallsDefaultsOffAndIsNeverWritten(t *testing.T) {
 	}
 }
 
+// recall.briefing_refresh_interval is a Go duration: 6 h by default, 0 for
+// no floor, refused when negative, unparsable or not whole seconds.
+func TestBriefingRefreshInterval(t *testing.T) {
+	if got := Default(dirs, "/u").Recall.BriefingRefreshInterval; got.Seconds() != 21600 {
+		t.Errorf("default %v, want 6h", got)
+	}
+	for in, want := range map[string]int{`"90m"`: 5400, `"0"`: 0, `"0s"`: 0, `"24h"`: 86400} {
+		cfg, err := Load(write(t, "[recall]\nbriefing_refresh_interval = "+in+"\n"), dirs, "/u")
+		if err != nil || cfg.Recall.BriefingRefreshInterval.Seconds() != want {
+			t.Errorf("%s: %v, %d s, want %d", in, err, cfg.Recall.BriefingRefreshInterval.Seconds(), want)
+		}
+	}
+	for _, in := range []string{`"-1h"`, `"six hours"`, `"1.5s"`, `""`} {
+		if _, err := Load(write(t, "[recall]\nbriefing_refresh_interval = "+in+"\n"), dirs, "/u"); err == nil || !strings.Contains(err.Error(), "briefing_refresh_interval") {
+			t.Errorf("%s: want an error naming the key, got %v", in, err)
+		}
+	}
+	// A bare number is refused, not read as nanoseconds (no floor at all);
+	// the decoder does not name the key then, the message says the unit.
+	if _, err := Load(write(t, "[recall]\nbriefing_refresh_interval = 21600\n"), dirs, "/u"); err == nil || !strings.Contains(err.Error(), `"21600": a duration such as "6h"`) {
+		t.Errorf("bare number: want a refusal, got %v", err)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nope.toml"), dirs, "/home/u")
 	if !errors.Is(err, fs.ErrNotExist) {
