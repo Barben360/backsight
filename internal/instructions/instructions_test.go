@@ -59,7 +59,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v13" {
+	if Version != "v14" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -144,7 +144,7 @@ func TestSearchDescriptionCarriesTheRecipes(t *testing.T) {
 
 func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
 	for _, want := range []string{"decision, correction, convention, pitfall, state, lesson", "one fact per call", "why", "absolute dates",
-		"no secrets", "transverse", "Examples:", "Non-examples:", "3 most similar"} {
+		"no secrets", "transverse", "Examples:", "Non-examples:", "most similar memory"} {
 		if !strings.Contains(StoreDescription, want) {
 			t.Errorf("store description lacks %q", want)
 		}
@@ -389,6 +389,7 @@ var wordings = map[string]string{
 	"v11": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
 	"v12": "8e8aec126cbede943fcee5c75d31a2a9e781059316444c66255602ae4c94c9a0",
 	"v13": "daf579e2e998c49a849a2c7d5f27ba20b181e5261ea1ce3aa80f026b980110bb",
+	"v14": "38d36fbc00507212af4d086fc7499522dcd948cba1894be8c6c9bc9d5f6ca8ff",
 }
 
 func wordingHash() string {
@@ -397,7 +398,7 @@ func wordingHash() string {
 		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
 		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader,
 		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), ConfirmedLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
-		SavedLine("p", "k"), UpdatedLine("p", "k"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
+		SavedLine("p", "k"), UpdatedLine("p", "k", "i"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
 		HiddenLine("wrong", "p", "i", true), HiddenLine("outdated", "p", "i", false), NotRetiredLine("p", "i", "r", true), NotRetiredLine("p", "i", "r", false),
 		NothingLine, RetroLine, Pointer([]string{"#1", "https://example.com/2"})}
 	for _, feedback := range []bool{true, false} {

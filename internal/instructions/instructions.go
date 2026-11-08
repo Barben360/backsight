@@ -32,8 +32,9 @@ import (
 // v11: the doctor and memory skills read `stats overview` and allow only the read-only stats views;
 // v12: a prompt that points at an issue, PR or link is read before searching: the pointer line, the
 // guide and the reminder say so; v13: memory_credit takes the verdict confirmed, for what this
-// session established independently, with its guard and one call per verdict).
-const Version = "v13"
+// session established independently, with its guard and one call per verdict; v14: memory_store
+// shows at most one similar memory, the closest, and its Updated line names it).
+const Version = "v14"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -215,7 +216,7 @@ const (
 		"Close the loop: when work ships (PR merged, issue closed or abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
 		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
 		"State the fact itself, never \"a memory about X was stored\"; split a fact that covers two topics. " +
-		"The 3 most similar memories are returned: if one contradicts this fact, it updates it rather than adding a parallel fact; print the line the result gives, Updated then, Saved otherwise (if it repeats one, say so in it)."
+		"The most similar memory is returned when it is close: if it contradicts this fact, it updates it rather than adding a parallel fact; print the line the result gives, Updated then, Saved otherwise (if it repeats it, say so in it)."
 	ReadDescription   = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
 	CreditDescription = "Name the memories shown to you in this session that informed your answer: call it once you know what you used, before your final message. " +
 		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
@@ -264,7 +265,7 @@ func Skills(shim string) []Skill {
 			Body: "Store the fact given here with the `memory_store` tool: $ARGUMENTS\n\n" +
 				"Pick the kind (decision, correction, convention, pitfall, state, lesson) and the project (the current one; \"transverse\" for user-wide rules). " +
 				"Write 1-3 sentences in English with the why and absolute dates, exact identifiers, no secrets. " +
-				"Then print the line the tool returns: Updated when the fact updates one of the similar memories it lists, Saved otherwise.\n",
+				"Then print the line the tool returns: Updated when the fact updates the similar memory it shows, Saved otherwise.\n",
 		},
 		{
 			Name: "pause",

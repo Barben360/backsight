@@ -80,6 +80,11 @@ type SettleResult struct {
 // they count neither as shown nor as a miss.
 const PathSources = "sources"
 
+// PathStore: the similar memory a memory_store answer showed (0083 C4),
+// journaled so memory_credit accepts it. It settles like any show but is
+// never a miss, and the end-of-turn check does not ask about it.
+const PathStore = "store"
+
 // missPath: a show on this path can be a confident miss. The briefing,
 // reads and failure recalls never are.
 func missPath(path string) bool {

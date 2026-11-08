@@ -156,6 +156,9 @@ type Recall struct {
 	// replay shows it helps. Nothing writes this key: an older binary refuses
 	// a config.toml with a key it does not know, so only the user sets it.
 	FailurePitfalls bool `toml:"failure_pitfalls" json:"failure_pitfalls"`
+	// StoreSimilarMinScore: the score (after boost) the most similar memory
+	// needs to be shown in memory_store's answer (0083 C4).
+	StoreSimilarMinScore float64 `toml:"store_similar_min_score" json:"store_similar_min_score"`
 }
 
 type LLM struct {
@@ -263,7 +266,7 @@ func Default(d paths.Dirs, home string) Config {
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: []string{"sdk-*"}},
 		Components: Components{Read: true, Write: true},
-		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
+		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
 			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model"},
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-flash", Currency: "USD"},
@@ -427,6 +430,7 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	r := c.Recall
 	unit("recall.min_score", r.MinScore)
 	unit("recall.global_min_score", r.GlobalMinScore)
+	unit("recall.store_similar_min_score", r.StoreSimilarMinScore)
 	unit("recall.sticky_bypass", r.StickyBypass)
 	unit("recall.project_boost", r.ProjectBoost)
 	if r.Briefing != "model" && r.Briefing != "recent" {

@@ -311,7 +311,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			// A refused key is followed here, before the note is queued: the
 			// store itself is never sent twice.
 			sec, eng := key.get()
-			q := recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3}
+			q := recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: deps.cfg.Recall.StoreSimilarMinScore, Limit: 1}
 			similar := eng.Search(ctx, q)
 			if refused(similar) && key.refresh(sec.APIKey) {
 				sec, eng = key.get()
@@ -323,23 +323,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if res.Document == "" {
 				return errorResult(err.Error()), nil, nil
 			}
-			var b strings.Builder
-			b.WriteString(storeText(res))
-			if err != nil {
-				fmt.Fprintf(&b, "%s\n", err)
-			}
-			saved := instructions.SavedLine(safeProject(res.Project), res.Kind)
-			if len(similar.Hits) == 0 {
-				b.WriteString("Print this line in your final message:\n" + saved + "\n")
-				return textResult(b.String()), nil, nil
-			}
-			b.WriteString("Most similar memories (does this fact update or repeat one?):\n")
-			for _, h := range similar.Hits {
-				fmt.Fprintf(&b, "- [%s] %s (%s ago, %s)\n", h.Project, h.Text, h.Age, h.ID)
-			}
-			b.WriteString("Print one line in your final message: this one for a new fact,\n" + saved +
-				"\nor this one when it updates one of the memories above:\n" + instructions.UpdatedLine(safeProject(res.Project), res.Kind) + "\n")
-			return textResult(b.String()), nil, nil
+			return textResult(storeReply(res, err, similar.Hits, deps.cfg.Recall.StoreSimilarMinScore)), nil, nil
 		})
 	if deps.cfg.Feedback.Enabled {
 		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
@@ -643,6 +627,42 @@ func mcpSearchText(r recall.Result, feedback bool) string {
 		return "nothing in memory\n"
 	}
 	return searchText(r) + "\n" + instructions.For(feedback).SearchEnd + "\n"
+}
+
+// storeSimilarHeader opens the similar memory of a memory_store answer:
+// the PostToolUse hook journals the memory below it as shown (storeShow).
+const (
+	storeSimilarHeader = "Similar memory: does this fact update or repeat it?"
+	storeSimilarChars  = 200 // of the similar memory's text, ellipsis included
+)
+
+// storeReply is memory_store's answer (SPEC §7, 0083 C4): the stored line,
+// err when the note was kept but not sent, then the line to print. The
+// best of hits at min or above (the score after boost), if any, comes
+// before it on two lines, its project then its text cut at 200
+// characters, and the Updated line naming it joins the Saved one.
+func storeReply(res storeResult, err error, hits []recall.Hit, min float64) string {
+	var b strings.Builder
+	b.WriteString(storeText(res))
+	if err != nil {
+		fmt.Fprintf(&b, "%s\n", err)
+	}
+	project := safeProject(res.Project)
+	saved := instructions.SavedLine(project, res.Kind)
+	var best *recall.Hit
+	for i := range hits {
+		if hits[i].Score >= min && (best == nil || hits[i].Score > best.Score) {
+			best = &hits[i]
+		}
+	}
+	if best == nil {
+		b.WriteString("Print this line in your final message:\n" + saved + "\n")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "%s\n[%s]\n- %s (%s ago, %s)\n", storeSimilarHeader, singleLine(best.Project), clip(singleLine(best.Text), storeSimilarChars), best.Age, best.ID)
+	b.WriteString("Print one line in your final message, Updated if the fact updates that memory:\n" +
+		instructions.UpdatedLine(project, res.Kind, best.ID) + "\n" + saved + "\n")
+	return b.String()
 }
 
 func newMCPCmd() *cobra.Command {

@@ -107,10 +107,14 @@ type Check struct {
 
 // CheckTurn is turn's check for agent ("" is the main agent) of session;
 // withBriefing adds the main agent's briefing shows (turn ""), shown
-// before the first prompt.
+// before the first prompt. A store's similar memory is left out: it can
+// be credited, but a store asks for no declaration.
 func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) Check {
 	var c Check
 	for _, s := range Shows(events, session) {
+		if s.Path == PathStore {
+			continue
+		}
 		if s.Agent == agent && (s.Turn == turn || withBriefing && agent == "" && s.Turn == "") {
 			c.Shown = append(c.Shown, s)
 		}

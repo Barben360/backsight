@@ -77,6 +77,7 @@ func TestCheckTurn(t *testing.T) {
 	events := []Event{
 		{Kind: "shows", Session: "s1", Turn: "", Path: "briefing", Items: []Item{{ID: "brief", Rank: 1}}},
 		{Kind: "shows", Session: "s1", Turn: "t1", Path: "prompt", Items: []Item{{ID: idA, Rank: 1}}},
+		{Kind: "shows", Session: "s1", Turn: "t1", Path: PathStore, Items: []Item{{ID: "similar", Rank: 1}}}, // creditable, never asked about
 		{Kind: "shows", Session: "s1", Turn: "t1", Agent: "a1", Path: "search", Items: []Item{{ID: idB, Rank: 1}}},
 		{Kind: "shows", Session: "s1", Turn: "t0", Path: "prompt", Items: []Item{{ID: "old", Rank: 1}}},
 		{Kind: "shows", Session: "s2", Turn: "t1", Path: "prompt", Items: []Item{{ID: "other", Rank: 1}}},

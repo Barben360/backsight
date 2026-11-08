@@ -51,14 +51,14 @@ func ConfirmedLine(project string, ids8 []string) string {
 }
 
 // SavedLine and UpdatedLine are memory_store's: a new fact, or one that
-// updates a memory the tool listed as similar. A note has no memory id
-// yet, so the line names its kind.
+// updates id, the memory the tool showed as similar. A note has no memory
+// id yet, so the line names its kind.
 func SavedLine(project, kind string) string {
 	return line(emojiSaved, "Saved", project+" · "+kind, "<the fact, in a few words>")
 }
 
-func UpdatedLine(project, kind string) string {
-	return line(emojiUpdated, "Updated", project+" · "+kind+" · replaces <id8 of the memory it updates>", "<the fact, in a few words>")
+func UpdatedLine(project, kind, id string) string {
+	return line(emojiUpdated, "Updated", project+" · "+kind+" · replaces "+short(id), "<the fact, in a few words>")
 }
 
 // why is what a wrong or outdated verdict's line says.

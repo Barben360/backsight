@@ -45,6 +45,7 @@ recall.session_budget_chars        6000
 recall.sticky_bypass               0.97
 recall.sticky_max                  3
 recall.sticky_window_h             24
+recall.store_similar_min_score     0.8
 
 Observational: weeks, projects and memory differ
 

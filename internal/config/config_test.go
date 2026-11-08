@@ -171,6 +171,7 @@ func TestValidate(t *testing.T) {
 		{"digest short", func(c *Config) { c.Server.Digest = "sha256:abc" }, "server.digest"},
 		{"bank dotdot", func(c *Config) { c.Server.Bank = ".." }, "server.bank"},
 		{"global_min_score range", func(c *Config) { c.Recall.GlobalMinScore = 1.2 }, "recall.global_min_score"},
+		{"store_similar_min_score range", func(c *Config) { c.Recall.StoreSimilarMinScore = -0.1 }, "recall.store_similar_min_score"},
 		{"briefing source", func(c *Config) { c.Recall.Briefing = "both" }, "recall.briefing"},
 		{"skip_entrypoints bad glob", func(c *Config) { c.Privacy.SkipEntrypoints = []string{"sdk-["} }, "privacy.skip_entrypoints"},
 		{"skip_entrypoints empty pattern", func(c *Config) { c.Privacy.SkipEntrypoints = []string{""} }, "privacy.skip_entrypoints"},

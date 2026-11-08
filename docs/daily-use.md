@@ -45,7 +45,7 @@ Every line about the memory has the same shape: 🧠 alone when a memory was rea
 |---|---|
 | 🧠 **From memory (my-project · 0b4c2a52)** — … | A memory informed the answer. |
 | 🧠💾 **Saved (my-project · decision)** — … | Claude stored a new fact with `memory_store`. |
-| 🧠🔄 **Updated (my-project · correction · replaces 7d1e93a0)** — … | The fact stored updates a memory `memory_store` listed as similar. |
+| 🧠🔄 **Updated (my-project · correction · replaces 7d1e93a0)** — … | The fact stored updates the similar memory `memory_store` showed. |
 | 🧠❌ **Wrong, retired (my-project · 7e1f9d03)** — … · undo: `backsight forget --restore <id>` | Claude reported a memory false; it is retired on the server ([below](#memories-claude-reports-wrong)). |
 | 🧠✔ **Confirmed by memory (my-project · 5a1d0c33)** — … | A memory the session checked on its own (your words, a file, a command output) and found true, though it did not inform the answer. It counts like a used one for the ranking by use. |
 | 🧠⌛ **Outdated, retired (my-project · c93a0e17)** — … · undo: `backsight forget --restore <id>` | The same for a memory that was true and no longer is. |
