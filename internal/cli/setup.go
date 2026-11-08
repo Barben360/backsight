@@ -609,7 +609,8 @@ func readLine() (string, error) {
 func estimateFlusher(d paths.Dirs, home string, cfg config.Config, since time.Time, idx *retain.SentIndex) *retain.Flusher {
 	return &retain.Flusher{Bank: cfg.Server.Bank, Dirs: d, Resolver: project.New(home, cfg.Projects.Transverse),
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, Now: now, RetainSince: since, Index: idx, Outbox: notesOutboxFor(d, cfg),
-		Attribution: retain.Attributor{Transverse: cfg.Projects.Transverse}}
+		ReportMinChars: cfg.Hooks.SubagentReportMinChars,
+		Attribution:    retain.Attributor{Transverse: cfg.Projects.Transverse}}
 }
 
 // backfillEstimate counts the sessions backfill would send and prices

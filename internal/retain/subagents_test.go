@@ -110,6 +110,9 @@ func TestRebuiltReportsFollowTheHooksRules(t *testing.T) {
 			e.quarantine(NewSubagentNote("claude-memory", "s2", "ag1", "Explore", "billing", reply, clockAt(12, 50)))
 		}, false, ""},
 		"hook's attribution": {func(e *env) { e.f.ReportProject = func(string) string { return "transverse" } }, true, "transverse"},
+		// The reply is 24 characters, without a URL or a reference.
+		"under the report gate": {func(e *env) { e.f.ReportMinChars = 400 }, false, ""},
+		"over the report gate":  {func(e *env) { e.f.ReportMinChars = 20 }, true, "billing"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := restoredEnv(t)

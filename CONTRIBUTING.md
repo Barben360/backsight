@@ -6,7 +6,7 @@ How to build, test and change backsight. User documentation is in [docs/](docs/)
 
 - Everything that can be deterministic stays deterministic: the binary detects, configures, migrates, checks and backs up. It calls no LLM itself; only the Hindsight server does, for extraction.
 - Hooks never block Claude Code: they always exit 0 within their time budget, and never wait on a lock or prompt.
-- Nothing is applied outward without the user's opt-in, and memory is deleted only by an explicit user command.
+- Nothing is applied outward without the user's opt-in, and memory is deleted only by an explicit user command, with one exception: `jobs maintain` purges the stored subagent reports that fail the report gate (`hooks.subagent_report_min_chars`), once per gate (decision 0083 §C3, asked for by the author on 2026-11-08). That rule is measured (such reports cost an extraction each and almost never gave a memory used) and narrow (one source, one rule); widening it, or adding another automatic deletion, needs its own decision.
 - Claude Code's files are edited only through the config editor: a copy of each file first, a byte-level patch, a write only if the file did not change meanwhile, and an undo.
 - Secrets never travel in arguments or answers, and never reach a Claude session.
 

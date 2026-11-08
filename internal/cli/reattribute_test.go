@@ -95,8 +95,9 @@ func reportToMove(t *testing.T, home string, port int) {
 	edit := `{"type":"assistant","isSidechain":true,"uuid":"e%d","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(shop, "cart.go")) + `"}}]}}` + "\n"
 	_ = os.WriteFile(agent, []byte(fmt.Sprintf(edit, 1, 1)+fmt.Sprintf(edit, 2, 2)), 0o600)
 	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
-	if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "Fixed the cart.", DocumentID: "subagent:s1:ag1",
-		Tags: []string{"project:billing", "source:subagent", "harness:claude-code"}, Metadata: map[string]string{"source": "subagent"}}}); err != nil {
+	if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: padTo("Fixed the cart.", 450), // over the report gate: jobs maintain keeps it
+		DocumentID: "subagent:s1:ag1",
+		Tags:       []string{"project:billing", "source:subagent", "harness:claude-code"}, Metadata: map[string]string{"source": "subagent"}}}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -130,7 +130,8 @@ On a client of another PC's server (`server.mode = "remote"`), the server's host
 
 | Key | Default | Effect |
 |---|---|---|
-| `hooks.subagent_skip` | `["Explore", "statusline-setup", "claude-code-guide"]` | Subagent types that get no memory guide when they start. Their final reports are still sent. |
+| `hooks.subagent_skip` | `["Explore", "statusline-setup", "claude-code-guide"]` | Subagent types that get no memory guide when they start. Their final reports are still sent, as any other's (see `hooks.subagent_report_min_chars`). |
+| `hooks.subagent_report_min_chars` | `400` | A subagent's final report shorter than this many characters is not sent, unless it holds a URL, an issue or pull request reference (`#123`, `owner/repo#123`, `PR 205`, `GH-7`) or a commit hash: short status reports ("Reading x.go", "Waiting for CI") cost an extraction each and almost never gave a memory Claude used. `jobs maintain` deletes the stored reports that fail the same rule, once, and again after you change this value ([how it works](how-it-works.md#subagents)). `0` sends every report. At least 0. |
 | `hooks.outbox_warn_mb` | `50` | Size of the notes queue (notes waiting for the server) at which `backsight store` warns and `backsight doctor` warns. At least 1 and at most `hooks.outbox_max_mb`. |
 | `hooks.outbox_max_mb` | `500` | Size of the notes queue at which it stops taking notes (`backsight store` refuses and `backsight doctor` reports an error), so a server down for long cannot fill the disk. |
 

@@ -124,14 +124,14 @@ func TestSubagentStopQueuesItsReport(t *testing.T) {
 func TestSubagentStopHonoursPauseAndTheWriteFlag(t *testing.T) {
 	home := hookHome(t)
 	_ = sessions(home).Update("s1", func(st *session.State) error { st.Paused = true; return nil })
-	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": "report"})
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": padTo("report", 450)})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Error("paused session queued a report")
 	}
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("[components]\nwrite = false\n")...), 0o600)
-	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "transcript_path": subagentTranscript(t, "s2", "a"), "last_assistant_message": "report"})
+	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "transcript_path": subagentTranscript(t, "s2", "a"), "last_assistant_message": padTo("report", 450)})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Error("write = false queued a report")
 	}
@@ -159,13 +159,13 @@ func TestSubagentStopSkipsTheReportOfAHeadlessSession(t *testing.T) {
 	parent := subagentTranscript(t, "s1", "a") // a real subagent, of a headless session
 	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/w","entrypoint":"sdk-cli","message":{"role":"user","content":"cron digest"}}`+"\n"), 0o600)
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
-		"transcript_path": parent, "last_assistant_message": "All 11 workers exited with code 0."})
+		"transcript_path": parent, "last_assistant_message": padTo("All 11 workers exited with code 0.", 450)})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Fatalf("a headless session's subagent report was queued:\n%s", raw)
 	}
 	interactive := subagentTranscript(t, "s2", "a")
 	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
-		"transcript_path": interactive, "last_assistant_message": "Found the leak in pool.go."})
+		"transcript_path": interactive, "last_assistant_message": padTo("Found the leak in pool.go.", 450)})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); !strings.Contains(string(raw), "pool.go") {
 		t.Errorf("an interactive session's report was not queued:\n%s", raw)
 	}
@@ -176,7 +176,7 @@ func TestSubagentStopIgnoresInternalHelperAgents(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "s1.jsonl") // the session's transcript, no subagents/ file for this agent
 	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a1fc250e6b154ac35", "cwd": filepath.Join(home, "billing"),
-		"transcript_path": parent, "last_assistant_message": "Reviewing checkMention in docs_commands_test.go"})
+		"transcript_path": parent, "last_assistant_message": padTo("Reviewing checkMention in docs_commands_test.go", 450)})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Fatalf("a helper agent's status line was queued:\n%s", raw)
 	}
@@ -186,7 +186,7 @@ func TestSubagentStopIgnoresInternalHelperAgents(t *testing.T) {
 	// agent_transcript_path, when Claude Code gives it, is the one checked.
 	real := subagentTranscript(t, "s3", "b")
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "x", "cwd": filepath.Join(home, "billing"),
-		"agent_transcript_path": filepath.Join(strings.TrimSuffix(real, ".jsonl"), "subagents", "agent-b.jsonl"), "last_assistant_message": "Found the leak in pool.go."})
+		"agent_transcript_path": filepath.Join(strings.TrimSuffix(real, ".jsonl"), "subagents", "agent-b.jsonl"), "last_assistant_message": padTo("Found the leak in pool.go.", 450)})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); !strings.Contains(string(raw), "pool.go") {
 		t.Errorf("a subagent with agent_transcript_path was not queued:\n%s", raw)
 	}
@@ -222,13 +222,13 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 		line := func(uuid, file string) string {
 			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(file, "x.go")) + `"}}]}}` + "\n"
 		}
-		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
+		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"` + padTo("Fixed in "+c.sid, 450) + `"}]}}` + "\n"
 		if c.sid == "s3" {
 			reply = ""
 		}
 		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+testtool.JSONPath(billing)+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)+reply), 0o600)
 		fire(t, "subagent-stop", map[string]any{"session_id": c.sid, "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
-			"transcript_path": parent, "last_assistant_message": "Fixed in " + c.sid})
+			"transcript_path": parent, "last_assistant_message": padTo("Fixed in "+c.sid, 450)})
 	}
 	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
 	got := map[string]string{}
@@ -275,7 +275,7 @@ func TestSubagentStopBoundsItsAttributionByTheKill(t *testing.T) {
 	// The kill is due within the append margin: the lock deadline passed.
 	t.Setenv(hook.KillAtEnv, strconv.FormatInt(time.Now().Add(subagentAppendMargin-time.Millisecond).UnixNano(), 10))
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
-		"transcript_path": parent, "last_assistant_message": "Fixed it"})
+		"transcript_path": parent, "last_assistant_message": padTo("Fixed it", 450)})
 	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
 	var n struct {
 		DocumentID  string `json:"document_id"`
@@ -325,7 +325,7 @@ func TestSubagentStopGivesUpTheLockBeforeTheChildDeadline(t *testing.T) {
 				t.Setenv(hook.KillAtEnv, strconv.FormatInt(killAt.UnixNano(), 10))
 			}
 			fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
-				"transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": "report"})
+				"transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": padTo("report", 450)})
 			if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 				t.Errorf("queued under a held lock:\n%s", raw)
 			}

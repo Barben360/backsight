@@ -90,7 +90,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 		ServerID: serverID, SendsGeneration: generation,
 		Append: retain.AppendGate{MinChars: cfg.Retain.AppendMinChars, MaxWait: cfg.Retain.AppendMaxWaitDuration()},
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
-		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
+		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportMinChars: cfg.Hooks.SubagentReportMinChars, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
 		Attribution: attributor(d, cfg, res)}, nil
 }
 
@@ -232,6 +232,9 @@ func emitNoteEvents(stateDir string, fr retain.FlushResult) {
 	tw := telemetry.New(stateDir, telemetry.Common{BinaryVersion: buildinfo.Version})
 	for _, ev := range noteEvents(fr) {
 		tw.Emit(ev)
+	}
+	for _, sk := range fr.Skipped { // as SubagentStop counts the reports it drops
+		tw.Emit(telemetry.Raw{Name: "subagent_report_skipped", Fields: map[string]any{"length": sk.Length, "agent_type": sk.AgentType, "at": "flush"}})
 	}
 }
 

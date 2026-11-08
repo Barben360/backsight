@@ -776,7 +776,7 @@ type telemetryRetain struct {
 // send's duration); a note the server refuses ends quarantined; with the
 // server down the note that failed is logged retry and stays queued.
 func TestTickLogsEachNoteItTried(t *testing.T) {
-	sub := retain.NewSubagentNote("claude-memory", "s1", "agent-7", "Explore", "p", "Found the leak.", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	sub := retain.NewSubagentNote("claude-memory", "s1", "agent-7", "Explore", "p", padTo("Found the leak.", 450), time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	t.Run("sent", func(t *testing.T) {
 		home := devInstall(t, true)
 		pointAt(t, home, fakeHindsight(t))

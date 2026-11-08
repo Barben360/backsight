@@ -53,6 +53,7 @@ breaker_failures = 3
 breaker_pause_min = 5
 [hooks]
 subagent_skip = ["Explore", "statusline-setup", "claude-code-guide"]
+subagent_report_min_chars = 400
 outbox_warn_mb = 50
 outbox_max_mb = 500
 [retain]

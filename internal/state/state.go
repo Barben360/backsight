@@ -77,6 +77,10 @@ type State struct {
 	// running one whose owner is gone was cut off: doctor names it, and its
 	// rerun first puts the source back.
 	RuntimeSwitch *RuntimeSwitch `json:"runtime_switch,omitempty"`
+	// SubagentSweep: the last sweep of the stored subagent reports that
+	// fail the report gate (jobs maintain, decision 0083 C3); it runs again
+	// when the gate, the bank or the restore epoch differs.
+	SubagentSweep *SubagentSweep `json:"subagent_sweep,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -228,6 +232,18 @@ type PurgeHold struct {
 	Unchecked bool      `json:"unchecked,omitempty"`
 	Error     string    `json:"error"`
 	At        time.Time `json:"at"`
+}
+
+// SubagentSweep records a finished sweep of the subagent reports of Bank
+// that failed Gate (retain.SubagentGate), at restore epoch Epoch (a
+// restore brings swept reports back): how many it read and purged.
+type SubagentSweep struct {
+	Bank    string    `json:"bank"`
+	Gate    string    `json:"gate"`
+	Epoch   int       `json:"epoch,omitempty"`
+	At      time.Time `json:"at"`
+	Checked int       `json:"checked"`
+	Purged  int       `json:"purged"`
 }
 
 // PurgeGuard is where the look for recreated purged documents stands:

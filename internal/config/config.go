@@ -195,8 +195,13 @@ type Network struct {
 
 type Hooks struct {
 	SubagentSkip []string `toml:"subagent_skip" json:"subagent_skip"`
-	OutboxWarnMB int      `toml:"outbox_warn_mb" json:"outbox_warn_mb"`
-	OutboxMaxMB  int      `toml:"outbox_max_mb" json:"outbox_max_mb"`
+	// SubagentReportMinChars: a subagent's final report shorter than this
+	// (in characters, trimmed) is not sent, unless it holds a URL or an
+	// issue or pull request reference (decision 0083 C3); jobs maintain
+	// purges the stored ones that fail the same gate. 0 sends every one.
+	SubagentReportMinChars int `toml:"subagent_report_min_chars" json:"subagent_report_min_chars"`
+	OutboxWarnMB           int `toml:"outbox_warn_mb" json:"outbox_warn_mb"`
+	OutboxMaxMB            int `toml:"outbox_max_mb" json:"outbox_max_mb"`
 }
 
 // Retain: when a session's turns are sent. Nothing writes this table: an
@@ -309,7 +314,7 @@ func Default(d paths.Dirs, home string) Config {
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-flash", Currency: "USD"},
 		Embeddings: Embeddings{Preset: "multilingual"},
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
-		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
+		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, SubagentReportMinChars: 400, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Retain:     Retain{AppendMinChars: 30_000, AppendMaxWait: "6h"},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
 		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
@@ -503,6 +508,7 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	}
 	atLeast("network.breaker_failures", c.Network.BreakerFailures, 1)
 	atLeast("network.breaker_pause_min", c.Network.BreakerPauseMin, 1)
+	atLeast("hooks.subagent_report_min_chars", c.Hooks.SubagentReportMinChars, 0)
 	atLeast("hooks.outbox_warn_mb", c.Hooks.OutboxWarnMB, 1)
 	if c.Hooks.OutboxWarnMB > c.Hooks.OutboxMaxMB {
 		bad("hooks.outbox_warn_mb", "(%d) must not exceed hooks.outbox_max_mb (%d)", c.Hooks.OutboxWarnMB, c.Hooks.OutboxMaxMB)

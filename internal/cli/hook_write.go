@@ -195,7 +195,7 @@ func (h *hookEnv) subagentStop(lockDeadline time.Time) []byte {
 
 // queueSubagentReport queues the subagent's final report as a document
 // (SPEC §6.2), redacted and capped, honouring the session pause and
-// opt-outs.
+// opt-outs, when it passes the report gate (hooks.subagent_report_min_chars).
 func (h *hookEnv) queueSubagentReport(lockDeadline time.Time) {
 	text := strings.TrimSpace(h.in.LastAssistantMessage)
 	if !h.cfg.Components.Write || text == "" || h.in.AgentID == "" {
@@ -211,6 +211,12 @@ func (h *hookEnv) queueSubagentReport(lockDeadline time.Time) {
 		return // a headless session's subagent (decision 0071 C1)
 	}
 	text = retain.SubagentReport(text) // redacted and capped, as a reconcile rebuilds it
+	// A status report ("Reading x.go") costs an extraction and almost
+	// never gives a memory used (decision 0083 C3): counted, not sent.
+	if !retain.KeepsSubagentReport(text, h.cfg.Hooks.SubagentReportMinChars) {
+		h.tw.Emit(telemetry.Raw{Name: "subagent_report_skipped", Fields: map[string]any{"length": retain.ReportLengthBucket(text), "agent_type": h.in.AgentType}})
+		return
+	}
 	proj := canonicalProject(h.cfg, h.project)
 	// The report goes to the own repository the subagent's work is in
 	// (the path rule, decision 0072), else to its session's project.
