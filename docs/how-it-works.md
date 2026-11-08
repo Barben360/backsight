@@ -20,8 +20,8 @@ Hooks never block Claude Code. When the server is down or slow, recall is skippe
 
 ## At session start
 
-- **The memory guide**: a short text (about 1,200 characters) telling Claude when to search and store, to read an issue or link the prompt points at before searching, to report the memories it used with `memory_credit`, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
-- **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force. After a compaction, the briefing and the last memories shown are given again only when the server refreshed the page since the session got it; otherwise one line says it is unchanged. The ids of the notes stored this session come back either way. A resume, `/clear` or a fork gives the guide only.
+- **The memory guide**: a short text (about 250 characters) telling Claude to read an issue or link the prompt points at before searching, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction. The rest is said once, where Claude always has it: the memory tools' instructions (report the memories used with `memory_credit`, what to store) and each tool's description (when and how to search, how to write a fact).
+- **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force (with the project's process rules: how it releases, how pull requests are opened and merged, worktree and branch conventions). A page created by an earlier release keeps its earlier request, without the process rules, until it is created again (a page is deleted after 14 quiet days). After a compaction, the briefing and the last memories shown are given again only when the server refreshed the page since the session got it; otherwise one line says it is unchanged. The ids of the notes stored this session come back either way. A resume, `/clear` or a fork gives the guide only.
 - **The status line** you see, such as `🧠 backsight · 🗂️ my-project` ([daily-use.md](daily-use.md#the-line-at-session-start)).
 
 ## On each prompt
@@ -85,7 +85,7 @@ The point: many questions Claude would ask you ("which server?", "what did we de
 
 ## Subagents
 
-- **When a subagent starts**, it gets a short memory guide (including how its final report should read: findings with their cause, decisions with their reason, what was delivered where) and the top of the briefing (at most 600 characters), except the types in `hooks.subagent_skip` (by default `Explore`, `statusline-setup` and `claude-code-guide`).
+- **When a subagent starts**, it gets a short memory guide (search before asking or guessing, and how its final report should read: findings with their cause, decisions with their reason, what was delivered where) and the top of the briefing (at most 600 characters), except the types in `hooks.subagent_skip` (by default `Explore`, `statusline-setup` and `claude-code-guide`).
 - **When it finishes**, its final report is redacted, cut at 4,000 characters and sent like a note, unless the session is paused or the project excluded, or the report is short: under `hooks.subagent_report_min_chars` characters (400 by default) with no URL (`github.com/...` without a scheme counts), no issue or pull request reference (`#123`, `owner/repo#123`, `PR 205`, `GH-7`) and no commit hash. Short status reports ("Reading x.go", "Waiting for CI") made most subagent reports, each cost an extraction, and the memories drawn only from them were almost never used. The check at the end of the subagent's turn runs either way. A short report already queued (by an older backsight, or given another try by `retain retry-quarantine`) is dropped when the queue is sent, under the same rule.
 - **Reports stored before that rule** are deleted by `jobs maintain`, once: every `subagent:` document of the bank whose text fails the same rule goes as with `forget --purge` (its facts, the observations drawn from them, which the server then consolidates again from their other sources, and the document), including reports that gave no fact. A document with facts whose text the server returns empty is left. Each document is read again just before it goes: one whose text changed meanwhile is left. Unlike `forget --purge`, it writes no [tombstone](glossary.md#tombstone): a subagent resumed later reports again under the same document, and that report is kept. It runs after the daily backup, which still holds them; it waits for the next day when that backup failed, when the server does not answer, or while a backup, a restore or a purge holds the maintenance lock. Changing `hooks.subagent_report_min_chars` runs it again with the new value, and so does a restore of the server (which brings the deleted reports back). On several PCs any of them may run it: a second run finds nothing left. This is the only memory backsight deletes without a command from you.
 
@@ -118,9 +118,9 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 
 | What | Size |
 |---|---|
-| The memory guide, each session start | about 1,200 characters |
+| The memory guide, each session start | about 250 characters |
 | The briefing, each session start | up to about 1,600 characters |
-| The memory tools' descriptions and instructions | about 4,000 characters |
+| The memory tools' descriptions and instructions | about 4,300 characters |
 | Memories on prompts, whole session | up to 6,000 characters (`recall.session_budget_chars`) |
 | The line asking Claude to report what it used, under each recall | about 200 characters |
 | Reminder, nudge, save prompt | 100 to 350 characters each, when they fire |

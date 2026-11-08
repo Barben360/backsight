@@ -32,8 +32,8 @@ import (
 )
 
 type searchArgs struct {
-	Queries  []string `json:"queries" jsonschema:"1-4 short keyword queries, one per subject"`
-	Projects []string `json:"projects,omitempty" jsonschema:"other projects to search too"`
+	Queries  []string `json:"queries" jsonschema:"1-4 short keyword queries"`
+	Projects []string `json:"projects,omitempty" jsonschema:"other projects to search too: related repositories"`
 	Scope    string   `json:"scope,omitempty" jsonschema:"auto (current project, transverse, related projects and the whole memory; default) or all (the whole memory only)"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"most memories returned (default 8)"`
 	MinScore *float64 `json:"min_score,omitempty" jsonschema:"relevance floor (default 0.4); lower it to widen"`
@@ -45,15 +45,15 @@ type readArgs struct {
 
 type storeArgs struct {
 	Kind    string `json:"kind" jsonschema:"decision, correction, convention, pitfall, state or lesson"`
-	Text    string `json:"text" jsonschema:"1-3 sentences: the fact, why, absolute dates"`
-	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" only for a user-wide rule"`
+	Text    string `json:"text" jsonschema:"1-3 sentences: the fact, why, absolute dates (2026-10-24, never \"today\")"`
+	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" only for a user-wide rule (it reaches every project)"`
 }
 
 type creditArgs struct {
-	IDs        []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
-	Verdict    string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; confirmed: these memories match what this session established independently (the user's words, a file, a command output), they did not inform the answer; none: no memory shown informed it; wrong: this session shows them false; outdated: they were true but no longer are"`
-	Correction string   `json:"correction,omitempty" jsonschema:"with wrong or outdated: the right fact, 1-3 sentences, as for memory_store"`
-	Evidence   string   `json:"evidence,omitempty" jsonschema:"with wrong or outdated: what in this session shows it (the user's words, a file, a command output), at most 300 characters"`
+	IDs        []string `json:"ids,omitempty" jsonschema:"1-10 memory ids, full or their first 8 characters; none with verdict none"`
+	Verdict    string   `json:"verdict,omitempty" jsonschema:"used (default), confirmed, none, wrong or outdated"`
+	Correction string   `json:"correction,omitempty" jsonschema:"with wrong or outdated: 1-3 sentences, as for memory_store"`
+	Evidence   string   `json:"evidence,omitempty" jsonschema:"with wrong or outdated: at most 300 characters"`
 }
 
 // live is the session and project of the Claude Code session this server

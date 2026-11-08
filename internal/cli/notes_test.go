@@ -84,7 +84,8 @@ func TestMCPStoreScopeIsTheCurrentProjectAndTransverseOnlyWhenNamed(t *testing.T
 	}
 }
 
-// The tool tells Claude the default and that transverse must be named.
+// The tool tells Claude the default and that transverse must be named
+// (in the project parameter's description, 0083 C7).
 func TestMCPStoreSchemaDocumentsTheScope(t *testing.T) {
 	cs := mcpSession(t)
 	res, err := cs.ListTools(t.Context(), nil)
@@ -96,7 +97,7 @@ func TestMCPStoreSchemaDocumentsTheScope(t *testing.T) {
 			continue
 		}
 		raw, _ := json.Marshal(tool.InputSchema)
-		if !strings.Contains(tool.Description, "current project") || !strings.Contains(string(raw), `only for a user-wide rule`) {
+		if !strings.Contains(string(raw), "default: the current project") || !strings.Contains(string(raw), `only for a user-wide rule`) {
 			t.Errorf("description %q\nschema %s", tool.Description, raw)
 		}
 		return

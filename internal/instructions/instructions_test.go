@@ -21,14 +21,15 @@ func TestSizes(t *testing.T) {
 		text string
 		max  int
 	}{
-		{"guide (≤ 1 200, E6: near 700)", Guide, 1200},
-		{"short guide", ShortGuide, 1000},
+		{"guide (≤ 1 200, E6; 0083 C7: what the tools do not say)", Guide, 400},
+		{"short guide", ShortGuide, 700},
 		{"reminder", Reminder, 400},
 		{"nudge with terms", Nudge([]string{"PostgreSQL", "Grafana", "backfill", "observation scopes"}), 300},
 		{"gate reason", GateReason, 400},
-		{"subagent guide", SubagentGuide, 300},
+		{"subagent guide", SubagentGuide, 280},
 		{"search description", SearchDescription, 1000},
-		{"store description", StoreDescription, 1500}, // v15 adds the merges/releases/CI rule; 0083 C7 cuts it
+		{"store description (0083 C7: ≈ 40 % under v15's 1 496)", StoreDescription, 910},
+		{"credit description (0083 C7: ≈ 40 % under v14's 1 630)", CreditDescription, 980},
 		{"read description", ReadDescription, 300},
 		{"pointer line", Pointer([]string{"https://github.com/o/r/issues/1", "https://github.com/o/r/pull/2", "o/r#3"}), 300},
 	} {
@@ -46,10 +47,15 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 	if CreditAsk != want {
 		t.Errorf("credit ask changed: %q", CreditAsk)
 	}
-	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide, "reminder": Reminder} {
+	for name, s := range map[string]string{"short guide": ShortGuide, "reminder": Reminder} {
 		if !strings.Contains(s, CreditAsk) || strings.Contains(s, Credit) {
 			t.Errorf("%s: want the credit ask and no citation format: %s", name, s)
 		}
+	}
+	// 0083 C7: the MCP instructions carry it for every session; the guide,
+	// beside them in the same context, does not repeat it.
+	if strings.Contains(Guide, "memory_credit") || strings.Contains(Guide, Credit) {
+		t.Errorf("guide repeats the credit ask: %s", Guide)
 	}
 	if Credit != "> 🧠 **From memory (<project>)** — <facts>" {
 		t.Errorf("credit changed: %q", Credit)
@@ -59,12 +65,12 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v15" {
+	if Version != "v16" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
 		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output).",
-		`"verdict": "wrong"`, `"verdict": "outdated"`, `"correction":`, `"evidence":`,
+		`"verdict": "wrong"`, `"correction":`, `"evidence":`,
 	} {
 		if !strings.Contains(CreditDescription, want) {
 			t.Errorf("credit description lacks %q: %s", want, CreditDescription)
@@ -74,7 +80,7 @@ func TestGuideV8(t *testing.T) {
 		name string
 		text string
 		max  int
-	}{{"guide", Guide, 1200}, {"short guide", ShortGuide, 1000}} {
+	}{{"short guide", ShortGuide, 1000}} {
 		if n := utf8.RuneCountInString(c.text); n > c.max {
 			t.Errorf("%s: %d chars (max %d)", c.name, n, c.max)
 		}
@@ -93,8 +99,11 @@ func TestGuideV8(t *testing.T) {
 // the agent cites in the earlier format instead. On: the credit ask.
 func TestTextsFollowFeedback(t *testing.T) {
 	on, off := For(true), For(false)
+	if on.Guide != off.Guide || strings.Contains(on.Guide, "memory_credit") || strings.Contains(on.Guide, Credit) {
+		t.Errorf("the guide names neither the credit nor the citation (the short guide does): %q / %q", on.Guide, off.Guide)
+	}
 	for name, pair := range map[string][2]string{
-		"guide": {on.Guide, off.Guide}, "short guide": {on.ShortGuide, off.ShortGuide}, "reminder": {on.Reminder, off.Reminder},
+		"short guide": {on.ShortGuide, off.ShortGuide}, "reminder": {on.Reminder, off.Reminder},
 		"recall end": {on.RecallEnd, off.RecallEnd}, "search end": {on.SearchEnd, off.SearchEnd},
 	} {
 		if !strings.Contains(pair[0], "memory_credit") || strings.Contains(pair[0], Credit) {
@@ -117,12 +126,85 @@ func TestTextsFollowFeedback(t *testing.T) {
 	}
 }
 
+// SPEC §8's guide content, now held once across the texts every session
+// reads (0083 C7): the search triggers and recipes in the search tool's
+// description, the credit, the empty-search line, what to store and the
+// override in the MCP instructions, the conversation's rules in the guide.
 func TestGuideCoversTheSpecPoints(t *testing.T) {
-	for _, want := range []string{"memory_search", "1-4 short keyword queries", "verify", NothingLine, "memory_store",
-		"transverse", "override", "user's language", "test"} {
-		if !strings.Contains(Guide, want) {
-			t.Errorf("guide lacks %q", want)
+	for _, c := range []struct {
+		name, text string
+		want       []string
+	}{
+		{"guide", Guide, []string{"issue, PR or link", "user's language", "Never ask the user for a key"}},
+		{"short guide", ShortGuide, []string{CreditAsk, NothingLine, "Store decisions, corrections, conventions, pitfalls and lessons with `memory_store`",
+			"User-wide rules override conflicting project facts", "each tool's description says when and how to use it"}},
+		{"short guide, feedback off", ShortGuideCite, []string{Credit, NothingLine, "memory_store", "override"}},
+		{"search description", SearchDescription, []string{"BEFORE asking the user a factual question", "recommending", "starting a task or topic",
+			"refers to the past", "writing a test or changing something shared", "Skip it for trivial edits", "verify"}},
+	} {
+		for _, want := range c.want {
+			if !strings.Contains(c.text, want) {
+				t.Errorf("%s lacks %q: %s", c.name, want, c.text)
+			}
 		}
+	}
+}
+
+// shingles are the 6-word runs of s, lower-cased, punctuation dropped.
+func shingles(s string) map[string]bool {
+	word := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '\''
+	}
+	words := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !word(r) })
+	out := map[string]bool{}
+	for i := 0; i+6 <= len(words); i++ {
+		out[strings.Join(words[i:i+6], " ")] = true
+	}
+	return out
+}
+
+// 0083 C7: the guide, the MCP instructions and the tool descriptions sit
+// in one context; none repeats another (v14's guide and short guide shared
+// about 740 characters).
+func TestStaticTextsDoNotRepeatEachOther(t *testing.T) {
+	for _, feedback := range []bool{true, false} {
+		x := For(feedback)
+		texts := map[string]string{"guide": x.Guide, "short guide": x.ShortGuide, "search": SearchDescription, "store": StoreDescription, "read": ReadDescription}
+		if feedback {
+			texts["credit"] = CreditDescription
+		}
+		for a, ta := range texts {
+			for b, tb := range texts {
+				if a >= b {
+					continue
+				}
+				sb := shingles(tb)
+				for sh := range shingles(ta) {
+					if sb[sh] {
+						t.Errorf("feedback %v: %s and %s both say %q", feedback, a, b, sh)
+					}
+				}
+			}
+		}
+	}
+}
+
+// 0083 C7: 13 % of searches looked the project's process conventions up
+// again every session; the briefing page states them under "In force",
+// in the same length.
+func TestBriefingQueryAsksForTheProcessRules(t *testing.T) {
+	_, inForce, ok := strings.Cut(BriefingQuery, "'In force'")
+	inForce, _, _ = strings.Cut(inForce, ")")
+	if !ok {
+		t.Fatalf("no In force section: %s", BriefingQuery)
+	}
+	for _, want := range []string{"standing process rules", "releases", "pull requests", "worktree"} {
+		if !strings.Contains(inForce, want) {
+			t.Errorf("In force lacks %q: %s", want, inForce)
+		}
+	}
+	if !strings.Contains(BriefingQuery, "In at most 1 200 characters") {
+		t.Errorf("the length rule changed: %s", BriefingQuery)
 	}
 }
 
@@ -130,21 +212,22 @@ func TestGuideCoversTheSpecPoints(t *testing.T) {
 // not to search; the real parameter name for related repositories.
 func TestSearchDescriptionCarriesTheRecipes(t *testing.T) {
 	for _, want := range []string{"topic + intent word", "never a kind word alone", "one per angle", "date or version", "pitfall / correction",
-		"topic + decision", "convention / correction", "`projects`", "Skip it for trivial edits", "already found this session", "Hits show their kinds"} {
+		"topic + decision", "convention / correction", "Skip it for trivial edits", "already found this session", "Hits show their kinds"} {
 		if !strings.Contains(SearchDescription, want) {
 			t.Errorf("search description lacks %q", want)
 		}
 	}
 	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
-		if !strings.Contains(s, "topic + intent word") {
-			t.Errorf("%s lacks the query recipe", name)
+		if strings.Contains(s, "topic + intent word") {
+			t.Errorf("%s repeats the query recipe", name)
 		}
 	}
 }
 
 func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
-	for _, want := range []string{"decision, correction, convention, pitfall, state, lesson", "one fact per call", "why", "absolute dates",
-		"no secrets", "transverse", "Examples:", "Non-examples:", "most similar memory"} {
+	// The kinds, the text's rubric (1-3 sentences, why, absolute dates) and
+	// the project are the parameters' (internal/cli's static-context test).
+	for _, want := range []string{"one durable fact per call", "exact identifiers", "no code dumps, no secrets", "Example:", "the memory it shows"} {
 		if !strings.Contains(StoreDescription, want) {
 			t.Errorf("store description lacks %q", want)
 		}
@@ -154,11 +237,11 @@ func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
 // Close the loop: a recalled open item that is settled and a contradicted
 // memory become one dated fact naming the old claim; a contradicted
 // similar memory is updated. Shipped work alone is no reason to store
-// (v15, decision 0083 C6).
+// (v15, decision 0083 C6). Said once, in memory_store's description (C7).
 func TestStoreDescriptionClosesTheLoop(t *testing.T) {
 	for _, want := range []string{"Close the loop", "when a recalled open item is settled (shipped, abandoned, root cause found)",
 		"contradicted by the code or the user", "ONE dated fact", "names the old claim in its own words", "replaces open item", "kind correction",
-		"updates it rather than adding a parallel fact"} {
+		"updates the memory it shows (no parallel fact)"} {
 		if !strings.Contains(StoreDescription, want) {
 			t.Errorf("store description lacks %q", want)
 		}
@@ -167,18 +250,17 @@ func TestStoreDescriptionClosesTheLoop(t *testing.T) {
 		t.Errorf("store description still closes the loop on any shipped work: %s", StoreDescription)
 	}
 	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide, "guide (cite)": GuideCite, "short guide (cite)": ShortGuideCite} {
-		if !strings.Contains(s, "naming the old claim") || !strings.Contains(s, "settled open item") {
-			t.Errorf("%s lacks the close-the-loop line: %s", name, s)
-		}
-		if strings.Contains(s, "when work ships") {
-			t.Errorf("%s still closes the loop on any shipped work: %s", name, s)
+		if strings.Contains(s, "old claim") || strings.Contains(s, "when work ships") {
+			t.Errorf("%s repeats the close-the-loop line: %s", name, s)
 		}
 	}
 }
 
 // v15 (decision 0083 C6): merges, releases and CI status are left to the
 // conversation, which records them; a delivered state is stored only with
-// what the conversation would not make obvious.
+// what the conversation would not make obvious. v16 (C7): said once, in
+// memory_store's description; the short guide lists what to store, without
+// delivered states.
 func TestStoreTextsLeaveProcessStatusToTheConversation(t *testing.T) {
 	for _, want := range []string{"no merges, releases or CI status (the conversation has them)",
 		"a delivered state only with a reason or location the conversation lacks"} {
@@ -187,17 +269,17 @@ func TestStoreTextsLeaveProcessStatusToTheConversation(t *testing.T) {
 		}
 	}
 	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide, "guide (cite)": GuideCite, "short guide (cite)": ShortGuideCite} {
-		if !strings.Contains(s, "not merges, releases or CI status") {
-			t.Errorf("%s does not leave merges, releases and CI status out: %s", name, s)
+		if strings.Contains(s, "delivered states") || strings.Contains(s, "CI status") {
+			t.Errorf("%s asks to store every delivered state, or repeats the process-status rule: %s", name, s)
 		}
-		if strings.Contains(s, "delivered states") {
-			t.Errorf("%s still asks to store every delivered state: %s", name, s)
-		}
+	}
+	if !strings.Contains(ShortGuide, "decisions, corrections, conventions, pitfalls and lessons") {
+		t.Errorf("short guide does not list what to store: %s", ShortGuide)
 	}
 }
 
 func TestStoreDescriptionForbidsMemoryAboutMemory(t *testing.T) {
-	for _, want := range []string{"State the fact itself", "never \"a memory about X was stored\"", "split a fact that covers two topics"} {
+	for _, want := range []string{"state the fact itself", "never \"a memory about X was stored\"", "split a fact that covers two topics"} {
 		if !strings.Contains(StoreDescription, want) {
 			t.Errorf("store description lacks %q", want)
 		}
@@ -206,8 +288,8 @@ func TestStoreDescriptionForbidsMemoryAboutMemory(t *testing.T) {
 
 // What a subagent's final report should look like: it is kept in memory.
 func TestSubagentGuideShapesTheReport(t *testing.T) {
-	for _, want := range []string{"memory_search", "Your final message is kept", "findings with their cause", "decisions with their reason",
-		"what was delivered where", "no progress chatter", "never say you retrieved a memory", "The main session stores durable decisions"} {
+	for _, want := range []string{"memory_search", "before asking or guessing", "Your final message is stored", "findings with their cause", "decisions with their reason",
+		"what was delivered where", "no progress chatter", "never say you retrieved one", "Leave storing to the main session"} {
 		if !strings.Contains(SubagentGuide, want) {
 			t.Errorf("subagent guide lacks %q", want)
 		}
@@ -391,7 +473,6 @@ func TestCreditDescriptionTeachesConfirmedWithItsGuard(t *testing.T) {
 		"Never as a default, never for a memory you did not check",
 		"one call per verdict",
 		"it takes no evidence",
-		`"verdict": "confirmed"`,
 	} {
 		if !strings.Contains(CreditDescription, want) {
 			t.Errorf("credit description lacks %q: %s", want, CreditDescription)
@@ -420,6 +501,7 @@ var wordings = map[string]string{
 	"v13": "daf579e2e998c49a849a2c7d5f27ba20b181e5261ea1ce3aa80f026b980110bb",
 	"v14": "38d36fbc00507212af4d086fc7499522dcd948cba1894be8c6c9bc9d5f6ca8ff",
 	"v15": "1c8774365de706f728d5ffd77598677ea22f235b0b8654c6ded8b6c5540f69ec",
+	"v16": "ae82f602a1d512624eae936a5dfbc49068f9f4809850a26c9d451c5d0d8e8b3a",
 }
 
 func wordingHash() string {

@@ -46,7 +46,7 @@ func TestFeedbackLines(t *testing.T) {
 
 // The lines the agent writes without a tool's answer, where it is told.
 func TestNothingAndRetroLinesAreAskedFor(t *testing.T) {
-	for name, s := range map[string]string{"guide": Guide, "guide, feedback off": GuideCite, "gate reason": GateReason} {
+	for name, s := range map[string]string{"short guide": ShortGuide, "short guide, feedback off": ShortGuideCite, "gate reason": GateReason} {
 		if !strings.Contains(s, NothingLine) {
 			t.Errorf("%s lacks the nothing line: %s", name, s)
 		}

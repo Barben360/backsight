@@ -35,8 +35,10 @@ import (
 // session established independently, with its guard and one call per verdict; v14: memory_store
 // shows at most one similar memory, the closest, and its Updated line names it; v15: the guide, the
 // short guide and memory_store leave merges, releases and CI status to the conversation, and close
-// the loop on a settled open item rather than on any shipped work).
-const Version = "v15"
+// the loop on a settled open item rather than on any shipped work; v16 (0083 C7): each rule once
+// across the guide, the MCP instructions and the tool texts, the guide keeping only the conversation's
+// rules, shorter memory_store and memory_credit descriptions, the briefing asks for the process rules).
+const Version = "v16"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -50,29 +52,26 @@ const Credit = "> 🧠 **From memory (<project>)** — <facts>"
 const CreditAsk = "When memories were shown to you this turn, call `memory_credit` once you know what you used, before your final message: " +
 	"the ids that informed it (it returns the line to print), or `verdict: none`."
 
+// The texts every session re-reads (decision 0083 C7) hold each rule once:
+// the tool descriptions say when and how to use each tool, the short guide
+// (MCP instructions, also read by subagents) the turn's credit and what to
+// store, the guide only what concerns the main session's conversation.
 const (
-	guideHead = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject, topic + intent word: \"docker subnet pitfall\"). " +
-		"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
-		"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
-		"An issue, PR or link in the prompt: read it first, then search its content. " +
-		"Results are hints: verify them. "
-	guideTail = "Store decisions, corrections, conventions, pitfalls, lessons with `memory_store` (user-wide rules: project \"transverse\"), not merges, releases or CI status; a wrong memory or settled open item: a dated fact naming the old claim. " +
-		"User-wide rules override conflicting project facts. Answer in the user's language. " +
-		"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
-	shortGuideHead = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
-		"recommendations, new tasks and references to the past; results are hints to verify"
-	shortGuideTail = "Query = topic + intent word (\"docker subnet pitfall\"), never a kind word alone. " +
-		"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and lessons, one fact per call, not merges, releases or CI status; for a wrong memory or a settled open item, store a dated fact naming the old claim. " +
-		"`memory_read` shows one memory with the facts it was built from."
+	shortGuideHead = "The user's long-term memory of past sessions, all projects; each tool's description says when and how to use it. "
+	shortGuideTail = "Store decisions, corrections, conventions, pitfalls and lessons with `memory_store`. " +
+		"User-wide rules override conflicting project facts."
+	emptySearch  = "An empty search: one line «" + NothingLine + "». "
 	reminderHead = "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, " +
 		"call `memory_search` first (an issue, PR or link in it: read it first, then search its content)"
 )
 
-// Guide is the SessionStart guide (≤ 1 200 chars, E6).
-const Guide = guideHead + CreditAsk + " An empty search: one line «" + NothingLine + "». " + guideTail
+// Guide is the SessionStart guide (≤ 1 200 chars, E6): what the tools and
+// the MCP instructions do not say. The same with feedback on or off.
+const Guide = "Memory: an issue, PR or link in the prompt: read it first, then search its content. Answer in the user's language. " +
+	"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
 
 // ShortGuide is the MCP server's instructions (≤ 1 000 chars).
-const ShortGuide = shortGuideHead + ". " + CreditAsk + " " + shortGuideTail
+const ShortGuide = shortGuideHead + CreditAsk + " " + emptySearch + shortGuideTail
 
 // Reminder is added to the first prompt of a session (and after a gap).
 const Reminder = reminderHead + ". " + CreditAsk
@@ -80,8 +79,8 @@ const Reminder = reminderHead + ". " + CreditAsk
 // The texts where memory_credit is not offered (feedback.enabled off): the
 // v6 citation instead of the credit ask.
 const (
-	GuideCite      = guideHead + "If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line «" + NothingLine + "». " + guideTail
-	ShortGuideCite = shortGuideHead + ", cite what you use as «" + Credit + "». " + shortGuideTail
+	GuideCite      = Guide
+	ShortGuideCite = shortGuideHead + "If a result informs your answer, cite it exactly: «" + Credit + "». " + emptySearch + shortGuideTail
 	ReminderCite   = reminderHead + "; credit what you use exactly: «" + Credit + "»."
 	RecallCite     = "Cite what you use as «" + Credit + "»."
 	SearchCite     = "Cite what you use as: " + Credit
@@ -179,7 +178,8 @@ const BriefingModelEnd = "(end of the memory notes)"
 // facts are (0039), short, by section, every recent session.
 const BriefingQuery = "Briefing for an assistant starting a new work session on this project. In at most 1 200 characters, as short bullet lists under these headings, " +
 	"most recent first, with absolute dates: 'Open items' (unfinished work, questions left open, things to verify), 'Recent' (what was delivered " +
-	"in the last sessions), 'In force' (decisions, conventions and pitfalls that still apply, with exact values). Cover every recent session, " +
+	"in the last sessions), 'In force' (decisions, conventions and pitfalls that still apply, with exact values, and the project's standing process rules: " +
+	"how it releases, how pull requests are opened and merged, worktree and branch conventions). Cover every recent session, " +
 	"not only the last one. State only what the memories support."
 
 const (
@@ -197,44 +197,37 @@ func FirstSessionNotice(server, provider string) string {
 
 // SubagentGuide opens the SubagentStart text (≤ 600 chars with the hints
 // line and the briefing items, which the hook clips to what is left).
-const SubagentGuide = "Memory: `memory_search` (topic + intent word queries). Your final message is kept in it: " +
+const SubagentGuide = "Search memory (`memory_search`) before asking or guessing. Your final message is stored: " +
 	"findings with their cause, decisions with their reason, what was delivered where; no progress chatter; " +
-	"quote a recalled fact, never say you retrieved a memory. The main session stores durable decisions."
+	"quote recalled facts, never say you retrieved one. Leave storing to the main session."
 
-// Tool descriptions (SPEC §7).
+// Tool descriptions (SPEC §7). What a parameter's description says (the
+// kinds, the text rubric, the project, the id forms, the limits) is not
+// repeated here.
 const (
 	SearchDescription = "Search the user's long-term memory: what was discussed, decided and learned in past sessions across all projects " +
 		"(decisions and their reasons, conventions, infrastructure facts, project history, mistakes already made). " +
-		"Use it BEFORE asking the user a factual question or a preference, recommending an architecture, tool or convention, starting a task, " +
-		"or when the user refers to the past. Queries: 1-4 short ones, one per angle, written as topic + intent word " +
-		"(\"docker compose subnet pitfall\"), never a kind word alone and never a copy of the user's sentence; add a date or version " +
-		"for a question about time. Before a risky or irreversible action search topic + pitfall / correction; before design work " +
-		"topic + decision; before asking a preference topic + convention / correction. `projects` also searches related repositories. " +
-		"Skip it for trivial edits and a fact already found this session. Hits show their kinds [pitfall, state]. Results are hints from past sessions: verify them against the code."
-	StoreDescription = "Store one durable fact in the user's long-term memory. Kinds: decision, correction, convention, pitfall, state, lesson. " +
-		"Rubric: one fact per call, 1-3 sentences, say why, absolute dates (2026-10-24, never \"today\"), exact identifiers; " +
+		"Use it BEFORE asking the user a factual question or a preference, recommending an architecture, tool or convention, starting a task or topic, " +
+		"writing a test or changing something shared, or when the user refers to the past. Skip it for trivial edits and a fact already found this session. " +
+		"Queries: one per angle, topic + intent word (\"docker compose subnet pitfall\"), never a kind word alone nor a copy of the user's sentence; " +
+		"add a date or version for a question about time. Before a risky or irreversible action search topic + pitfall / correction; before design work " +
+		"topic + decision; before asking a preference topic + convention / correction. " +
+		"Hits show their kinds [pitfall, state]. Results are hints from past sessions: verify them against the code."
+	StoreDescription = "Store one durable fact per call (split a fact that covers two topics), exact identifiers; " +
 		"no code dumps, no secrets, no plans or hypotheses, no merges, releases or CI status (the conversation has them), " +
-		"a delivered state only with a reason or location the conversation lacks. Without project the fact goes to the current project; " +
-		"set project \"transverse\" only for a user-wide rule (it reaches every project). " +
-		"Examples: \"Decision (2026-10-24): billing keeps PostgreSQL 16 because partial indexes are required.\" · " +
-		"\"Pitfall: Hindsight /stats under-counts queued async retains; count /operations instead.\" " +
-		"Non-examples: \"We are looking into the bug\" (not durable) · a 40-line config file (a dump). " +
+		"a delivered state only with a reason or location the conversation lacks; state the fact itself, never \"a memory about X was stored\". " +
+		"Example: \"Decision (2026-10-24): billing keeps PostgreSQL 16 because partial indexes are required.\" " +
 		"Close the loop: when a recalled open item is settled (shipped, abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
-		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
-		"State the fact itself, never \"a memory about X was stored\"; split a fact that covers two topics. " +
-		"The most similar memory is returned when it is close: if it contradicts this fact, it updates it rather than adding a parallel fact; print the line the result gives, Updated then, Saved otherwise (if it repeats it, say so in it)."
+		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"); kind correction for a contradiction. " +
+		"Print the line the result gives: Updated if the fact updates the memory it shows (no parallel fact), else Saved; a repeat: say so in it."
 	ReadDescription   = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
-	CreditDescription = "Name the memories shown to you in this session that informed your answer: call it once you know what you used, before your final message. " +
-		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
-		"Memories were shown but none informed the answer: `verdict: none`, without ids. Only memories shown in this session count: a search sent in the same message " +
-		"must return its result first. " +
-		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): it did not inform the answer, and you checked it here. Never as a default, never for a memory you did not check; it takes no evidence and returns its own line to print. " +
-		"When verdicts differ, make one call per verdict. " +
+	CreditDescription = "Declare the memories shown in this session that informed your answer; a search sent in the same message must return its result first. " +
+		"Verdict `used` (the default) returns the line to print in your final message. " +
+		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): " +
+		"it did not inform the answer, and you checked it here. Never as a default, never for a memory you did not check; it takes no evidence and returns its own line to print. " +
 		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output). " +
-		"Examples: {\"ids\": [\"0b4c2a52\"]} after using that memory · {\"verdict\": \"none\"} when the memories shown were off-topic · " +
-		"{\"ids\": [\"5a1d0c33\"], \"verdict\": \"confirmed\"} when the user said rtk was removed and a memory already says so · " +
-		"{\"ids\": [\"7e1f9d03\"], \"verdict\": \"wrong\", \"correction\": \"Billing runs PostgreSQL 16, not 15.\", \"evidence\": \"psql --version printed 16.4\"} · " +
-		"{\"ids\": [\"c93a0e17\"], \"verdict\": \"outdated\", \"correction\": \"Deploys moved from Jenkins to GitHub Actions on 2026-10-20.\", \"evidence\": \"the user: we dropped Jenkins last week\"}."
+		"When verdicts differ, make one call per verdict. " +
+		"Example: {\"ids\": [\"7e1f9d03\"], \"verdict\": \"wrong\", \"correction\": \"Billing runs PostgreSQL 16, not 15.\", \"evidence\": \"psql --version printed 16.4\"}."
 )
 
 // Skill is one plugin skill (SPEC §9.2, §17): its SKILL.md frontmatter and
