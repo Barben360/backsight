@@ -134,7 +134,9 @@ type purgeDoc struct {
 
 // newForgetCmd is `forget <id> [--purge [--yes]] [--restore]` and `forget
 // --project P [--source S] [--purge] [--plan]` (SPEC §2, §13, decision 0071
-// C7): the only way memory is deleted, always by the user.
+// C7): the way memory is deleted, always by the user. The one exception
+// is jobs maintain's sweep of the subagent reports under the report gate
+// (decision 0083 C3, maintainSubagentSweep).
 func newForgetCmd(e *env) *cobra.Command {
 	var purge, yes, restore bool
 	var pf forgetProjectFlags

@@ -5,7 +5,7 @@ What backsight stores, where it goes, and how to keep things out of memory. Word
 ## What is stored
 
 - **Your sessions**: the text of your prompts and Claude's replies, with one line per tool call (`Edit src/main.go`, for example). Tool results, thinking and file contents Claude read are not sent.
-- **Subagent reports**: the final message of each subagent Claude starts, cut at 4,000 characters.
+- **Subagent reports**: the final message of each subagent Claude starts, cut at 4,000 characters; a report under `hooks.subagent_report_min_chars` characters (400 by default) with no URL and no issue or pull request reference is not sent.
 - **Facts Claude stores** with `memory_store`, and those you store with `backsight store` or `/backsight:remember`.
 
 The server turns this text into memories: short facts tagged with their project, kept with the documents they came from.
@@ -121,6 +121,8 @@ doctor's `noise-headless` check names the projects that got headless sessions se
 - `backsight forget <id>` retires a memory; recall stops returning it, and `--restore` brings it back.
 - `backsight forget <id> --purge --yes` deletes the memory, its source facts and the documents they came from. Backups made before the purge still hold them; the command lists those backups, which you can delete yourself.
 - `backsight forget --project <name> --plan` lists what a whole project holds in the bank: its documents and its memory counts. Without `--purge`, `backsight forget --project <name>` then retires every raw fact of it (each can be brought back with `backsight forget <id> --restore`); with `--purge`, it deletes those documents and the project's observations for good, and lists the older backups that still hold them. `--source <s>` keeps to one source (`chat`, `subagent`, `note`) and the observations drawn from it. Either way it asks you to type the project name: `--answer confirm_project=<name>`.
+
+Memory is deleted only by these commands, with one exception: `jobs maintain` deletes, once, the stored subagent reports that fail the rule above (shorter than `hooks.subagent_report_min_chars`, with no URL and no issue or pull request reference), as `forget --purge` does, tombstones included, after the daily backup that still holds them, and again only when you change that setting ([how it works](how-it-works.md#subagents)).
 
 A purge stays a purge. Before deleting, it writes a **[tombstone](glossary.md#tombstone)** for each document: its id, its session and project, and the last turn it held (for a note, a hash of its text, never the text). Tombstones are kept for good in `state.json` and copied to the document `backsight:tombstones` of the `<bank>-control` bank, so your other machines and a reinstall know them too. The turns a tombstone covers are never sent again from your transcripts: not after a restore, not by `retain retry-quarantine`, not by `retain backfill`, and the saves made in them are not replayed. Later turns of the same session are still sent, to a new document (`conversation:<session>#2`, then `#3` after another purge): a purged document id is never written again, so a restore that brings the purged document back deletes it again without losing them. If the control bank cannot be written at that moment, the purge says so, and the next `jobs tick` writes the tombstone there.
 

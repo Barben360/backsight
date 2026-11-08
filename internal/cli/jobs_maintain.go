@@ -43,6 +43,9 @@ type maintainResult struct {
 	// Purges: the daily look at every purge tombstone for a document an
 	// older client wrote again, "" when none was found.
 	Purges string `json:"purges,omitempty"`
+	// SubagentSweep: the sweep of the stored subagent reports under the
+	// report gate (maintainSubagentSweep), "" when it had nothing to do.
+	SubagentSweep string `json:"subagent_sweep,omitempty"`
 	// Rename: the legacy bank's move to the new names, after the backup,
 	// when an update could not finish it (pending operations).
 	Rename string `json:"rename,omitempty"`
@@ -127,6 +130,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			var moved int
 			res.Reattribute, moved = maintainReattribute(cmd.Context(), d, archive, noBackup)
 			res.Purges = guardMaintain(cmd.Context(), d, home)
+			res.SubagentSweep = maintainSubagentSweep(cmd.Context(), d, tw, strings.HasPrefix(res.Backup, "failed"))
 			if archive != "" {
 				res.Rename = maintainRename(cmd.Context(), d)
 			}
@@ -304,6 +308,9 @@ func maintainText(r maintainResult) string {
 	purges := ""
 	if r.Purges != "" {
 		purges = ", " + r.Purges
+	}
+	if r.SubagentSweep != "" {
+		purges += ", " + r.SubagentSweep
 	}
 	if r.Rename != "" {
 		purges += ", bank rename " + r.Rename
