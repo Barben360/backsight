@@ -682,11 +682,13 @@ func fakeHindsight(t *testing.T) (port int) {
 				if r.Method == http.MethodDelete {
 					delete(mentalModels, id)
 				}
-				if m, ok := mentalModels[id]; ok && r.Method == http.MethodPatch { // a trigger update replaces it
+				if m, ok := mentalModels[id]; ok && r.Method == http.MethodPatch { // an update replaces the fields it sends
 					var cur, in map[string]any
 					_ = json.Unmarshal([]byte(m), &cur)
 					_ = json.Unmarshal(body, &in)
-					cur["trigger"] = in["trigger"]
+					for k, v := range in {
+						cur[k] = v
+					}
 					raw, _ := json.Marshal(cur)
 					mentalModels[id] = string(raw)
 				}

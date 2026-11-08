@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,11 +9,15 @@ import (
 	"time"
 )
 
-const (
-	floorPATCH = `{"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`
-	// noFloor: a page made before decision 0083 C2.
-	noFloor = `{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":null}`
-)
+// noFloor: a page made before decision 0083 C2.
+const noFloor = `{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":null}`
+
+// patchBody is the update a page gets: the current request and the whole
+// trigger, with the 6 h floor.
+func patchBody(query string) string {
+	q, _ := json.Marshal(query)
+	return `{"source_query":` + string(q) + `,"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`
+}
 
 // oldPage is a briefing page of billing made before decision 0083 C2.
 func oldPage(id string) string {
@@ -39,13 +44,13 @@ func TestTickGivesBriefingPagesTheFloorOncePerVersion(t *testing.T) {
 	page, other := briefingModelID("billing"), "team-notes"
 	mentalModels[page], mentalModels[other] = oldPage(page), oldPage(other)
 	_, out, _ := run(t, "jobs", "tick", "--json")
-	if p := triggerPatches(); len(p) != 1 || p[0] != "PATCH "+page+" "+floorPATCH {
+	if p := triggerPatches(); len(p) != 1 || p[0] != "PATCH "+page+" "+patchBody(briefingQuery) {
 		t.Fatalf("want one PATCH of the backsight page with the whole trigger, got %q", p)
 	}
 	if d := pathsOf(home); !ownEntry(d, d.State, "briefing-trigger") {
 		t.Error("uninstall would leave the marker behind")
 	}
-	if !strings.Contains(out, `"briefing_triggers": "1 briefing page(s) given the 6h refresh floor"`) {
+	if !strings.Contains(out, `"briefing_triggers": "1 briefing page(s) given the 6h refresh floor and the current briefing request"`) {
 		t.Errorf("tick result:\n%s", out)
 	}
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"event":"briefing_trigger"`) || !strings.Contains(tel, `"checked":1`) || !strings.Contains(tel, `"patched":1`) || !strings.Contains(tel, `"failed":0`) {
@@ -129,7 +134,7 @@ func TestMaintainReconcilesBriefingTriggers(t *testing.T) {
 	mentalModels[page] = oldPage(page)
 	_ = os.WriteFile(filepath.Join(pathsOf(home).State, "briefing-trigger"), []byte("whatever\n"), 0o600)
 	_, out, _ := run(t, "jobs", "maintain")
-	if p := triggerPatches(); len(p) != 1 || p[0] != "PATCH "+page+" "+floorPATCH || !strings.Contains(out, "1 briefing page(s) given the 6h refresh floor") {
+	if p := triggerPatches(); len(p) != 1 || p[0] != "PATCH "+page+" "+patchBody(briefingQuery) || !strings.Contains(out, "1 briefing page(s) given the 6h refresh floor") {
 		t.Fatalf("maintain: %q\n%s", p, out)
 	}
 	_, out, _ = run(t, "jobs", "maintain")
@@ -141,5 +146,35 @@ func TestMaintainReconcilesBriefingTriggers(t *testing.T) {
 	run(t, "jobs", "maintain")
 	if p := triggerPatches(); len(p) != 1 {
 		t.Errorf("briefing = recent: %q", p)
+	}
+}
+
+// 0083 C7: a new briefing request reaches the pages made with an earlier
+// one at the first tick (the marker names the request), and only once.
+func TestTickGivesBriefingPagesANewQueryOnce(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recentHasEventTime.Store(true)
+	recentByTag["project:billing"] = `[{"id":"a","text":"t","mentioned_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]`
+	prev := briefingQuery
+	t.Cleanup(func() { briefingQuery = prev })
+	page := briefingModelID("billing")
+	mentalModels[page] = oldPage(page)
+	run(t, "jobs", "tick")
+	if p := triggerPatches(); len(p) != 1 || p[0] != "PATCH "+page+" "+patchBody(prev) {
+		t.Fatalf("first tick: %q", p)
+	}
+	run(t, "jobs", "tick")
+	if p := triggerPatches(); len(p) != 1 {
+		t.Fatalf("same binary, floor and request: %q", p)
+	}
+	briefingQuery = "Briefing, asked another way."
+	_, out, _ := run(t, "jobs", "tick", "--json")
+	if p := triggerPatches(); len(p) != 2 || p[1] != "PATCH "+page+" "+patchBody(briefingQuery) || !strings.Contains(out, "1 briefing page(s) given") {
+		t.Fatalf("a changed request was not applied at the next tick: %q\n%s", p, out)
+	}
+	run(t, "jobs", "tick")
+	if p := triggerPatches(); len(p) != 2 {
+		t.Errorf("the new request was patched again: %q", p)
 	}
 }

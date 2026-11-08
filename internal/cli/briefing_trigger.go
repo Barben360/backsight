@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,23 +15,29 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
-// The briefing pages' trigger (decision 0083 C2): every page of the bank
-// is given the wanted one, so that pages made by an earlier version get the
-// refresh floor too. jobs maintain does it daily; jobs tick once per binary
-// version and floor (its marker), so an update applies it within a tick.
+// The briefing pages' trigger (decision 0083 C2) and request (C7): every
+// page of the bank is given the wanted ones, so that pages made by an
+// earlier version get the refresh floor and the current request too. jobs
+// maintain does it daily; jobs tick once per binary version, floor and
+// request (its marker), so an update applies it within a tick.
+
+// briefingQuery is the request the pages are written from (a variable for
+// the tests).
+var briefingQuery = instructions.BriefingQuery
 
 // briefingTriggerRetry is how long the ticks wait before trying again
 // after a failure (a page the server refuses, a listing that failed):
 // a page that keeps failing costs a listing an hour, not one per tick.
 const briefingTriggerRetry = time.Hour
 
-// briefingMarker is the last reconcile: the binary version and floor it
-// ran for, and the pages that failed (with when), "" none.
+// briefingMarker is the last reconcile: the binary version, floor and
+// request it ran for, and the pages that failed (with when), "" none.
 type briefingMarker struct {
 	Key      string    `json:"key"`
 	Failed   []string  `json:"failed,omitempty"`
@@ -37,7 +45,8 @@ type briefingMarker struct {
 }
 
 func briefingTriggerKey(cfg config.Config) string {
-	return buildinfo.Version + " " + strconv.Itoa(cfg.Recall.BriefingRefreshInterval.Seconds())
+	q := sha256.Sum256([]byte(briefingQuery))
+	return buildinfo.Version + " " + strconv.Itoa(cfg.Recall.BriefingRefreshInterval.Seconds()) + " " + hex.EncodeToString(q[:6])
 }
 
 func writeBriefingMarker(d paths.Dirs, m briefingMarker) {
@@ -46,12 +55,12 @@ func writeBriefingMarker(d paths.Dirs, m briefingMarker) {
 	}
 }
 
-// reconcileBriefingTriggers sets the wanted trigger on every briefing page
-// whose trigger differs, emits what it did, and records the marker (with
+// reconcileBriefingTriggers sets the wanted trigger and request on every
+// briefing page where either differs, emits what it did, and records the marker (with
 // the failures, if any). Its line is "" when every page was already right.
 func reconcileBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Config, cl *hindsight.Client, tw *telemetry.Writer, job string) string {
 	key := briefingTriggerKey(cfg)
-	r, err := retain.ReconcileBriefingTriggers(ctx, cl, cfg.Server.Bank, retain.BriefingTrigger(cfg.Recall.BriefingRefreshInterval.Seconds()))
+	r, err := retain.ReconcileBriefingTriggers(ctx, cl, cfg.Server.Bank, retain.BriefingTrigger(cfg.Recall.BriefingRefreshInterval.Seconds()), briefingQuery)
 	if err != nil {
 		tw.Emit(telemetry.Raw{Name: "briefing_trigger", Fields: map[string]any{"job": job, "error": err.Error()}})
 		writeBriefingMarker(d, briefingMarker{Key: key, Failed: []string{"listing: " + err.Error()}, FailedAt: now().UTC()})
@@ -67,7 +76,7 @@ func reconcileBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Con
 	writeBriefingMarker(d, m)
 	var line string
 	if len(r.Patched) > 0 {
-		line = fmt.Sprintf("%d briefing page(s) given the %s refresh floor", len(r.Patched), cfg.Recall.BriefingRefreshInterval)
+		line = fmt.Sprintf("%d briefing page(s) given the %s refresh floor and the current briefing request", len(r.Patched), cfg.Recall.BriefingRefreshInterval)
 	}
 	if len(r.Failed) > 0 {
 		line = strings.TrimPrefix(line+fmt.Sprintf("; %d briefing page(s) not updated (%s), tried again in an hour", len(r.Failed), strings.Join(r.Failed, "; ")), "; ")
@@ -75,7 +84,8 @@ func reconcileBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Con
 	return line
 }
 
-// tickBriefingTriggers reconciles once per binary version and floor, and
+// tickBriefingTriggers reconciles once per binary version, floor and
+// request, and
 // again at most hourly while a page failed; "" when it does not run. The
 // caller has checked the server is the joined one.
 func tickBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Config, cl *hindsight.Client, tw *telemetry.Writer) string {

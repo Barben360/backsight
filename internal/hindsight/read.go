@@ -235,6 +235,9 @@ type MentalModel struct {
 	Content         string   `json:"content"`
 	Tags            []string `json:"tags"`
 	LastRefreshedAt string   `json:"last_refreshed_at"`
+	// SourceQuery: the request the server writes the page from ("" in the
+	// metadata listing).
+	SourceQuery string `json:"source_query"`
 	// Trigger: nil when the server sent none.
 	Trigger *MentalModelTrigger `json:"trigger"`
 }
@@ -278,9 +281,10 @@ func (c *Client) CreateMentalModel(ctx context.Context, bank, id, name, query st
 	return c.do(ctx, http.MethodPost, bankPath(bank, "/mental-models"), nil, body, nil)
 }
 
-// UpdateMentalModelTrigger replaces a mental model's trigger, whole.
-func (c *Client) UpdateMentalModelTrigger(ctx context.Context, bank, id string, trigger MentalModelTrigger) error {
-	return c.do(ctx, http.MethodPatch, bankPath(bank, "/mental-models/"+url.PathEscape(id)), nil, map[string]any{"trigger": trigger}, nil)
+// UpdateMentalModel replaces a mental model's source query and its
+// trigger, whole; the next refresh writes the page from that query.
+func (c *Client) UpdateMentalModel(ctx context.Context, bank, id, query string, trigger MentalModelTrigger) error {
+	return c.do(ctx, http.MethodPatch, bankPath(bank, "/mental-models/"+url.PathEscape(id)), nil, map[string]any{"source_query": query, "trigger": trigger}, nil)
 }
 
 // MentalModels lists the bank's mental models with their content and
