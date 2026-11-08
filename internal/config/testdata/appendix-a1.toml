@@ -54,7 +54,7 @@ subagent_skip = ["Explore", "statusline-setup", "claude-code-guide"]
 outbox_warn_mb = 50
 outbox_max_mb = 500
 [retain]
-append_min_chars = 20000
+append_min_chars = 30000
 append_max_wait = "6h"
 [backup]
 enabled = true

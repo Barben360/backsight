@@ -196,7 +196,11 @@ type Retain struct {
 	// the server already has waits until this much rendered text is
 	// pending, or its document's last send is this old (a Go duration,
 	// "6h") with the turns settled or long-open (decision 0083 C1). 0 for
-	// either: every append goes out as before.
+	// either: every append goes out as before. AppendMinChars defaults to
+	// 30,000, the bank's retain_chunk_size: each append then carries at
+	// least one whole chunk, not a rework of the tail one (decision 0083
+	// set 20,000; the replay of this author's sessions measured -69 % of
+	// appends at 20,000 and -75 % at 30,000).
 	AppendMinChars int    `toml:"append_min_chars" json:"append_min_chars"`
 	AppendMaxWait  string `toml:"append_max_wait" json:"append_max_wait"`
 }
@@ -295,7 +299,7 @@ func Default(d paths.Dirs, home string) Config {
 		Embeddings: Embeddings{Preset: "multilingual"},
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
-		Retain:     Retain{AppendMinChars: 20_000, AppendMaxWait: "6h"},
+		Retain:     Retain{AppendMinChars: 30_000, AppendMaxWait: "6h"},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
 		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
 			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true},

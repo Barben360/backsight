@@ -35,7 +35,7 @@ func TestReplayAppendGate(t *testing.T) {
 		t.Skip("BACKSIGHT_REPLAY_PROJECTS not set")
 	}
 	files, _ := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
-	gate := AppendGate{MinChars: 20_000, MaxWait: 6 * time.Hour}
+	gate := AppendGate{MinChars: 30_000, MaxWait: 6 * time.Hour}
 	if n, err := strconv.Atoi(os.Getenv("BACKSIGHT_REPLAY_MIN_CHARS")); err == nil {
 		gate.MinChars = n // another threshold to compare
 	}

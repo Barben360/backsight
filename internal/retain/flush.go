@@ -214,24 +214,15 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 	if err != nil {
 		return fail(Retry, err.Error())
 	}
-	// A cursor without Segments predates per-project documents: its
-	// Segment counts every project's runs, all sent to conversation:<sid>.
-	resync := resyncFirst || !haveCursor || !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
-	if haveCursor {
-		fp, err := Fingerprint(path, cur.Offset)
-		if err != nil {
-			return fail(Retry, err.Error())
-		}
-		resync = resync || cur.Fingerprint != fp
-	}
 	tombs, err := f.tombstones()
 	if err != nil {
 		return fail(Retry, err.Error())
 	}
-	// A purge deleted a document this cursor appends to: its segments
-	// start again in the successor id, which the resync reads.
-	for p := range cur.Segments {
-		resync = resync || cur.docOf(sid, p) != LiveDocumentID(sid, cur.Home, p, tombs)
+	resync := resyncFirst || !haveCursor
+	if haveCursor && !resync {
+		if resync, err = f.cursorStale(cur, sid, path, fi.Size(), tombs); err != nil {
+			return fail(Retry, err.Error())
+		}
 	}
 	from := cur.Offset
 	if resync {
@@ -324,6 +315,33 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 		}
 	}
 	return f.sendRuns(ctx, res, cur, sid, send, attrs, tombs, now)
+}
+
+// cursorStale says this PC's cursor cur of sid's transcript at path (size
+// bytes long) cannot number the next segments: the flush rebuilds it from
+// the server (resync). The transcript before its offset changed or
+// shrank, it is another bank's or backfill's, it predates per-project
+// documents (no Segments: its Segment counts every project's runs, all
+// sent to conversation:<sid>), or a purge deleted a document it appends
+// to (its segments start again in the successor id, which the resync
+// reads).
+func (f *Flusher) cursorStale(cur Cursor, sid, path string, size int64, tombs []state.Tombstone) (bool, error) {
+	if !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || size < cur.Offset {
+		return true, nil
+	}
+	fp, err := Fingerprint(path, cur.Offset)
+	if err != nil {
+		return false, err
+	}
+	if cur.Fingerprint != fp {
+		return true, nil
+	}
+	for p := range cur.Segments {
+		if cur.docOf(sid, p) != LiveDocumentID(sid, cur.Home, p, tombs) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // movedElsewhere reads, before an append, each document send would write

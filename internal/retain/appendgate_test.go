@@ -13,7 +13,7 @@ import (
 func gateEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t)
-	e.f.Append = AppendGate{MinChars: 20_000, MaxWait: 6 * time.Hour}
+	e.f.Append = AppendGate{MinChars: 30_000, MaxWait: 6 * time.Hour}
 	e.clock = time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
 	e.record("s1", "u1", "user", 0, "first question") // 09:00
 	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
@@ -35,7 +35,7 @@ func TestAppendOfLittleTextWaitsForTheGate(t *testing.T) {
 	e.clock = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC) // 10:10 is 2 h 50 old, last send 3 h ago
 	r := e.flush("s1", Options{})
 	expect(t, r, Waiting, 0, 0)
-	if !strings.Contains(r.Detail, "waiting for 20,000 characters or 6 h") {
+	if !strings.Contains(r.Detail, "waiting for 30,000 characters or 6 h") {
 		t.Errorf("detail %q does not name the rule", r.Detail)
 	}
 	if len(e.hs.retains) != 1 {
@@ -46,7 +46,7 @@ func TestAppendOfLittleTextWaitsForTheGate(t *testing.T) {
 // A last send 1 h ago, the issue's own case.
 func TestAppendWaitsAnHourAfterTheLastSend(t *testing.T) {
 	e := newEnv(t)
-	e.f.Append = AppendGate{MinChars: 20_000, MaxWait: 6 * time.Hour}
+	e.f.Append = AppendGate{MinChars: 30_000, MaxWait: 6 * time.Hour}
 	e.clock = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	e.record("s1", "u1", "user", 0, "first question")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 1)                  // 12:00
@@ -61,7 +61,7 @@ func TestAppendWaitsAnHourAfterTheLastSend(t *testing.T) {
 
 func TestAppendOfEnoughTextGoesAtOnce(t *testing.T) {
 	e := gateEnv(t)
-	longOpen(e, 21_000, 230)
+	longOpen(e, 31_000, 230)
 	e.clock = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
 	if got := e.hs.retains[1]; got.UpdateMode != "append" || strings.Contains(got.Content, "still talking") {
@@ -97,7 +97,7 @@ func TestForcedAppendIgnoresTheGate(t *testing.T) {
 // The first send of a session is never held, however little it holds.
 func TestFirstSendIgnoresTheGate(t *testing.T) {
 	e := newEnv(t)
-	e.f.Append = AppendGate{MinChars: 20_000, MaxWait: 6 * time.Hour}
+	e.f.Append = AppendGate{MinChars: 30_000, MaxWait: 6 * time.Hour}
 	e.record("s1", "u1", "user", 0, strings.Repeat("x", 1_000))
 	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
 }
@@ -171,11 +171,11 @@ func TestWaitingNamesTheAppendGate(t *testing.T) {
 	e.record("s1", "a1", "assistant", 70, strings.Repeat("x", 5_000))
 	e.clock = time.Date(2026, 10, 24, 11, 0, 0, 0, time.UTC)
 	ws := e.f.Waiting([]string{filepath.Join(e.dir, "s1.jsonl")})
-	if len(ws) != 1 || ws[0].Reason != WaitAppend || !strings.Contains(ws[0].Detail, "waiting for 20,000 characters or 6 h") {
+	if len(ws) != 1 || ws[0].Reason != WaitAppend || !strings.Contains(ws[0].Detail, "waiting for 30,000 characters or 6 h") {
 		t.Fatalf("%+v", ws)
 	}
 	// Enough text: due at the next tick, as before.
-	e.record("s1", "a2", "assistant", 80, strings.Repeat("y", 20_000))
+	e.record("s1", "a2", "assistant", 80, strings.Repeat("y", 30_000))
 	e.clock = time.Date(2026, 10, 24, 11, 30, 0, 0, time.UTC)
 	if ws := e.f.Waiting([]string{filepath.Join(e.dir, "s1.jsonl")}); len(ws) != 1 || ws[0].Reason != WaitDue {
 		t.Fatalf("%+v", ws)
@@ -184,7 +184,7 @@ func TestWaitingNamesTheAppendGate(t *testing.T) {
 
 func TestAppendGateHolds(t *testing.T) {
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
-	g := AppendGate{MinChars: 20_000, MaxWait: 6 * time.Hour}
+	g := AppendGate{MinChars: 30_000, MaxWait: 6 * time.Hour}
 	for _, c := range []struct {
 		name  string
 		g     AppendGate
@@ -192,12 +192,13 @@ func TestAppendGateHolds(t *testing.T) {
 		last  time.Time
 		want  bool
 	}{
-		{"little text, recent send", g, 19_999, now.Add(-time.Hour), true},
-		{"enough text", g, 20_000, now.Add(-time.Hour), false},
+		{"little text, recent send", g, 29_999, now.Add(-time.Hour), true},
+		{"enough text", g, 30_000, now.Add(-time.Hour), false},
 		{"last send old enough", g, 10, now.Add(-6 * time.Hour), false},
 		{"no last send known", g, 10, time.Time{}, false},
+		{"last send after now (clock set back)", g, 10, now.Add(time.Hour), false},
 		{"min chars 0: off", AppendGate{MaxWait: 6 * time.Hour}, 10, now.Add(-time.Minute), false},
-		{"max wait 0: off", AppendGate{MinChars: 20_000}, 10, now.Add(-time.Minute), false},
+		{"max wait 0: off", AppendGate{MinChars: 30_000}, 10, now.Add(-time.Minute), false},
 	} {
 		if got := c.g.Holds(c.chars, c.last, now); got != c.want {
 			t.Errorf("%s: holds %v, want %v", c.name, got, c.want)

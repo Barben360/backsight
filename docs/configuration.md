@@ -137,7 +137,7 @@ An append to a session already on the server makes it re-read the end of that se
 
 | Key | Default | Effect |
 |---|---|---|
-| `retain.append_min_chars` | `20000` | An append goes out once at least this many characters of new turns are waiting. `0` turns the wait off: every append goes out as soon as its turns are settled. At least 0. |
+| `retain.append_min_chars` | `30000` | An append goes out once at least this many characters of new turns are waiting. The default is the size of the pieces the server cuts a session into (its `retain_chunk_size`), so each append brings at least one whole new piece instead of reworking the last one. `0` turns the wait off: every append goes out as soon as its turns are settled. At least 0. |
 | `retain.append_max_wait` | `"6h"` | …or once the session's last send is this old (and its turns are settled or 2 h old), whatever the amount. A duration such as `"6h"` or `"90m"`; `"0s"` turns the wait off. |
 
 ## `[backup]`

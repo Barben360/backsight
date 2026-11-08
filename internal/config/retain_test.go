@@ -6,12 +6,12 @@ import (
 	"time"
 )
 
-// [retain]: the append gate (decision 0083 C1). Defaults 20,000 characters
+// [retain]: the append gate (decision 0083 C1). Defaults 30,000 characters
 // and 6 h; 0 for either turns the gate off; a negative count, or a wait
 // that is not a Go duration ≥ 0, is refused with its key.
 func TestRetainAppendGateKeys(t *testing.T) {
 	r := Default(dirs, "/home/u").Retain
-	if r.AppendMinChars != 20_000 || r.AppendMaxWaitDuration() != 6*time.Hour {
+	if r.AppendMinChars != 30_000 || r.AppendMaxWaitDuration() != 6*time.Hour {
 		t.Fatalf("defaults %+v", r)
 	}
 	cfg, err := Load(write(t, "[retain]\nappend_min_chars = 0\nappend_max_wait = \"90m\"\n"), dirs, "/home/u")

@@ -49,7 +49,7 @@ func TestTickHoldsASmallAppendUntilTheGateOpens(t *testing.T) {
 		t.Fatalf("held append: exit %d, %d retained\n%s", code, retained.Load(), out)
 	}
 	_, text, _ := run(t, "retain", "waiting")
-	if !strings.Contains(text, "s1") || !strings.Contains(text, "waiting for 20,000 characters or 6 h") {
+	if !strings.Contains(text, "s1") || !strings.Contains(text, "waiting for 30,000 characters or 6 h") {
 		t.Errorf("retain waiting does not name the gate:\n%s", text)
 	}
 	appendConfig(t, home, "[retain]\nappend_min_chars = 0")
@@ -60,8 +60,8 @@ func TestTickHoldsASmallAppendUntilTheGateOpens(t *testing.T) {
 
 func TestWaitingTextNamesTheAppendGate(t *testing.T) {
 	got := waitingText(waitingReport{Sessions: []retain.Waiter{{Session: "s1", Reason: retain.WaitAppend, Idle: 50 * time.Minute,
-		Detail: "waiting for 20,000 characters or 6 h (1,234 pending, last sent 1h0m0s ago)"}}})
-	for _, want := range []string{"s1", "waiting for 20,000 characters or 6 h (1,234 pending", "when the session ends"} {
+		Detail: "waiting for 30,000 characters or 6 h (1,234 pending, last sent 1h0m0s ago)"}}})
+	for _, want := range []string{"s1", "waiting for 30,000 characters or 6 h (1,234 pending", "when the session ends"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("text lacks %q:\n%s", want, got)
 		}

@@ -106,15 +106,23 @@ type Waiter struct {
 	Reason     string        `json:"reason"`
 	Idle       time.Duration `json:"idle_ns,omitempty"` // since its last turn; 0 when quarantined
 	// Detail: for WaitAppend, the gate's rule and where the session is
-	// ("waiting for 20,000 characters or 6 h (5,120 characters pending, ...)").
+	// ("waiting for 30,000 characters or 6 h (5,120 characters pending, ...)").
 	Detail string `json:"detail,omitempty"`
 }
 
-// appendWaits says the append gate holds back the records of recs (the
-// whole transcript) past cur, every one of them as if settled: what the
-// flush would find, from the transcript and cursor alone.
-func (f *Flusher) appendWaits(cur Cursor, sid string, recs []transcript.Record) (string, bool) {
-	if cur.Segments == nil || !state.SameBank(cur.Bank, f.Bank) {
+// appendWaits says the append gate holds back what the flush would send
+// now of recs (the whole transcript at file, size bytes) past cur, by the
+// flush's own rules: never for a cursor the flush rebuilds (cursorStale),
+// and on the records the settle rule lets go. Approximate in one point:
+// the records' times are not clamped to the file's modification time, so a
+// turn with no time or a future one (a clock moved back) may read
+// differently than in the flush.
+func (f *Flusher) appendWaits(cur Cursor, sid, file string, size int64, recs []transcript.Record) (string, bool) {
+	tombs, err := f.tombstones()
+	if err != nil {
+		return "", false
+	}
+	if stale, err := f.cursorStale(cur, sid, file, size, tombs); err != nil || stale {
 		return "", false // the flush resyncs: never held
 	}
 	var pending []transcript.Record
@@ -123,12 +131,13 @@ func (f *Flusher) appendWaits(cur Cursor, sid string, recs []transcript.Record) 
 			pending = append(pending, r)
 		}
 	}
-	tombs, err := f.tombstones()
-	if err != nil || len(pending) == 0 {
+	now := f.Now()
+	send := pending[:settledCount(pending, now)]
+	if len(send) == 0 {
 		return "", false
 	}
 	attrs := f.attribute(sid, pending, attr{project: cur.Project, namedOut: cur.OptOut, namedOutDir: cur.OptOutDir})
-	return f.appendHeld(cur, sid, pending, attrs, tombs, f.Now())
+	return f.appendHeld(cur, sid, send, attrs, tombs, now)
 }
 
 // Waiting lists the sessions of files that live retain still has records
@@ -167,7 +176,7 @@ func (f *Flusher) Waiting(files []string) []Waiter {
 				w.Reason = WaitNotSettled
 			}
 			if ok {
-				if detail, held := f.appendWaits(cur, sid, recs); held {
+				if detail, held := f.appendWaits(cur, sid, file, fi.Size(), recs); held {
 					w.Reason, w.Detail = WaitAppend, detail
 				}
 			}

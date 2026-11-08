@@ -22,12 +22,15 @@ type AppendGate struct {
 }
 
 // Holds says an append of chars rendered characters, to documents last
-// sent at lastSent (zero: unknown), waits at now.
+// sent at lastSent, waits at now. A last send unknown (zero) or later than
+// now (the clock was set back since) never holds: the wait could not be
+// bounded by MaxWait, and the send that goes records a time before now.
 func (g AppendGate) Holds(chars int, lastSent, now time.Time) bool {
-	return g.MinChars > 0 && g.MaxWait > 0 && chars < g.MinChars && !lastSent.IsZero() && now.Sub(lastSent) < g.MaxWait
+	return g.MinChars > 0 && g.MaxWait > 0 && chars < g.MinChars &&
+		!lastSent.IsZero() && !lastSent.After(now) && now.Sub(lastSent) < g.MaxWait
 }
 
-// Rule is the gate as a waiting reason: "waiting for 20,000 characters or 6 h".
+// Rule is the gate as a waiting reason: "waiting for 30,000 characters or 6 h".
 func (g AppendGate) Rule() string {
 	return "waiting for " + grouped(g.MinChars) + " characters or " + hours(g.MaxWait)
 }
