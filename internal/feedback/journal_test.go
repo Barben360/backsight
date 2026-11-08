@@ -1,10 +1,13 @@
 package feedback
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -272,6 +275,97 @@ func TestJournalMonthFromEventTime(t *testing.T) {
 		events, _, err := ReadFrom(filepath.Join(dir, file), 0)
 		if err != nil || len(events) != 1 || events[0].Turn != turn {
 			t.Errorf("%s: %+v %v, want the %q turn alone", file, events, err, turn)
+		}
+	}
+}
+
+func eventLine(t *testing.T, turn string) string {
+	t.Helper()
+	b, err := json.Marshal(Event{Schema: Schema, Seq: 1, TS: time.Unix(1, 0).UTC(), Kind: "turn", Turn: turn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b) + "\n"
+}
+
+func writeRaw(t *testing.T, file, s string) {
+	t.Helper()
+	if err := os.WriteFile(file, []byte(s), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadCompleteStopsBeforeAPartialLine(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "journal-2026-11.jsonl")
+	l1, l2, l3 := eventLine(t, "t1"), eventLine(t, "t2"), eventLine(t, "t3")
+	writeRaw(t, file, l1+l2+l3[:len(l3)/2])
+	events, end, skipped, err := ReadComplete(file, 0)
+	if err != nil || len(events) != 2 || skipped != 0 || end != int64(len(l1)+len(l2)) {
+		t.Fatalf("%d events, end %d (want %d), %d skipped, %v", len(events), end, len(l1)+len(l2), skipped, err)
+	}
+	appendRaw(t, file, l3[len(l3)/2:])
+	events, end2, skipped, err := ReadComplete(file, end)
+	if err != nil || len(events) != 1 || events[0].Turn != "t3" || skipped != 0 || end2 != int64(len(l1)+len(l2)+len(l3)) {
+		t.Fatalf("%+v, end %d, %d skipped, %v", events, end2, skipped, err)
+	}
+}
+
+func TestReadCompleteSkipsABrokenCompleteLine(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "journal-2026-11.jsonl")
+	good := eventLine(t, "t1")
+	writeRaw(t, file, "{bad\n"+good)
+	events, end, skipped, err := ReadComplete(file, 0)
+	if err != nil || len(events) != 1 || skipped != 1 || end != int64(len("{bad\n")+len(good)) {
+		t.Fatalf("%d events, end %d, %d skipped, %v", len(events), end, skipped, err)
+	}
+}
+
+func TestReadCompleteFromTheEnd(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "journal-2026-11.jsonl")
+	good := eventLine(t, "t1")
+	writeRaw(t, file, good)
+	events, end, skipped, err := ReadComplete(file, int64(len(good)))
+	if err != nil || len(events) != 0 || skipped != 0 || end != int64(len(good)) {
+		t.Fatalf("%d events, end %d, %d skipped, %v", len(events), end, skipped, err)
+	}
+	if _, end, _, err := ReadComplete(filepath.Join(t.TempDir(), "journal-1999-01.jsonl"), 7); err != nil || end != 7 {
+		t.Errorf("missing file: end %d, %v", end, err)
+	}
+}
+
+func TestMonthFilesSorted(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"journal-2026-11.jsonl", "journal-2026-10.jsonl", "ledger.json", "journal-old.jsonl", "journal-2026-1.jsonl"} {
+		writeRaw(t, filepath.Join(dir, n), "")
+	}
+	got, err := MonthFiles(dir)
+	if err != nil || !slices.Equal(got, []string{"journal-2026-10.jsonl", "journal-2026-11.jsonl"}) {
+		t.Fatalf("%v, %v", got, err)
+	}
+}
+
+func TestReadAllEndsAreTheCursors(t *testing.T) {
+	dir := t.TempDir()
+	a, b1, b2 := eventLine(t, "a"), eventLine(t, "b1"), eventLine(t, "b2")
+	writeRaw(t, filepath.Join(dir, "journal-2026-10.jsonl"), a)
+	writeRaw(t, filepath.Join(dir, "journal-2026-11.jsonl"), b1+b2[:5])
+	writeRaw(t, filepath.Join(dir, "journal-old.jsonl"), eventLine(t, "ignored"))
+	events, ends, skipped, err := ReadAll(dir)
+	want := map[string]int64{"journal-2026-10.jsonl": int64(len(a)), "journal-2026-11.jsonl": int64(len(b1))}
+	if err != nil || skipped != 0 || len(events) != 2 || events[0].Turn != "a" || events[1].Turn != "b1" || !maps.Equal(ends, want) {
+		t.Fatalf("%+v, ends %v (want %v), %d skipped, %v", events, ends, want, skipped, err)
+	}
+}
+
+func TestAppliedKinds(t *testing.T) {
+	for _, k := range []string{"settle", "forget", "retire", "hide", "unhide", "import"} {
+		if !Applied(k) {
+			t.Errorf("Applied(%q) = false", k)
+		}
+	}
+	for _, k := range []string{"shows", "turn", "credit", "stop"} {
+		if Applied(k) {
+			t.Errorf("Applied(%q) = true", k)
 		}
 	}
 }

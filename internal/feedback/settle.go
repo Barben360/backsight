@@ -32,8 +32,8 @@ const (
 	// OpenTurnLimit: a show whose turn never ended (no later turn, no
 	// stop) settles once this old.
 	OpenTurnLimit = 2 * time.Hour
-	// settleWindow is how far back Settle reads the journal.
-	settleWindow = 62 * 24 * time.Hour
+	// SettleWindow is how far back Settle reads the journal.
+	SettleWindow = 62 * 24 * time.Hour
 )
 
 // Params are the values settling, folding and the boost use; a half-life
@@ -52,8 +52,8 @@ const (
 	creditHalfLifeKey = "credit_half_life_days"
 )
 
-// record is p as a settle event carries it.
-func (p Params) record() map[string]float64 {
+// Record is p as a settle event carries it.
+func (p Params) Record() map[string]float64 {
 	return map[string]float64{
 		"confident_rank":       float64(p.ConfidentRank),
 		missHalfLifeKey:        p.MissHalfLife.Hours() / 24,
@@ -127,7 +127,7 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 	stopped := map[string]bool{}        // session|turn|agent with a stop
 	turns := map[string][]Event{}       // session's turn events, in time order
 	forgotten := map[string]time.Time{} // id: its latest forget
-	for _, e := range sortedByTime(seen) {
+	for _, e := range SortByTime(seen) {
 		switch e.Kind {
 		case "turn":
 			turns[e.Session] = append(turns[e.Session], e)
@@ -281,7 +281,7 @@ func Settle(dir string, p Params, clock func() time.Time) (SettleResult, error) 
 		return res, err
 	}
 	at := journalEnd(dir)
-	events, _, err := Read(dir, now.Add(-settleWindow))
+	events, _, err := Read(dir, now.Add(-SettleWindow))
 	if err != nil {
 		return res, err
 	}
@@ -296,7 +296,7 @@ func Settle(dir string, p Params, clock func() time.Time) (SettleResult, error) 
 			for _, s := range e.Settled {
 				applied[s.Key] = true
 			}
-		case (e.Kind == "settle" || folded(e.Kind)) && e.TS.After(l.Watermark) && !e.TS.After(now):
+		case (e.Kind == "settle" || Folds(e.Kind)) && e.TS.After(l.Watermark) && !e.TS.After(now):
 			apply = append(apply, e) // a ledger write that failed, and forgets and retirements since the last settle
 		}
 	}
@@ -304,7 +304,7 @@ func Settle(dir string, p Params, clock func() time.Time) (SettleResult, error) 
 	if len(settled) > 0 || late > 0 {
 		// Even with no show, the event marks where these late credits were
 		// counted: the next settle counts only later ones.
-		e := Event{Kind: "settle", TS: now.UTC(), Settled: settled, Params: p.record()}
+		e := Event{Kind: "settle", TS: now.UTC(), Settled: settled, Params: p.Record()}
 		j := NewJournal(dir, Common{Binary: buildinfo.Version})
 		j.now = func() time.Time { return now }
 		if err := j.Append(e); err != nil {
@@ -312,9 +312,9 @@ func Settle(dir string, p Params, clock func() time.Time) (SettleResult, error) 
 		}
 		apply = append(apply, e)
 	}
-	for _, e := range sortedByTime(apply) {
+	for _, e := range SortByTime(apply) {
 		if e.Kind == "settle" {
-			e = unapplied(e, applied) // a settle run while its lock was wrongly broken
+			e = Unapplied(e, seenOnce(applied)) // a settle run while its lock was wrongly broken
 		}
 		l.Apply(e, p)
 	}
@@ -325,8 +325,8 @@ func Settle(dir string, p Params, clock func() time.Time) (SettleResult, error) 
 	// ends in a later month than now's: a folded event stamped just after
 	// the watermark goes to now's month, before that end.
 	l.JournalAt = at
-	if at.File > monthFile(now) ||
-		slices.ContainsFunc(events, func(e Event) bool { return folded(e.Kind) && e.TS.After(now) }) {
+	if at.File > MonthFile(now) ||
+		slices.ContainsFunc(events, func(e Event) bool { return Folds(e.Kind) && e.TS.After(now) }) {
 		l.JournalAt = JournalPos{}
 	}
 	if err := saveLedger(dir, l); err != nil {

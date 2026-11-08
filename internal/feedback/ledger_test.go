@@ -595,8 +595,8 @@ func TestCurrentReadsOnlyTheJournalsTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	all, _, _ := Read(dir, want.Watermark)
-	for _, e := range sortedByTime(all) {
-		if folded(e.Kind) && e.TS.After(want.Watermark) {
+	for _, e := range SortByTime(all) {
+		if Folds(e.Kind) && e.TS.After(want.Watermark) {
 			want.Apply(e, Params{})
 		}
 	}
@@ -728,5 +728,16 @@ func TestRestoreOnlyEntries(t *testing.T) {
 	}
 	if n := l.Counted(); n != 7 {
 		t.Errorf("Counted %d, want 7", n)
+	}
+}
+
+func TestUnappliedByPredicate(t *testing.T) {
+	e := Event{Kind: "settle", Settled: []Settled{{Key: "a"}, {Key: "b"}, {Key: "c"}}}
+	got := Unapplied(e, func(key string) bool { return key == "b" })
+	if len(got.Settled) != 2 || got.Settled[0].Key != "a" || got.Settled[1].Key != "c" {
+		t.Fatalf("%+v", got.Settled)
+	}
+	if len(e.Settled) != 3 {
+		t.Errorf("the input event changed: %+v", e.Settled)
 	}
 }

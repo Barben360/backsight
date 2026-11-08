@@ -171,15 +171,19 @@ func (m Entry) settled(s Settled, p Params) Entry {
 	return m
 }
 
-// folded: an event Settle applies to the ledger as it comes, besides its
-// own settle events.
-func folded(kind string) bool {
+// Folds reports whether kind is an event Settle applies to the ledger as it
+// comes, besides its own settle events.
+func Folds(kind string) bool {
 	switch kind {
 	case "forget", KindRetire, KindHide, KindUnhide, KindImport:
 		return true
 	}
 	return false
 }
+
+// Applied reports whether kind is an event the ledger applies: a settle, or
+// one that Folds.
+func Applied(kind string) bool { return kind == "settle" || Folds(kind) }
 
 // recorded is p with the half-lives a settle event's params carry.
 func (p Params) recorded(params map[string]float64) Params {
@@ -201,9 +205,9 @@ func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Ho
 func Fold(events []Event, p Params) Ledger {
 	l := newLedger()
 	applied := map[string]bool{}
-	for _, e := range sortedByTime(events) {
+	for _, e := range SortByTime(events) {
 		if e.Kind == "settle" {
-			e = unapplied(e, applied)
+			e = Unapplied(e, seenOnce(applied))
 			l.Watermark = laterOf(l.Watermark, e.TS)
 		}
 		l.Apply(e, p)
@@ -211,13 +215,12 @@ func Fold(events []Event, p Params) Ledger {
 	return l
 }
 
-// unapplied is settle event e without the shows whose key applied holds;
-// the keys it keeps join applied.
-func unapplied(e Event, applied map[string]bool) Event {
+// Unapplied is settle event e without the shows whose key seen reports;
+// seen is called once per show, in order, and may record the key.
+func Unapplied(e Event, seen func(key string) bool) Event {
 	var fresh []Settled
 	for _, s := range e.Settled {
-		if !applied[s.Key] {
-			applied[s.Key] = true
+		if !seen(s.Key) {
 			fresh = append(fresh, s)
 		}
 	}
@@ -225,9 +228,21 @@ func unapplied(e Event, applied map[string]bool) Event {
 	return e
 }
 
-// sortedByTime is a copy of events in (ts, seq) order, file order kept
+// seenOnce is a seen predicate over applied that records each key it meets:
+// the first show of a key is kept, later ones dropped.
+func seenOnce(applied map[string]bool) func(string) bool {
+	return func(key string) bool {
+		if applied[key] {
+			return true
+		}
+		applied[key] = true
+		return false
+	}
+}
+
+// SortByTime is a copy of events in (ts, seq) order, file order kept
 // between equals.
-func sortedByTime(events []Event) []Event {
+func SortByTime(events []Event) []Event {
 	out := slices.Clone(events)
 	slices.SortStableFunc(out, func(a, b Event) int {
 		if c := a.TS.Compare(b.TS); c != 0 {
@@ -334,7 +349,7 @@ var ErrCorruptLedger = errors.New("does not parse")
 // that does not parse (ErrCorruptLedger) or of another schema is an empty
 // ledger and an error, for doctor to report: never guessed.
 func LoadLedger(dir string) (Ledger, error) {
-	raw, err := os.ReadFile(ledgerFile(dir))
+	raw, err := fsutil.ReadFileShared(ledgerFile(dir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return newLedger(), nil
 	}
@@ -404,7 +419,7 @@ func rebuild(dir string, p Params, withImport bool) (Ledger, error) {
 	// Nor does the next settle apply them again (an import left out
 	// included): it applies what is newer than the watermark.
 	for _, e := range events {
-		if folded(e.Kind) {
+		if Folds(e.Kind) {
 			l.Watermark = laterOf(l.Watermark, e.TS)
 		}
 	}
@@ -426,8 +441,8 @@ func Current(dir string) (Ledger, error) {
 	if err != nil {
 		return l, err
 	}
-	for _, e := range sortedByTime(events) {
-		if folded(e.Kind) && e.TS.After(l.Watermark) {
+	for _, e := range SortByTime(events) {
+		if Folds(e.Kind) && e.TS.After(l.Watermark) {
 			l.Apply(e, Params{})
 		}
 	}
