@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -688,5 +689,30 @@ func TestVerdictLeavesOutYieldAndEarlierTimeToRecall(t *testing.T) {
 	// The overview still shows the time to recall, made beside the verdict.
 	if _, ok := x.run("overview", x.query(7)).Metrics[timeToRecallID]; !ok {
 		t.Errorf("the overview lacks %s", timeToRecallID)
+	}
+}
+
+// A memory a memory_store reply showed was not recalled: the store show
+// leaves the funnel as it was. A briefing page shown is no memory: never
+// unresolved (decision 0083 C4, C8).
+func TestTimeToRecallSkipsStoreShowsAndPages(t *testing.T) {
+	funnel := func(extra bool) map[string]int64 {
+		x := newFx(t, fxNow)
+		x.rcPrompt(rcBase, "s1")
+		x.rcSend(rcBase.Add(time.Minute), "s1")
+		x.rcOp("s1", "completed", rcBase.Add(time.Minute+5*time.Second), rcBase.Add(5*time.Minute), 0, units(2))
+		x.rcMemory("s1", "m-s1", "2026-10-26")
+		if extra {
+			x.shows(rcBase.Add(time.Hour), "viewer", "t1", "", "alpha", feedback.PathStore, "", "m-s1")
+			x.shows(rcBase.Add(2*time.Hour), "viewer", "", "", "alpha", "briefing", "alpha", feedback.BriefingPagePrefix+"alpha-1a2b3c4d")
+		}
+		return funnelOf(t, ttr(x, x.query(7)))
+	}
+	without, with := funnel(false), funnel(true)
+	if fmt.Sprint(with) != fmt.Sprint(without) {
+		t.Errorf("a store show and a page changed the funnel\nwithout: %v\n   with: %v", without, with)
+	}
+	if with["extracted"] != 1 || with["recalled"] != 0 || with["unresolved"] != 0 {
+		t.Errorf("funnel %v, want extracted 1, recalled 0, unresolved 0", with)
 	}
 }

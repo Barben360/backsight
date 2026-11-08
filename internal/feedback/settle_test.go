@@ -2,6 +2,7 @@ package feedback
 
 import (
 	"errors"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -753,5 +754,37 @@ func TestABriefingPageIsNeverAMiss(t *testing.T) {
 	}
 	if got, _ := Decide(turn("s2", "used", page), p, t0.Add(time.Hour)); len(got) != 1 || got[0].Outcome != OutcomeCredit {
 		t.Errorf("credited: %+v", got)
+	}
+}
+
+// A memory a memory_store reply showed is settled, but only a credit of it
+// reaches the ledger: shown by stores and never credited, it is not shown
+// often and never used (decision 0083 C4).
+func TestAStoreShowCountsInTheLedgerOnlyCredited(t *testing.T) {
+	var events []Event
+	for i := range 12 {
+		sess := "s" + strconv.Itoa(i)
+		events = append(events, evTurn(sess, "p-1", 10*i), evShows(sess, "p-1", "", PathStore, 10*i+1, Item{ID: "similar", Rank: 1}),
+			evCredit(sess, "p-1", "", "none", 10*i+2), evStop(sess, "p-1", "", "declared", 10*i+3))
+	}
+	events = append(events, evTurn("c", "p-1", 200), evShows("c", "p-1", "", PathStore, 201, Item{ID: "keeper", Rank: 1}),
+		evCredit("c", "p-1", "", "used", 202, "keeper"), evStop("c", "p-1", "", "declared", 203))
+	now := at(400)
+	settled, _ := Decide(events, testParams, now)
+	if len(settled) != 13 {
+		t.Fatalf("settled %d shows, want all 13: %+v", len(settled), settled)
+	}
+	l := Fold(append(events, Event{Kind: "settle", TS: now, Settled: settled}), testParams)
+	if m, ok := l.Memories["similar"]; ok {
+		t.Errorf("never credited, only shown by stores: ledger entry %+v, want none", m)
+	}
+	if m := l.Memories["keeper"]; m.Shown != 1 || m.Credits <= 0 {
+		t.Errorf("credited store show: %+v, want shown 1 and a credit", m)
+	}
+	if got := Stale(l, 10, now); len(got.NeverUsed) != 0 {
+		t.Errorf("never used %v, want none", got.NeverUsed)
+	}
+	if r := Replay(events, testParams, now); !maps.Equal(r.Memories, l.Memories) {
+		t.Errorf("replay %+v, want the live fold %+v", r.Memories, l.Memories)
 	}
 }

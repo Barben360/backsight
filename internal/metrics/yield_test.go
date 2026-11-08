@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/metricsfile"
 )
@@ -665,4 +666,21 @@ func TestYieldIsNotFilteredByProject(t *testing.T) {
 		t.Errorf("project alpha: tags %v, want %s", m.Tags, tagNotFiltered)
 	}
 	wantInt(t, "den", m.Den, 45) // the figure itself is unchanged
+}
+
+// A briefing page credited used is no memory: it has no day-list row and
+// is never unresolved, so it cannot withhold the yield (decision 0083 C8).
+func TestYieldIgnoresBriefingPages(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays(ydWeek, 45)
+	x.ydListed()
+	x.ydUsedMemories("f", 14)
+	page := feedback.BriefingPagePrefix + "alpha-1a2b3c4d"
+	x.shows(time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC), "v", "", "", "alpha", "briefing", "alpha", page)
+	x.ydUsed(page, time.Date(2026, 9, 25, 10, 5, 0, 0, time.UTC), "")
+	m := yieldOf(x, x.query(90))
+	wantFloat(t, "value", m.Value, 14.0/45)
+	if ydExtra(t, m, "unresolved") != 0 || ydExtra(t, m, "gone") != 0 || ydExtra(t, m, "resolved_used") != 14 {
+		t.Errorf("unresolved %v gone %v resolved_used %v, want 0, 0 and 14", m.Extra["unresolved"], m.Extra["gone"], m.Extra["resolved_used"])
+	}
 }

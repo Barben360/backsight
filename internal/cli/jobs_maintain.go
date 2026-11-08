@@ -131,6 +131,10 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 					}
 				}
 			}
+			// The pages get their floor before any step that makes the
+			// server consolidate (moves, purges, the sweep), which refreshes
+			// them, and before an update applied replaces this binary.
+			res.BriefingTriggers = maintainBriefingTriggers(cmd.Context(), d, tw)
 			var moved int
 			res.Reattribute, moved = maintainReattribute(cmd.Context(), d, archive, noBackup)
 			res.Purges = guardMaintain(cmd.Context(), d, home)
@@ -139,7 +143,6 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				res.Rename = maintainRename(cmd.Context(), d)
 			}
 			res.Update = maintainUpdate(cmd.Context(), d)
-			res.BriefingTriggers = maintainBriefingTriggers(cmd.Context(), d, tw)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})

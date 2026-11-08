@@ -18,14 +18,16 @@ import (
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // The briefing pages' trigger (decision 0083 C2) and request (C7): every
 // page of the bank is given the wanted ones, so that pages made by an
 // earlier version get the refresh floor and the current request too. jobs
-// maintain does it daily; jobs tick once per binary version, floor and
-// request (its marker), so an update applies it within a tick.
+// maintain does it daily; jobs tick once per binary version, floor,
+// request, bank and restore epoch (its marker), so an update or a restore
+// applies it within a tick.
 
 // briefingQuery is the request the pages are written from (a variable for
 // the tests).
@@ -36,17 +38,27 @@ var briefingQuery = instructions.BriefingQuery
 // a page that keeps failing costs a listing an hour, not one per tick.
 const briefingTriggerRetry = time.Hour
 
-// briefingMarker is the last reconcile: the binary version, floor and
-// request it ran for, and the pages that failed (with when), "" none.
+// briefingMarker is the last reconcile: the binary version, floor,
+// request, bank and restore epoch it ran for, and the pages that failed
+// (with when), "" none.
 type briefingMarker struct {
 	Key      string    `json:"key"`
 	Failed   []string  `json:"failed,omitempty"`
 	FailedAt time.Time `json:"failed_at,omitzero"`
 }
 
-func briefingTriggerKey(cfg config.Config) string {
+// briefingTriggerKey names what a reconcile ran for. The bank and its
+// restore epoch are in it: another bank, or a restore that brought back
+// pages older than the marker, is reconciled at the next tick, not the
+// next daily maintain. A state.json that does not read counts as epoch 0.
+func briefingTriggerKey(d paths.Dirs, cfg config.Config) string {
 	q := sha256.Sum256([]byte(briefingQuery))
-	return buildinfo.Version + " " + strconv.Itoa(cfg.Recall.BriefingRefreshInterval.Seconds()) + " " + hex.EncodeToString(q[:6])
+	epoch := 0
+	if st, err := state.Load(d.StateFile()); err == nil {
+		epoch = st.EpochOf(cfg.Server.Bank)
+	}
+	return buildinfo.Version + " " + strconv.Itoa(cfg.Recall.BriefingRefreshInterval.Seconds()) + " " + hex.EncodeToString(q[:6]) +
+		" " + cfg.Server.Bank + " " + strconv.Itoa(epoch)
 }
 
 func writeBriefingMarker(d paths.Dirs, m briefingMarker) {
@@ -59,7 +71,7 @@ func writeBriefingMarker(d paths.Dirs, m briefingMarker) {
 // briefing page where either differs, emits what it did, and records the marker (with
 // the failures, if any). Its line is "" when every page was already right.
 func reconcileBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Config, cl *hindsight.Client, tw *telemetry.Writer, job string) string {
-	key := briefingTriggerKey(cfg)
+	key := briefingTriggerKey(d, cfg)
 	r, err := retain.ReconcileBriefingTriggers(ctx, cl, cfg.Server.Bank, retain.BriefingTrigger(cfg.Recall.BriefingRefreshInterval.Seconds()), briefingQuery)
 	if err != nil {
 		tw.Emit(telemetry.Raw{Name: "briefing_trigger", Fields: map[string]any{"job": job, "error": err.Error()}})
@@ -84,15 +96,16 @@ func reconcileBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Con
 	return line
 }
 
-// tickBriefingTriggers reconciles once per binary version, floor and
-// request, and again at most hourly while a page failed; "" when it does
-// not run. The caller has checked the server is the joined one.
+// tickBriefingTriggers reconciles once per binary version, floor,
+// request, bank and restore epoch, and again at most hourly while a page
+// failed; "" when it does not run. The caller has checked the server is
+// the joined one.
 func tickBriefingTriggers(ctx context.Context, d paths.Dirs, cfg config.Config, cl *hindsight.Client, tw *telemetry.Writer) string {
 	if briefingFor(cfg) != "model" {
 		return ""
 	}
 	var m briefingMarker
-	if raw, err := os.ReadFile(d.BriefingTriggerFile()); err == nil && json.Unmarshal(raw, &m) == nil && m.Key == briefingTriggerKey(cfg) &&
+	if raw, err := os.ReadFile(d.BriefingTriggerFile()); err == nil && json.Unmarshal(raw, &m) == nil && m.Key == briefingTriggerKey(d, cfg) &&
 		(len(m.Failed) == 0 || now().Sub(m.FailedAt) < briefingTriggerRetry) {
 		return ""
 	}

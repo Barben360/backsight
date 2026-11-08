@@ -98,8 +98,8 @@ func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[stri
 // entry with its time (an entry holding only that time for a memory
 // without one, for a restore here to beat a hiding elsewhere). A settle or an
 // import decays under the half-lives it recorded, p's when it recorded
-// none, each show from its own time; a forgotten show counts nowhere, an
-// import never counts a miss. Sums
+// none, each show from its own time; a forgotten show counts nowhere, nor
+// does a store reply's show not credited; an import never counts a miss. Sums
 // decay order-independently, so applying events as they come and folding
 // them all later agree.
 func (l *Ledger) Apply(e Event, p Params) {
@@ -110,7 +110,7 @@ func (l *Ledger) Apply(e Event, p Params) {
 	case "settle":
 		p = p.recorded(e.Params)
 		for _, s := range e.Settled {
-			if s.Outcome != OutcomeForgotten {
+			if s.Outcome != OutcomeForgotten && (s.Path != PathStore || s.Outcome == OutcomeCredit) {
 				l.Memories[s.ID] = l.Memories[s.ID].settled(s, p)
 			}
 		}
