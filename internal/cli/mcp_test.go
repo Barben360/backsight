@@ -443,6 +443,53 @@ func TestMCPToolEventsAreLogged(t *testing.T) {
 	}
 }
 
+// toolEvents are the tool events of home's telemetry, decoded.
+func toolEvents(t *testing.T, home string) []telemetry.Tool {
+	t.Helper()
+	var out []telemetry.Tool
+	for _, line := range strings.Split(telemetryText(t, home), "\n") {
+		if !strings.Contains(line, `"event":"tool"`) {
+			continue
+		}
+		var e telemetry.Tool
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// The tool event says how many queries a search asked, each one's count of
+// the hits returned, and every tool's answer size (decision 0083 C8).
+func TestMCPToolEventsCountQueriesHitsAndAnswerSize(t *testing.T) {
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	recallAnswer = "[]"
+	recallByQuery = map[string]string{
+		"postgres": `[{"id":"a","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}},
+			{"id":"b","text":"Billing keeps its cron.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`,
+		"cron": `[{"id":"b","text":"Billing keeps its cron.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`,
+	}
+	search, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres", "cron", "nothing"}})
+	read, _ := call(t, cs, "memory_read", map[string]any{"id": "nope"})
+	store, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."})
+	refused, _ := call(t, cs, "memory_store", map[string]any{"kind": "idea", "text": "x"})
+	evs := toolEvents(t, home)
+	if len(evs) != 4 {
+		t.Fatalf("%d tool events: %+v", len(evs), evs)
+	}
+	s := evs[0]
+	if s.Name != "memory_search" || s.QueriesN != 3 || fmt.Sprint(s.QueryHits) != "[2 1 0]" || s.Hits != 2 || s.ResultChars != len([]rune(search)) {
+		t.Errorf("search event %+v (answer %d chars)", s, len([]rune(search)))
+	}
+	for i, want := range []string{read, store, refused} {
+		if e := evs[i+1]; e.ResultChars != len([]rune(want)) || e.ResultChars == 0 || e.QueriesN != 0 || e.QueryHits != nil {
+			t.Errorf("event %d %+v: answer %d chars", i+1, e, len([]rune(want)))
+		}
+	}
+}
+
 func TestMCPReadRefusesIDsThatAreNotIDs(t *testing.T) {
 	cs := mcpSession(t)
 	for _, id := range []string{"", "..", "../banks", "a/b"} {

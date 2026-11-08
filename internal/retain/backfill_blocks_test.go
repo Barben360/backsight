@@ -37,6 +37,12 @@ func TestNotesFromRecords(t *testing.T) {
 	if c.Kind != "lesson" {
 		t.Errorf("unknown kind: %+v", c)
 	}
+	// a replayed note names its session, as a live one does
+	for _, n := range notes {
+		if n.Session != "s1" || n.Item("m1").Metadata["session"] != "s1" {
+			t.Errorf("session of %+v", n)
+		}
+	}
 	again := NotesFromRecords("b", "s1", recs, nil, all)
 	if again[0].DocumentID != a.DocumentID || again[0].OperationID != a.OperationID {
 		t.Error("ids must be deterministic so a rerun collapses")

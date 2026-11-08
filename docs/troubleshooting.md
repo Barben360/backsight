@@ -346,6 +346,25 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 - doctor's `bank` check says "briefing page(s) have another refresh trigger than this PC's": each page named says the floor it has. Without a floor, the server's LLM rewrites the page after every consolidation instead of once per `recall.briefing_refresh_interval`. `backsight jobs maintain` sets this PC's trigger (it does so every day, and the first `jobs tick` after an update does too; a page the server refuses is tried again at most hourly). A page found with another floor usually means another PC sharing the server has another `recall.briefing_refresh_interval`: set the same on every PC.
 - A backfill paused on its budget: `backsight retain backfill --plan`, then `backsight retain backfill --max-cost <higher>`.
 
+## Seeing what the server's model was asked
+
+The server logs each call of its model (extraction, consolidation, briefing pages) in its LLM request log, which `backsight stats` reads for tokens and cost. backsight sets `HINDSIGHT_API_LLM_TRACE_MAX_CHARS=1`, so the log keeps the operation, the model and the tokens, and 1 character of each request and answer: no prompt, conversation or memory text. Keep it so day to day.
+
+To find out for a while what the calls hold, for example how many consolidation calls answer that nothing changes, raise it for one day, then put it back:
+
+1. Docker runtime, on the server's host: in `compose.override.yaml`, next to the server's `compose.yaml` (`server.compose_dir`), add under `services:`:
+
+   ```yaml
+   hindsight:
+     environment:
+       HINDSIGHT_API_LLM_TRACE_MAX_CHARS: "20000"
+   ```
+
+   (merge it into an existing `hindsight:` part), then run `backsight server start`. The native runtime has no override file: `backsight server start` writes its `server.env` again, so this needs the Docker runtime.
+2. A day later, remove those lines (or the file, if it held nothing else) and run `backsight server start` again.
+
+What it exposes: for every call made meanwhile, the first 20,000 characters of what the server's model was sent and answered, so excerpts of your conversations, notes and memories, in clear in the server's database, as readable as your memories are; backups taken meanwhile hold them. The log keeps them for 30 days (`HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS`); putting the setting back stops new ones, it does not remove those already logged. Your LLM provider received that text anyway: the setting changes what the server keeps, not what it sends.
+
 ## An import is paused or not moving
 
 `backsight import list` says where each imported folder stands ([import](import.md)); in the commands below, put your folder in place of `~/notes`:

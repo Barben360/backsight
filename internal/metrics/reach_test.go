@@ -305,6 +305,29 @@ func TestSearchEmptyRateExcludesFailures(t *testing.T) {
 	}
 }
 
+// Beside the rate: the queries the successful searches asked, how many
+// found none of the hits returned, and the characters a search returned
+// on average. A call written before those fields counts in none of them;
+// a failed one is counted apart.
+func TestSearchEmptyRateCountsQueriesAndAnswerSize(t *testing.T) {
+	x := newFx(t, fxNow)
+	at := func(h int) time.Time { return fxNow.Add(-time.Duration(h) * time.Hour) }
+	x.tel(at(1), telemetry.Tool{Name: "memory_search", OK: true, Hits: 2, QueriesN: 3, QueryHits: []int{2, 0, 0}, ResultChars: 900}, "s", "alpha")
+	x.tel(at(2), telemetry.Tool{Name: "memory_search", OK: true, QueriesN: 1, QueryHits: []int{0}, ResultChars: 100}, "s", "alpha")
+	x.tel(at(3), telemetry.Raw{Name: "tool", Fields: map[string]any{"name": "memory_search", "ok": true, "hits": 1}}, "s", "alpha")
+	x.tel(at(4), telemetry.Tool{Name: "memory_search", QueriesN: 2, QueryHits: []int{0, 0}, ResultChars: 50}, "s", "alpha")
+	x.tel(at(5), telemetry.Tool{Name: "memory_read", OK: true, ResultChars: 4000}, "s", "alpha")
+	m := reachOf(x, x.query(7))["search.empty_rate"]
+	if m.Extra["queries"] != int64(4) || m.Extra["empty_queries"] != int64(3) || m.Extra["chars_per_search"] != int64(500) || m.Extra["failed"] != int64(1) {
+		t.Errorf("extra %v, want 4 queries, 3 empty, 500 chars per search, 1 failed", m.Extra)
+	}
+	y := newFx(t, fxNow)
+	y.tel(at(1), telemetry.Raw{Name: "tool", Fields: map[string]any{"name": "memory_search", "ok": true, "hits": 1}}, "s", "alpha")
+	if m := reachOf(y, y.query(7))["search.empty_rate"]; m.Extra["queries"] != int64(0) || m.Extra["chars_per_search"] != nil {
+		t.Errorf("before the fields: extra %v, want 0 queries and no average", m.Extra)
+	}
+}
+
 // TestByLang: each language is judged on its own trials; a missing
 // language is "unknown".
 func TestByLang(t *testing.T) {

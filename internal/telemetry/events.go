@@ -71,12 +71,19 @@ type BriefingOutcome struct {
 	UsedIDs []string `json:"used_ids"`
 }
 
+// Tool is one MCP tool call. QueriesN and QueryHits (memory_search):
+// how many queries it asked and, in their order, each one's count of the
+// hits returned (decision 0083 C8). ResultChars: the characters of the
+// answer, its weight in Claude's context.
 type Tool struct {
-	Name string `json:"name"`
-	MS   int    `json:"ms"`
-	Hits int    `json:"hits"`
-	OK   bool   `json:"ok"`
-	Live string `json:"live,omitempty"` // MCP: record | session | stale | none (how the server found its session: by its parent pid, by the session id)
+	Name        string `json:"name"`
+	MS          int    `json:"ms"`
+	Hits        int    `json:"hits"`
+	OK          bool   `json:"ok"`
+	Live        string `json:"live,omitempty"` // MCP: record | session | stale | none (how the server found its session: by its parent pid, by the session id)
+	QueriesN    int    `json:"queries_n,omitempty"`
+	QueryHits   []int  `json:"query_hits,omitempty"`
+	ResultChars int    `json:"result_chars,omitempty"`
 }
 
 // Credit is one memory_credit call: its verdict, how many ids it named
@@ -107,6 +114,20 @@ type CreditCheck struct {
 	Flags      []string `json:"flags,omitempty"`
 	AfterBlock bool     `json:"after_block,omitempty"`
 }
+
+// StopBlock is what one end-of-turn block produced, emitted when the
+// blocked turn ends again (decision 0083 C8): what the agent declared
+// then (used, confirmed, corrected for wrong or outdated, none) or refused
+// (no declaration), the paths of the memories shown when it blocked, how
+// many memories it listed, and whether a subagent was asked.
+type StopBlock struct {
+	Outcome  string   `json:"outcome"` // used | confirmed | corrected | none | refused
+	Paths    []string `json:"paths"`
+	Shown    int      `json:"shown"`
+	Subagent bool     `json:"subagent,omitempty"`
+}
+
+func (StopBlock) EventName() string { return "stop_block" }
 
 // FeedbackSettle is one settle of the feedback journal: the shows it
 // decided by outcome, and the used credits that came too late to attach.

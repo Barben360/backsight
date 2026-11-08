@@ -84,9 +84,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "search.empty_rate", Label: "Searches that found nothing", Unit: "ratio", Direction: "down", MinN: 20,
 		Relative: true, CI: "wilson", Scope: "machine", Source: "telemetry", Family: "reach", Series: "daily", Command: "backsight stats quality",
-		Extra:      []string{"failed"},
+		Extra:      []string{"failed", "queries", "empty_queries", "chars_per_search"},
 		Question:   "How often does a memory search come back empty?",
-		Definition: "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart.",
+		Definition: "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart. Beside it, from the calls that recorded them: the queries asked, those that found none of the memories returned, and the characters a search answer adds to Claude's context, on average.",
 		Action:     "Gaps in memory: what Claude looks for is not stored.",
 	},
 	{
@@ -427,6 +427,14 @@ var Catalog = withDrills([]Def{
 		Question:   "How often does the learned ranking change what is shown?",
 		Definition: "The share of recalls, prompts and searches, whose shown memories differ from what the ranking would show without what it learned from past feedback.",
 		Action:     "A share near 0 means the learned ranking has no effect yet.",
+	},
+	{
+		ID: "stopcheck.block_yield", Label: "Held turns that then credited a memory", Unit: "ratio", Direction: "up", MinN: 20,
+		CI: "none", Scope: "machine", Source: "telemetry", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Extra:      []string{"by_outcome", "by_path"},
+		Question:   "When the end of a turn asks Claude what it used, does its answer credit a memory?",
+		Definition: "Turns the end-of-turn check held, and whose agent then credited a memory used or confirmed, out of the held turns that ended again. Beside it: the held turns by what followed (used, confirmed, corrected for wrong or outdated, none, refused for no answer), and by where the memories were shown when the check held them (prompt, search, briefing and others; a turn with two counts in each, and each needs its own 20 turns). Turns held before this was recorded are not counted.",
+		Action:     "A low share, above all for one way of showing memory, means the question costs Claude an extra step there for little: a reason to ask less often there.",
 	},
 })
 

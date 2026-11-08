@@ -3,6 +3,7 @@ package metrics
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -346,7 +347,7 @@ func orUnknown(s string) string {
 // succeeded; failed calls are counted apart.
 func reachSearches(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT ts, ok, hits FROM tel_tool
+SELECT ts, ok, hits, queries_n, queries_empty, result_chars FROM tel_tool
 WHERE name = 'memory_search' AND ts >= ? AND ts < ? AND (? = '' OR project = ?)`,
 		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {
@@ -356,11 +357,21 @@ WHERE name = 'memory_search' AND ts >= ? AND ts < ? AND (? = '' OR project = ?)`
 	buckets := w.Buckets()
 	var total toolAcc
 	days := make([]toolAcc, len(buckets))
+	// Of the successful calls that recorded them: the queries, those that
+	// found none of the hits returned, and the answers' characters.
+	var queries, emptyQueries, chars, sized int64
 	for rows.Next() {
 		var ts int64
-		var ok, hits sql.NullInt64
-		if err := rows.Scan(&ts, &ok, &hits); err != nil {
+		var ok, hits, queriesN, queriesEmpty, resultChars sql.NullInt64
+		if err := rows.Scan(&ts, &ok, &hits, &queriesN, &queriesEmpty, &resultChars); err != nil {
 			return err
+		}
+		if ok.Valid && ok.Int64 == 1 {
+			queries += queriesN.Int64
+			emptyQueries += queriesEmpty.Int64
+			if resultChars.Valid {
+				chars, sized = chars+resultChars.Int64, sized+1
+			}
 		}
 		accs := []*toolAcc{&total}
 		if i := bucketIndex(buckets, time.UnixMilli(ts).In(w.Loc)); i >= 0 {
@@ -381,8 +392,12 @@ WHERE name = 'memory_search' AND ts >= ? AND ts < ? AND (? = '' OR project = ?)`
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	var perSearch any // none recorded: no average
+	if sized > 0 {
+		perSearch = int64(math.Round(float64(chars) / float64(sized)))
+	}
 	m := Metric{Num: i64(total.found0), Den: i64(total.ok), Value: ratio(total.found0, total.ok),
-		Extra: map[string]any{"failed": total.failed}}
+		Extra: map[string]any{"failed": total.failed, "queries": queries, "empty_queries": emptyQueries, "chars_per_search": perSearch}}
 	for i, b := range buckets {
 		p := pointOf(w, b.Key)
 		p.Value, p.Num, p.Den = ratio(days[i].found0, days[i].ok), i64(days[i].found0), i64(days[i].ok)

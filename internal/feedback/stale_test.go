@@ -55,3 +55,13 @@ func TestStaleHiddenBoundary(t *testing.T) {
 		t.Errorf("lists = %+v, want only exact hidden", got)
 	}
 }
+
+// A briefing page is no memory to review: shown at every session start
+// and never credited, it is never listed (decision 0083 C8).
+func TestStaleNeverListsABriefingPage(t *testing.T) {
+	page := BriefingPagePrefix + "billing-1a2b3c4d"
+	l := Ledger{Memories: map[string]Entry{page: {Shown: 40}, "n-a": {Shown: 15}}}
+	if got := Stale(l, 10, staleAt); !slices.Equal(got.NeverUsed, []string{"n-a"}) {
+		t.Errorf("never used %v", got.NeverUsed)
+	}
+}

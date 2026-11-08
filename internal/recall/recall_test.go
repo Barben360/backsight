@@ -23,10 +23,12 @@ type hit struct {
 // fakeBank answers recall per scope: the tags of the request pick the
 // hits; types pick observations or raw facts.
 type fakeBank struct {
-	mu       sync.Mutex
-	scopes   map[string][]hit // key: comma-joined tags ("" = whole bank)
-	raw      map[string][]hit // world/experience answers
-	fail     map[string]bool
+	mu     sync.Mutex
+	scopes map[string][]hit // key: comma-joined tags ("" = whole bank)
+	raw    map[string][]hit // world/experience answers
+	fail   map[string]bool
+	// byQuery, when set, answers by the query text, whatever the scope.
+	byQuery  map[string][]hit
 	requests []hindsight.RecallRequest
 }
 
@@ -46,6 +48,9 @@ func (f *fakeBank) client(t *testing.T) *hindsight.Client {
 		src := f.scopes
 		if len(req.Types) > 0 && req.Types[0] != "observation" {
 			src = f.raw
+		}
+		if f.byQuery != nil {
+			src = map[string][]hit{key: f.byQuery[req.Query]}
 		}
 		var out []map[string]any
 		for _, h := range src[key] {
@@ -522,5 +527,25 @@ func TestRankWithoutBoostCountsAHitTheBoostSank(t *testing.T) {
 	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.68})
 	if hitIDs(res.Hits) != "b" || res.Hits[0].RankWithoutBoost != 2 {
 		t.Errorf("hits %+v", res.Hits)
+	}
+}
+
+// Each query's count of the hits returned (decision 0083 C8): a hit two
+// scopes return counts once for its query, a hit two queries return counts
+// for both, one under the floor or past the limit for none; a blank query
+// is never sent and counts 0.
+func TestSearchCountsHitsPerQuery(t *testing.T) {
+	f := &fakeBank{byQuery: map[string][]hit{
+		"postgres": {{"a", "a", "billing", 0.9}, {"b", "b", "billing", 0.8}},
+		"cron":     {{"b", "b", "billing", 0.85}, {"z", "noise", "x", 0.1}},
+	}}
+	q := Query{Queries: []string{"postgres", "cron", "nothing", "  "}, Current: "billing", MinScore: 0.4, Limit: 10}
+	res := engine(t, f).Search(context.Background(), q)
+	if fmt.Sprint(res.QueryHits) != "[2 1 0 0]" || len(res.Hits) != 2 {
+		t.Errorf("per query %v, hits %+v", res.QueryHits, res.Hits)
+	}
+	q.Limit = 1
+	if res := engine(t, f).Search(context.Background(), q); fmt.Sprint(res.QueryHits) != "[1 0 0 0]" {
+		t.Errorf("limit 1: per query %v", res.QueryHits)
 	}
 }

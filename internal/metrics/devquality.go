@@ -3,6 +3,7 @@ package metrics
 import (
 	"math"
 	"sort"
+	"strings"
 )
 
 // The developer metrics on quality: the corrections that follow memory
@@ -12,11 +13,78 @@ import (
 // prompts. Both quality metrics answer to the `stats` command's figures on the
 // same data: its injections line and its Boost line.
 
-// The steps of the quality family that fill the two metrics.
+// The steps of the quality family that fill the two metrics, and the one
+// of stopcheck.block_yield (the end-of-turn blocks, from the telemetry).
 const (
 	stepContradicted = "contradicted"
 	stepSetChanged   = "setchanged"
+	stepBlocks       = "blocks"
 )
+
+// blockOutcomes are what a held turn's agent can then declare, in the
+// order by_outcome lists them; used and confirmed credit a memory.
+var blockOutcomes = []string{"used", "confirmed", "corrected", "none", "refused"}
+
+// qualityBlocks fills stopcheck.block_yield: the end-of-turn blocks of the
+// window (each written when its turn ended again), and those whose agent
+// then credited a memory used or confirmed; by outcome, and by the paths
+// shown when it held, each path judged on its own blocks.
+func qualityBlocks(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
+	const id = "stopcheck.block_yield"
+	rows, err := e.tx.QueryContext(e.ctx, `
+SELECT COALESCE(outcome, ''), COALESCE(paths, '') FROM tel_stop_block
+WHERE ts >= ? AND ts < ? AND `+projectClause+` AND `+versionClause,
+		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	byOutcome := make(map[string]int64, len(blockOutcomes))
+	for _, o := range blockOutcomes {
+		byOutcome[o] = 0
+	}
+	type acc struct{ num, den int64 }
+	byPath := map[string]*acc{}
+	var num, den int64
+	for rows.Next() {
+		var outcome, paths string
+		if err := rows.Scan(&outcome, &paths); err != nil {
+			return err
+		}
+		if outcome == "" {
+			outcome = unknownKey
+		}
+		credited := outcome == "used" || outcome == "confirmed"
+		den, byOutcome[outcome] = den+1, byOutcome[outcome]+1
+		if credited {
+			num++
+		}
+		for _, p := range strings.Split(paths, ",") {
+			if p == "" {
+				continue
+			}
+			if byPath[p] == nil {
+				byPath[p] = &acc{}
+			}
+			byPath[p].den++
+			if credited {
+				byPath[p].num++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	def, _ := DefOf(id)
+	paths := make(map[string]pathStat, len(byPath))
+	for p, a := range byPath {
+		j := Judge(def, Observation{Num: a.num, Den: a.den})
+		paths[p] = pathStat{Num: a.num, Den: a.den, Value: ratio(a.num, a.den), Status: j.Status}
+	}
+	obs[id] = Observation{Num: num, Den: den}
+	met[id] = Metric{Num: i64(num), Den: i64(den), Value: ratio(num, den), Extra: map[string]any{"by_outcome": byOutcome, "by_path": paths}}
+	return nil
+}
 
 // flagIn is the SQL test that a row's comma-joined flags hold flag (the bind
 // value is the flag with its commas).
@@ -94,6 +162,9 @@ func devQualityAbsent(e env, step string) (bool, error) {
 	switch step {
 	case stepContradicted:
 		err = e.tx.QueryRowContext(e.ctx, `SELECT EXISTS (SELECT 1 FROM tel_outcome WHERE `+projectClause+`)`,
+			e.q.Project, e.q.Project).Scan(&found)
+	case stepBlocks:
+		err = e.tx.QueryRowContext(e.ctx, `SELECT EXISTS (SELECT 1 FROM tel_stop_block WHERE `+projectClause+`)`,
 			e.q.Project, e.q.Project).Scan(&found)
 	default:
 		err = e.tx.QueryRowContext(e.ctx, `

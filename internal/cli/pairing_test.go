@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/session"
 )
 
@@ -45,6 +46,84 @@ func TestPairingFallsBackToTheSessionID(t *testing.T) {
 	_ = session.WriteLive(dir, 4747, session.Live{SessionID: "s-tree", Cwd: filepath.Join(home, "web"), Project: "web", At: time.Now()})
 	if out, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Web keeps Vite."}); !strings.Contains(out, "project web)") {
 		t.Errorf("the pid record is not first: %s", out)
+	}
+}
+
+// lastNoteSession is the session the last document sent names in its
+// metadata ("" when none).
+func lastNoteSession(t *testing.T) string {
+	t.Helper()
+	if len(retainedDocIDs) == 0 {
+		t.Fatal("nothing sent")
+	}
+	cfg, sec, _ := loadServerConfig()
+	cl, _ := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
+	d, err := cl.GetDocument(t.Context(), cfg.Server.Bank, retainedDocIDs[len(retainedDocIDs)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.Metadata["session"]
+}
+
+// Every note names its session (decision 0083 C8): unpaired, a
+// memory_store note names the session Claude Code started the server
+// for; paired, the session found.
+func TestMCPStoreNotesNameTheirSession(t *testing.T) {
+	mcpParentPID, mcpParentStart, mcpSessionID = 4747, time.Now().Add(-time.Minute), "s-tree"
+	t.Cleanup(func() { mcpParentPID, mcpParentStart, mcpSessionID = 0, time.Time{}, "" })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."}); isErr {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != "s-tree" {
+		t.Errorf("unpaired note names session %q, want s-tree", got)
+	}
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4747, session.Live{SessionID: "s-live", Cwd: filepath.Join(home, "billing"), Project: "billing", At: time.Now()})
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps its cron."}); isErr {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != "s-live" {
+		t.Errorf("paired note names session %q, want s-live", got)
+	}
+}
+
+// Without a spawn session id (not given, or not an id) an unpaired note
+// names none: never a made-up one.
+func TestMCPStoreNoteWithoutAnySessionNamesNone(t *testing.T) {
+	mcpParentPID, mcpParentStart, mcpSessionID = 4747, time.Now().Add(-time.Minute), "../etc"
+	t.Cleanup(func() { mcpParentPID, mcpParentStart, mcpSessionID = 0, time.Time{}, "" })
+	cs := mcpSession(t)
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."}); isErr {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != "" {
+		t.Errorf("note names session %q", got)
+	}
+}
+
+// backsight store from Claude Code's Bash tool, without the env file's
+// BACKSIGHT_SESSION, names the session Claude Code gives its children.
+func TestCLIStoreNamesClaudeCodesSession(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	dir := filepath.Join(home, "work", "billing")
+	_ = os.MkdirAll(dir, 0o700)
+	t.Chdir(dir)
+	t.Setenv("BACKSIGHT_SESSION", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-bash")
+	if code, _, out := storeJSON(t, "--kind", "decision", "Billing keeps PostgreSQL 16."); code != 0 {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != "s-bash" {
+		t.Errorf("note names session %q, want s-bash", got)
+	}
+	t.Setenv("BACKSIGHT_SESSION", "s-env") // the env file's comes first
+	if code, _, out := storeJSON(t, "--kind", "decision", "Billing keeps its cron."); code != 0 {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != "s-env" {
+		t.Errorf("note names session %q, want s-env", got)
 	}
 }
 

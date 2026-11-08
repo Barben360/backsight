@@ -95,7 +95,7 @@ func newStoreCmd(e *env) *cobra.Command {
 				return err
 			}
 			cwd, _ := os.Getwd()
-			sid := os.Getenv("BACKSIGHT_SESSION")
+			sid := noteSession(os.Getenv("BACKSIGHT_SESSION"), os.Getenv("CLAUDE_CODE_SESSION_ID"))
 			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, sid, cwd, kind, proj, strings.Join(args, " "))
 			telemetry.New(d.State, telemetry.Common{Session: sid, BinaryVersion: buildinfo.Version}).Emit(storeEvent(kind, res, false))
 			if res.Document == "" {
@@ -212,6 +212,19 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		}
 	}
 	return res, failed
+}
+
+// noteSession is the session a note names in its metadata (decision 0083
+// C8): the one found, else the one Claude Code gave the process
+// (CLAUDE_CODE_SESSION_ID), when it is an id; "" when neither.
+func noteSession(found, given string) string {
+	if found != "" {
+		return found
+	}
+	if session.ValidID(given) {
+		return given
+	}
+	return ""
 }
 
 // otherServer is the mismatch the last check recorded: another server

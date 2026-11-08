@@ -79,7 +79,7 @@ func kindOf(kind string) (sourceKind, bool) {
 // pruning of old rows walks them.
 var rowTables = []string{
 	"tel_prompt", "tel_outcome", "tel_reply", "tel_briefing", "tel_briefing_outcome",
-	"tel_tool", "tel_tool_use", "tel_credit", "tel_credit_check", "tel_retire",
+	"tel_tool", "tel_tool_use", "tel_credit", "tel_credit_check", "tel_stop_block", "tel_retire",
 	"tel_feedback_settle", "tel_feedback_error", "tel_gate", "tel_retain",
 	"tel_hook_failure", "tel_job", "tel_attribution", "tel_store", "tel_dashboard",
 	"tel_config", "tel_ids", "tel_prompt_scopes", "tel_config_values", "events",

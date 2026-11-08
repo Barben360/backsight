@@ -246,12 +246,17 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				_, eng = key.get()
 				res = searchMemory(ctx, deps.dirs, deps.home, deps.cfg, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			}
-			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res), Live: found})
-			deps.journalRecall(live, found, res)
-			if len(res.Hits) == 0 && !scopesOK(res) {
-				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil
+			text, failed := mcpSearchText(res, deps.cfg.Feedback.Enabled), len(res.Hits) == 0 && !scopesOK(res)
+			if failed {
+				text = "memory unavailable: " + scopeErrors(res)
 			}
-			return textResult(mcpSearchText(res, deps.cfg.Feedback.Enabled)), nil, nil
+			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res), Live: found,
+				QueriesN: len(a.Queries), QueryHits: res.QueryHits, ResultChars: utf8.RuneCountInString(text)})
+			deps.journalRecall(live, found, res)
+			if failed {
+				return errorResult(text), nil, nil
+			}
+			return textResult(text), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
@@ -273,15 +278,21 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				_, eng = key.get()
 				m, err = eng.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
 			}
-			deps.tw.Emit(telemetry.Tool{Name: "memory_read", MS: int(time.Since(start).Milliseconds()), Hits: map[bool]int{true: 1}[err == nil], OK: err == nil})
 			var apiErr *hindsight.APIError
-			if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
-				return errorResult("no memory " + a.ID), nil, nil
+			var text string
+			switch {
+			case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+				text = "no memory " + a.ID
+			case err != nil:
+				text = "memory unavailable: " + err.Error()
+			default:
+				text = readText(m)
 			}
+			deps.tw.Emit(telemetry.Tool{Name: "memory_read", MS: int(time.Since(start).Milliseconds()), Hits: map[bool]int{true: 1}[err == nil], OK: err == nil, ResultChars: utf8.RuneCountInString(text)})
 			if err != nil {
-				return errorResult("memory unavailable: " + err.Error()), nil, nil
+				return errorResult(text), nil, nil
 			}
-			return textResult(readText(m)), nil, nil
+			return textResult(text), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_store", Description: instructions.StoreDescription},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
@@ -304,7 +315,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			}
 			if err != nil {
 				deps.tw.Emit(telemetry.Store{Result: "refused", Kind: noteKind(a.Kind)})
-				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Live: found})
+				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Live: found, ResultChars: utf8.RuneCountInString(err.Error())})
 				return errorResult(err.Error()), nil, nil
 			}
 			// What this fact updates or repeats, before it is stored (SPEC §7).
@@ -317,13 +328,19 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				sec, eng = key.get()
 				similar = eng.Search(ctx, q)
 			}
-			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, sec, deps.generation, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
+			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, sec, deps.generation, noteSession(live.SessionID, deps.sessionID), live.Cwd, a.Kind, proj, a.Text)
 			deps.tw.Emit(storeEvent(a.Kind, res, false))
-			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found})
+			var text string
 			if res.Document == "" {
-				return errorResult(err.Error()), nil, nil
+				text = err.Error()
+			} else {
+				text = storeReply(res, err, similar.Hits, deps.cfg.Recall.StoreSimilarMinScore)
 			}
-			return textResult(storeReply(res, err, similar.Hits, deps.cfg.Recall.StoreSimilarMinScore)), nil, nil
+			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found, ResultChars: utf8.RuneCountInString(text)})
+			if res.Document == "" {
+				return errorResult(text), nil, nil
+			}
+			return textResult(text), nil, nil
 		})
 	if deps.cfg.Feedback.Enabled {
 		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
@@ -423,6 +440,12 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 	}
 	owner := shownProjects(shown, live.Project)
 	if verdict == "wrong" || verdict == "outdated" {
+		for _, id := range ids {
+			if feedback.IsBriefingPage(id) {
+				return "", errors.New(id + ": a briefing page summarises memories and is not one: nothing is retired; " +
+					"give the id of the memory it took the wrong fact from (memory_search finds it), or store the right fact with memory_store")
+			}
+		}
 		return d.correct(ctx, key, live, verdict, a, ids, owner)
 	}
 	// One line per project, in the order the ids were given.

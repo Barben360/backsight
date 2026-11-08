@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -363,6 +364,102 @@ func TestStopFirstTurnCountsTheBriefing(t *testing.T) {
 	}
 	if _, _, out := stopHook(t, "stop", map[string]any{"session_id": "s2", "cwd": home, "last_assistant_message": "done"}); out != nil {
 		t.Errorf("second turn answered %s", out)
+	}
+}
+
+// The briefing page alone never holds a turn (decision 0083 C8): it can
+// be credited, but a page asks for no declaration. Beside other shows it
+// is listed by its whole id, the one memory_credit takes.
+func TestStopNeverBlocksForABriefingPageAlone(t *testing.T) {
+	home := hookHome(t)
+	page := briefingModelID("billing")
+	j := showTurn(t, home, "s1", "t-1", 1, false)
+	journalShow(t, j, "", "", "briefing", page)
+	if _, _, out := stopHook(t, "stop", map[string]any{"session_id": "s1", "cwd": home, "last_assistant_message": "done"}); out != nil {
+		t.Fatalf("a page alone answered %s", out)
+	}
+	if got := stopsOf(t, home, "s1"); len(got) != 0 {
+		t.Errorf("a page alone journaled %+v", got)
+	}
+	j2 := showTurn(t, home, "s2", "u-1", 1, false)
+	journalShow(t, j2, "", "", "briefing", page)
+	journalShow(t, j2, "u-1", "", "prompt", stopIDA)
+	d, reason, _ := stopHook(t, "stop", map[string]any{"session_id": "s2", "cwd": home, "last_assistant_message": "done"})
+	if d != "block" || !strings.Contains(reason, "\n- "+page+" (the briefing page)\n") || !strings.Contains(reason, "\n- 0b4c2a52 ") {
+		t.Errorf("page and memory: %q\n%s", d, reason)
+	}
+}
+
+// Each block's outcome is telemetered once the blocked turn ends again
+// (decision 0083 C8): the paths that were shown when it blocked (not a
+// search made after it), what the agent declared then (used, confirmed,
+// corrected, none) or refused (nothing), and whether a subagent was asked.
+func TestStopBlockOutcomesAreTelemetered(t *testing.T) {
+	home := hookHome(t)
+	stop := func(sess string) string {
+		d, _, _ := stopHook(t, "stop", map[string]any{"session_id": sess, "cwd": home, "last_assistant_message": "done"})
+		return d
+	}
+	credit := func(j *feedback.Journal, turn, verdict string, ids ...string) {
+		if err := j.Append(feedback.Event{Kind: "credit", Turn: turn, Verdict: verdict, IDs: ids}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turns := map[string]*feedback.Journal{}
+	for _, sess := range []string{"used", "confirmed", "corrected", "none", "refused"} {
+		j := showTurn(t, home, sess, "t-2", 2, false)
+		journalShow(t, j, "t-2", "", "prompt", stopIDA)
+		journalShow(t, j, "t-2", "", "search", stopIDB)
+		turns[sess] = j
+		if d := stop(sess); d != "block" {
+			t.Fatalf("%s: %q", sess, d)
+		}
+	}
+	if evs := eventsNamed(t, home, "stop_block"); len(evs) != 0 {
+		t.Fatalf("a block still open was telemetered: %v", evs)
+	}
+	journalShow(t, turns["used"], "t-2", "", "read", stopIDC) // after the block
+	credit(turns["used"], "t-2", "none")
+	credit(turns["used"], "t-2", "used", stopIDA)
+	credit(turns["confirmed"], "t-2", "confirmed", stopIDB)
+	credit(turns["corrected"], "t-2", "wrong", stopIDA)
+	credit(turns["none"], "t-2", "none")
+	for _, sess := range []string{"used", "confirmed", "corrected", "none", "refused"} {
+		if d := stop(sess); d != "" {
+			t.Fatalf("%s blocked twice: %q", sess, d)
+		}
+	}
+	got := map[string]string{}
+	for _, e := range eventsNamed(t, home, "stop_block") {
+		got[e["session"].(string)] = fmt.Sprintf("%v %v %v %v", e["outcome"], e["paths"], e["shown"], e["subagent"])
+	}
+	want := map[string]string{
+		"used":      "used [prompt search] 2 <nil>",
+		"confirmed": "confirmed [prompt search] 2 <nil>",
+		"corrected": "corrected [prompt search] 2 <nil>",
+		"none":      "none [prompt search] 2 <nil>",
+		"refused":   "refused [prompt search] 2 <nil>",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("stop_block events\n got %v\nwant %v", got, want)
+	}
+	// A subagent's block: its own paths, and the flag.
+	j := showTurn(t, home, "sub", "t-2", 2, false)
+	journalShow(t, j, "t-2", "a1", "search", stopIDA)
+	sub := func() string {
+		d, _, _ := stopHook(t, "subagent-stop", map[string]any{"session_id": "sub", "agent_id": "a1", "cwd": filepath.Join(home, "billing"),
+			"transcript_path": subagentTranscript(t, "sub", "a1"), "last_assistant_message": "report"})
+		return d
+	}
+	if d := sub() + "," + sub(); d != "block," {
+		t.Fatalf("subagent: %q", d)
+	}
+	evs := eventsNamed(t, home, "stop_block")
+	if len(evs) == 0 {
+		t.Fatal("no stop_block event")
+	}
+	if e := evs[len(evs)-1]; e["session"] != "sub" || e["outcome"] != "refused" || fmt.Sprint(e["paths"]) != "[search]" || e["subagent"] != true {
+		t.Errorf("subagent block %v", e)
 	}
 }
 

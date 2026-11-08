@@ -52,7 +52,7 @@
       "page": {
         "limit": 50,
         "offset": 0,
-        "total": 47
+        "total": 48
       },
       "defs": [
         {
@@ -172,7 +172,7 @@
           "id": "search.empty_rate",
           "label": "Searches that found nothing",
           "question": "How often does a memory search come back empty?",
-          "definition": "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart.",
+          "definition": "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart. Beside it, from the calls that recorded them: the queries asked, those that found none of the memories returned, and the characters a search answer adds to Claude's context, on average.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "down",
@@ -191,7 +191,10 @@
           "family": "reach",
           "series": "daily",
           "extra": [
-            "failed"
+            "failed",
+            "queries",
+            "empty_queries",
+            "chars_per_search"
           ],
           "drill": "backsight stats quality",
           "n": 0,
@@ -1488,6 +1491,36 @@
           ],
           "drill": "backsight stats quality --dev",
           "n": 3,
+          "mdc": null
+        },
+        {
+          "id": "stopcheck.block_yield",
+          "label": "Held turns that then credited a memory",
+          "question": "When the end of a turn asks Claude what it used, does its answer credit a memory?",
+          "definition": "Turns the end-of-turn check held, and whose agent then credited a memory used or confirmed, out of the held turns that ended again. Beside it: the held turns by what followed (used, confirmed, corrected for wrong or outdated, none, refused for no answer), and by where the memories were shown when the check held them (prompt, search, briefing and others; a turn with two counts in each, and each needs its own 20 turns). Turns held before this was recorded are not counted.",
+          "unit": "ratio",
+          "aggregation": "raw",
+          "direction": "up",
+          "min_n": 20,
+          "absolute": {
+            "on": ""
+          },
+          "relative": false,
+          "error_class": false,
+          "ci": "none",
+          "scope": "machine",
+          "source": "telemetry",
+          "action": "A low share, above all for one way of showing memory, means the question costs Claude an extra step there for little: a reason to ask less often there.",
+          "command": "backsight stats quality --dev",
+          "dev": true,
+          "family": "quality",
+          "series": "none",
+          "extra": [
+            "by_outcome",
+            "by_path"
+          ],
+          "drill": "backsight stats quality --dev",
+          "n": 0,
           "mdc": null
         }
       ]

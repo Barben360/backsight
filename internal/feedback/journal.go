@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,7 +39,18 @@ type Item struct {
 	Boost             float64  `json:"boost,omitempty"`
 	RankWithoutBoost  int      `json:"rank_without_boost,omitempty"`
 	ScoreWithoutBoost *float64 `json:"score_without_boost,omitempty"`
+	// RefreshedAt: a briefing page's last_refreshed_at, as the server
+	// wrote it, telling one version of the page from the next.
+	RefreshedAt string `json:"refreshed_at,omitempty"`
 }
+
+// BriefingPagePrefix starts every briefing page's id (retain's
+// BriefingModelPrefix): a page shown is credited like a memory, but it is
+// no memory a verdict retires or a review lists.
+const BriefingPagePrefix = "backsight-brief-"
+
+// IsBriefingPage reports whether id is a briefing page's.
+func IsBriefingPage(id string) bool { return strings.HasPrefix(id, BriefingPagePrefix) }
 
 // Settled is the outcome a settle gave one show: credit, confident_miss,
 // shown or unknown. Key names the show (session, turn, call, id). An

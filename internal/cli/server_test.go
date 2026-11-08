@@ -327,6 +327,9 @@ var (
 	recallSourceFacts  string
 	recallAskedSources int
 	recallQueries      []string
+	// recallByQuery answers the recalls of the queries it names, in place
+	// of recallAnswer.
+	recallByQuery      map[string]string
 	recentAnswer       map[string]string // memories/list items by type ("" = any)
 	recentByTag        map[string]string // memories/list items by tags (wins over recentAnswer)
 	tagCounts          map[string]int    // /tags count by project (default 1)
@@ -406,7 +409,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recallFailTag = ""
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	memoryStatus, memoryHistory = map[string]int{}, map[string]string{}
-	recallQueries, recallSourceFacts, recallAskedSources = nil, "", 0
+	recallQueries, recallSourceFacts, recallAskedSources, recallByQuery = nil, "", 0, nil
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
@@ -591,7 +594,11 @@ func fakeHindsight(t *testing.T) (port int) {
 			if recallSourceFacts != "" {
 				extra = `,"source_facts":` + recallSourceFacts
 			}
-			_, _ = w.Write([]byte(`{"results":` + recallAnswer + extra + `}`))
+			answer := recallAnswer
+			if a, ok := recallByQuery[body.Query]; ok {
+				answer = a
+			}
+			_, _ = w.Write([]byte(`{"results":` + answer + extra + `}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") == "created_at" && fakeCreated != nil:
 			createdListing(w, r.URL.Query())
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") != "":

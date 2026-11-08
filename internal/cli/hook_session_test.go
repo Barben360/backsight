@@ -218,6 +218,19 @@ func TestCompactGivesARefreshedBriefingAndTheLastMemories(t *testing.T) {
 	if c := compact(t, home); strings.Contains(c, "Ship the invoice export") || !strings.Contains(c, instructions.CompactUnchanged) {
 		t.Errorf("second compaction:\n%s", c)
 	}
+	// The startup page and the refreshed one are shown, each once, each by
+	// its refresh time (decision 0083 C8); the skipped one is not.
+	var refreshes []string
+	for _, e := range eventsOf(journalEvents(t, home), "shows") {
+		for _, it := range e.Items {
+			if it.ID == id && e.Path == "briefing" {
+				refreshes = append(refreshes, it.RefreshedAt)
+			}
+		}
+	}
+	if len(refreshes) != 2 || refreshes[1] != t2 || refreshes[0] == t2 {
+		t.Errorf("page shows by refresh time %q", refreshes)
+	}
 }
 
 // A page that appeared since a session briefed from the recent memories is
@@ -372,6 +385,69 @@ func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
 	}
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"source":"model"`) {
 		t.Errorf("telemetry:\n%s", tel)
+	}
+}
+
+// Decision 0083 C8: a briefing page shown at SessionStart is in the shown
+// record, by its id and refresh time, and its id is in the briefing:
+// memory_credit credits it (never as a confident miss: the briefing path
+// never is one) and refuses to retire it, a page being no memory.
+func TestBriefingPageIsShownAndCreditable(t *testing.T) {
+	home := hookHome(t)
+	id := briefingModelID("billing")
+	refreshed := time.Now().Add(-3 * time.Hour).UTC().Format("2006-01-02T15:04:05.000000+00:00")
+	raw, _ := json.Marshal(map[string]any{"id": id, "content": "## Open items\n- Migrate the export job", "tags": []string{"project:billing"}, "last_refreshed_at": refreshed})
+	mentalModels[id] = string(raw)
+	h := fire(t, "session-start", map[string]any{"session_id": "S", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "[billing · "+id+"]") {
+		t.Errorf("the page's id is not in the briefing:\n%s", h.Specific.Context)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "briefing" || shows[0].Turn != "" || len(shows[0].Items) != 1 {
+		t.Fatalf("shows %+v", shows)
+	}
+	if it := shows[0].Items[0]; it.ID != id || it.Rank != 1 || it.Project != "billing" || it.RefreshedAt != refreshed {
+		t.Errorf("page show %+v", it)
+	}
+
+	mcpParentPID = 4848
+	t.Cleanup(func() { mcpParentPID = 0 })
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "billing"), Project: "billing", At: time.Now()})
+	cs := mcpConnect(t, home)
+	wrong := map[string]any{"ids": []string{id}, "verdict": "wrong", "correction": "The export job is migrated.", "evidence": "the user said so"}
+	if out, isErr := call(t, cs, "memory_credit", wrong); !isErr || !strings.Contains(out, "briefing page") {
+		t.Errorf("a page retired: %v %s", isErr, out)
+	}
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{id}})
+	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, id) {
+		t.Fatalf("credit: %v %s", isErr, out)
+	}
+	fire(t, "post-tool-use", map[string]any{"session_id": "S", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+		"tool_input": map[string]any{"ids": []string{id}}, "tool_response": []map[string]string{{"type": "text", "text": out}}})
+	credits := eventsOf(journalEvents(t, home), "credit")
+	if len(credits) != 1 || credits[0].Verdict != "used" || strings.Join(credits[0].IDs, ",") != id {
+		t.Fatalf("credits %+v", credits)
+	}
+	// Settled: the credit attaches to the page's show.
+	settled, _ := feedback.Decide(journalEvents(t, home), feedback.Params{ConfidentRank: 2}, time.Now().Add(3*time.Hour))
+	if len(settled) != 1 || settled[0].ID != id || settled[0].Outcome != feedback.OutcomeCredit {
+		t.Errorf("settled %+v", settled)
+	}
+}
+
+// A page the server returns without an id is shown, but not recorded:
+// nothing could credit it.
+func TestBriefingPageWithoutAnIDIsNotRecorded(t *testing.T) {
+	home := hookHome(t)
+	id := briefingModelID("billing")
+	raw, _ := json.Marshal(map[string]any{"content": "## Open items\n- Migrate the export job", "last_refreshed_at": time.Now().UTC().Format(time.RFC3339)})
+	mentalModels[id] = string(raw)
+	h := fire(t, "session-start", map[string]any{"session_id": "S", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "Migrate the export job") || strings.Contains(h.Specific.Context, "· backsight-brief-") {
+		t.Errorf("briefing:\n%s", h.Specific.Context)
+	}
+	if shows := eventsOf(journalEvents(t, home), "shows"); len(shows) != 0 {
+		t.Errorf("shows %+v", shows)
 	}
 }
 

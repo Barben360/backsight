@@ -72,7 +72,16 @@ var typedCases = []typedCase{
 	{"briefing_outcome", map[string]any{"used_ids": []string{"b1"}},
 		"tel_briefing_outcome", map[string]any{"used_n": 1}},
 	{"tool", map[string]any{"name": "memory_search", "ms": 80, "hits": 4, "ok": true, "live": "stale"},
-		"tel_tool", map[string]any{"name": "memory_search", "ms": 80, "hits": 4, "ok": true, "live": "stale"}},
+		"tel_tool", map[string]any{"name": "memory_search", "ms": 80, "hits": 4, "ok": true, "live": "stale", "queries_n": nil, "queries_empty": nil, "result_chars": nil}},
+	// Decision 0083 C8: the queries, how many found nothing, the answer's size.
+	{"tool", map[string]any{"name": "memory_search", "ms": 80, "hits": 2, "ok": true, "queries_n": 3, "query_hits": []int{2, 0, 0}, "result_chars": 410},
+		"tel_tool", map[string]any{"name": "memory_search", "ms": 80, "hits": 2, "ok": true, "live": nil, "queries_n": 3, "queries_empty": 2, "result_chars": 410}},
+	{"tool", map[string]any{"name": "memory_read", "ok": true, "result_chars": 95},
+		"tel_tool", map[string]any{"name": "memory_read", "ms": nil, "hits": nil, "ok": true, "live": nil, "queries_n": nil, "queries_empty": nil, "result_chars": 95}},
+	{"stop_block", map[string]any{"outcome": "used", "paths": []string{"search", "prompt"}, "shown": 2, "subagent": true},
+		"tel_stop_block", map[string]any{"outcome": "used", "paths": "prompt,search", "shown": 2, "subagent": true}},
+	{"stop_block", map[string]any{"outcome": "a reply text", "paths": []string{"briefing"}, "shown": 1},
+		"tel_stop_block", map[string]any{"outcome": "other", "paths": "briefing", "shown": 1, "subagent": nil}},
 	{"tool_use", map[string]any{"name": "mcp__x__memory_search", "ids": 2, "memory_ids": []string{"m1", "m2"}, "n": 6, "subagent": true},
 		"tel_tool_use", map[string]any{"n": 6, "name": "mcp__x__memory_search", "ids_n": 2, "subagent": true}},
 	{"credit", map[string]any{"verdict": "used", "ids_n": 2, "ok": true},
@@ -141,8 +150,8 @@ func TestTelemetryTypedRows(t *testing.T) {
 		content.WriteString(tline(c.event, ts0, withCommon(c.fields)))
 		kinds[c.event] = true
 	}
-	if len(kinds) != 20 {
-		t.Fatalf("the cases cover %d kinds, want the 20 typed ones", len(kinds))
+	if len(kinds) != 21 {
+		t.Fatalf("the cases cover %d kinds, want the 21 typed ones", len(kinds))
 	}
 	e.write("2026-10", content.String())
 	st := e.ingest()

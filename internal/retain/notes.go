@@ -106,7 +106,7 @@ func NotesFromRecords(bank, sid string, recs []transcript.Record, transverse []s
 			project = CanonicalProject(transverse, project)
 			content, _ = redact.Text(content)
 			n := NewNote(bank, kind, project, content, r.Timestamp)
-			n.DocumentID = "note:" + uuid5(nsBacksight, bank+"\n"+sid+"\n"+tu.ID)
+			n.DocumentID, n.Session = "note:"+uuid5(nsBacksight, bank+"\n"+sid+"\n"+tu.ID), sid
 			n.OperationID = uuid5(nsBacksight, bank+"\n"+n.DocumentID+"\n"+content)
 			notes = append(notes, n)
 		}

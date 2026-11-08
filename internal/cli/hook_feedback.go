@@ -27,7 +27,8 @@ const shortIDChars = 8
 // shortID is the id the agent sees next to a memory: its first 8
 // characters.
 func shortID(id string) string {
-	if len(id) > shortIDChars {
+	// A briefing page's id is whole: no prefix of it names it.
+	if len(id) > shortIDChars && !feedback.IsBriefingPage(id) {
 		return id[:shortIDChars]
 	}
 	return id

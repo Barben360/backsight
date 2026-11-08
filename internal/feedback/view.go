@@ -98,11 +98,26 @@ func Resolve(ref string, shown []Show) (string, error) {
 // Check is what the end of a turn needs to know about one agent: the
 // memories shown to it, whether it declared (a memory_credit call of the
 // turn), whether it was already asked to, and what it declared.
+// BlockPaths and BlockShown: the paths of the shows before the turn's
+// first block, each once, in the order first shown, and how many
+// memories they showed; Verdicts: the verdicts it declared, each once.
 type Check struct {
 	Shown             []Show
 	Declared, Blocked bool
 	None              bool     // the turn's only declaration was none
 	Credited          []string // the ids its used credits named
+	BlockPaths        []string
+	BlockShown        int
+	Verdicts          []string
+}
+
+// distinctIDs counts the memories of shown, each once.
+func distinctIDs(shown []Show) int {
+	seen := map[string]bool{}
+	for _, s := range shown {
+		seen[s.ID] = true
+	}
+	return len(seen)
 }
 
 // CheckTurn is turn's check for agent ("" is the main agent) of session;
@@ -111,22 +126,32 @@ type Check struct {
 // be credited, but a store asks for no declaration.
 func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) Check {
 	var c Check
-	for _, s := range Shows(events, session) {
-		if s.Path == PathStore {
-			continue
-		}
-		if s.Agent == agent && (s.Turn == turn || withBriefing && agent == "" && s.Turn == "") {
-			c.Shown = append(c.Shown, s)
-		}
-	}
+	var paths []string // of the shows so far
 	none, credited := false, false
 	for _, e := range events {
-		if e.Session != session || e.Turn != turn || e.Agent != agent {
+		if e.Session != session {
+			continue
+		}
+		if e.Kind == "shows" {
+			if e.Path == PathStore || e.Agent != agent || (e.Turn != turn && (!withBriefing || agent != "" || e.Turn != "")) {
+				continue
+			}
+			shows := ShowsOf(e)
+			c.Shown = append(c.Shown, shows...)
+			if len(shows) > 0 && !slices.Contains(paths, e.Path) {
+				paths = append(paths, e.Path)
+			}
+			continue
+		}
+		if e.Turn != turn || e.Agent != agent {
 			continue
 		}
 		switch {
 		case e.Kind == "credit":
 			c.Declared = true
+			if !slices.Contains(c.Verdicts, e.Verdict) {
+				c.Verdicts = append(c.Verdicts, e.Verdict)
+			}
 			none = none || e.Verdict == "none"
 			credited = credited || len(e.IDs) > 0
 			if e.Verdict != "used" {
@@ -138,6 +163,9 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 				}
 			}
 		case e.Kind == "stop" && e.Outcome == "blocked":
+			if !c.Blocked {
+				c.BlockPaths, c.BlockShown = slices.Clone(paths), distinctIDs(c.Shown)
+			}
 			c.Blocked = true
 		}
 	}

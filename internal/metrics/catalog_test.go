@@ -31,7 +31,7 @@ var catalogRows = []catalogRow{
 	{"recall.empty_reasons", "Why prompts got nothing", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "reach", "daily", "backsight stats quality", "empty,skips"},
 	{"recall.by_lang", "Prompts that got memory, by language", "ratio", "up", 20, none, none, "test", false, false, "wilson", "machine", true, "reach", "none", "backsight stats quality --dev", "by_lang,test"},
 	{"search.rate", "Prompts where Claude searched memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", ""},
-	{"search.empty_rate", "Searches that found nothing", "ratio", "down", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", "failed"},
+	{"search.empty_rate", "Searches that found nothing", "ratio", "down", 20, none, none, "", true, false, "wilson", "machine", false, "reach", "daily", "backsight stats quality", "failed,queries,empty_queries,chars_per_search"},
 	{"used.turn_rate", "Turns where Claude used memory", "ratio", "up", 20, none, none, "", true, false, "wilson", "machine", false, "quality", "daily", "backsight stats sessions --has used", "worst_case,pending,check_skipped,subagent_turns"},
 	{"declare.coverage", "Turns where Claude said what it used", "ratio", "up", 20, 0.80, none, "hi", false, false, "wilson", "machine", false, "quality", "daily", "backsight stats sessions --has undeclared", "pending,check_skipped"},
 	{"used.rubber_stamp", "Turns where every memory was marked used", "ratio", "down", 30, 0.80, none, "lo", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
@@ -74,13 +74,14 @@ var catalogRows = []catalogRow{
 	{"shows.concentration", "How concentrated shows are", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "reach", "none", "backsight stats bank --dev", "gini,top10_share,shows"},
 	{"injection.contradicted", "Corrections after memory was shown", "ratio", "none", 20, none, none, "", false, false, "wilson", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
 	{"boost.set_changed", "Recalls the learned ranking changed", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "prompts,prompts_set_changed,searches,searches_set_changed"},
+	{"stopcheck.block_yield", "Held turns that then credited a memory", "ratio", "up", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "by_outcome,by_path"},
 }
 
 // A typo in any value of any row goes red: each Def is read back against the
 // row stated above, in order.
 func TestCatalogRows(t *testing.T) {
-	if len(catalogRows) != 47 || len(Catalog) != 47 {
-		t.Fatalf("rows: table %d, catalog %d, want 47 each", len(catalogRows), len(Catalog))
+	if len(catalogRows) != 48 || len(Catalog) != 48 {
+		t.Fatalf("rows: table %d, catalog %d, want 48 each", len(catalogRows), len(Catalog))
 	}
 	num := func(p *float64) float64 {
 		if p == nil {
@@ -141,6 +142,7 @@ func TestCatalogSources(t *testing.T) {
 	want["bank.active_share"] = "journal"
 	want["shows.concentration"] = "journal"
 	want["injection.contradicted"] = "telemetry"
+	want["stopcheck.block_yield"] = "telemetry"
 	want["boost.set_changed"] = "journal"
 	if len(want) != len(Catalog) {
 		t.Fatalf("source table covers %d rows, catalog has %d", len(want), len(Catalog))

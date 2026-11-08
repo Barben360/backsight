@@ -60,6 +60,7 @@ var (
 	dashActions     = []string{"start", "stop"}
 	verdicts        = []string{"used", "confirmed", "none", "wrong", "outdated", "invalid"}
 	checkOutcomes   = []string{"declared", "blocked", "undeclared", "check_skipped"}
+	blockOutcomes   = []string{"used", "confirmed", "corrected", "none", "refused"}
 	retireActions   = []string{"retired", "partly", "hidden", "sources"}
 	replyKinds      = []string{"exact", "free", "empty"}
 	creditSources   = []string{"tool", "citation"}
