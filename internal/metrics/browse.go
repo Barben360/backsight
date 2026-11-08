@@ -230,7 +230,7 @@ func sortSessions(rows []SessionRow) {
 }
 
 // mainTurn is a main-agent turn that showed memory in a window: its
-// earliest and latest non-briefing show, its final outcome and whether it
+// earliest and latest non-briefing, non-store show, its final outcome and whether it
 // credited a memory used.
 type mainTurn struct {
 	session, turn string
@@ -239,7 +239,7 @@ type mainTurn struct {
 	anyUsed       bool
 }
 
-// mainTurns are the main-agent turns whose earliest non-briefing show is in
+// mainTurns are the main-agent turns whose earliest non-briefing, non-store show is in
 // w, for the query's project (the turn's own). The outcome follows the
 // quality family: the final stop (journal order, a last blocked reads
 // undeclared); with no stop, pending until feedback.OpenTurnLimit after the
@@ -249,11 +249,11 @@ func mainTurns(e env, w Window) ([]mainTurn, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `
 WITH cand AS (
   SELECT DISTINCT session, turn FROM shows
-  WHERE ts >= ? AND ts < ? AND COALESCE(path, '') <> 'briefing' AND COALESCE(agent, '') = ''),
+  WHERE ts >= ? AND ts < ? AND COALESCE(path, '') NOT IN ('briefing', 'store') AND COALESCE(agent, '') = ''),
 t AS (
   SELECT s.session, s.turn, MIN(s.ts) AS first, MAX(s.ts) AS last
   FROM shows s JOIN cand ON cand.session = s.session AND cand.turn = s.turn
-  WHERE COALESCE(s.path, '') <> 'briefing' AND COALESCE(s.agent, '') = ''
+  WHERE COALESCE(s.path, '') NOT IN ('briefing', 'store') AND COALESCE(s.agent, '') = ''
   GROUP BY s.session, s.turn)
 SELECT COALESCE(t.session, ''), COALESCE(t.turn, ''), t.first, t.last, f.outcome,
        EXISTS (SELECT 1 FROM credits c WHERE c.session = t.session AND c.turn = t.turn AND c.verdict = 'used')

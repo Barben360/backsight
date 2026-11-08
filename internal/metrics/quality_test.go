@@ -454,6 +454,38 @@ func TestBriefingOnlyTurnsDoNotCount(t *testing.T) {
 	}
 }
 
+// TestStoreOnlyTurnsDoNotCount: the similar memory a memory_store answer
+// showed (path store, 0083 C4) puts its turn in no denominator, as the
+// briefing does: a store-only turn, declared without use or never
+// declared, lowers neither used.turn_rate nor declare.coverage, and a
+// turn's time is its earliest show of another path.
+func TestStoreOnlyTurnsDoNotCount(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.turnEvent(hoursAgo(3), "used", "alpha")
+	x.shows(hoursAgo(3), "used", "t1", "", "alpha", "prompt", "", "m1")
+	x.credit(hoursAgo(3).Add(time.Minute), "used", "", "alpha", "used", "m1")
+	x.stop(hoursAgo(3).Add(2*time.Minute), "used", "", "declared")
+
+	x.turnEvent(hoursAgo(2), "declared", "alpha")
+	x.shows(hoursAgo(2), "declared", "t1", "", "alpha", feedback.PathStore, "", "s1", "s2")
+	x.credit(hoursAgo(2).Add(time.Minute), "declared", "", "alpha", "none")
+	x.stop(hoursAgo(2).Add(2*time.Minute), "declared", "", "declared")
+
+	x.turnEvent(hoursAgo(30), "silent", "alpha") // long past the open-turn limit: undeclared if it counted
+	x.shows(hoursAgo(30), "silent", "t1", "", "alpha", feedback.PathStore, "", "s3")
+
+	m := qualityOf(x, x.query(7))
+	if r := m["used.turn_rate"]; num(r) != 1 || den(r) != 1 {
+		t.Errorf("used.turn_rate = %d/%d, want 1/1 (store-only turns left out)", num(r), den(r))
+	}
+	if c := m["declare.coverage"]; num(c) != 1 || den(c) != 1 {
+		t.Errorf("declare.coverage = %d/%d, want 1/1 (store-only turns left out)", num(c), den(c))
+	}
+	if s := m["used.rubber_stamp"]; den(s) != 0 {
+		t.Errorf("rubber stamp den = %d, want 0 (the store's two memories do not count)", den(s))
+	}
+}
+
 // TestShowTimeAttribution: a turn shown 2026-10-22T23:50, before the
 // window, whose stop and used credit land an hour into it, counts in the
 // previous window, not this one: in used.turn_rate, declare.coverage and

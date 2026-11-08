@@ -112,7 +112,7 @@ func localDayExpr(start, end time.Time, loc *time.Location) func(col string) str
 
 // usedTurnsPerDay counts, per local date number, the main-agent turns of the
 // query's project that declared and credited some memory used, whose
-// earliest non-briefing show is in [start, end): mainTurns' definition of
+// earliest non-briefing, non-store show is in [start, end): mainTurns' definition of
 // such a turn, read from the used credits outward rather than from every
 // show of the span. day is the SQL expression of a date number over first.
 func usedTurnsPerDay(e env, start, end time.Time, day string) (map[int64]int64, error) {
@@ -123,7 +123,7 @@ WITH u AS (
 t AS (
   SELECT session, turn,
          (SELECT MIN(s.ts) FROM shows s WHERE s.session = u.session AND s.turn = u.turn
-            AND COALESCE(s.path, '') <> 'briefing' AND COALESCE(s.agent, '') = '') AS first
+            AND COALESCE(s.path, '') NOT IN ('briefing', 'store') AND COALESCE(s.agent, '') = '') AS first
   FROM u),
 f AS (
   SELECT t.first AS first, `+finalMainOutcome("t")+` AS outcome

@@ -613,7 +613,7 @@ func TestCompareSessionAcrossStrata(t *testing.T) {
 }
 
 // The stratum of a unit is its turn's earliest non-briefing main-agent show:
-// a later show does not move it, a briefing show or a subagent's is skipped,
+// a later show does not move it, a briefing show, a store's or a subagent's is skipped,
 // shows at the same instant go in the order prompt, gate, search, read,
 // failure, sources; a verdict whose turn has no main-agent show is in
 // "unknown". The project filter keeps the units of that project.
@@ -639,6 +639,13 @@ func TestCompareStratumPath(t *testing.T) {
 	turn("briefing-first", "alpha", func(at time.Time) { // briefing is skipped: read
 		x.shows(at.Add(-time.Minute), "briefing-first", fxTurn, "", "alpha", "briefing", "", "m1")
 		x.shows(at, "briefing-first", fxTurn, "", "alpha", "read", "", "m1")
+	})
+	turn("store-first", "alpha", func(at time.Time) { // a store's similar memory is skipped: search
+		x.shows(at.Add(-time.Minute), "store-first", fxTurn, "", "alpha", "store", "", "m1")
+		x.shows(at, "store-first", fxTurn, "", "alpha", "search", "", "m1")
+	})
+	turn("store-only", "alpha", func(at time.Time) { // no unit of the turn rate; its verdict's path is unknown
+		x.shows(at, "store-only", fxTurn, "", "alpha", "store", "", "m1")
 	})
 	turn("subagent-first", "alpha", func(at time.Time) { // a subagent's show is skipped: failure
 		x.shows(at.Add(-time.Minute), "subagent-first", fxTurn, "sub", "alpha", "prompt", "", "m1")
@@ -685,12 +692,12 @@ func TestCompareStratumPath(t *testing.T) {
 		}
 	}
 	eq("turn rate", read("used.turn_rate", ""), map[string]string{
-		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read",
+		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read", "store-first": "alpha/search",
 		"subagent-first": "alpha/failure", "other-project": "beta/prompt"})
 	eq("turn rate, project alpha", read("used.turn_rate", "alpha"), map[string]string{
-		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read", "subagent-first": "alpha/failure"})
+		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read", "store-first": "alpha/search", "subagent-first": "alpha/failure"})
 	eq("verdicts", read("verdict.wrong_rate", "alpha"), map[string]string{
-		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read",
+		"later-prompt": "alpha/search", "tie": "alpha/gate", "briefing-first": "alpha/read", "store-first": "alpha/search", "store-only": "alpha/unknown",
 		"subagent-first": "alpha/failure", "sub-only": "alpha/unknown"})
 	eq("verdicts, project beta", read("verdict.wrong_rate", "beta"), map[string]string{"other-project": "beta/prompt"})
 }

@@ -145,7 +145,7 @@ type turnAcc struct {
 	subagent                                     int64
 }
 
-// qualityTurns reads the turns that showed memory (a non-briefing show)
+// qualityTurns reads the turns that showed memory (a non-briefing, non-store show)
 // whose earliest such show is in w, and fills used.turn_rate,
 // declare.coverage and used.rubber_stamp. A main-agent turn's outcome is
 // its final stop (turn_final_stop: journal order, a last blocked reads
@@ -157,14 +157,14 @@ func qualityTurns(e env, w Window, obs map[string]Observation, met map[string]Me
 	rows, err := e.tx.QueryContext(e.ctx, `
 WITH cand AS (
   SELECT DISTINCT session, turn, COALESCE(agent, '') AS agent FROM shows
-  WHERE ts >= ? AND ts < ? AND COALESCE(path, '') <> 'briefing'),
+  WHERE ts >= ? AND ts < ? AND COALESCE(path, '') NOT IN ('briefing', 'store')),
 t AS (
   SELECT s.session, s.turn, cand.agent, MIN(s.ts) AS first, MAX(s.ts) AS last,
          COUNT(DISTINCT s.memory_id) AS mems,
          COUNT(DISTINCT CASE WHEN EXISTS (SELECT 1 FROM credits c WHERE c.session = s.session AND c.turn = s.turn
                 AND c.memory_id = s.memory_id AND c.verdict = 'used') THEN s.memory_id END) AS credited
   FROM shows s JOIN cand ON cand.session = s.session AND cand.turn = s.turn AND cand.agent = COALESCE(s.agent, '')
-  WHERE COALESCE(s.path, '') <> 'briefing'
+  WHERE COALESCE(s.path, '') NOT IN ('briefing', 'store')
   GROUP BY s.session, s.turn, cand.agent)
 SELECT t.agent, t.first, t.last, t.mems, t.credited, `+finalMainOutcome("t")+`,
        EXISTS (SELECT 1 FROM credits c WHERE c.session = t.session AND c.turn = t.turn AND c.verdict = 'used')
