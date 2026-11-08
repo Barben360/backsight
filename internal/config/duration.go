@@ -13,6 +13,9 @@ type Duration struct{ d time.Duration }
 // Hours is a Duration of n hours.
 func Hours(n int) Duration { return Duration{time.Duration(n) * time.Hour} }
 
+// SecondsOf is a Duration of n seconds.
+func SecondsOf(n int) Duration { return Duration{time.Duration(n) * time.Second} }
+
 // UnmarshalText parses a Go duration of whole seconds.
 func (d *Duration) UnmarshalText(b []byte) error {
 	v, err := time.ParseDuration(string(b))

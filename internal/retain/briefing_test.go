@@ -22,6 +22,7 @@ type briefingServer struct {
 	order   []string
 	patches []string
 	fail    map[string]bool
+	gone    map[string]bool // a PATCH of it answers 404
 	listErr bool
 }
 
@@ -52,6 +53,10 @@ func (s *briefingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		if s.gone[id] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var in map[string]any
 		_ = json.Unmarshal(body, &in)
 		s.models[id]["trigger"] = in["trigger"]
@@ -63,7 +68,7 @@ func (s *briefingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func newBriefingServer(t *testing.T, models map[string]string) (*briefingServer, *hindsight.Client) {
 	t.Helper()
-	s := &briefingServer{models: map[string]map[string]any{}, fail: map[string]bool{}}
+	s := &briefingServer{models: map[string]map[string]any{}, fail: map[string]bool{}, gone: map[string]bool{}}
 	for id, trigger := range models {
 		var tr any
 		if err := json.Unmarshal([]byte(trigger), &tr); err != nil {
@@ -126,5 +131,46 @@ func TestReconcileBriefingTriggersGoesOnPastAFailedPage(t *testing.T) {
 	s.listErr = true
 	if _, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600)); err == nil {
 		t.Error("a failed listing must be an error")
+	}
+}
+
+// A page deleted between the listing and its update is done, not failed:
+// it would otherwise be retried for ever.
+func TestReconcileBriefingTriggersCountsADeletedPageAsDone(t *testing.T) {
+	a, b := BriefingModelID("a"), BriefingModelID("b")
+	s, cl := newBriefingServer(t, map[string]string{a: noFloorTrigger, b: noFloorTrigger})
+	s.order = []string{a, b}
+	s.gone[a] = true
+	r, err := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(21600))
+	if err != nil || len(r.Failed) != 0 || len(r.Gone) != 1 || r.Gone[0] != a || len(r.Patched) != 1 || r.Patched[0] != b {
+		t.Errorf("deleted page: %v %+v", err, r)
+	}
+}
+
+// With no floor wanted, a null floor is no floor: the server may echo a
+// stored 0 as null, which must not be patched at every run.
+func TestNoFloorWantedAcceptsANullFloor(t *testing.T) {
+	zero, six := 0, 21600
+	null := &hindsight.MentalModelTrigger{Budget: "low", Mode: "full", RefreshAfterConsolidation: true}
+	if !BriefingTriggerIs(null, BriefingTrigger(0)) {
+		t.Error("a null floor differs from no floor wanted")
+	}
+	if BriefingTriggerIs(null, BriefingTrigger(21600)) {
+		t.Error("a null floor taken for the 6 h floor")
+	}
+	explicit := &hindsight.MentalModelTrigger{Budget: "low", Mode: "full", RefreshAfterConsolidation: true, MinRefreshIntervalSeconds: &zero}
+	if !BriefingTriggerIs(explicit, BriefingTrigger(0)) || BriefingTriggerIs(explicit, BriefingTrigger(21600)) {
+		t.Error("an explicit 0")
+	}
+	other := &hindsight.MentalModelTrigger{Budget: "mid", Mode: "full", RefreshAfterConsolidation: true}
+	if BriefingTriggerIs(other, BriefingTrigger(0)) || BriefingTriggerIs(nil, BriefingTrigger(0)) {
+		t.Error("another budget, or no trigger, taken for the wanted one")
+	}
+	if null.MinRefreshIntervalSeconds != nil || *BriefingTrigger(six).MinRefreshIntervalSeconds != six {
+		t.Error("the comparison changed its arguments")
+	}
+	s, cl := newBriefingServer(t, map[string]string{BriefingModelID("a"): noFloorTrigger})
+	if r, _ := ReconcileBriefingTriggers(context.Background(), cl, "b", BriefingTrigger(0)); len(r.Patched) != 0 || len(s.patches) != 0 {
+		t.Errorf("floor 0 patched a page with a null floor: %+v", r)
 	}
 }

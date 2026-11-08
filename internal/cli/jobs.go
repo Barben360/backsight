@@ -495,7 +495,7 @@ func briefingFor(cfg config.Config) string {
 // briefing is "recent": the server would keep refreshing them for nothing.
 // Other mental models are never touched. Best effort.
 func pruneBriefings(ctx context.Context, bank, briefing string, cl *hindsight.Client) []string {
-	models, err := cl.MentalModels(ctx, bank)
+	models, err := cl.MentalModelsMetadata(ctx, bank) // every tick: no page content
 	if err != nil {
 		return nil
 	}

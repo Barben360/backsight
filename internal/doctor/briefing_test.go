@@ -38,15 +38,27 @@ func TestBankReportsADriftedBriefingTrigger(t *testing.T) {
 
 	c = check(t, briefingFixture(t, model(ok, floor)+","+model(drifted, none), "").run(), "bank")
 	expect(t, c, Warn, "bank coding-agent::memoire")
-	if !strings.Contains(c.Detail, "1 of 2 briefing page(s) refresh without the 6h floor ("+drifted+")") || c.Fix != "backsight jobs maintain" {
+	if !strings.Contains(c.Detail, "1 briefing page(s) have another refresh trigger than this PC's (floor 6h): "+drifted+" (found no floor)") || c.Fix != "backsight jobs maintain" {
 		t.Errorf("drifted: %+v", c)
 	}
 
-	// Another floor configured: the page with 6 h is the drifted one.
+	// Another floor here (another PC set 6 h): the page says the floor found.
 	c = check(t, briefingFixture(t, model(ok, floor), "[recall]\nbriefing_refresh_interval = \"1h\"\n").run(), "bank")
 	expect(t, c, Warn, "bank coding-agent::memoire")
-	if !strings.Contains(c.Detail, "without the 1h floor ("+ok+")") {
+	if !strings.Contains(c.Detail, "than this PC's (floor 1h): "+ok+" (found floor 6h)") {
 		t.Errorf("configured floor: %+v", c)
+	}
+
+	// No floor wanted: a null floor is no floor, an explicit 6 h is not.
+	c = check(t, briefingFixture(t, model(drifted, none)+","+model(ok, floor), "[recall]\nbriefing_refresh_interval = \"0\"\n").run(), "bank")
+	if !strings.Contains(c.Detail, "1 briefing page(s) have another refresh trigger than this PC's (no floor): "+ok+" (found floor 6h)") || strings.Contains(c.Detail, drifted) {
+		t.Errorf("floor 0: %+v", c)
+	}
+
+	// Same floor, another setting.
+	c = check(t, briefingFixture(t, model(ok, strings.Replace(floor, `"budget":"low"`, `"budget":"mid"`, 1)), "").run(), "bank")
+	if !strings.Contains(c.Detail, ok+` (found budget "mid", mode "full", refresh after consolidation true)`) {
+		t.Errorf("budget: %+v", c)
 	}
 
 	// briefing = "recent": the pages go at the next tick, nothing to say.

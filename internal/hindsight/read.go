@@ -292,6 +292,15 @@ func (c *Client) MentalModels(ctx context.Context, bank string) ([]MentalModel, 
 	return out.Items, c.get(ctx, bankPath(bank, "/mental-models"), url.Values{"detail": {"content"}}, &out)
 }
 
+// MentalModelsMetadata lists the bank's mental models without their
+// content or trigger (ids, tags, refresh times): the light listing.
+func (c *Client) MentalModelsMetadata(ctx context.Context, bank string) ([]MentalModel, error) {
+	var out struct {
+		Items []MentalModel `json:"items"`
+	}
+	return out.Items, c.get(ctx, bankPath(bank, "/mental-models"), nil, &out)
+}
+
 // DeleteMentalModel removes a mental model.
 func (c *Client) DeleteMentalModel(ctx context.Context, bank, id string) error {
 	return c.do(ctx, http.MethodDelete, bankPath(bank, "/mental-models/"+url.PathEscape(id)), nil, nil, nil)

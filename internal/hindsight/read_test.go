@@ -239,11 +239,14 @@ func TestMentalModelTriggerCalls(t *testing.T) {
 	_ = c.CreateMentalModel(ctx, "b", "p1", "n", "q", []string{"project:p"}, 600, tr)
 	_ = c.UpdateMentalModelTrigger(ctx, "b", "p1", tr)
 	models, err := c.MentalModels(ctx, "b")
+	_, _ = c.MentalModelsMetadata(ctx, "b")
 	want := []string{
 		`POST /v1/default/banks/b/mental-models? {"id":"p1","max_tokens":600,"name":"n","source_query":"q","tags":["project:p"],"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
 		`PATCH /v1/default/banks/b/mental-models/p1? {"trigger":{"budget":"low","mode":"full","refresh_after_consolidation":true,"min_refresh_interval_seconds":21600}}`,
 		// detail=content: the default listing (metadata) leaves trigger and content null.
 		`GET /v1/default/banks/b/mental-models?detail=content `,
+		// the light listing: no content asked for
+		`GET /v1/default/banks/b/mental-models? `,
 	}
 	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("err %v\ngot:\n%s\nwant:\n%s", err, strings.Join(got, "\n"), strings.Join(want, "\n"))

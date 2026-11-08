@@ -340,6 +340,7 @@ var (
 	mentalGetDelay     time.Duration     // a slow page read
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	mentalPatchStatus  atomic.Int32      // non-zero: answer a page update with this status
+	mentalLists        []string          // the query of each mental-model listing
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
 	docPatchFails      atomic.Bool       // PATCH /documents/… answers 503
 	queueOnWrite       atomic.Bool       // a document PATCH or DELETE leaves an operation processing (a consolidation)
@@ -410,7 +411,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
 	recentHasEventTime.Store(false)
-	mentalModels, mentalCalls, mentalGetDelay = map[string]string{}, nil, 0
+	mentalModels, mentalCalls, mentalGetDelay, mentalLists = map[string]string{}, nil, 0, nil
 	mentalCreateStatus.Store(0)
 	mentalPatchStatus.Store(0)
 	docDeleteFails.Store(false)
@@ -650,6 +651,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			body, _ := io.ReadAll(r.Body)
 			switch {
 			case r.Method == http.MethodGet && id == "":
+				mentalLists = append(mentalLists, r.URL.RawQuery)
 				var items []string
 				for _, m := range mentalModels {
 					items = append(items, m)

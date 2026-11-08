@@ -52,13 +52,19 @@ func TestTickGivesBriefingPagesTheFloorOncePerVersion(t *testing.T) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
 	// Drifted again (an older client recreated it): this binary's ticks
-	// leave it to jobs maintain.
+	// leave it to jobs maintain, and list the pages without their content.
 	mentalModels[page] = oldPage(page)
+	mentalLists = nil
 	run(t, "jobs", "tick")
 	if p := triggerPatches(); len(p) != 1 {
 		t.Errorf("a second tick of the same binary and floor patched: %q", p)
 	}
-	// Another floor: the next tick reconciles to it.
+	if len(mentalLists) != 1 || strings.Contains(mentalLists[0], "detail=content") {
+		t.Errorf("the tick's pruning must list without content: %q", mentalLists)
+	}
+	// Another floor: the next tick reconciles to it (a null floor would
+	// already be no floor).
+	mentalModels[page] = strings.Replace(oldPage(page), `"min_refresh_interval_seconds":null`, `"min_refresh_interval_seconds":21600`, 1)
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("\n[recall]\nbriefing_refresh_interval = \"0\"\n")...), 0o600)
@@ -68,27 +74,46 @@ func TestTickGivesBriefingPagesTheFloorOncePerVersion(t *testing.T) {
 	}
 }
 
-// A page whose update failed leaves the marker unwritten: the next tick
-// tries again.
-func TestTickRetriesAFailedBriefingTrigger(t *testing.T) {
+// A page whose update failed is tried again by the ticks, at most once an
+// hour (not at every tick); a page deleted meanwhile (404) is done.
+func TestTickRetriesAFailedBriefingTriggerHourly(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	recentHasEventTime.Store(true)
 	recentByTag["project:billing"] = `[{"id":"a","text":"t","mentioned_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]`
+	prev := now
+	t.Cleanup(func() { now = prev })
+	at := time.Now()
+	now = func() time.Time { return at }
 	page := briefingModelID("billing")
 	mentalModels[page] = oldPage(page)
-	mentalPatchStatus.Store(500)
+	mentalPatchStatus.Store(422) // an older server refusing the field
 	_, out, _ := run(t, "jobs", "tick", "--json")
 	if !strings.Contains(out, "1 briefing page(s) not updated ("+page+": ") {
 		t.Errorf("the failure is not reported:\n%s", out)
 	}
-	if _, err := os.Stat(filepath.Join(pathsOf(home).State, "briefing-trigger")); err == nil {
-		t.Error("marker written although a page failed")
+	at = at.Add(59 * time.Minute)
+	if _, out, _ = run(t, "jobs", "tick", "--json"); len(triggerPatches()) != 1 || strings.Contains(out, "briefing page") {
+		t.Errorf("a tick within the hour tried again: %q\n%s", triggerPatches(), out)
 	}
+	at = at.Add(2 * time.Minute)
 	mentalPatchStatus.Store(0)
 	run(t, "jobs", "tick")
 	if p := triggerPatches(); len(p) != 2 || !strings.Contains(mentalModels[page], `"min_refresh_interval_seconds":21600`) {
-		t.Errorf("the next tick did not retry: %q", p)
+		t.Errorf("the tick after the hour did not retry: %q", p)
+	}
+
+	// Deleted between the listing and the update: done, never retried.
+	other := briefingModelID("ops")
+	mentalModels[other] = oldPage(other)
+	_ = os.Remove(pathsOf(home).BriefingTriggerFile())
+	mentalPatchStatus.Store(404)
+	run(t, "jobs", "tick")
+	n := len(triggerPatches())
+	at = at.Add(2 * time.Hour)
+	run(t, "jobs", "tick")
+	if n != 3 || len(triggerPatches()) != n {
+		t.Errorf("a deleted page was retried (or never tried): %q", triggerPatches())
 	}
 }
 
