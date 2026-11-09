@@ -86,6 +86,7 @@ func newHarness(t *testing.T, opts ...func(*Config)) *harness {
 // layer's fakes (withIndex, withServer, withDoctor, withNeedsBuild).
 func newDataHarness(t *testing.T, opts ...harnessOpt) *harness {
 	t.Helper()
+	servedBound(t)
 	home := t.TempDir()
 	t.Setenv("BACKSIGHT_HOME", home)
 	t.Setenv("BACKSIGHT_STATE_DIR", "")
@@ -121,6 +122,27 @@ func newDataHarness(t *testing.T, opts ...harnessOpt) *harness {
 		h.client.CloseIdleConnections()
 	})
 	return h
+}
+
+// prodRenderTimeout is renderTimeout as the dashboard ships it, read
+// before any test changes it.
+var prodRenderTimeout = renderTimeout
+
+// servedRenderTimeout bounds the requests of a test that means "it is
+// served", not "it is fast", as dashboard.SetRenderTimeout's other users
+// do (internal/cli's parity test).
+const servedRenderTimeout = 2 * time.Minute
+
+// servedBound raises the render bound to servedRenderTimeout for the
+// test, unless it set its own first (the tests of the "too slow" answer,
+// at 20 ms): under -race on a busy CI runner a view can take longer than
+// the 10 s a user waits, and the page answers 503 (issue 248,
+// TestPagesShowNoJargon).
+func servedBound(t *testing.T) {
+	t.Helper()
+	if renderTimeout == prodRenderTimeout {
+		t.Cleanup(SetRenderTimeout(servedRenderTimeout))
+	}
 }
 
 // stop cancels Serve and waits for it to return.
@@ -237,3 +259,31 @@ func (h *harness) login() *http.Cookie {
 
 // cookieHdr is the request header that sends c, as a pair for do.
 func cookieHdr(c *http.Cookie) []string { return []string{"Cookie", c.Name + "=" + c.Value} }
+
+// A harness bounds its requests at servedRenderTimeout while its test
+// runs, unless the test set its own bound first, and the shipped bound
+// is back once the test ends.
+func TestHarnessBoundsRequestsAsServedNotFast(t *testing.T) {
+	if prodRenderTimeout != 10*time.Second || servedRenderTimeout <= prodRenderTimeout {
+		t.Fatalf("shipped bound %v, served bound %v: want 10 s and more", prodRenderTimeout, servedRenderTimeout)
+	}
+	t.Run("the shipped bound", func(t *testing.T) {
+		dataHarness(t)
+		if renderTimeout != servedRenderTimeout {
+			t.Errorf("render bound %v during the test, want %v", renderTimeout, servedRenderTimeout)
+		}
+	})
+	if renderTimeout != prodRenderTimeout {
+		t.Errorf("render bound %v after the test, want %v back", renderTimeout, prodRenderTimeout)
+	}
+	t.Run("a bound of the test's own", func(t *testing.T) {
+		t.Cleanup(SetRenderTimeout(20 * time.Millisecond))
+		dataHarness(t)
+		if renderTimeout != 20*time.Millisecond {
+			t.Errorf("render bound %v, want the test's 20ms", renderTimeout)
+		}
+	})
+	if renderTimeout != prodRenderTimeout {
+		t.Errorf("render bound %v after the test, want %v back", renderTimeout, prodRenderTimeout)
+	}
+}
