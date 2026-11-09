@@ -67,6 +67,57 @@ func TestReaderAppliesTheJournalTail(t *testing.T) {
 	}
 }
 
+// TestReaderAppliesTheTailInTimeOrder: two processes can append a later
+// hide before an earlier unhide (and a later forget before an earlier
+// hide). The reader applies the tail as the fold does, by (ts, seq), not
+// in file order: between two ticks recall reads the hidden state the
+// next fold writes.
+func TestReaderAppliesTheTailInTimeOrder(t *testing.T) {
+	o := tempOpts(t)
+	w := mustOpenWriter(t, o)
+	defer mustCloseWriter(t, w)
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeShown), show("k2", "m2", nov(1), feedback.OutcomeShown)))
+	mustFold(t, w, testParams)
+
+	appendLines(t, o,
+		hideOf(nov(11), "m1"), unhideOf(nov(10), "m1"), // m1: unhidden at 10:00, hidden since 11:00
+		feedback.Event{Kind: "forget", TS: nov(13), IDs: []string{"m2"}}, hideOf(nov(12), "m2")) // m2: hidden at 12:00, forgotten at 13:00
+	r := mustOpenReader(t, o)
+	check := func(what string, got map[string]feedback.Entry) {
+		t.Helper()
+		if e, ok := got["m1"]; !ok || e.Hidden == nil || !e.Hidden.Since.Equal(nov(11)) {
+			t.Errorf("%s: m1 %+v (%v), want hidden since %v (the later hide wins)", what, e, ok, nov(11))
+		}
+		if e, ok := got["m2"]; ok {
+			t.Errorf("%s: m2 %+v, want forgotten (the later forget wins)", what, e)
+		}
+	}
+	got, err := r.Get([]string{"m1", "m2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("Get", got)
+	hidden, err := r.Hidden()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("Hidden", hidden)
+	before := readerAll(t, o)
+	check("All", before.Memories)
+
+	mustFold(t, w, testParams)
+	after := folded(t, o)
+	check("the next fold", after.Memories)
+	if len(before.Memories) != len(after.Memories) {
+		t.Errorf("the reader saw %d memories, the next fold wrote %d", len(before.Memories), len(after.Memories))
+	}
+	for id, e := range after.Memories {
+		if b, ok := before.Memories[id]; ok {
+			sameEntry(t, "reader before the fold vs the fold: "+id, b, e)
+		}
+	}
+}
+
 // TestAnyCountsTheTail: a ledger.db with no row and a hide in the tail
 // has an entry, as All says.
 func TestAnyCountsTheTail(t *testing.T) {

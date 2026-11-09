@@ -416,19 +416,26 @@ func TestOutcomesDayOfTheLastEvent(t *testing.T) {
 	x := pipeFx(t)
 	x.retained(ago(50*time.Hour), "x1", "queued", 0)
 	x.retained(ago(2*time.Hour), "x1", "ok", 90)
+	// Out of time order, as two processes appending can write it: x2's
+	// later line in the file carries the earlier ts. It still lands on
+	// the day of its latest event, not of its last row. (Today the ts
+	// range reads tel_retain_ts and hands the rows in ts order; a query
+	// that reads them in file order must not move x2.)
+	x.retained(ago(2*time.Hour), "x2", "ok", 80)
+	x.retained(ago(50*time.Hour), "x2", "queued", 0)
 	m := pipeOf(x, x.query(7))["retain.outcomes"]
 	days := map[string]Point{}
 	for _, p := range m.Series {
 		days[p.Day] = p
 	}
-	if p := days["2026-10-30"]; val2(p) != 1 || p.Parts["ok"] != 1 {
-		t.Errorf("10-30 = %+v, want 1 ok", p)
+	if p := days["2026-10-30"]; val2(p) != 2 || p.Parts["ok"] != 2 {
+		t.Errorf("10-30 = %+v, want 2 ok", p)
 	}
 	if p := days["2026-10-28"]; val2(p) != 0 || len(p.Parts) != 0 {
 		t.Errorf("10-28 = %+v, want 0", p)
 	}
-	if val(m) != 1 {
-		t.Errorf("value = %v, want 1", val(m))
+	if val(m) != 2 {
+		t.Errorf("value = %v, want 2", val(m))
 	}
 }
 

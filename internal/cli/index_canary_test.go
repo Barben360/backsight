@@ -33,6 +33,9 @@ var canaries = []string{
 	"CANARY-ENUM", "CANARY-UNKNOWN", "CANARY-CONFIG", "CANARY-MEMORY", "CANARY NOTE",
 	"CANARY-JOURNAL", "CANARY-SESSION", "CANARY-NOTE", "CANARY-STATE", "CANARY-TOML",
 	"CANARY-LEDGER",
+	// a string in a payload field the index keeps (payloadAllow) but
+	// without the enum shape
+	"CANARY-ALLOWED-DECISION", "CANARY-ALLOWED-ACTION",
 	// a folded retire's free text: its note and the project of the memory
 	// it retired
 	"CANARY RETIRE NOTE", "CANARY-RETIRE-PROJECT",
@@ -169,6 +172,10 @@ func canaryState(t *testing.T) string {
 		`{"event":"job","ts":"` + ts + `","name":"tick","status":"ok","ms":5,"details":{"shared_error":"CANARY-JOB"}}`,
 		`{"event":"replace_unconfirmed","ts":"` + ts + `","session":"s1","reason":"CANARY-REASON"}`,
 		`{"event":"mystery_kind","ts":"` + ts + `","session":"s1","text":"CANARY-UNKNOWN"}`,
+		// the allowlisted payload fields of the kinds without a table:
+		// kept only with the enum shape
+		`{"event":"failure_recall","ts":"` + ts + `","session":"s1","decision":"CANARY-ALLOWED-DECISION","ms":7}`,
+		`{"event":"import","ts":"` + ts + `","session":"s1","action":"CANARY-ALLOWED-ACTION","files":2}`,
 		`{"event":"config","ts":"` + ts + `","model":"CANARY-CONFIG","top_k":5}`,
 		// two settings records that differ: a marker, whose key may only be a numeric setting and whose canary key must not come through
 		`{"event":"config","ts":"` + at.Add(-2*time.Minute).Format(time.RFC3339Nano) + `","sha256":"` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","recall.min_score":0.5,"CANARY-KEY":1}`,
