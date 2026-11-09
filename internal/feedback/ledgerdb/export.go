@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // betweenExportReads, when set (tests), runs inside the export's read
@@ -20,15 +24,32 @@ var betweenExportReads func()
 // transaction of ledger.db: every row, watermark_ns as its watermark,
 // history_imported_ns, and the latest month file with its cursor as its
 // journal_at. An older binary, or the fallback reader, then applies
-// only the lines after them, so nothing counts twice. It then records
-// the generation it wrote as exported_generation, and does nothing while
-// that is the current one: a failed export is retried by the next call,
-// even when no fold changed anything since. Two processes exporting at
-// once may leave the older snapshot in place: each is whole, and the
-// next fold's export replaces it.
+// only the lines after them, so nothing counts twice. Once the file is
+// written it records the generation it wrote as exported_generation,
+// and does nothing while that is the current one: a failed export is
+// retried by the next call, even when no fold changed anything since.
+// Exports are serialized by <state>/locks/feedback-export.lock, so
+// exported_generation always names the snapshot ledger.json holds; one
+// that waits more than exportLockWait for it does nothing (the holder
+// exports, the next call retries). A corruption the snapshot meets is
+// set aside and the fresh file exported (recover.go).
 func (w *Writer) Export() error {
+	if w.broken != nil {
+		return w.broken
+	}
+	release, err := lockExport(w.opts.Dirs)
+	if err != nil || release == nil {
+		return err
+	}
+	defer release()
 	ctx := context.Background()
 	l, gen, err := w.snapshot(ctx)
+	if isCorrupt(err) {
+		if err := w.recoverCorrupt(ctx, err); err != nil {
+			return err
+		}
+		l, gen, err = w.snapshot(ctx)
+	}
 	if err != nil || l == nil {
 		return err
 	}
@@ -41,6 +62,32 @@ func (w *Writer) Export() error {
 	}
 	_, err = w.db.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES ('exported_generation', ?)`, strconv.FormatInt(gen, 10))
 	return err
+}
+
+// exportLockWait is how long an export waits for another's lock (a
+// variable for the tests).
+var exportLockWait = 2 * time.Second
+
+// lockExport takes <state>/locks/feedback-export.lock, breaking a lock
+// whose owner is gone, waiting at most exportLockWait while a live owner
+// holds it; release is nil (and err too) when it still holds it then.
+func lockExport(d paths.Dirs) (release func(), err error) {
+	path := filepath.Join(d.LocksDir(), "feedback-export.lock")
+	deadline := time.Now().Add(exportLockWait)
+	for {
+		l, _, err := state.Acquire(path, "feedback ledger export")
+		if err == nil {
+			return func() { _ = l.Release() }, nil
+		}
+		var held *state.HeldError
+		if !errors.As(err, &held) {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // snapshot is the ledger to export and its generation, read in one

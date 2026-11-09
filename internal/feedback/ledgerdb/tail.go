@@ -12,10 +12,15 @@ import (
 // each month file read from its cursor (from 0 without one) up to its
 // last newline, the lines the ledger folds as they come (a forget,
 // retire, hide, unhide or import: never a settle, which waits for its
-// fold), in time order. Current applies the same lines past ledger.json's
+// fold), in time order, without the imports a rebuild left out. Current applies the same lines past ledger.json's
 // journal_at: a hide reaches the next recall, not the next fold.
 func readTail(tx *sql.Tx, dir string) ([]feedback.Event, error) {
-	cursors, err := readCursors(context.Background(), tx)
+	ctx := context.Background()
+	cursors, err := readCursors(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	m, err := readMeta(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +40,7 @@ func readTail(tx *sql.Tx, dir string) ([]feedback.Event, error) {
 			}
 		}
 	}
-	return feedback.SortByTime(tail), nil
+	return feedback.SortByTime(dropImports(tail, m.importsCut)), nil
 }
 
 // applyTail applies tail to l as Current does (the half-lives each

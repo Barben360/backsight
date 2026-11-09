@@ -741,3 +741,45 @@ func TestUnappliedByPredicate(t *testing.T) {
 		t.Errorf("the input event changed: %+v", e.Settled)
 	}
 }
+
+// TestCurrentIgnoresAStrayJournalFile: the fallback reader reads the
+// month files (MonthFiles) only, as ledger.db's folds do: a stray
+// journal-old.jsonl holding a hide is applied by neither, through Read
+// (no journal_at) or ReadSince (from journal_at).
+func TestCurrentIgnoresAStrayJournalFile(t *testing.T) {
+	oct := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		at   bool // ledger.json names a journal_at
+	}{{"no journal_at", false}, {"from journal_at", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			j := NewJournal(dir, Common{Session: "s"})
+			if err := j.Append(Event{Kind: KindRetire, TS: oct, IDs: []string{"m2"}}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.at {
+				fi, err := os.Stat(filepath.Join(dir, MonthFile(oct)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				l := newLedger()
+				l.Watermark, l.JournalAt = oct, JournalPos{File: MonthFile(oct), Offset: fi.Size()}
+				if err := saveLedger(dir, l); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stray := `{"schema":1,"seq":9,"ts":"2026-10-06T00:00:00Z","kind":"hide","ids":["m1"]}` + "\n"
+			if err := os.WriteFile(filepath.Join(dir, "journal-old.jsonl"), []byte(stray), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			l, err := Current(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e, ok := l.Memories["m1"]; ok {
+				t.Errorf("Current applied journal-old.jsonl: m1 %+v", e)
+			}
+		})
+	}
+}

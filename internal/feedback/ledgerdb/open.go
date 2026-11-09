@@ -75,6 +75,12 @@ type Writer struct {
 	path string
 	side bool
 	opts Options
+	// built is what this open's first build folded (zero when the file
+	// existed): a fold after a set-aside reports it.
+	built FoldResult
+	// broken: a set-aside left no file to open again; every later call
+	// returns it (db is closed).
+	broken error
 }
 
 // OpenWriter opens the ledger database under o.Dirs, creating and
@@ -88,21 +94,32 @@ type Writer struct {
 // folded in, imports kept, in one transaction after the migrations'
 // (until it commits, readers find no generation row: ErrMissing). A
 // corrupt file is set aside and a fresh one built, once a day at most
-// (recover.go).
+// (recover.go); the fresh build keeps the imports cut of the corrupt
+// file when it could still be read.
 func OpenWriter(ctx context.Context, o Options) (*Writer, error) {
+	return openWriterCut(ctx, o, 0)
+}
+
+// openWriterCut is OpenWriter, a first build dropping the imports
+// journaled at or before cut (unix ns, 0: none): the cut a corrupt file
+// set aside held, read from it when it still could be.
+func openWriterCut(ctx context.Context, o Options, cut int64) (*Writer, error) {
 	o = o.withDefaults()
 	reg, err := registry(o)
 	if err != nil {
 		return nil, err
 	}
 	for again := false; ; again = true {
-		w, err := openWriter(ctx, o, reg)
+		w, err := openWriter(ctx, o, reg, cut)
 		var ce *corruptErr
 		if !errors.As(err, &ce) {
 			return w, err
 		}
 		if again { // the fresh file is corrupt too
 			return nil, fmt.Errorf("%w: %w", ErrUnreadable, err)
+		}
+		if c := storedCut(ctx, ce.path); c != 0 {
+			cut = c
 		}
 		if err := setAside(ctx, o, ce); err != nil {
 			return nil, err
@@ -114,24 +131,24 @@ func OpenWriter(ctx context.Context, o Options) (*Writer, error) {
 // binary may migrate ledger.db after the probe: the writer then finds it
 // above the head and lets it go, and the second and last pass opens the
 // side file.
-func openWriter(ctx context.Context, o Options, reg []sqlitedb.Migration) (*Writer, error) {
+func openWriter(ctx context.Context, o Options, reg []sqlitedb.Migration, cut int64) (*Writer, error) {
 	head := sqlitedb.Head(reg)
 	t, err := resolve(ctx, o, head)
 	if err != nil {
 		return nil, err
 	}
-	w, err := openTarget(ctx, o, reg, t)
+	w, err := openTarget(ctx, o, reg, t, cut)
 	if !errors.Is(err, errNewer) || t.side {
 		return w, err
 	}
 	if t, err = sideTarget(ctx, o, head); err != nil {
 		return nil, err
 	}
-	return openTarget(ctx, o, reg, t)
+	return openTarget(ctx, o, reg, t, cut)
 }
 
 // openTarget opens t.path, creating it, and migrates it to the head.
-func openTarget(ctx context.Context, o Options, reg []sqlitedb.Migration, t target) (*Writer, error) {
+func openTarget(ctx context.Context, o Options, reg []sqlitedb.Migration, t target, cut int64) (*Writer, error) {
 	if t.known && t.version < sqlitedb.Head(reg) { // before the file is created
 		if err := sqlitedb.UpdateGate(o.Dirs); err != nil {
 			return nil, err
@@ -153,7 +170,7 @@ func openTarget(ctx context.Context, o Options, reg []sqlitedb.Migration, t targ
 		return nil, asCorrupt(t.path, err)
 	}
 	if created {
-		if err := w.firstBuild(ctx); err != nil {
+		if err := w.firstBuild(ctx, cut); err != nil {
 			_ = db.Close()
 			return nil, asCorrupt(t.path, err)
 		}
@@ -207,7 +224,12 @@ func (w *Writer) migrate(ctx context.Context, reg []sqlitedb.Migration) error {
 }
 
 // Close closes the writer's connection.
-func (w *Writer) Close() error { return w.db.Close() }
+func (w *Writer) Close() error {
+	if w.broken != nil { // its connection was closed for the set-aside
+		return nil
+	}
+	return w.db.Close()
+}
 
 // openDB opens path's writer and its connection, creating the file: WAL
 // or the rollback journal, and synchronous to match (sqlitedb.DSN). Two

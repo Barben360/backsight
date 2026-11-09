@@ -7,9 +7,11 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/sqlitedb"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func mustExport(t *testing.T, w *Writer) {
@@ -147,4 +149,72 @@ func TestCrashBetweenFoldAndExport(t *testing.T) {
 	if exported := metaInt(t, o, "exported_generation"); exported != gen {
 		t.Errorf("exported_generation %d, want %d", exported, gen)
 	}
+}
+
+// TestConcurrentExportsAgreeWithTheirGeneration: an export waits for
+// another's lock, so ledger.json always holds the rows of
+// exported_generation.
+func TestConcurrentExportsAgreeWithTheirGeneration(t *testing.T) {
+	forceFS(t, sqlitedb.FSLocal)
+	fakeProbe(t, true) // WAL: a read transaction does not hold a writer back
+	o := tempOpts(t)
+	a := mustOpenWriter(t, o)
+	defer mustCloseWriter(t, a)
+	b := mustOpenWriter(t, o)
+	defer mustCloseWriter(t, b)
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)))
+	mustFold(t, a, testParams)
+	appendLines(t, o, retireOf(nov(3), "m1"))
+	bDone := make(chan error, 1)
+	var once sync.Once
+	setSeam(t, &betweenExportReads, func() {
+		once.Do(func() {
+			if _, err := b.Fold(context.Background(), testParams); err != nil {
+				t.Errorf("the fold between the exports: %v", err)
+			}
+			go func() { bDone <- b.Export() }()
+			select {
+			case err := <-bDone:
+				t.Errorf("the second export finished (%v) while the first held its snapshot", err)
+				bDone <- err
+			case <-time.After(300 * time.Millisecond):
+			}
+		})
+	})
+	mustExport(t, a)
+	if err := <-bDone; err != nil {
+		t.Fatalf("the second export: %v", err)
+	}
+	gen, exported := metaInt(t, o, "generation"), metaInt(t, o, "exported_generation")
+	if exported != gen {
+		t.Errorf("exported_generation %d, generation %d: the later export must be the last written", exported, gen)
+	}
+	sameLedger(t, "ledger.json at exported_generation", loadExport(t, o), folded(t, o))
+}
+
+// TestAnExportThatCannotLockSkips: an export that waits out the lock
+// writes nothing and leaves exported_generation as it was.
+func TestAnExportThatCannotLockSkips(t *testing.T) {
+	o := tempOpts(t)
+	w := mustOpenWriter(t, o)
+	defer mustCloseWriter(t, w)
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)))
+	mustFold(t, w, testParams)
+	setSeam(t, &exportLockWait, 50*time.Millisecond)
+	l, _, err := state.Acquire(filepath.Join(o.Dirs.LocksDir(), "feedback-export.lock"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Export(); err != nil {
+		t.Fatalf("an export behind a held lock: %v, want a skip", err)
+	}
+	absent(t, filepath.Join(feedbackDir(o), "ledger.json"))
+	if _, ok := metaOf(t, o)["exported_generation"]; ok {
+		t.Error("exported_generation was written without an export")
+	}
+	if err := l.Release(); err != nil {
+		t.Fatal(err)
+	}
+	mustExport(t, w)
+	sameLedger(t, "the export once the lock is free", loadExport(t, o), folded(t, o))
 }

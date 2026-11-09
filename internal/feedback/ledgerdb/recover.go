@@ -2,12 +2,14 @@ package ledgerdb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
@@ -105,28 +107,56 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 // afterSeize, when set (tests), runs once setAside holds the file.
 var afterSeize func()
 
-// recoverCorrupt answers err, a corruption a fold or a rebuild met past
-// the header (the open read that fine): w's connection is closed, for
-// Seize wants the file whole, the file set aside, and w opened again,
-// on a fresh file built from the journal. When the set-aside cannot be
-// done (another connection holds the file; one was set aside less than
-// a day ago), w is opened again on the file as it is and the error, the
-// corruption's and the set-aside's, returned: the next fold tries again.
+// recoverCorrupt answers err, a corruption a fold, a rebuild or an
+// export met past the header (the open read that fine): w's connection
+// is closed, for Seize wants the file whole, the file set aside, and w
+// opened again on a fresh file built from the journal, which keeps the
+// corrupt file's imports cut when that could still be read. When the
+// set-aside cannot be done (another connection holds the file; one was
+// set aside less than a day ago), w is opened again on the file as it
+// is and the error, the corruption's and the set-aside's, returned: the
+// next call tries again. When no file can be opened again, w is broken:
+// every later call returns why.
 func (w *Writer) recoverCorrupt(ctx context.Context, err error) error {
 	var ce *corruptErr
 	if !errors.As(asCorrupt(w.path, err), &ce) {
 		return err
 	}
 	_ = w.db.Close()
+	cut := storedCut(ctx, w.path)
 	serr := setAside(ctx, w.opts, ce)
-	nw, oerr := OpenWriter(ctx, w.opts)
-	if oerr == nil {
-		*w = *nw
+	nw, oerr := openWriterCut(ctx, w.opts, cut)
+	if oerr != nil {
+		w.broken = fmt.Errorf("%w: %s was closed after a corruption and could not be opened again: %w", ErrUnreadable, filepath.Base(w.path), oerr)
+		if serr != nil {
+			return fmt.Errorf("%w (it could not be set aside: %w)", w.broken, serr)
+		}
+		return w.broken
 	}
+	*w = *nw
 	if serr != nil {
 		return fmt.Errorf("%w (it could not be set aside: %w)", ce, serr)
 	}
-	return oerr
+	return nil
+}
+
+// storedCut is the imports cut (imports_dropped_before_ns) a corrupt
+// file still gives, read only; 0 when it gives none, or cannot be read.
+func storedCut(ctx context.Context, path string) int64 {
+	db, err := sql.Open(driverName, sqlitedb.ReaderDSN(path, 100*time.Millisecond))
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = db.Close() }()
+	var s string
+	if err := db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'imports_dropped_before_ns'`).Scan(&s); err != nil {
+		return 0
+	}
+	cut, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return cut
 }
 
 // within: at is set, not after now, and less than setAsideEvery before

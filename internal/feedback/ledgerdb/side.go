@@ -55,7 +55,7 @@ func sideTarget(ctx context.Context, o Options, head int) (target, error) {
 // head, and a read-write open sets the journal mode of a file this
 // binary must never write.
 func (t *target) probe(ctx context.Context) error {
-	v, err := fileVersion(ctx, t.path)
+	v, err := probeVersion(ctx, t.path)
 	if err == nil {
 		t.version, t.known = v, true
 		return nil
@@ -69,6 +69,9 @@ func (t *target) probe(ctx context.Context) error {
 	}
 	return asCorrupt(t.path, err)
 }
+
+// probeVersion is fileVersion (the seam of the tests).
+var probeVersion = fileVersion
 
 // fileVersion is path's user_version through a read-only connection that
 // changes nothing (0: no file). An idle WAL file opens immutable, so that

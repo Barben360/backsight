@@ -96,12 +96,13 @@ func changedUnder(path string, off int64) (bool, error) {
 }
 
 // build empties the ledger and folds the whole journal into it, all (nil:
-// read now with ReadAll): a refold, a rebuild, a first build. Imports
-// are left out when imports is dropped, and the choice recorded; the
-// cursors are exactly the read's ends; the generation moves on, and a new
-// build (fresh) gets a new build_id. It returns the ledger it wrote,
-// with its watermark and journal position as the export gives them.
-func (w *Writer) build(ctx context.Context, tx *sql.Tx, p feedback.Params, m meta, imports string, all *batch, fresh bool) (FoldResult, feedback.Ledger, error) {
+// read now with ReadAll): a refold, a rebuild, a first build. The
+// imports journaled at or before m.importsCut are left out (the cut is
+// kept); the cursors are exactly the read's ends; the generation moves
+// on, and a new build (fresh) gets a new build_id. It returns the ledger
+// it wrote, with its watermark and journal position as the export gives
+// them.
+func (w *Writer) build(ctx context.Context, tx *sql.Tx, p feedback.Params, m meta, all *batch, fresh bool) (FoldResult, feedback.Ledger, error) {
 	if all == nil {
 		a, err := readAll(w.journalDir())
 		if err != nil {
@@ -109,10 +110,7 @@ func (w *Writer) build(ctx context.Context, tx *sql.Tx, p feedback.Params, m met
 		}
 		all = &a
 	}
-	kept := all.events
-	if imports == importsDropped {
-		kept = feedback.DropImports(kept)
-	}
+	kept := dropImports(all.events, m.importsCut)
 	l := feedback.Fold(kept, p)
 	for _, q := range []string{`DELETE FROM memories`, `DELETE FROM settled_keys`, `DELETE FROM ledger_cursors`} {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
@@ -147,7 +145,7 @@ func (w *Writer) build(ctx context.Context, tx *sql.Tx, p feedback.Params, m met
 	// reading the export must not apply them.
 	m.watermark = toNS(latestApplied(all.events))
 	m.historyImported = toNS(l.HistoryImported)
-	m.params, m.imports = paramsJSON(p), imports
+	m.params = paramsJSON(p)
 	m.generation++
 	if fresh || m.buildID == "" {
 		m.buildID = newBuildID()

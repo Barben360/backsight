@@ -222,21 +222,21 @@ func (j *Journal) Position() (file string, offset int64) {
 	return file, offset
 }
 
-// Read returns the events of every month file from from's month on, in
-// file order. Lines that do not parse or carry another schema are skipped
-// and counted, empty lines ignored; a missing dir is no events.
+// Read returns the events of every month file (monthNames) from from's
+// month on, in file order. Lines that do not parse or carry another schema
+// are skipped and counted, empty lines ignored; a missing dir is no
+// events.
 func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
-	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	files, err := monthNames(dir)
 	if err != nil {
 		return nil, 0, err
 	}
-	slices.Sort(files) // journal-YYYY-MM sorts by month
 	first := MonthFile(from)
-	for _, f := range files {
-		if filepath.Base(f) < first {
+	for _, name := range files {
+		if name < first {
 			continue
 		}
-		ev, sk, err := ReadFrom(f, 0)
+		ev, sk, err := ReadFrom(filepath.Join(dir, name), 0)
 		events, skipped = append(events, ev...), skipped+sk
 		if err != nil {
 			return events, skipped, err
@@ -267,6 +267,25 @@ func MonthFiles(dir string) ([]string, error) {
 }
 
 var monthFileName = regexp.MustCompile(`^journal-[0-9]{4}-[0-9]{2}\.jsonl$`)
+
+// monthNames is the base names in dir that a month file has
+// (MonthFiles's pattern), oldest month first, whatever they are: a
+// directory or another entry that cannot be read is listed, for its read
+// to fail as it did. A stray name, journal-old.jsonl say, is not.
+func monthNames(dir string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, p := range paths {
+		if name := filepath.Base(p); monthFileName.MatchString(name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names) // journal-YYYY-MM sorts by month
+	return names, nil
+}
 
 // ReadComplete returns the events of file from byte offset up to and
 // including its last newline, and end, the offset just after it (offset
@@ -375,8 +394,8 @@ func ReadFrom(file string, offset int64) (events []Event, skipped int, err error
 }
 
 // ReadSince returns the events of file from byte offset on, then those of
-// the later month files beside it: a turn that began before a month's end
-// goes on in the next file.
+// the later month files (monthNames) beside it: a turn that began before a
+// month's end goes on in the next file.
 func ReadSince(file string, offset int64) (events []Event, skipped int, err error) {
 	if file == "" {
 		return nil, 0, errors.New("no journal position")
@@ -384,16 +403,16 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 	if events, skipped, err = ReadFrom(file, offset); err != nil {
 		return events, skipped, err
 	}
-	files, err := filepath.Glob(filepath.Join(filepath.Dir(file), "journal-*.jsonl"))
+	dir := filepath.Dir(file)
+	files, err := monthNames(dir)
 	if err != nil {
 		return events, skipped, err
 	}
-	slices.Sort(files)
-	for _, f := range files {
-		if filepath.Base(f) <= filepath.Base(file) {
+	for _, name := range files {
+		if name <= filepath.Base(file) {
 			continue
 		}
-		ev, sk, err := ReadFrom(f, 0)
+		ev, sk, err := ReadFrom(filepath.Join(dir, name), 0)
 		events, skipped = append(events, ev...), skipped+sk
 		if err != nil {
 			return events, skipped, err

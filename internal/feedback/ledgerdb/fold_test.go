@@ -89,8 +89,9 @@ func mustFold(t *testing.T, w *Writer, p feedback.Params) FoldResult {
 }
 
 // oracle is the ledger a rebuild gives: feedback.Fold over ReadAll's
-// lines (imports dropped when ledger.db's meta says so), its watermark
-// the latest applied line's ts. Task 5's tests use it too.
+// lines (without the imports journaled at or before ledger.db's
+// imports_dropped_before_ns), its watermark the latest applied line's
+// ts. Task 5's tests use it too.
 func oracle(t *testing.T, dir string, p feedback.Params) feedback.Ledger {
 	t.Helper()
 	events, _, _, err := feedback.ReadAll(dir)
@@ -98,8 +99,10 @@ func oracle(t *testing.T, dir string, p feedback.Params) feedback.Ledger {
 		t.Fatal(err)
 	}
 	kept := events
-	if storedImports(t, dir) == importsDropped {
-		kept = feedback.DropImports(events)
+	if cut := importsCutAt(t, dir); cut != 0 {
+		kept = slices.DeleteFunc(slices.Clone(events), func(e feedback.Event) bool {
+			return e.Kind == feedback.KindImport && e.Outcome != feedback.ImportComplete && e.TS.UnixNano() <= cut
+		})
 	}
 	l := feedback.Fold(kept, p)
 	l.Watermark = time.Time{}
@@ -111,14 +114,23 @@ func oracle(t *testing.T, dir string, p feedback.Params) feedback.Ledger {
 	return l
 }
 
-// storedImports is meta.imports of dir's ledger.db ("" without one).
-func storedImports(t *testing.T, dir string) string {
+// importsCutAt is imports_dropped_before_ns of dir's ledger.db (0
+// without one).
+func importsCutAt(t *testing.T, dir string) int64 {
 	t.Helper()
 	path := filepath.Join(dir, FileName)
 	if _, err := os.Stat(path); err != nil {
-		return ""
+		return 0
 	}
-	return metaAt(t, path)["imports"]
+	s, ok := metaAt(t, path)["imports_dropped_before_ns"]
+	if !ok {
+		return 0
+	}
+	cut, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cut
 }
 
 // roQuery runs fn over a read-only connection to path, closed after.

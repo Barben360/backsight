@@ -3,12 +3,9 @@ package ledgerdb
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,15 +20,17 @@ import (
 type FoldResult struct {
 	Lines, Skipped int
 	Refolded       bool
-	Reason         string // "", "late_line", "file_changed", "params"
+	Reason         string // "", "late_line", "file_changed", "params", "set_aside"
 	Generation     int64
 }
 
-// Why a fold rebuilds the ledger from the whole journal (refold.go).
+// Why a fold rebuilds the ledger from the whole journal (refold.go), or
+// built a fresh file after setting a corrupt one aside (set_aside).
 const (
 	ReasonLateLine    = "late_line"
 	ReasonFileChanged = "file_changed"
 	ReasonParams      = "params"
+	ReasonSetAside    = "set_aside"
 )
 
 // Test seams.
@@ -59,9 +58,12 @@ var (
 //
 // A ledger.db never folded (no generation row) is built. A fold that
 // meets a corrupt page sets the file aside and builds a fresh one
-// (recover.go). It takes no lock but SQLite's: BEGIN IMMEDIATE
-// serializes the folds of every process.
+// (recover.go): Refolded, reason set_aside. It takes no lock but
+// SQLite's: BEGIN IMMEDIATE serializes the folds of every process.
 func (w *Writer) Fold(ctx context.Context, p feedback.Params) (FoldResult, error) {
+	if w.broken != nil {
+		return FoldResult{}, w.broken
+	}
 	res, err := w.fold(ctx, p)
 	if !isCorrupt(err) {
 		return res, err
@@ -69,7 +71,15 @@ func (w *Writer) Fold(ctx context.Context, p feedback.Params) (FoldResult, error
 	if err := w.recoverCorrupt(ctx, err); err != nil {
 		return FoldResult{}, err
 	}
-	return w.fold(ctx, p)
+	// The fresh file's first build folded the journal; this fold, the
+	// lines journaled since.
+	res, err = w.fold(ctx, p)
+	if err != nil {
+		return FoldResult{}, err
+	}
+	res.Lines, res.Skipped = res.Lines+w.built.Lines, res.Skipped+w.built.Skipped
+	res.Refolded, res.Reason = true, ReasonSetAside
+	return res, nil
 }
 
 func (w *Writer) fold(ctx context.Context, p feedback.Params) (FoldResult, error) {
@@ -92,7 +102,7 @@ func (w *Writer) fold(ctx context.Context, p feedback.Params) (FoldResult, error
 			return err
 		}
 		if !m.built {
-			res, _, err = w.build(ctx, tx, p, m, m.importChoice(), nil, true)
+			res, _, err = w.build(ctx, tx, p, m, nil, true)
 			return err
 		}
 		cursors, err := readCursors(ctx, tx)
@@ -109,7 +119,7 @@ func (w *Writer) fold(ctx context.Context, p feedback.Params) (FoldResult, error
 			return err
 		}
 		if reason != "" {
-			res, _, err = w.build(ctx, tx, p, m, m.importChoice(), all, false)
+			res, _, err = w.build(ctx, tx, p, m, all, false)
 			res.Refolded, res.Reason = true, reason
 			return err
 		}
@@ -157,11 +167,7 @@ func (w *Writer) apply(ctx context.Context, tx *sql.Tx, p feedback.Params, m met
 		}
 		return in
 	}
-	events := b.events
-	if m.importChoice() == importsDropped {
-		events = feedback.DropImports(events)
-	}
-	for _, e := range feedback.SortByTime(events) {
+	for _, e := range feedback.SortByTime(dropImports(b.events, m.importsCut)) {
 		if e.Kind == "settle" {
 			e = feedback.Unapplied(e, seen)
 		}
@@ -363,149 +369,6 @@ func insertKeys(ctx context.Context, tx *sql.Tx, keys []string) error {
 		}
 	}
 	return nil
-}
-
-// queryer is a transaction or a connection pool.
-type queryer interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-// readCursors is ledger_cursors: each month file's base name to the
-// offset its folded lines end at.
-func readCursors(ctx context.Context, q queryer) (map[string]int64, error) {
-	rows, err := q.QueryContext(ctx, `SELECT file, offset FROM ledger_cursors`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	cursors := map[string]int64{}
-	for rows.Next() {
-		var f string
-		var off int64
-		if err := rows.Scan(&f, &off); err != nil {
-			return nil, err
-		}
-		cursors[f] = off
-	}
-	return cursors, rows.Err()
-}
-
-func writeCursors(ctx context.Context, tx *sql.Tx, ends map[string]int64) error {
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO ledger_cursors(file, offset) VALUES (?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-	for _, name := range slices.Sorted(maps.Keys(ends)) {
-		if _, err := stmt.ExecContext(ctx, name, ends[name]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// The imports choice (meta.imports): a rebuild without imports drops
-// them for good, until a rebuild with them.
-const (
-	importsKept    = "kept"
-	importsDropped = "dropped"
-)
-
-// meta is the meta table, read whole.
-type meta struct {
-	built           bool // a generation row: folded once
-	watermark       int64
-	historyImported int64
-	params          string
-	imports         string
-	generation      int64
-	buildID         string
-	exported        int64
-}
-
-// importChoice is m's imports choice (kept when none was made).
-func (m meta) importChoice() string {
-	if m.imports == importsDropped {
-		return importsDropped
-	}
-	return importsKept
-}
-
-func readMeta(ctx context.Context, q queryer) (meta, error) {
-	rows, err := q.QueryContext(ctx, `SELECT key, value FROM meta`)
-	if err != nil {
-		return meta{}, err
-	}
-	defer func() { _ = rows.Close() }()
-	var m meta
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return meta{}, err
-		}
-		n := func(dst *int64) error {
-			var err error
-			if *dst, err = strconv.ParseInt(v, 10, 64); err != nil {
-				return fmt.Errorf("meta %s: %w", k, err)
-			}
-			return nil
-		}
-		switch k {
-		case "watermark_ns":
-			err = n(&m.watermark)
-		case "history_imported_ns":
-			err = n(&m.historyImported)
-		case "generation":
-			m.built, err = true, n(&m.generation)
-		case "exported_generation":
-			err = n(&m.exported)
-		case "params":
-			m.params = v
-		case "imports":
-			m.imports = v
-		case "build_id":
-			m.buildID = v
-		}
-		if err != nil {
-			return meta{}, err
-		}
-	}
-	return m, rows.Err()
-}
-
-// write writes every key a fold owns (exported_generation is the
-// export's), folded_at_ns as foldedAt.
-func (m meta) write(ctx context.Context, tx *sql.Tx, foldedAt int64) error {
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-	itoa := func(n int64) string { return strconv.FormatInt(n, 10) }
-	for _, kv := range [][2]string{
-		{"watermark_ns", itoa(m.watermark)},
-		{"folded_at_ns", itoa(foldedAt)},
-		{"history_imported_ns", itoa(m.historyImported)},
-		{"params", m.params},
-		{"imports", m.importChoice()},
-		{"generation", itoa(m.generation)},
-		{"build_id", m.buildID},
-	} {
-		if _, err := stmt.ExecContext(ctx, kv[0], kv[1]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// paramsJSON is p as meta.params records it: the JSON of p.Record(), its
-// keys sorted.
-func paramsJSON(p feedback.Params) string {
-	b, err := json.Marshal(p.Record())
-	if err != nil { // a half-life JSON cannot hold (NaN, ±Inf): no Params gives one
-		return ""
-	}
-	return string(b)
 }
 
 // isCorrupt: err is SQLite finding the file corrupt, or not a database.
