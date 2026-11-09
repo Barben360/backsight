@@ -28,17 +28,21 @@ type LedgerFacts struct {
 	// latest applied event's.
 	FoldedAt, Watermark time.Time
 	ExportBehind        bool // exported_generation < generation
+	// Busy: another process held File past factsBusy, so nothing more of
+	// it could be read (Built false says nothing then).
+	Busy bool
 	// OpenError is why a writer could not open, build or fold File: the
 	// class (sqlitedb.Code) of the file's read, or "readonly" for a file or
-	// folder this user cannot write; "" when fine.
+	// folder this user cannot write; "" when fine (or Busy).
 	OpenError        string
 	UpdateInProgress bool
 	Memories         int    // entries, a restore's alone left out (feedback.Ledger.Counted)
 	Params           string // meta.params: the parameters the last fold used
 }
 
-// factsBusy is how long Facts waits for a writer's lock.
-const factsBusy = writerBusy
+// factsBusy is how long Facts waits for a writer's lock (a variable for
+// the tests).
+var factsBusy = writerBusy
 
 // Facts reads o's ledger database for doctor, creating, migrating and
 // writing nothing: which file this binary uses (ledger.db, or its side
@@ -54,13 +58,13 @@ func Facts(o Options) (LedgerFacts, error) {
 	f := LedgerFacts{File: FileName, Head: head, UpdateInProgress: errors.Is(sqlitedb.UpdateGate(o.Dirs), sqlitedb.ErrUpdateInProgress)}
 	dir := o.Dirs.FeedbackDir()
 	ctx := context.Background()
-	v, err := fileVersion(ctx, filepath.Join(dir, FileName))
+	v, err := fileVersionWait(ctx, filepath.Join(dir, FileName), factsBusy)
 	if err == nil && v > head {
 		f.Newer, f.File = true, SideFileName(head)
-		v, err = fileVersion(ctx, filepath.Join(dir, f.File))
+		v, err = fileVersionWait(ctx, filepath.Join(dir, f.File), factsBusy)
 	}
 	if err != nil {
-		f.OpenError = sqlitedb.Code(err)
+		f.setReadError(err)
 		return f, nil
 	}
 	f.Schema = v
@@ -76,11 +80,21 @@ func Facts(o Options) (LedgerFacts, error) {
 	case errors.Is(err, ErrMissing): // migrated, never folded
 	case errors.Is(err, ErrSchema): // older: the next writer migrates it
 	case err != nil:
-		f.OpenError = sqlitedb.Code(err)
+		f.setReadError(err)
 		return f, nil
 	}
 	f.OpenError = writeProblem(dir, path)
 	return f, nil
+}
+
+// setReadError records a failed read of File: held by another process
+// (Busy, no write problem known), else its class as OpenError.
+func (f *LedgerFacts) setReadError(err error) {
+	if c := sqlitedb.Code(err); errors.Is(err, ErrBusy) || c == "busy" {
+		f.Busy = true
+	} else {
+		f.OpenError = c
+	}
 }
 
 // readMeta fills f from a built file's meta and rows, in tx.

@@ -1,0 +1,9 @@
+package recall
+
+import (
+	. "github.com/Barben360/backsight/internal/feedback"
+)
+
+func dotted() { _, _ = LoadLedger("d") }
+
+func dottedReader() CurrentReader { return CurrentReader{} }

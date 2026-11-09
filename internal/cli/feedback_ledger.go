@@ -348,8 +348,8 @@ const (
 	hiddenCheckTimeout = 10 * time.Second
 )
 
-// checkHidden lifts the hidings the server made moot, the hidings read
-// through r and the lifts journaled in dir: an observation with a change
+// checkHidden lifts the hidings the server made moot, the hidings those
+// of ledger (the tick's one read) and the lifts journaled in dir: an observation with a change
 // in its history after it was hidden is journaled unhide rewritten, one
 // the server no longer holds (its history and the memory itself both not
 // found) unhide gone. Any other answer leaves the hiding as it is. The
@@ -358,8 +358,8 @@ const (
 // tick's time, which stamps the events), so each is read within
 // ceil(n/hiddenChecks) ticks. The loop stops once hiddenCheckTimeout has
 // passed on the clock. Best effort: it returns how many it lifted.
-func checkHidden(ctx context.Context, cl *hindsight.Client, bank string, r feedback.LedgerReader, dir string, at time.Time) (lifted int) {
-	entries, err := r.Hidden()
+func checkHidden(ctx context.Context, cl *hindsight.Client, bank string, ledger func() (feedback.Ledger, error), dir string, at time.Time) (lifted int) {
+	l, err := ledger()
 	if err != nil {
 		return 0
 	}
@@ -368,8 +368,10 @@ func checkHidden(ctx context.Context, cl *hindsight.Client, bank string, r feedb
 		since time.Time
 	}
 	var hidden []hiding
-	for id, m := range entries {
-		hidden = append(hidden, hiding{id, m.Hidden.Since})
+	for id, m := range l.Memories {
+		if m.Hidden != nil {
+			hidden = append(hidden, hiding{id, m.Hidden.Since})
+		}
 	}
 	if len(hidden) == 0 {
 		return 0

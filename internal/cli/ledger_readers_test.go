@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
@@ -102,7 +104,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n := checkHidden(context.Background(), cl, "b", ledgerReader(d, cfg, false, tw), dir, time.Now()); n != 0 {
+		if n := checkHidden(context.Background(), cl, "b", tickLedger(d, cfg, tw), dir, time.Now()); n != 0 {
 			t.Errorf("lifted %d", n)
 		}
 		if len(read) != 1 || !strings.Contains(read[0], "/memories/"+hid+"/history") {
@@ -110,7 +112,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 		}
 	})
 	t.Run("the tick's history import", func(t *testing.T) {
-		if got := importInTick(context.Background(), d, home, cfg, tw); got != "" {
+		if got := importInTick(context.Background(), d, home, cfg, tickLedger(d, cfg, tw)); got != "" {
 			t.Errorf("importInTick %q, want nothing to do", got)
 		}
 	})
@@ -119,7 +121,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if up, err := uploadShared(context.Background(), cl, d, cfg, "pc-a", time.Now(), tw); !up || err != nil {
+		if up, err := uploadShared(context.Background(), cl, d, cfg, "pc-a", time.Now(), tickLedger(d, cfg, tw)); !up || err != nil {
 			t.Fatalf("uploaded %v, %v", up, err)
 		}
 		docs, err := retain.ControlDocuments(context.Background(), cl, cfg.Server.Bank, sharedDocPrefix)
@@ -211,7 +213,8 @@ func TestIndexLedgerFollowsTheDBOnceItIsBack(t *testing.T) {
 
 // TestMaintainSweepsOldRebuildPlans: jobs maintain removes what a
 // feedback rebuild --plan that died left in <state>/staging (a copy of
-// the journal) once a day old, and nothing else there.
+// the journal) once a day old, and nothing else there, on a line of its
+// own; a removal that fails makes the run partial.
 func TestMaintainSweepsOldRebuildPlans(t *testing.T) {
 	home := devInstall(t, true)
 	configure(t, home, "[backup]\nenabled = false")
@@ -234,13 +237,21 @@ func TestMaintainSweepsOldRebuildPlans(t *testing.T) {
 		}
 		return p
 	}
+	maintain := func() (int, maintainResult) {
+		t.Helper()
+		code, out, _ := run(t, "jobs", "maintain", "--json")
+		var env maintainEnvelope
+		if err := json.Unmarshal([]byte(out), &env); err != nil {
+			t.Fatalf("exit %d: %v\n%s", code, err, out)
+		}
+		return code, env.Data
+	}
 	dead := mk("rebuild-plan-111", old)
 	running := mk("rebuild-plan-222", time.Now().Add(-time.Hour))
 	other := mk("restore-333", old)
-	code, out, _ := run(t, "jobs", "maintain", "--json")
-	var env maintainEnvelope
-	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
-		t.Fatalf("exit %d: %v\n%s", code, err, out)
+	code, r := maintain()
+	if code != output.OK || r.Status != "done" {
+		t.Fatalf("exit %d, %+v", code, r)
 	}
 	if _, err := os.Stat(dead); !os.IsNotExist(err) {
 		t.Errorf("the day-old plan: %v", err)
@@ -250,10 +261,78 @@ func TestMaintainSweepsOldRebuildPlans(t *testing.T) {
 			t.Errorf("%s: %v", filepath.Base(p), err)
 		}
 	}
-	if !strings.Contains(env.Data.FeedbackLedger, "rebuild-plan-111") || strings.Contains(env.Data.FeedbackLedger, "222") {
-		t.Errorf("feedback_ledger %q, want the plan removed named", env.Data.FeedbackLedger)
+	if r.RebuildPlans != "removed rebuild-plan-111" || r.FeedbackLedger != "" {
+		t.Errorf("rebuild_plans %q, feedback_ledger %q: want the plan removed named on its own line", r.RebuildPlans, r.FeedbackLedger)
 	}
-	if code, out, _ := run(t, "jobs", "maintain", "--json"); code != output.OK || strings.Contains(out, "rebuild-plan") {
-		t.Errorf("second run: exit %d\n%s", code, out)
+	if _, r := maintain(); r.RebuildPlans != "" {
+		t.Errorf("second run: rebuild_plans %q", r.RebuildPlans)
+	}
+
+	// A removal that fails: the run is partial and says which.
+	mk("rebuild-plan-444", old)
+	oldRemove := removeTree
+	removeTree = func(string) error { return errors.New("in use") }
+	t.Cleanup(func() { removeTree = oldRemove })
+	if code, r := maintain(); code != output.Partial || r.Status != "partial" || r.RebuildPlans != "could not remove rebuild-plan-444" {
+		t.Errorf("a failed removal: exit %d, status %q, rebuild_plans %q", code, r.Status, r.RebuildPlans)
+	}
+}
+
+// TestABadTickLogsOneFallback: a tick whose ledger.db cannot be read
+// (here a folder in its place) logs ledger_fold for its settle and at
+// most one fallback for its later steps (one read of the ledger, not one
+// per step), so doctor's feedback-ledger check stays below its line of
+// three failures a day after one such tick, and reports them after
+// three.
+func TestABadTickLogsOneFallback(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	hideAll(t, d.FeedbackDir(), time.Now().Add(-time.Hour), "o1")
+	tickJSON(t) // builds ledger.db, exports ledger.json
+	removeLedgerDB(t, home)
+	if err := os.Mkdir(ledgerDBPath(home), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ledgerCheck := func() doctor.Check {
+		t.Helper()
+		_, out, _ := run(t, "doctor", "--json")
+		var env struct {
+			Data doctor.Report `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil {
+			t.Fatalf("not JSON: %v\n%s", err, out)
+		}
+		for _, c := range env.Data.Checks {
+			if c.ID == "feedback-ledger" {
+				return c
+			}
+		}
+		t.Fatal("no feedback-ledger check")
+		return doctor.Check{}
+	}
+	fallbacks := func() (fold, other int) {
+		for _, r := range reasonsOf(t, home) {
+			switch {
+			case r == telemetry.FeedbackReasonLedgerFold:
+				fold++
+			case strings.HasPrefix(r, "ledger_"):
+				other++
+			}
+		}
+		return fold, other
+	}
+	const line = "times in 24 h"
+	tickJSON(t)
+	if fold, other := fallbacks(); fold != 1 || other > 1 {
+		t.Errorf("one tick: %d ledger_fold, %d other ledger_* event(s), want 1 and at most 1", fold, other)
+	}
+	if c := ledgerCheck(); strings.Contains(c.Summary+c.Detail, line) {
+		t.Errorf("after one tick: %+v", c)
+	}
+	tickJSON(t)
+	tickJSON(t)
+	if c := ledgerCheck(); !strings.Contains(c.Summary+c.Detail, line) {
+		t.Errorf("after three ticks: %+v", c)
 	}
 }

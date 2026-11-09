@@ -33,6 +33,7 @@ var ledgerJSONReaders = []string{
 	"internal/feedback/ledgerdb.Writer.Export",
 	"internal/cli.ledgerReader",
 	"internal/cli.indexLedger",
+	"internal/cli.ledgerChain", // the type of their chain: its fallback field
 	"internal/index.Options.withDefaults",
 	"internal/index/indexgen.Generate",
 }
@@ -65,74 +66,84 @@ type ledgerJSONUse struct {
 
 func (u ledgerJSONUse) String() string { return fmt.Sprintf("%d %s %s", u.line, u.fn, u.what) }
 
+// ledgerJSONNames are the feedback package's names that read ledger.json.
+var ledgerJSONNames = map[string]bool{"LoadLedger": true, "Current": true, "Rebuild": true, "CurrentReader": true}
+
 // ledgerJSONUses is every place of f, a file of the package in pkgDir
 // (slash-separated, from the module root), that reads ledger.json or
-// names it: a call of feedback.LoadLedger, feedback.Current or
-// feedback.Rebuild (unqualified inside internal/feedback), a
-// feedback.CurrentReader literal, the literal "ledger.json".
+// names it: any use of feedback.LoadLedger, Current, Rebuild or
+// CurrentReader (a call, a function value, a type, new, a literal), bare
+// inside internal/feedback or under a dot import of it, and the literal
+// "ledger.json". Declaring one of those names is no use of it. A use in a
+// type declaration is enclosed by that type, any other outside a
+// function by "".
 func ledgerJSONUses(fset *token.FileSet, f *ast.File, pkgDir string) []ledgerJSONUse {
 	names := map[string]bool{} // the local names of the feedback package
+	bare := pkgDir == "internal/feedback"
 	for _, imp := range f.Imports {
 		if p, _ := strconv.Unquote(imp.Path.Value); p == feedbackImport {
-			name := "feedback"
-			if imp.Name != nil {
-				name = imp.Name.Name
-			}
-			names[name] = true
-		}
-	}
-	inFeedback := pkgDir == "internal/feedback"
-	readers := map[string]bool{"LoadLedger": true, "Current": true, "Rebuild": true}
-	// feedbackName is the feedback function or type e names: X.Sel of the
-	// imported package, or a bare name inside the package itself.
-	feedbackName := func(e ast.Expr) string {
-		switch e := e.(type) {
-		case *ast.SelectorExpr:
-			if x, ok := e.X.(*ast.Ident); ok && names[x.Name] {
-				return e.Sel.Name
-			}
-		case *ast.Ident:
-			if inFeedback {
-				return e.Name
+			switch {
+			case imp.Name == nil:
+				names["feedback"] = true
+			case imp.Name.Name == ".":
+				bare = true // its names, unqualified
+			default:
+				names[imp.Name.Name] = true
 			}
 		}
-		return ""
 	}
 	var out []ledgerJSONUse
 	scan := func(n ast.Node, fn string) {
-		ast.Inspect(n, func(n ast.Node) bool {
-			what := ""
+		var visit func(n ast.Node) bool
+		use := func(n ast.Node, what string) {
+			out = append(out, ledgerJSONUse{fset.Position(n.Pos()).Line, fn, what})
+		}
+		visit = func(n ast.Node) bool {
 			switch n := n.(type) {
-			case *ast.CallExpr:
-				if name := feedbackName(n.Fun); readers[name] {
-					what = "calls " + name
+			case *ast.SelectorExpr:
+				if x, ok := n.X.(*ast.Ident); ok && names[x.Name] && ledgerJSONNames[n.Sel.Name] {
+					use(n, "uses "+n.Sel.Name)
 				}
-			case *ast.CompositeLit:
-				if feedbackName(n.Type) == "CurrentReader" {
-					what = "builds a CurrentReader"
+				ast.Inspect(n.X, visit) // a field or method named Current is no use
+				return false
+			case *ast.Ident:
+				if bare && ledgerJSONNames[n.Name] {
+					use(n, "uses "+n.Name)
 				}
 			case *ast.BasicLit:
 				if s, err := strconv.Unquote(n.Value); n.Kind == token.STRING && err == nil && s == "ledger.json" {
-					what = `names "ledger.json"`
+					use(n, `names "ledger.json"`)
 				}
 			}
-			if what != "" {
-				out = append(out, ledgerJSONUse{fset.Position(n.Pos()).Line, fn, what})
-			}
 			return true
-		})
+		}
+		ast.Inspect(n, visit)
 	}
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
 		if !ok {
-			scan(d, "")
+			gd := d.(*ast.GenDecl)
+			for _, sp := range gd.Specs {
+				if ts, ok := sp.(*ast.TypeSpec); ok { // its uses count as the type's; its name aside
+					scan(ts.Type, ts.Name.Name)
+					if ts.TypeParams != nil {
+						scan(ts.TypeParams, ts.Name.Name)
+					}
+					continue
+				}
+				scan(sp, "")
+			}
 			continue
 		}
 		fn := fd.Name.Name
 		if fd.Recv != nil && len(fd.Recv.List) == 1 {
 			fn = receiverType(fd.Recv.List[0].Type) + "." + fn
+			scan(fd.Recv, fn)
 		}
-		scan(fd, fn)
+		scan(fd.Type, fn)
+		if fd.Body != nil {
+			scan(fd.Body, fn)
+		}
 	}
 	return out
 }
@@ -218,15 +229,20 @@ func TestOnlyTheFallbackReadsLedgerJSON(t *testing.T) {
 
 	fixture := filepath.Join("testdata", "ledgerjson_scan", "forbidden.go.txt")
 	every := []string{
-		"8 loadsTheLedger calls LoadLedger",
-		"10 current calls Current",
-		"12 rebuilds calls Rebuild",
-		"14 buildsAReader builds a CurrentReader",
+		"8 loadsTheLedger uses LoadLedger",
+		"10 current uses Current",
+		"12 rebuilds uses Rebuild",
+		"14 buildsAReader uses CurrentReader",
 		`16 namesTheFile names "ledger.json"`,
-		"18  calls LoadLedger",
-		"22 other.indexLedger builds a CurrentReader",
-		"24 Writer.Export calls LoadLedger",
-		"26 ledgerReader builds a CurrentReader",
+		"18  uses LoadLedger",
+		"22 other.indexLedger uses CurrentReader",
+		"24 Writer.Export uses LoadLedger",
+		"26 ledgerReader uses CurrentReader",
+		"30  uses LoadLedger",
+		"32 passesIt uses Current",
+		"34 allocates uses CurrentReader",
+		"36  uses CurrentReader",
+		"38 typed uses CurrentReader",
 	}
 	for _, c := range []struct {
 		pkgDir string
@@ -235,11 +251,18 @@ func TestOnlyTheFallbackReadsLedgerJSON(t *testing.T) {
 		// In the cli, its own ledgerReader may build the fallback.
 		{"internal/cli", slices.DeleteFunc(slices.Clone(every), func(u string) bool { return strings.Contains(u, " ledgerReader ") })},
 		{"internal/recall", every},
-		// Inside the feedback package, its bare names count too.
-		{"internal/feedback", append(slices.Clone(every), "28 bare calls LoadLedger")},
+		// Inside the feedback package, its bare names count too, but not
+		// a field or method of that name.
+		{"internal/feedback", slices.Insert(slices.Clone(every), 9, "28 bare uses LoadLedger")},
 	} {
 		if got := forbiddenLedgerJSONUses(t, fixture, c.pkgDir); !slices.Equal(got, c.want) {
 			t.Errorf("the control read as %s: flagged\n%s\nwant\n%s", c.pkgDir, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
 		}
+	}
+	// A dot import is the package itself: its names, bare.
+	dot := filepath.Join("testdata", "ledgerjson_scan", "dotimport.go.txt")
+	want := []string{"7 dotted uses LoadLedger", "9 dottedReader uses CurrentReader", "9 dottedReader uses CurrentReader"}
+	if got := forbiddenLedgerJSONUses(t, dot, "internal/recall"); !slices.Equal(got, want) {
+		t.Errorf("the dot import: flagged\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

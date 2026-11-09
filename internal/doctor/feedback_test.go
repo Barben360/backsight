@@ -329,8 +329,23 @@ func TestDoctorLedgerFacts(t *testing.T) {
 		{"missing, a tick in the last hour, the folder read-only", func(t *testing.T) Check {
 			d := feedbackDirs(t, recent, time.Time{})
 			telemetryAt(t, d, map[time.Duration][]string{10 * time.Minute: {tickLine}})
-			return checkFeedbackLedger(d, true, ledgerdb.LedgerFacts{File: ledgerdb.FileName, Head: 1, OpenError: "readonly"}, nil, usageNow)
-		}, Warn, []string{"readonly", "feedback"}},
+			c := checkFeedbackLedger(d, true, ledgerdb.LedgerFacts{File: ledgerdb.FileName, Head: 1, OpenError: "readonly"}, nil, usageNow)
+			if !strings.Contains(c.Summary, d.FeedbackDir()) || !strings.Contains(c.Fix, d.FeedbackDir()) {
+				t.Errorf("%+v: the folder %s is not named", c, d.FeedbackDir())
+			}
+			return c
+		}, Warn, []string{"readonly", "writable"}},
+		{"built but held by another process, a tick lately", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			telemetryAt(t, d, map[time.Duration][]string{10 * time.Minute: {tickLine}})
+			c := checkFeedbackLedger(d, true, ledgerdb.LedgerFacts{File: ledgerdb.FileName, Head: 1, Busy: true}, nil, usageNow)
+			for _, not := range []string{"not built", "writable"} {
+				if strings.Contains(c.Summary+" "+c.Detail+" "+c.Fix, not) {
+					t.Errorf("%+v: says %q of a busy database", c, not)
+				}
+			}
+			return c
+		}, Warn, []string{"in use by another process", "doctor again"}},
 		{"a side file in use", func(t *testing.T) Check {
 			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
 			db, err := sql.Open("sqlite", "file:"+filepath.Join(d.FeedbackDir(), ledgerdb.FileName))

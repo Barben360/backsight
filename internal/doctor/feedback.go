@@ -125,6 +125,11 @@ func checkFeedbackLedger(d paths.Dirs, enabled bool, f ledgerdb.LedgerFacts, err
 	}
 	if err == nil {
 		switch {
+		// Held by another process: nothing more of it is known.
+		case f.Busy:
+			add(fmt.Sprintf("%s in %s is in use by another process: doctor could not read it", f.File, dir),
+				"a fold or a rebuild holds it for a moment; recall reads the last copy of the counts, ledger.json, meanwhile",
+				"run backsight doctor again; if it stays in use, a backsight process is stuck (jobs tick, feedback rebuild): end it")
 		// A damaged file is one; a folder a tick could not build in, one
 		// once a tick tried.
 		case f.OpenError == "corrupt" || f.OpenError == "notadb":

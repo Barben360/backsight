@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -53,9 +52,11 @@ type maintainResult struct {
 	// MetricsIndex: the pruning of the metrics index (maintainIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
 	// FeedbackLedger: the side files of the feedback ledger removed
-	// (maintainLedger) and the scratch folders of rebuild plans that died
-	// (sweepRebuildPlans), "" when there were none.
+	// (maintainLedger), "" when there were none.
 	FeedbackLedger string `json:"feedback_ledger,omitempty"`
+	// RebuildPlans: the scratch folders of feedback rebuild plans that
+	// died, removed or not (sweepRebuildPlans), "" when there were none.
+	RebuildPlans string `json:"rebuild_plans,omitempty"`
 	// MetricsRotated: the metrics month files removed past the months kept.
 	MetricsRotated []string `json:"metrics_rotated,omitempty"`
 	// DoctorHistory: "<n> check(s)" kept in the day's history line, or
@@ -90,13 +91,21 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			}
 			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
 			res := maintainResult{Status: "done"}
+			plansFailed := false
 			finish := func() error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "maintain", Status: res.Status, MS: res.MS,
 					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "reattribute": res.Reattribute, "purges": res.Purges, "update": res.Update, "reason": res.Reason}})
 				var failed error
 				if res.Status == "partial" {
-					failed = &output.Error{Code: output.Partial, Message: "the backup failed: " + res.Backup + "; the next run retries"}
+					var why []string
+					if strings.HasPrefix(res.Backup, "failed") {
+						why = append(why, "the backup failed: "+res.Backup)
+					}
+					if plansFailed {
+						why = append(why, "rebuild plans: "+res.RebuildPlans)
+					}
+					failed = &output.Error{Code: output.Partial, Message: strings.Join(why, "; ") + "; the next run retries"}
 				}
 				return e.report("jobs maintain", res, func() string { return maintainText(res) }, failed)
 			}
@@ -120,7 +129,10 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
 			res.MetricsRotated = metricsfile.Rotate(d.MetricsDir(), now(), metricsfile.KeepMonths)
 			res.MetricsIndex = maintainIndex(cmd.Context(), d, home)
-			res.FeedbackLedger = joinNonEmpty(maintainLedger(cmd.Context(), d, home), sweepRebuildPlans(d, now()))
+			res.FeedbackLedger = maintainLedger(cmd.Context(), d, home)
+			if res.RebuildPlans, plansFailed = sweepRebuildPlans(d, now()); plansFailed {
+				res.Status = "partial"
+			}
 			archive, noBackup := "", "backup.enabled is off, and the moves wait for a backup"
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
@@ -336,6 +348,9 @@ func maintainText(r maintainResult) string {
 	if r.FeedbackLedger != "" {
 		metrics += ", feedback ledger " + r.FeedbackLedger
 	}
+	if r.RebuildPlans != "" {
+		metrics += ", rebuild plans " + r.RebuildPlans
+	}
 	history := ""
 	switch {
 	case strings.HasPrefix(r.DoctorHistory, "not written"):
@@ -469,14 +484,15 @@ const rebuildPlanTTL = 24 * time.Hour
 // sweepRebuildPlans removes the <state>/staging/rebuild-plan-* folders
 // older than rebuildPlanTTL at now (a plan that died left its copy of the
 // journal there), each entry through fsutil.RemoveRetry, and nothing else
-// of staging; "" when there were none.
-func sweepRebuildPlans(d paths.Dirs, now time.Time) string {
+// of staging: what it removed and could not ("" when there were none),
+// failed when a removal failed.
+func sweepRebuildPlans(d paths.Dirs, now time.Time) (line string, failed bool) {
 	staging := filepath.Join(d.State, "staging")
 	ents, err := os.ReadDir(staging)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	var removed, failed []string
+	var removed, kept []string
 	for _, e := range ents {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), "rebuild-plan-") {
 			continue
@@ -485,7 +501,7 @@ func sweepRebuildPlans(d paths.Dirs, now time.Time) string {
 			continue
 		}
 		if err := removeTree(filepath.Join(staging, e.Name())); err != nil {
-			failed = append(failed, e.Name())
+			kept = append(kept, e.Name())
 			continue
 		}
 		removed = append(removed, e.Name())
@@ -494,13 +510,8 @@ func sweepRebuildPlans(d paths.Dirs, now time.Time) string {
 	if len(removed) > 0 {
 		out = append(out, "removed "+strings.Join(removed, ", "))
 	}
-	if len(failed) > 0 {
-		out = append(out, "could not remove "+strings.Join(failed, ", "))
+	if len(kept) > 0 {
+		out = append(out, "could not remove "+strings.Join(kept, ", "))
 	}
-	return strings.Join(out, ", ")
-}
-
-// joinNonEmpty is the parts that are not empty, joined by ", ".
-func joinNonEmpty(parts ...string) string {
-	return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), ", ")
+	return strings.Join(out, ", "), len(kept) > 0
 }

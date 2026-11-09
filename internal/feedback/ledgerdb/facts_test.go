@@ -2,12 +2,14 @@ package ledgerdb
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -107,4 +109,35 @@ func TestFactsReadWithoutWriting(t *testing.T) {
 			t.Errorf("%+v", f)
 		}
 	})
+}
+
+// TestFactsOfABusyDatabase: a database another process holds (DELETE
+// mode, BEGIN EXCLUSIVE) past the wait is Busy, never a write problem.
+func TestFactsOfABusyDatabase(t *testing.T) {
+	o := tempOpts(t)
+	appendLines(t, o, hideOf(oct(1), "m1"))
+	mustCloseWriter(t, mustOpenWriter(t, o))
+	db, err := sql.Open(driverName, "file:"+mainPath(o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	for _, q := range []string{"PRAGMA journal_mode=DELETE", "BEGIN EXCLUSIVE"} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _, _ = conn.ExecContext(ctx, "ROLLBACK") })
+	old := factsBusy
+	factsBusy = 50 * time.Millisecond
+	t.Cleanup(func() { factsBusy = old })
+	if f := mustFacts(t, o); !f.Busy || f.OpenError != "" {
+		t.Errorf("%+v, want Busy and no write problem", f)
+	}
 }

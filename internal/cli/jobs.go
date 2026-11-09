@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -191,6 +192,11 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
 			res.Feedback = settleFeedback(d, home, cfg, tw) // local only: before the server start, which can wait
+			// The ledger the tick's later steps read (hidings, the shared
+			// upload, the history import): read once, at the first of them,
+			// so that a ledger.db that cannot be read logs one fallback per
+			// tick, not one per step.
+			ledger := tickLedger(d, cfg, tw)
 			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
 				tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSharedCombine))
 			}
@@ -220,11 +226,11 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil || f.StartedOver() != nil {
 					return
 				}
-				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, ledgerReader(d, cfg, false, tw), d.FeedbackDir(), now())
+				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, ledger, d.FeedbackDir(), now())
 				sctx, cancel := context.WithTimeout(cmd.Context(), shareTickBudget)
 				defer cancel()
 				var err error
-				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now(), tw); err != nil {
+				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now(), ledger); err != nil {
 					res.SharedError = err.Error()
 				}
 				publishFigures = true
@@ -244,7 +250,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 					res.BriefingTriggers = tickBriefingTriggers(cmd.Context(), d, cfg, f.Client, tw)
 				}
-				res.History = importInTick(cmd.Context(), d, home, cfg, tw)
+				res.History = importInTick(cmd.Context(), d, home, cfg, ledger)
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -328,7 +334,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			feedbackSteps() // after the sends: a slow server delays this look, never them
-			res.History = importInTick(cmd.Context(), d, home, cfg, tw)
+			res.History = importInTick(cmd.Context(), d, home, cfg, ledger)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -420,6 +426,20 @@ func tickText(r tickResult) string {
 	return msg + metrics + "\n"
 }
 
+// tickLedger is the ledger as the tick's steps after the settle read it:
+// ledgerReader's All, read at the first call and kept for the others
+// (what the steps journal meanwhile waits for the next tick). Nil-safe:
+// with feedback off it reads as an empty ledger.
+func tickLedger(d paths.Dirs, cfg config.Config, tw *telemetry.Writer) func() (feedback.Ledger, error) {
+	return sync.OnceValues(func() (feedback.Ledger, error) {
+		r := ledgerReader(d, cfg, false, tw)
+		if r == nil {
+			return feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{}}, nil
+		}
+		return r.All()
+	})
+}
+
 // importTickBudget bounds a tick's import of earlier history, its local
 // reading included (its server checks keep their importCheckBudget).
 var importTickBudget = 60 * time.Second
@@ -430,11 +450,11 @@ var importTickBudget = 60 * time.Second
 // keeps what it journaled, and the next tick goes on. Best effort: what
 // it did, "" when there is nothing to do (feedback off, done already, the
 // ledger unreadable) or another import is running.
-func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config, tw *telemetry.Writer) string {
+func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config, ledger func() (feedback.Ledger, error)) string {
 	if !cfg.Feedback.Enabled {
 		return ""
 	}
-	if l, err := ledgerReader(d, cfg, false, tw).All(); err != nil || !l.HistoryImported.IsZero() {
+	if l, err := ledger(); err != nil || !l.HistoryImported.IsZero() {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, importTickBudget)
