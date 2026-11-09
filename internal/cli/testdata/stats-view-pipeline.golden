@@ -1,8 +1,9 @@
 Is it flowing? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
 
 Flowing
-Sessions sent                                1 of 1                   (n=1, ok)
+Items sent                                   1 of 1                   (n=1, ok)
   sent 1, failed 0, set aside after an error 0, waiting 0
+  items: 1 from a session
 Sends by result                              1                        (ok, +1 vs previous)
 Waiting on this PC                           0                        (ok)
 Waiting on the server                        0                        (ok)

@@ -14,8 +14,9 @@ Time memory adds to a prompt                 —                        (approxi
   all PCs: typical 500 ms–1.0 s
 
 Flowing
-Sessions sent                                91 % (62–98 %)           (n=11, status on this PC: ok, -0.8 pts vs previous)
+Items sent                                   91 % (62–98 %)           (n=11, status on this PC: ok, -0.8 pts vs previous)
   sent 1, failed 0, set aside after an error 0, waiting 0
+  items on this PC: 1 from a session
 
 Sessions of 2026-10-07
 Session  Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent

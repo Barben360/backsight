@@ -220,7 +220,7 @@ func TestBannerFixRound1(t *testing.T) {
 	if got := flowing(metrics.AxisAttention, 1); got != "3 failed, oldest waiting under 1 min" {
 		t.Errorf("age over 0: %q", got)
 	}
-	if got := flowing(metrics.AxisOK, 93_600_000); got != "188 of 192 sessions sent" {
+	if got := flowing(metrics.AxisOK, 93_600_000); got != "188 of 192 items sent" {
 		t.Errorf("failed but not in attention: %q", got)
 	}
 

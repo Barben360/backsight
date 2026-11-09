@@ -57,7 +57,7 @@ var catalogRows = []catalogRow{
 	{"bank.churn", "Retired, hidden, restored", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "weekly", "backsight memory stale", "forget,retire,hide,unhide"},
 	{"notes.stored", "Facts stored", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "none", "backsight stats bank", "by_result,by_kind"},
 	{"imports.sent", "Files imported", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "bank", "none", "backsight import list", "by_action"},
-	{"pipeline.flow", "Sessions sent", "ratio", "up", 0, none, none, "", false, true, "wilson", "machine", false, "pipeline", "daily", "backsight stats pipeline", "ok,failed,set_aside,waiting,backlog_oldest_ms"},
+	{"pipeline.flow", "Items sent", "ratio", "up", 0, none, none, "", false, true, "wilson", "machine", false, "pipeline", "daily", "backsight stats pipeline", "ok,failed,set_aside,waiting,backlog_oldest_ms,sessions,notes,subagent_reports"},
 	{"retain.outcomes", "Sends by result", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "daily", "backsight stats pipeline", "by_status,p95_ms"},
 	{"local.backlog", "Waiting on this PC", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight retain waiting", "notes_queued,sessions_waiting,quarantined,oldest_ms"},
 	{"server.queue", "Waiting on the server", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight doctor", "pending,processing,failed,failed_total,failed_capped"},
@@ -250,7 +250,7 @@ func TestCatalogText(t *testing.T) {
 	}
 	// And the plain-words additions the table asks for.
 	for id, want := range map[string]string{
-		"pipeline.flow":      "documents",
+		"pipeline.flow":      "a session's document for one project, a note, or a subagent's report",
 		"server.queue":       "last 7 days",
 		"bank.consolidation": "current total",
 		"context.per_prompt": "typical (median)",

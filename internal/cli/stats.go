@@ -344,18 +344,11 @@ func extractionOver(cmd *cobra.Command, from, to time.Time) extraction {
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	// The window's days are [from, to): a to at midnight leaves its day out.
-	// The server's 30 buckets count back from today, not from to.
-	firstDay := from.UTC().Truncate(24 * time.Hour)
-	lastDay := to.UTC().Add(-time.Nanosecond).Truncate(24 * time.Hour)
-	if kept := now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -29); firstDay.Before(kept) {
-		firstDay = kept
-	}
-	x := extraction{Days: max(0, int(lastDay.Sub(firstDay)/(24*time.Hour))+1)}
-	first, last := firstDay.Format("2006-01-02"), lastDay.Format("2006-01-02")
+	days := extractionDays(from, to, now())
+	x := extraction{Days: len(days)}
 	var thoughts int64
 	for day, t := range byDay {
-		if day < first || day > last {
+		if !days[day] {
 			continue
 		}
 		x.Input += t.Input
@@ -368,6 +361,24 @@ func extractionOver(cmd *cobra.Command, from, to time.Time) extraction {
 		x.Cost, x.Currency = p.Cost(x.Input, x.Cached, x.Output, 0), p.Currency
 	}
 	return x
+}
+
+// extractionDays are the UTC days (YYYY-MM-DD) of [from, to) whose
+// extraction counts, by the dashboard's rule (metrics.UTCDayIn): a UTC day
+// counts when the middle of what it can hold (today: up to readAt) lies in
+// the window, so a window of local midnights counts exactly its days and a
+// UTC day mostly outside it is left out; and only within the server's 30
+// days, which count back from today, not from to.
+func extractionDays(from, to, readAt time.Time) map[string]bool {
+	const d = 24 * time.Hour
+	kept := readAt.UTC().Truncate(d).AddDate(0, 0, -29)
+	out := map[string]bool{}
+	for day := from.UTC().Truncate(d).Add(-d); day.Before(to); day = day.Add(d) {
+		if !day.Before(kept) && metrics.UTCDayIn(day, readAt, from, to) {
+			out[day.Format("2006-01-02")] = true
+		}
+	}
+	return out
 }
 
 // serverDays notes when the server's 30 days of buckets cut the window.

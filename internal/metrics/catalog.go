@@ -291,13 +291,13 @@ var Catalog = withDrills([]Def{
 		Action:     "A pause means a folder reached its cost cap; backsight import list shows which one.",
 	},
 	{
-		ID: "pipeline.flow", Label: "Sessions sent", Unit: "ratio", Direction: "up", MinN: 0,
+		ID: "pipeline.flow", Label: "Items sent", Unit: "ratio", Direction: "up", MinN: 0,
 		ErrorClass: true, CI: "wilson", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily",
 		Command: "backsight doctor", Drill: "backsight stats pipeline",
-		Extra:      []string{"ok", "failed", "set_aside", "waiting", "backlog_oldest_ms"},
+		Extra:      []string{"ok", "failed", "set_aside", "waiting", "backlog_oldest_ms", "sessions", "notes", "subagent_reports"},
 		Question:   "Are finished sessions reaching the server?",
-		Definition: "Documents whose last status is ok, out of documents with a send in the window. The interval counts documents (a session's documents per project), not independent sends. Failed, set aside and waiting ones are given beside it. A note logged queued with nothing after it waits only while the notes outbox still holds it (queued at or after its oldest note); one that left the outbox counts as sent. Watched when any failed or was set aside; bad when the backlog is older than 24 hours.",
-		Action:     "Sessions are not being sent. Run backsight doctor, then look at the pipeline.",
+		Definition: "Items whose last status is ok, out of items with a send in the window. An item is a document sent to the server: a session's document for one project, a note, or a subagent's report; how many of each is given beside it. The interval counts items, not independent sends. Failed, set aside and waiting ones are given beside it. A note logged queued with nothing after it waits only while the notes outbox still holds it (queued at or after its oldest note); one that left the outbox counts as sent. Likewise an item logged waiting (queued or retry) waits no more once a later background run counted nothing of its kind waiting on this PC. Watched when any failed or was set aside; bad when the backlog is older than 24 hours.",
+		Action:     "Sessions and notes are not being sent. Run backsight doctor, then look at the pipeline.",
 	},
 	{
 		ID: "retain.outcomes", Label: "Sends by result", Unit: "count", Direction: "none", MinN: 0,
@@ -312,7 +312,7 @@ var Catalog = withDrills([]Def{
 		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight retain waiting",
 		Extra:      []string{"notes_queued", "sessions_waiting", "quarantined", "oldest_ms"},
 		Question:   "Is anything stuck on this PC?",
-		Definition: "Notes queued, sessions waiting to be sent, items set aside, and the age of the oldest (a note logged queued counts only while the notes outbox holds it). Watched when the oldest is over 1 hour, bad over 24 hours.",
+		Definition: "Notes queued, sessions waiting to be sent, items set aside, and the age of the oldest (a note logged queued counts only while the notes outbox holds it; an item logged waiting, only until a later background run counts nothing of its kind waiting). Watched when the oldest is over 1 hour, bad over 24 hours.",
 		Action:     "Work is not leaving this PC. Run backsight retain waiting to see what waits and why.",
 	},
 	{

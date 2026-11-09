@@ -159,9 +159,9 @@ type recordTokens struct {
 }
 
 // readRecordTokens reads ops (and every operation, ""), for the UTC days
-// overlapping the window and before cutoff, placed in buckets as inWindow
-// places the server's: by start instant, a day straddling the start in the
-// first.
+// the window counts (bucketIn: by their noon) before cutoff, placed in
+// buckets as inWindow places the server's: by start instant, a day starting
+// before the window in the first.
 func readRecordTokens(e env, w Window, buckets []Bucket, cutoff time.Time, ops []string) (recordTokens, error) {
 	rt := recordTokens{byOp: map[string][]tokens{}, total: map[string]tokens{}, held: make([]bool, len(buckets))}
 	for _, op := range append([]string{""}, ops...) {
@@ -175,6 +175,9 @@ func readRecordTokens(e env, w Window, buckets []Bucket, cutoff time.Time, ops [
 	}
 	seen := map[string]bool{}
 	for _, r := range rows {
+		if !bucketIn(r.Bucket, day, llmSpan{}, w.Since, w.Until) {
+			continue // a recorded UTC day counts by its noon, as the server's
+		}
 		local := r.Bucket.In(w.Loc)
 		if local.Before(w.Since) {
 			local = w.Since.In(w.Loc)
@@ -200,15 +203,6 @@ func readRecordTokens(e env, w Window, buckets []Bucket, cutoff time.Time, ops [
 	return rt, nil
 }
 
-// llmTimes are the times of bs.
-func llmTimes(bs []hindsight.LLMBucket) []time.Time {
-	out := make([]time.Time, len(bs))
-	for i, b := range bs {
-		out[i] = b.Time
-	}
-	return out
-}
-
 // recordedExtraction is the record's tokens for the window's days before
 // the server's first LLM day, and each bucket's source; nil, nil when the
 // window lies inside the server's 30 days (the server alone, as ever).
@@ -218,7 +212,14 @@ func recordedExtraction(e env, w Window, buckets []Bucket, all []hindsight.LLMBu
 	if !w.Since.Before(reachStart(e.now, llmReachDays)) {
 		return nil, nil, nil
 	}
-	first, hasServer := firstBucket(llmTimes(all), llmWidth(all), w.Since, w.Until)
+	// The server's first bucket the window counts (inWindow's rule).
+	var first time.Time
+	hasServer := false
+	for _, b := range all {
+		if bucketIn(b.Time, llmWidth(all), llmSpanOf(e, "llm:"), w.Since, w.Until) && (!hasServer || b.Time.Before(first)) {
+			first, hasServer = b.Time, true
+		}
+	}
 	cutoff := w.Until
 	if hasServer {
 		cutoff = first

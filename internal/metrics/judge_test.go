@@ -89,6 +89,21 @@ func TestJudgeOrder(t *testing.T) {
 	})
 }
 
+// A metric judged on its p95 whose p95 could not be computed (fewer than
+// 100 samples, whatever its own min_n) was never judged: too few, never ok.
+// The time to recall's min_n (20 sessions sent) is met at 33, but its judged
+// step timed 28: no p95, too few.
+func TestJudgeP95NotComputedIsTooFew(t *testing.T) {
+	runJudge(t, []judgeCase{
+		{name: "time to recall, n 33, no p95", id: "pipeline.time_to_recall", o: Observation{Den: 33}, status: StatusTooFew},
+		{name: "time to recall, p95 at the line", id: "pipeline.time_to_recall", o: pct(100, 3_600_000), status: StatusOK},
+		{name: "time to recall, p95 past the line", id: "pipeline.time_to_recall", o: pct(100, 3_600_001), status: StatusWatch},
+		{name: "latency at min_n with no p95", id: "recall.latency", o: Observation{Den: 100}, status: StatusTooFew},
+		{name: "a value threshold is not a p95", id: "context.per_session", edit: func(d *Def) { d.Absolute = Threshold{On: "value", Watch: f(1)} },
+			o: Observation{Den: 100, Value: f(1)}, status: StatusOK},
+	})
+}
+
 func TestJudgeCI(t *testing.T) {
 	d := mustDef(t, "recall.hit_rate")
 	// 0/19: too_few, and the interval is still given: [0, 0.1682].

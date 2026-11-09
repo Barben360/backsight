@@ -334,7 +334,7 @@ func TestRootCauseCollapse(t *testing.T) {
 			x.retained(ago(2*time.Hour), "d2", "queued", 0)
 			down(x)
 		}, &Item{Severity: SeverityWatch, Text: "Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost."},
-			[]Item{{Metric: "pipeline.flow", Severity: SeverityWatch, Axis: "flowing", Text: "1 session could not be sent; 0 set aside after an error.",
+			[]Item{{Metric: "pipeline.flow", Severity: SeverityWatch, Axis: "flowing", Text: "1 item could not be sent; 0 set aside after an error.",
 				Why: mustDefAction("pipeline.flow"), Command: "backsight doctor"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -882,8 +882,8 @@ func TestCopyFormats(t *testing.T) {
 		{tooEarlySentence(1, countUnits["used.turn_rate"], 20), "Not enough yet: 1 declared turn, 20 needed."},
 		{tooEarlySentence(2, countUnits["context.per_session"], 100), "Not enough yet: 2 sessions, 100 needed."},
 		{hookText(1), "1 step crashed in the last 24 h."}, {hookText(2), "2 steps crashed in the last 24 h."},
-		{flowText(1, 0), "1 session could not be sent; 0 set aside after an error."},
-		{flowText(2, 1), "2 sessions could not be sent; 1 set aside after an error."},
+		{flowText(1, 0), "1 item could not be sent; 0 set aside after an error."},
+		{flowText(2, 1), "2 items could not be sent; 1 set aside after an error."},
 		{wrongText(1, 7), "1 memory reported wrong or out of date this week."},
 		{wrongText(2, 28), "2 memories reported wrong or out of date in the last 28 days."},
 		{cantJudgeSentence(0.64), "Can't judge yet: Claude said what it used on only 64 % of turns."},

@@ -30,6 +30,7 @@ type serverData struct {
 	Completed           []hindsight.Operation
 	LLM                 map[string][]hindsight.LLMBucket // key: operation ("" = all), over the window's period
 	LLM30               []hindsight.LLMBucket            // all operations over 30d whatever the window (llm30d:)
+	LLMSpan, LLM30Span  llmSpan                          // what the LLM reads can hold: their periods back from the read
 	Memory              hindsight.MemoryDetail           // memory:<id>
 	Doctor              []DoctorCheck
 	DoctorErr           error
@@ -152,6 +153,29 @@ func llmPeriod(span time.Duration) string {
 	return "30d"
 }
 
+// periodLength is the span an LLM-stats period (llmPeriod) counts back.
+func periodLength(period string) time.Duration {
+	switch period {
+	case "1d":
+		return day
+	case "7d":
+		return 7 * day
+	}
+	return 30 * day
+}
+
+// llmSpanOf is what the LLM read of key can hold (llmRead's keys: llm30dKey,
+// or llm:<operation>).
+func llmSpanOf(e env, key string) llmSpan {
+	if e.srv == nil {
+		return llmSpan{}
+	}
+	if key == llm30dKey {
+		return e.srv.LLM30Span
+	}
+	return e.srv.LLMSpan
+}
+
 // loadServer reads what need names (endpoint keys, plus "doctor" for the
 // live doctor run), every read in parallel under ServerTimeout and the
 // doctor beside them under doctorTimeout. The server's periods count back
@@ -185,8 +209,11 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		return d, nil
 	}
 
-	span := viewSpan(src.now(), w)
-	ySpan := yieldReadSpan(src.now(), w)
+	readAt := src.now()
+	span := viewSpan(readAt, w)
+	ySpan := yieldReadSpan(readAt, w)
+	d.LLMSpan = llmSpan{From: readAt.Add(-periodLength(llmPeriod(span))), To: readAt}
+	d.LLM30Span = llmSpan{From: readAt.Add(-periodLength("30d")), To: readAt}
 	yieldLLM := map[string]*[]hindsight.LLMBucket{}
 	var (
 		kmu    sync.Mutex

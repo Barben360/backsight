@@ -94,21 +94,23 @@ func (d PageData) funnelOf(r *metrics.Result) FunnelCard {
 		hops[x.Name] = x
 	}
 	whole := hops["whole_way"]
-	// Too few: the metric says so, or fewer sessions were recalled than the
-	// whole way needs (no typical time). Either way the card tells it and its
-	// pill agrees; a watch is the one status that outranks it.
-	few := v.M.Status == metrics.StatusTooFew || whole.P50 == nil
+	// The pill is the metric's status, as in stats and the JSON: it judges
+	// the slowest 1 in 20 of sent to turned into memories, too few until
+	// that step has its 100 sessions. Whether times are told is the card's
+	// own count: fewer sessions recalled than the whole way needs (no
+	// typical time) tells none.
+	few := whole.P50 == nil
 	need := int64(v.Def.MinN)
 	dur := func(p *float64) string { return chart.Span(*p) }
 	watch := v.M.Status == metrics.StatusWatch
 
 	c.Head.Pill = word(v)
-	if few && !watch {
-		c.Head.Pill = Word{"too few", "st-few"}
-	}
 	based := l.Int(f["recalled"]) + " sessions recalled in the window; each step on the sessions that reached it"
 	if few {
 		based = format.Count(l, f["recalled"], "session", "sessions") + " recalled (" + l.Int(need) + " needed)"
+	}
+	if s := hops["sent_to_extracted"]; v.M.Status == metrics.StatusTooFew && s.P95 == nil {
+		based += "; the slowest 1 in 20 needs " + l.Int(metrics.MinForP95) + " sessions timed from sent to turned into memories (" + l.Int(s.N) + " so far)"
 	}
 	c.Head.Info.What = "For each session sent in the window: from its last turn to its send, to the server turning it into memories, to the first time one of those memories was shown."
 	c.Head.Info.Limits = "Watch when the slowest 1 in 20 takes over " + chartLimit(v) + " from sent to turned into memories."

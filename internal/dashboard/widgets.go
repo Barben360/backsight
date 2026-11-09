@@ -211,7 +211,7 @@ var nouns = map[string][2]string{
 	"recall.hit_rate": {"prompt", "prompts"}, "recall.latency": {"prompt", "prompts"}, "search.rate": {"prompt", "prompts"},
 	"used.turn_rate": {"declared turn", "declared turns"}, "declare.coverage": {"turn", "turns"},
 	"verdict.wrong_rate":  {"verdict", "verdicts"},
-	"context.per_session": {"session", "sessions"}, "pipeline.flow": {"session", "sessions"},
+	"context.per_session": {"session", "sessions"}, "pipeline.flow": {"item", "items"},
 	"search.empty_rate": {"search", "searches"},
 }
 

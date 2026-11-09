@@ -977,7 +977,7 @@ func TestViewTextAllPCs(t *testing.T) {
 	wantLines(t, "cost", text("cost", "--machines", "all"),
 		"Time memory adds to a prompt 1.0–2.0 s (approximate, n=649, ok)", "all PCs: typical 500 ms–1.0 s")
 	// the sessions: this PC's 5 sent and the 8 days of 10 of the others, 9 of 10 ok
-	wantLines(t, "overview", text("overview", "--machines", "all"), "Sessions sent 91 % (83–95 %) (n=85, status on this PC: ok)")
+	wantLines(t, "overview", text("overview", "--machines", "all"), "Items sent 91 % (83–95 %) (n=85, status on this PC: ok)")
 	sys := text("system", "--machines", "all")
 	wantLines(t, "system", sys,
 		"PCs (fetched 2026-10-08 13:00)",

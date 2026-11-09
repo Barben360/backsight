@@ -47,8 +47,8 @@ const (
 	scFoundText    = "Fewer prompts get memory than usual: 14 % vs 27 % before."
 	scLatencyText  = "Memory adds 2.3 s to the slowest prompts (limit 2.5 s)."
 	scServerText   = "Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost."
-	scFailedText   = "3 sessions could not be sent; 1 set aside after an error."
-	scWaitedText   = "A session has waited on this PC for 26 h."
+	scFailedText   = "3 items could not be sent; 1 set aside after an error."
+	scWaitedText   = "The oldest item has waited on this PC for 26 h."
 	scCrashedText  = "2 steps crashed in the last 24 h."
 )
 
@@ -57,7 +57,7 @@ var scenarios = []scenario{
 		Title: scLearnText, Class: "v-learn",
 		Axes: [4][3]string{
 			{"Found", "learning", "day 2 of about 7"}, {"Right", "learning", "day 2 of about 7"},
-			{"Cost", "ok", "slowest prompts 1.4 s"}, {"Flowing", "ok", "4 of 4 sessions sent"},
+			{"Cost", "ok", "slowest prompts 1.4 s"}, {"Flowing", "ok", "4 of 4 items sent"},
 		},
 		Tiles:   [6]string{"too few", "learning", "too few", "ok", "ok", "ok"},
 		Summary: "In the last 7 days: 3 prompts got memory, Claude used it in 0 turns, about 1,100 tokens added; extraction cost price not set (server, all PCs).",
@@ -66,7 +66,7 @@ var scenarios = []scenario{
 		Title: "Memory is working.", Class: "v-ok",
 		Axes: [4][3]string{
 			{"Found", "ok", "28 % of prompts got memory"}, {"Right", "ok", scJudged28Text},
-			{"Cost", "ok", "slowest prompts 1.6 s"}, {"Flowing", "ok", "239 of 239 sessions sent"},
+			{"Cost", "ok", "slowest prompts 1.6 s"}, {"Flowing", "ok", "239 of 239 items sent"},
 		},
 		Tiles:   [6]string{"ok", "ok", "too few", "ok", "ok", "ok"},
 		Summary: "In the last 7 days: 46 prompts got memory, Claude used it in 10 turns, about 17 k tokens added; extraction cost $43.62 (server, all PCs).",
@@ -75,7 +75,7 @@ var scenarios = []scenario{
 		Title: "Right: can't judge yet.", Class: "v-cant",
 		Axes: [4][3]string{
 			{"Found", "ok", "27 % of prompts got memory"}, {"Right", "can't judge", "Claude said what it used on 16 of 25 turns"},
-			{"Cost", "ok", "slowest prompts 1.5 s"}, {"Flowing", "ok", "212 of 212 sessions sent"},
+			{"Cost", "ok", "slowest prompts 1.5 s"}, {"Flowing", "ok", "212 of 212 items sent"},
 		},
 		Reasons:   []string{scCantText},
 		Tiles:     [6]string{"ok", "unreliable", "too few", "ok", "ok", "ok"},
@@ -86,7 +86,7 @@ var scenarios = []scenario{
 		Title: "Found needs attention.", Class: "v-watch",
 		Axes: [4][3]string{
 			{"Found", "attention", "14 % vs 27 % usual, two weeks running"}, {"Right", "ok", "31 % used, borderline"},
-			{"Cost", "ok", "slowest prompts 1.7 s"}, {"Flowing", "ok", "226 of 226 sessions sent"},
+			{"Cost", "ok", "slowest prompts 1.7 s"}, {"Flowing", "ok", "226 of 226 items sent"},
 		},
 		Reasons:   []string{scFoundText},
 		Tiles:     [6]string{"watch", "borderline", "ok", "ok", "ok", "ok"},
@@ -97,7 +97,7 @@ var scenarios = []scenario{
 		Title: "Cost needs attention: slowest prompts take 2.3 s.", Class: "v-watch",
 		Axes: [4][3]string{
 			{"Found", "ok", "28 % of prompts got memory"}, {"Right", "ok", scJudged28Text},
-			{"Cost", "attention", "slowest 1 in 20: 2.3 s, limit 2.5 s"}, {"Flowing", "ok", "239 of 239 sessions sent"},
+			{"Cost", "attention", "slowest 1 in 20: 2.3 s, limit 2.5 s"}, {"Flowing", "ok", "239 of 239 items sent"},
 		},
 		Reasons:   []string{scLatencyText},
 		Tiles:     [6]string{"ok", "ok", "too few", "ok", "watch", "ok"},
@@ -557,8 +557,8 @@ func TestScenarioFixturesAreConsistent(t *testing.T) {
 		{scFoundText, "Fewer prompts get memory than usual: 14 % vs 27 % before."},
 		{scLatencyText, "Memory adds 2.3 s to the slowest prompts (limit 2.5 s)."},
 		{scServerText, "Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost."},
-		{scFailedText, "3 sessions could not be sent; 1 set aside after an error."},
-		{scWaitedText, "A session has waited on this PC for 26 h."},
+		{scFailedText, "3 items could not be sent; 1 set aside after an error."},
+		{scWaitedText, "The oldest item has waited on this PC for 26 h."},
 		{scCrashedText, "2 steps crashed in the last 24 h."},
 	} {
 		if c[0] != c[1] {
@@ -846,9 +846,9 @@ func scenarioNoteFigures(r *metrics.Result, axis, note string) ([]string, bool) 
 			return []string{fmt.Sprintf("%d ms", int(v))}, true
 		}
 		return []string{fmt.Sprintf("%.1f s", v/1000)}, true
-	case axis == "flowing" && strings.HasSuffix(note, "sessions sent"):
+	case axis == "flowing" && strings.HasSuffix(note, "items sent"):
 		f := m["pipeline.flow"]
-		return []string{fmt.Sprintf("%d of %d sessions sent", *f.Num, *f.Den)}, true
+		return []string{fmt.Sprintf("%d of %d items sent", *f.Num, *f.Den)}, true
 	case axis == "flowing" && strings.Contains(note, " notes and "):
 		x := m["local.backlog"].Extra
 		return []string{fmt.Sprintf("%d notes and %d sessions waiting", scInt(x["notes_queued"]), scInt(x["sessions_waiting"]))}, true

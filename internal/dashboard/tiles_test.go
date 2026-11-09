@@ -48,7 +48,7 @@ func TestTilesFollowTheCopyDeck(t *testing.T) {
 		{"healthy", "Reported wrong", "1 of 14", "", "", "1 reported wrong of 14 verdicts", "1 of 14: too few to judge.", "too few", "", none, "14 verdicts →"},
 		{"healthy", "Context", "3,600", "chars", "≈ 900 tokens", "high · typical 2,100 chars", "", "ok", "▼ −200 chars, better", none, "34 sessions →"},
 		{"healthy", "Speed", "1.6", "s", "", "slowest 1 in 20 · typical 840 ms", "", "ok", "▲ +0.1 s, worse", none, "167 prompts →"},
-		{"healthy", "Flowing", "100", "%", "", "239 of 239 sessions sent", "", "ok", "= no change", none, "239 sessions →"},
+		{"healthy", "Flowing", "100", "%", "", "239 of 239 items sent", "", "ok", "= no change", none, "239 items →"},
 		{"qualitywatch", "Found", "14", "%", "(9–20 %)", "usual 27 % · 21 of 150 prompts", scFoundText, "watch", none, none, none},
 		{"qualitywatch", "Used", none, none, none, none, "Borderline: the interval still reaches the usual level.", "borderline", none, none, none},
 		{"latency", "Speed", "2.3", "s", "", "slowest 1 in 20 · typical 1.1 s · limit 2.5 s", scLatencyText, "watch", none, none, none},
@@ -60,7 +60,7 @@ func TestTilesFollowTheCopyDeck(t *testing.T) {
 		{"serverdown", "Found", none, none, none, none, "Prompts skipped: server unreachable.", "watch", none, none, none},
 		{"serverdown", "Speed", "910", "ms", "", none, "", "ok", none, none, none},
 		{"serverdown", "Flowing", "17", "waiting", "", "14 notes and 3 sessions on this PC", "Memory server unreachable since 09:12. Nothing is lost.", "watch", "", "/pipeline?days=7", "Waiting items →"},
-		{"broken", "Flowing", "3", "failed", "", "1 set aside · oldest waiting 26 h · 188 of 192 sent", "3 sessions could not be sent; 1 set aside after an error.", "attention", none, none, none},
+		{"broken", "Flowing", "3", "failed", "", "1 set aside · oldest waiting 26 h · 188 of 192 sent", "3 items could not be sent; 1 set aside after an error.", "attention", none, none, none},
 	} {
 		t.Run(c.sc+"/"+c.tile, func(t *testing.T) {
 			tl := tileNamed(t, c.sc, c.tile)
@@ -349,7 +349,7 @@ func TestFlowingRootCauseFallbacks(t *testing.T) {
 	r = scenarioNamed(t, "serverdown")
 	r.Metrics["local.backlog"] = scValue("local.backlog", metrics.StatusWatch, 17, 0).m
 	tl := tilesFor(r)["Flowing"]
-	if tl.Big != "82" || tl.Unit != "%" || tl.Sub != "14 of 17 sessions sent" || tl.LinkText == "Waiting items →" {
+	if tl.Big != "82" || tl.Unit != "%" || tl.Sub != "14 of 17 items sent" || tl.LinkText == "Waiting items →" {
 		t.Errorf("no backlog counts: %+v", tl)
 	}
 }
@@ -660,7 +660,7 @@ func TestTileLinkNamesThisPCsCount(t *testing.T) {
 	own.Metrics["used.turn_rate"] = u
 	want := map[string]string{
 		"Found": "This PC’s 167 prompts →", "Used": "This PC’s 61 turns →", "Reported wrong": "This PC’s 14 verdicts →",
-		"Context": "This PC’s 34 sessions →", "Speed": "This PC’s 167 prompts →", "Flowing": "This PC’s 239 sessions →",
+		"Context": "This PC’s 34 sessions →", "Speed": "This PC’s 167 prompts →", "Flowing": "This PC’s 239 items →",
 	}
 	for name, w := range want {
 		if got := allTile(t, r, own, allPCsPage, name).LinkText; got != w {

@@ -135,8 +135,8 @@ func TestTimeToRecallHops(t *testing.T) {
 		x.rcWhole(fmt.Sprintf("sess-%d", k), rcBase, m, 2*m, 60*m)
 	}
 	m := ttr(x, x.query(7))
-	if m.Status != StatusOK {
-		t.Errorf("status %q, want ok", m.Status)
+	if m.Status != StatusTooFew {
+		t.Errorf("status %q, want too_few: 20 timed, the judged p95 needs 100", m.Status)
 	}
 	if m.Value == nil || *m.Value != 37_800_000 {
 		t.Errorf("value %v, want 37 800 000 ms (630 min)", m.Value)
@@ -280,8 +280,8 @@ func TestTimeToRecallWatch(t *testing.T) {
 	y := newFx(t, fxNow)
 	manyExtracted(y, 99)
 	m = ttr(y, y.query(7))
-	if m.Status != StatusOK {
-		t.Errorf("99 sessions: status %q, want ok (no p95 under 100)", m.Status)
+	if m.Status != StatusTooFew {
+		t.Errorf("99 sessions: status %q, want too_few (no p95 under 100: never judged)", m.Status)
 	}
 	wantHop(t, hopsOf(t, m), "sent_to_extracted", 50*60_000, nil, 99)
 }

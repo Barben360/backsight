@@ -687,7 +687,7 @@ func TestOverviewFocusOrder(t *testing.T) {
 	want := []string{"Skip to content", "backsight", "Overview", "Quality", "Cost", "Bank", "Pipeline", "Browse", "System",
 		"24 h", "7 d", "30 d", "90 d", "Custom window: pick the days", "All projects", "Refresh", "Preferences", "How the verdict is judged", "CLI",
 		"About Found", "167 prompts →", "CLI", "About Used", "61 turns →", "CLI", "About Reported wrong", "14 verdicts →", "CLI",
-		"About Context", "34 sessions →", "CLI", "About Speed", "167 prompts →", "CLI", "About Flowing", "239 sessions →", "CLI", "CLI", "CLI",
+		"About Context", "34 sessions →", "CLI", "About Speed", "167 prompts →", "CLI", "About Flowing", "239 items →", "CLI", "CLI", "CLI",
 		"a41c09e2", "backsight", "5be2d7f0", "project-a", "93c1a4e8", "backsight", "d0f63b15", "project-c", "2e8a91c7", "project-d-shared-fronte…",
 		"All sessions →", "About memory at a glance", "CLI",
 		"About helped most", "CLI", "7f3a9c21", "backsight", "Show text of memory 7f3a9c21", "b20e5d47", "project-d-shared-fronte…", "Show text of memory b20e5d47",

@@ -37,7 +37,7 @@ Memory is working.
   Found      ok      28 % of prompts got memory (21–35 %), +2 pts
   Right      ok      used in 62 % of turns (50–73 %), judged on 28 days
   Cost       ok      slowest prompts 1.6 s; context high 3,600 chars
-  Flowing    ok      239 of 239 sessions sent; memory back in ~1 d 2 h
+  Flowing    ok      239 of 239 items sent; memory back in ~1 d 2 h
 
 In the last 7 days: 46 prompts got memory, Claude used it in 10 turns,
 about 17 k tokens added; extraction cost $43.62 (server, all PCs).
@@ -71,7 +71,7 @@ func TestSummaryTextHasNoIDs(t *testing.T) {
 	r.Tables.Helped = []metrics.HelpedRow{{Memory: "7f3a9c219d2c4e1b0a7f63e85b1d0c4a", Project: "backsight", FactType: "world", Used: 6, Shown: 9}}
 	r.Text = &metrics.MemoryText{ID: "7f3a9c219d2c4e1b0a7f63e85b1d0c4a", Text: canary}
 	got := summaryText(r, views.Params{Days: 7}, parisZone(), "last 7 days", fixtureVersion)
-	if !strings.Contains(got, "Needs attention:\n  1. 3 sessions could not be sent; 1 set aside after an error: backsight\n     retain retry-quarantine\n  2. A session has waited on this PC for 26 h: backsight doctor\n") {
+	if !strings.Contains(got, "Needs attention:\n  1. 3 items could not be sent; 1 set aside after an error: backsight\n     retain retry-quarantine\n  2. The oldest item has waited on this PC for 26 h: backsight doctor\n") {
 		t.Errorf("the attention items are not in the text:\n%s", got)
 	}
 	if m := regexp.MustCompile(`\b[0-9a-f]{8}\b`).FindString(got); m != "" {
@@ -255,7 +255,7 @@ func flowingTileNode(t *testing.T, r *metrics.Result) *node {
 }
 
 func TestFlowingSubline(t *testing.T) {
-	const sub = "Session to recalled memory: typical 1 d 2 h · 239 of 239 sessions sent"
+	const sub = "Session to recalled memory: typical 1 d 2 h · 239 of 239 items sent"
 	r := scenarioNamed(t, "healthy")
 	withRecall(r, 93_600_000, 118, metrics.StatusOK)
 	tile := flowingTileNode(t, r)
@@ -283,12 +283,12 @@ func TestFlowingSubline(t *testing.T) {
 	// Too few sessions: no value, the subline is the existing one.
 	r = scenarioNamed(t, "healthy")
 	r.Metrics["pipeline.time_to_recall"] = metrics.Metric{Status: metrics.StatusTooFew}
-	if got := flowingTileNode(t, r).first("p.tile-sub").text(); got != "239 of 239 sessions sent" {
+	if got := flowingTileNode(t, r).first("p.tile-sub").text(); got != "239 of 239 items sent" {
 		t.Errorf("too few: subline %q", got)
 	}
 	// Not computed at all (an older result): the same.
 	r = scenarioNamed(t, "healthy")
-	if got := flowingTileNode(t, r).first("p.tile-sub").text(); got != "239 of 239 sessions sent" {
+	if got := flowingTileNode(t, r).first("p.tile-sub").text(); got != "239 of 239 items sent" {
 		t.Errorf("absent: subline %q", got)
 	}
 }
