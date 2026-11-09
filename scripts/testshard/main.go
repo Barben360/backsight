@@ -4,6 +4,7 @@
 //
 //	testshard -index <i> -total <n> [-durations <file>] -- [go test flags] <packages>
 //	testshard -record < go-test.json > durations.txt
+//	go test -json ... | testshard -report [<file>]
 //
 // It lists the tests with go test -list, given the flags and packages the
 // run will use (-race, -tags: the build the run then reuses), and groups
@@ -18,6 +19,10 @@
 // targets go to slice 0. The pattern names groups, not tests, so it stays
 // a few hundred characters long (Windows bounds a command line to 32767).
 // A slice that would run nothing is an error, as is a listing that fails.
+//
+// -report reads go test -json (make test-shard runs its slice so, for the
+// times CI records) and prints what go test would print without it, the
+// JSON kept in the file given: make test-durations reads CI's.
 package main
 
 import (
@@ -42,7 +47,15 @@ func main() {
 	total := flag.Int("total", 0, "how many slices")
 	file := flag.String("durations", "", "balance the slices by the test durations of this file (make test-durations), not by count")
 	record := flag.Bool("record", false, "read go test -json on stdin and print its durations file")
+	rep := flag.Bool("report", false, "read go test -json on stdin, print it as go test would without -json, and keep it in the file given as argument, if any")
 	flag.Parse()
+	if *rep {
+		if err := reportTo(flag.Arg(0)); err != nil {
+			fmt.Fprintln(os.Stderr, "testshard:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *record {
 		if err := recordDurations(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "testshard:", err)
@@ -225,6 +238,91 @@ func recordDurations(r io.Reader, w io.Writer) error {
 		fmt.Fprintf(bw, "%.2f %s %s\n", d[t], t.pkg, t.name)
 	}
 	return bw.Flush()
+}
+
+// reportTo runs report on stdin and stdout, the JSON kept in file when
+// one is given.
+func reportTo(file string) error {
+	if file == "" {
+		return report(os.Stdin, io.Discard, os.Stdout)
+	}
+	f, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+	err = report(os.Stdin, f, os.Stdout)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// report copies go test -json events from r to raw and prints to out what
+// go test prints without -json: each package's own lines (ok, FAIL, a
+// build's errors) as they come, and the output of each top-level test
+// that fails, or that never ends in a package that fails (a panic, a
+// timeout). A line that is not an event is printed as it is.
+func report(r io.Reader, raw, out io.Writer) error {
+	type key struct{ pkg, test string }
+	held := map[key][]string{}
+	var order []key // held tests in their first output's order
+	flush := func(k key) error {
+		for _, l := range held[k] {
+			if _, err := io.WriteString(out, l); err != nil {
+				return err
+			}
+		}
+		delete(held, k)
+		return nil
+	}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 1<<20), 1<<26)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if _, err := raw.Write(append(line, '\n')); err != nil {
+			return err
+		}
+		var e struct {
+			Action, Package, ImportPath, Test, Output string
+		}
+		if json.Unmarshal(line, &e) != nil || e.Action == "" {
+			if _, err := fmt.Fprintf(out, "%s\n", line); err != nil {
+				return err
+			}
+			continue
+		}
+		top, _, _ := strings.Cut(e.Test, "/")
+		k := key{e.Package, top}
+		switch {
+		case e.Action == "output" && e.Test != "":
+			if _, ok := held[k]; !ok {
+				order = append(order, k)
+			}
+			held[k] = append(held[k], e.Output)
+		case e.Action == "output" && e.Output == "PASS\n":
+			// the test binary's own PASS, which go test prints only with -v
+		case e.Action == "output" || e.Action == "build-output":
+			if _, err := io.WriteString(out, e.Output); err != nil {
+				return err
+			}
+		case e.Test != "" && e.Test == top && e.Action == "fail":
+			if err := flush(k); err != nil {
+				return err
+			}
+		case e.Test != "" && e.Test == top && (e.Action == "pass" || e.Action == "skip"):
+			delete(held, k)
+		case e.Test == "" && e.Action == "fail":
+			// the package failed: its tests that never ended
+			for _, h := range order {
+				if _, ok := held[h]; ok && h.pkg == e.Package {
+					if err := flush(h); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return sc.Err()
 }
 
 // maxPattern bounds a slice's pattern: far below Windows' 32767

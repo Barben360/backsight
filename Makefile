@@ -57,22 +57,28 @@ test:
 # One slice of make test's -race line, SHARD of SHARDS (from 0): CI runs
 # the SHARDS slices in parallel jobs (ci.yml test-race), each test in
 # exactly one of them (scripts/testshard), the slices balanced by the
-# tests' recorded times (make test-durations). The listing builds what
-# the run then reuses (-race).
+# tests' times recorded on CI (make test-durations). The listing builds
+# what the run then reuses (-race). The run goes through go test -json,
+# printed as go test would print it (testshard -report) and kept in
+# TEST_JSON when set: CI uploads it for make test-durations. pipefail
+# keeps go test's status.
+TEST_JSON ?=
 test-shard:
 	@pattern=$$(CGO_ENABLED=1 go run ./scripts/testshard -index "$(SHARD)" -total "$(SHARDS)" -durations scripts/testshard/durations.txt -- -race ./...) && \
 		echo "go test -race -timeout 20m -run '$$pattern' ./..." && \
-		GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m -run "$$pattern" ./...
+		GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 bash -o pipefail -c \
+			'go test -race -json -timeout 20m -run "$$0" ./... | go run ./scripts/testshard -report "$$1"' "$$pattern" "$(TEST_JSON)"
 
-# Records the times make test-shard balances its slices by: make test's
-# -race line once, as go test -json, piped to testshard -record, which
-# refuses a run with any failure (the pipe loses go test's status) and
-# replaces the file only then. A test added since weighs 0.05 s until the
-# next record: re-record when the slices of ci.yml test-race drift apart.
+# Records the times make test-shard balances its slices by, from the
+# test-race slices of a CI run (scripts/test-durations.sh): the latest
+# successful run of ci on main, or RUN=<run id>. Times taken on another
+# machine would not do: a 24-core workstation's did not carry over to the
+# 4-vCPU runner (internal/cli: 130 s by them in two slices, 409 and 229 s
+# there). A test added since weighs 0.05 s until the next record:
+# re-record when the slices of ci.yml test-race drift apart.
+RUN ?=
 test-durations:
-	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -json -count=1 -timeout 20m ./... | \
-		go run ./scripts/testshard -record > scripts/testshard/durations.txt.new && \
-		mv scripts/testshard/durations.txt.new scripts/testshard/durations.txt
+	scripts/test-durations.sh $(RUN)
 
 # make test's second line: the dashboard's page sweep, without -race.
 test-sweep:

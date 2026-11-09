@@ -342,3 +342,51 @@ func TestTheCommittedDurationsRead(t *testing.T) {
 		}
 	}
 }
+
+// report prints what go test prints without -json: a package's own lines
+// as they come, a failed test's output (its subtests' included), a test
+// that never ended in a failed package, a build's errors and any line
+// that is not an event; a passing or skipped test's output is dropped.
+// The events go to raw unchanged.
+func TestReportPrintsWhatGoTestWould(t *testing.T) {
+	in := strings.Join([]string{
+		`{"Action":"start","Package":"m/a"}`,
+		`{"Action":"run","Package":"m/a","Test":"TestOK"}`,
+		`{"Action":"output","Package":"m/a","Test":"TestOK","Output":"=== RUN   TestOK\n"}`,
+		`{"Action":"output","Package":"m/a","Test":"TestOK","Output":"--- PASS: TestOK (0.00s)\n"}`,
+		`{"Action":"pass","Package":"m/a","Test":"TestOK","Elapsed":0}`,
+		`{"Action":"output","Package":"m/a","Test":"TestBad","Output":"=== RUN   TestBad\n"}`,
+		`{"Action":"output","Package":"m/a","Test":"TestBad/sub","Output":"    bad_test.go:9: want 2, got 3\n"}`,
+		`{"Action":"fail","Package":"m/a","Test":"TestBad/sub","Elapsed":0}`,
+		`{"Action":"output","Package":"m/a","Test":"TestSkip","Output":"--- SKIP: TestSkip\n"}`,
+		`{"Action":"skip","Package":"m/a","Test":"TestSkip","Elapsed":0}`,
+		`{"Action":"output","Package":"m/a","Test":"TestBad","Output":"--- FAIL: TestBad (0.01s)\n"}`,
+		`{"Action":"fail","Package":"m/a","Test":"TestBad","Elapsed":0.01}`,
+		`{"Action":"output","Package":"m/a","Output":"FAIL\tm/a\t0.02s\n"}`,
+		`{"Action":"fail","Package":"m/a","Elapsed":0.02}`,
+		`{"Action":"output","Package":"m/b","Test":"TestHang","Output":"panic: test timed out after 20m0s\n"}`,
+		`{"Action":"output","Package":"m/b","Output":"FAIL\tm/b\t1200.00s\n"}`,
+		`{"Action":"fail","Package":"m/b","Elapsed":1200}`,
+		`{"ImportPath":"m/c","Action":"build-output","Output":"c.go:3:1: syntax error\n"}`,
+		`{"Action":"output","Package":"m/d","Output":"PASS\n"}`,
+		`{"Action":"output","Package":"m/d","Output":"ok  \tm/d\t0.50s\n"}`,
+		`go: downloading example.com/x v1.0.0`,
+	}, "\n")
+	var raw, out strings.Builder
+	if err := report(strings.NewReader(in), &raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	// a test's held lines print in their order of arrival
+	want := "=== RUN   TestBad\n    bad_test.go:9: want 2, got 3\n--- FAIL: TestBad (0.01s)\n" +
+		"FAIL\tm/a\t0.02s\n" +
+		"FAIL\tm/b\t1200.00s\n" + "panic: test timed out after 20m0s\n" +
+		"c.go:3:1: syntax error\n" +
+		"ok  \tm/d\t0.50s\n" +
+		"go: downloading example.com/x v1.0.0\n"
+	if out.String() != want {
+		t.Errorf("printed:\n%s\nwant:\n%s", out.String(), want)
+	}
+	if raw.String() != in+"\n" {
+		t.Errorf("raw differs from the input:\n%s", raw.String())
+	}
+}

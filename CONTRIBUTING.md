@@ -39,7 +39,7 @@ The first `make check` downloads the modules and builds the race runtime: count 
 | `make build` | builds `bin/backsight` |
 | `make test` | runs every test with the race detector, then the dashboard's page sweep without it |
 | `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`), the slices balanced by the tests' recorded times |
-| `make test-durations` | records those times (`scripts/testshard/durations.txt`) from one full race-detector run, refused if any test fails; a test added since counts 0.05 s, so re-record when CI's slices drift apart |
+| `make test-durations [RUN=<id>]` | records those times (`scripts/testshard/durations.txt`) from the times each `test-race` slice of a CI run uploads (main's latest successful run by default; needs `gh`), refused if a slice is missing or a test failed; a test added since counts 0.05 s, so re-record when CI's slices drift apart |
 | `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag, and vets them with it for Linux and Windows |
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |

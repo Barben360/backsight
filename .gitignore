@@ -8,3 +8,5 @@ coverage.out
 !/internal/server/testdata/docker-golden/*/.env
 # make test-durations writes here first; a refused record leaves it.
 /scripts/testshard/durations.txt.new
+# scripts/test-durations.sh: the CI runs' test times it downloaded.
+/.cache/
