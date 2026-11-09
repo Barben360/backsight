@@ -136,12 +136,13 @@ const floor = 0.05
 
 // parallel is how many tests' worth of time a slice runs at once, as
 // byTime counts it: below the hosted Linux runner's 4 vCPUs (go test's
-// -p there), which the race detector and the builds share. Measured on
-// the 2026-11-09 run of main cut by count, a slice's time followed its
-// whole time as much as its longest package's; over 3, the slices of the
-// durations keep both their longest package (130 s here) and their whole
-// time (391 s at most of 1464) near the least they can be, where 4 let
-// one slice's whole time reach 489 s and 2 its longest package 156 s.
+// -p there), which the race detector and the builds share. On CI a
+// package lasts the sum of its tests' times (internal/cli: 407 s of
+// tests, 408 s), but a test runs slower in a slice that runs more beside
+// it: the whole times must stay even too. Over the times of CI run
+// 42590943900 (2026-11-09), 3 keeps the longest package at 269 s and
+// every slice's whole time at 882 s; 4 let the whole times spread from
+// 586 to 1017 s, 2 the longest package reach 321 s.
 const parallel = 3
 
 // weight is a test's time by d, floor for one d does not list.
