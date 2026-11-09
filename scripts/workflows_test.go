@@ -169,12 +169,12 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 	}
 }
 
-// A Docker stack job on a hosted runner first frees the disk the runner's
-// preinstalled toolchains take: images, the model cache tar and the data
-// fill the rest, and setup's doctor wants 6 GB free. A restored model
-// cache tar is dropped once seeded (it is never saved again).
+// A Docker or native stack job on a hosted runner makes sure of its disk
+// right after its checkout, before anything else takes room
+// (scripts/ci-free-disk.sh, ci_free_disk_test.go). A restored model cache
+// tar is dropped once seeded (it is never saved again).
 func TestStackJobsFreeTheDiskFirst(t *testing.T) {
-	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install|m6-chain)\.sh`)
+	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install|m6-chain|native-chain)\.sh`)
 	jobs := 0
 	for _, w := range workflows(t) {
 		for _, j := range w.jobs {
@@ -182,14 +182,8 @@ func TestStackJobsFreeTheDiskFirst(t *testing.T) {
 				continue
 			}
 			jobs++
-			first := j.steps[0]
-			for _, s := range []string{"/usr/share/dotnet", "/usr/local/lib/android", "/opt/ghc", "/opt/hostedtoolcache/CodeQL"} {
-				if !strings.Contains(first, "sudo rm -rf") || !strings.Contains(first, s) {
-					t.Errorf("%s job %s: its first step does not remove %s", w.name, j.name, s)
-				}
-			}
-			if strings.Count(first, "df -h /") < 2 {
-				t.Errorf("%s job %s: its first step does not print df -h / before and after", w.name, j.name)
+			if len(j.steps) < 2 || !strings.Contains(j.steps[0], "uses: actions/checkout@") || !regexp.MustCompile(`(?m)^        run: scripts/ci-free-disk\.sh\s*$`).MatchString(j.steps[1]) {
+				t.Errorf("%s job %s: its checkout is not followed by scripts/ci-free-disk.sh", w.name, j.name)
 			}
 			for _, step := range j.steps {
 				if stack.MatchString(step) && strings.Contains(step, "BACKSIGHT_HF_CACHE=") && !strings.Contains(step, "BACKSIGHT_HF_CACHE_DROP=1") {
@@ -198,8 +192,8 @@ func TestStackJobsFreeTheDiskFirst(t *testing.T) {
 			}
 		}
 	}
-	if jobs < 3 {
-		t.Errorf("%d stack jobs found, want sandbox, fresh-install and m6-chain: the check proves nothing", jobs)
+	if jobs < 4 {
+		t.Errorf("%d stack jobs found, want sandbox, fresh-install, m6-chain and native-chain: the check proves nothing", jobs)
 	}
 }
 
@@ -707,6 +701,31 @@ func TestCIRunsWindowsTestsInPowerShellAndItsBudgetsApart(t *testing.T) {
 	b := jobs["test-windows-budgets"].raw
 	if !strings.Contains(b, "go test -count=1 -p 1 ") || !strings.Contains(b, "-run $env:TIME_BUDGETS") || !strings.Contains(b, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
 		t.Errorf("ci.yml job test-windows-budgets does not run the time budgets one package at a time on the local disk:\n%s", b)
+	}
+	// Its parts run at once, each package's budgets in exactly one of
+	// them, the dashboard's (about 470 s) alone, and the step tests the
+	// part's packages, not a fixed list.
+	if !strings.Contains(b, "PACKAGES: ${{ matrix.packages }}") || !strings.Contains(b, "@($env:PACKAGES -split ' ')") || !strings.Contains(b, "fail-fast: false") {
+		t.Errorf("ci.yml job test-windows-budgets does not test its matrix part's packages, fail-fast off:\n%s", b)
+	}
+	parts := regexp.MustCompile(`(?m)^            packages: (.+?)\s*$`).FindAllStringSubmatch(b, -1)
+	seen := map[string]int{}
+	for _, p := range parts {
+		pkgs := strings.Fields(p[1])
+		for _, pkg := range pkgs {
+			seen[pkg]++
+			if pkg == "./internal/dashboard/" && len(pkgs) != 1 {
+				t.Errorf("ci.yml job test-windows-budgets: the dashboard's budgets share a part with %v", pkgs)
+			}
+		}
+	}
+	for _, pkg := range []string{"./internal/index/", "./internal/metrics/", "./internal/dashboard/"} {
+		if seen[pkg] != 1 {
+			t.Errorf("ci.yml job test-windows-budgets: %s is in %d parts, want 1 (parts %v)", pkg, seen[pkg], parts)
+		}
+	}
+	if len(seen) != 3 || len(parts) < 2 {
+		t.Errorf("ci.yml job test-windows-budgets: parts %v, want the index's, metrics' and dashboard's budgets in two parts or more", parts)
 	}
 	// TIME_BUDGETS names make bench-index's tests, each
 	raw, err := os.ReadFile("../.github/workflows/ci.yml")

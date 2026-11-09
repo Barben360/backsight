@@ -22,7 +22,7 @@ OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
-.PHONY: build check test test-shard test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
+.PHONY: build check test test-shard test-durations test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
@@ -56,12 +56,23 @@ test:
 
 # One slice of make test's -race line, SHARD of SHARDS (from 0): CI runs
 # the SHARDS slices in parallel jobs (ci.yml test-race), each test in
-# exactly one of them (scripts/testshard). The listing builds what the
-# run then reuses (-race).
+# exactly one of them (scripts/testshard), the slices balanced by the
+# tests' recorded times (make test-durations). The listing builds what
+# the run then reuses (-race).
 test-shard:
-	@pattern=$$(CGO_ENABLED=1 go run ./scripts/testshard -index "$(SHARD)" -total "$(SHARDS)" -- -race ./...) && \
+	@pattern=$$(CGO_ENABLED=1 go run ./scripts/testshard -index "$(SHARD)" -total "$(SHARDS)" -durations scripts/testshard/durations.txt -- -race ./...) && \
 		echo "go test -race -timeout 20m -run '$$pattern' ./..." && \
 		GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m -run "$$pattern" ./...
+
+# Records the times make test-shard balances its slices by: make test's
+# -race line once, as go test -json, piped to testshard -record, which
+# refuses a run with any failure (the pipe loses go test's status) and
+# replaces the file only then. A test added since weighs 0.05 s until the
+# next record: re-record when the slices of ci.yml test-race drift apart.
+test-durations:
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -json -count=1 -timeout 20m ./... | \
+		go run ./scripts/testshard -record > scripts/testshard/durations.txt.new && \
+		mv scripts/testshard/durations.txt.new scripts/testshard/durations.txt
 
 # make test's second line: the dashboard's page sweep, without -race.
 test-sweep:

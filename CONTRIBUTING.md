@@ -38,7 +38,8 @@ The first `make check` downloads the modules and builds the race runtime: count 
 | `make check` | the whole gate below, in one command |
 | `make build` | builds `bin/backsight` |
 | `make test` | runs every test with the race detector, then the dashboard's page sweep without it |
-| `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`) |
+| `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`), the slices balanced by the tests' recorded times |
+| `make test-durations` | records those times (`scripts/testshard/durations.txt`) from one full race-detector run, refused if any test fails; a test added since counts 0.05 s, so re-record when CI's slices drift apart |
 | `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag, and vets them with it for Linux and Windows |
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |
@@ -85,7 +86,7 @@ Before every commit, `make check` must pass. It runs, and stops at the first fai
 
 Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) runs the tests, a signed snapshot release with a throwaway key, the sandbox tests and the fresh-install chain: setup from nothing, verify, store and search, backup and restore, update with rolled-back failures, undo and uninstall; and the M6 chain (`scripts/m6-chain.sh`): a server and two client homes, the dedup and key-rotation proofs.
 
-CI runs its jobs side by side: the race-detector tests in four slices (`make test-shard`), the Windows tests in three (in PowerShell: Git Bash would let Go read past a deny ACE) with their time budgets apart, and the `testhooks` run, the time budgets and the cross-compilation in jobs of their own; the required check `test` passes once all of the Linux ones have. A pull request that changes only documentation (the Markdown of `docs/` and of the repository's root, `scripts/ci-docs-only.sh`) skips the Windows tests, the M6 chain and the native chains; the sandbox tests and the fresh-install chain still run, as they search the embedded docs. A newer push to a pull request cancels its older run.
+CI runs its jobs side by side: the race-detector tests in four slices (`make test-shard`), the Windows tests in three (in PowerShell: Git Bash would let Go read past a deny ACE) with their time budgets apart (the dashboard's in a job of its own), and the `testhooks` run, the time budgets and the cross-compilation in jobs of their own; the required check `test` passes once all of the Linux ones have. A pull request that changes only documentation (the Markdown of `docs/` and of the repository's root, `scripts/ci-docs-only.sh`) skips the Windows tests, the M6 chain and the native chains; the sandbox tests and the fresh-install chain still run, as they search the embedded docs. A newer push to a pull request cancels its older run.
 
 Every Monday, `.github/workflows/price-drift.yml` compares the binary's price table (`internal/retain/estimate.go`) with LiteLLM's public list (`scripts/pricedrift`) and opens an issue, or updates the open one, when a price differs. Check the price on the provider's own pricing page before changing the table: LiteLLM is a community list, and its numbers never reach the binary on their own.
 
