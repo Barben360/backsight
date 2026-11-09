@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -39,9 +40,18 @@ type Engine struct {
 	Timeout    time.Duration // the whole search: every call and the raw fallback
 	Now        func() time.Time
 	Boost      float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
-	// Adjust is what this machine learned of a memory: a boost added to
-	// its score, or hidden to drop it. Nil: neither.
-	Adjust func(id string) (boost float64, hidden bool)
+	// Adjust is what this machine learned of the memories a search found,
+	// asked once per search with every merged hit's id: a boost added to
+	// a memory's score, or Hidden to drop it; an id it leaves out has
+	// neither. Nil, or a nil answer (nothing learned): no boost, nothing
+	// dropped, and no RankWithoutBoost.
+	Adjust func(ids []string) map[string]Adjustment
+}
+
+// Adjustment is what Engine.Adjust learned of one memory.
+type Adjustment struct {
+	Boost  float64
+	Hidden bool
 }
 
 // Query is one search.
@@ -76,7 +86,7 @@ type Hit struct {
 	Reranker float64 `json:"reranker"` // the server's score
 	// Boost: what Engine.Adjust added to Score. RankWithoutBoost: the
 	// hit's place without it, from 1, 0 when only the boost let it in;
-	// only when the engine has an Adjust.
+	// only when the engine's Adjust answered.
 	Boost            float64   `json:"boost,omitempty"`
 	RankWithoutBoost int       `json:"rank_without_boost,omitempty"`
 	Date             time.Time `json:"date"`
@@ -234,28 +244,29 @@ func queryHits(answers []answer, n int, hits []Hit) []int {
 	return counts
 }
 
-// adjust applies Engine.Adjust to the merged hits, after the floors on
-// the server's score: hidden ones are dropped, each boost is added to its
-// score, which MinScore then sees. The hits come best first. With an
-// Adjust, each carries its RankWithoutBoost: its place in the list
-// returned without any boost (MinScore on the unboosted score), 0 for a
-// hit the boost lifted over MinScore.
+// adjust applies Engine.Adjust, asked once with every merged hit's id
+// (sorted), after the floors on the server's score: hidden ones are
+// dropped, each boost is added to its score, which MinScore then sees.
+// The hits come best first. When Adjust answered, each carries its
+// RankWithoutBoost: its place in the list returned without any boost
+// (MinScore on the unboosted score), 0 for a hit the boost lifted over
+// MinScore.
 func (e *Engine) adjust(best map[string]Hit, minScore float64) []Hit {
 	type scored struct {
 		hit  Hit
 		base float64 // the score without the boost
 	}
+	var learned map[string]Adjustment
+	if e.Adjust != nil && len(best) > 0 {
+		learned = e.Adjust(slices.Sorted(maps.Keys(best)))
+	}
 	var all []scored
 	for _, h := range best {
 		base := h.Score
-		if e.Adjust != nil {
-			b, hidden := e.Adjust(h.ID)
-			if hidden {
-				continue
-			}
-			if b = round4(b); b != 0 {
-				h.Boost, h.Score = b, round4(h.Score+b)
-			}
+		if a := learned[h.ID]; a.Hidden {
+			continue
+		} else if b := round4(a.Boost); b != 0 {
+			h.Boost, h.Score = b, round4(h.Score+b)
 		}
 		all = append(all, scored{h, base})
 	}
@@ -267,7 +278,7 @@ func (e *Engine) adjust(best map[string]Hit, minScore float64) []Hit {
 			return strings.Compare(a.hit.ID, b.hit.ID)
 		}
 	}
-	if e.Adjust != nil {
+	if learned != nil {
 		slices.SortFunc(all, byScore(func(s scored) float64 { return s.base }))
 		n := 0
 		for i := range all {

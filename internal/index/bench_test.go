@@ -159,7 +159,7 @@ func ledgerSkipTimes(t *testing.T, stateDir string, n int) {
 			t.Fatal(err)
 		}
 	}
-	open := func(r feedback.LedgerReader) *Index {
+	open := func(r LedgerSource) *Index {
 		o := benchOptions(t, stateDir)
 		o.Ledger = r
 		ix, err := Open(ctx, o)

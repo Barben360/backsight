@@ -46,3 +46,41 @@ func TestCurrentReaderReadsWithoutTheLock(t *testing.T) {
 		t.Fatal("All waited for the ledger lock")
 	}
 }
+
+// TestCurrentReaderGetHidden: Get returns only the asked ids that have an
+// entry, Hidden only the hidden entries, both with the lines journaled
+// since the settle applied; GetAny is Get with Any's answer.
+func TestCurrentReaderGetHidden(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	r := CurrentReader{Dir: dir}
+	if m, has, err := r.GetAny([]string{"m1"}); err != nil || has || len(m) != 0 {
+		t.Fatalf("GetAny without a ledger: %v, %v, %v", m, has, err)
+	}
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := LegacySettle(dir, testParams, fixedClock(at(120))); err != nil {
+		t.Fatal(err)
+	}
+	writeJournal(t, dir, Event{Kind: KindHide, TS: at(130), IDs: []string{"m2"}, Verdict: "wrong"})
+
+	got, err := r.Get([]string{"m1", "m2", "nope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["m1"].Shown != 1 || got["m1"].Hidden != nil || got["m2"].Hidden == nil {
+		t.Errorf("Get: %+v, want m1 shown once and m2 hidden by the journal, nothing for nope", got)
+	}
+	hidden, err := r.Hidden()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hidden) != 1 || hidden["m2"].Hidden == nil || !hidden["m2"].Hidden.Since.Equal(at(130)) {
+		t.Errorf("Hidden: %+v, want m2 alone", hidden)
+	}
+	m, has, err := r.GetAny([]string{"nope"})
+	if err != nil || !has || len(m) != 0 {
+		t.Errorf("GetAny of an id without an entry: %v, %v, %v; want none, and an entry elsewhere", m, has, err)
+	}
+	if has, err := r.Any(); err != nil || !has {
+		t.Errorf("Any: %v, %v", has, err)
+	}
+}

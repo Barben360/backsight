@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
@@ -17,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 const (
@@ -48,10 +50,11 @@ func newEngine(cfg config.Config, sec config.Secrets) (*recall.Engine, error) {
 // project scope adds what cwd's .backsight.toml relates, the related scope
 // asked-for projects and those whose names the queries mention (entity
 // index). The ledger is read at each search, not with the engine: the MCP
-// server's engine lives as long as its session.
-func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Config, eng *recall.Engine, current, cwd string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
+// server's engine lives as long as its session. A ledger that cannot be
+// read is logged to tw (ledgerReader).
+func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Config, tw *telemetry.Writer, eng *recall.Engine, current, cwd string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
 	adjusted := *eng
-	adjusted.Adjust = ledgerAdjust(d, cfg, now())
+	adjusted.Adjust = ledgerAdjust(d, cfg, now(), tw)
 	for i, q := range queries {
 		queries[i], _ = redact.Text(q) // a key pasted into a query never leaves the machine
 	}
@@ -86,7 +89,8 @@ func newSearchCmd(e *env) *cobra.Command {
 				return err
 			}
 			cwd, _ := os.Getwd()
-			res := searchMemory(cmd.Context(), d, home, cfg, eng, currentProject(home, cfg), cwd, args, projects, all, limit, minScore)
+			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+			res := searchMemory(cmd.Context(), d, home, cfg, tw, eng, currentProject(home, cfg), cwd, args, projects, all, limit, minScore)
 			var failed error
 			if len(res.Hits) == 0 && !scopesOK(res) { // a failing scope alone is skipped (0054)
 				failed = &output.Error{Code: output.Blocked, Message: "memory unavailable: " + scopeErrors(res)}

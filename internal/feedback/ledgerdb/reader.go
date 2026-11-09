@@ -36,11 +36,27 @@ type Reader struct {
 // journal-mode pragma (SQLite reads the mode from the file's header), no
 // folder detection and no WAL probe.
 func OpenReader(o Options, busy time.Duration) (*Reader, error) {
+	return openReader(o, false, busy)
+}
+
+// OpenSideReader is OpenReader of the side file this binary's writers
+// use beside a ledger.db a newer binary migrated (ErrMissing when there
+// is none): for the commands that meet ErrSchema there, never the hooks,
+// which read ledger.json, exported from that side file.
+func OpenSideReader(o Options, busy time.Duration) (*Reader, error) {
+	return openReader(o, true, busy)
+}
+
+func openReader(o Options, side bool, busy time.Duration) (*Reader, error) {
 	head, err := Head(o)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnreadable, err)
 	}
-	path := filepath.Join(o.Dirs.FeedbackDir(), FileName)
+	name := FileName
+	if side {
+		name = SideFileName(head)
+	}
+	path := filepath.Join(o.Dirs.FeedbackDir(), name)
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrMissing
 	} else if err != nil {
@@ -69,31 +85,67 @@ func (r *Reader) Get(ids []string) (map[string]feedback.Entry, error) {
 	if len(ids) == 0 {
 		return out, nil
 	}
-	want := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		want[id] = true
-	}
 	err := r.read(func(tx *sql.Tx) error {
-		if err := loadEntries(tx, out, ids); err != nil {
-			return err
-		}
 		tail, err := readTail(tx, r.dir())
 		if err != nil {
 			return err
 		}
-		l := feedback.Ledger{Memories: out}
-		applyTail(&l, tail, func(id string) bool { return want[id] })
-		return nil
+		return getEntries(tx, out, ids, tail)
 	})
 	if err != nil {
 		return nil, err
 	}
+	return out, nil
+}
+
+// GetAny is Get and Any in one read transaction and one read of the
+// journal tail: recall's lookup of its hits, with whether the ledger
+// holds anything at all.
+func (r *Reader) GetAny(ids []string) (map[string]feedback.Entry, bool, error) {
+	out := map[string]feedback.Entry{}
+	var has bool
+	err := r.read(func(tx *sql.Tx) error {
+		tail, err := readTail(tx, r.dir())
+		if err != nil {
+			return err
+		}
+		if err := getEntries(tx, out, ids, tail); err != nil {
+			return err
+		}
+		if len(out) > 0 {
+			has = true
+			return nil
+		}
+		has, err = anyEntry(tx, tail)
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return out, has, nil
+}
+
+// getEntries adds to out the entries of ids that have one: their rows,
+// with tail's lines naming them applied.
+func getEntries(tx *sql.Tx, out map[string]feedback.Entry, ids []string, tail []feedback.Event) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	if err := loadEntries(tx, out, ids); err != nil {
+		return err
+	}
+	l := feedback.Ledger{Memories: out}
+	applyTail(&l, tail, func(id string) bool { return want[id] })
 	for id := range out { // an import of the tail names others
 		if !want[id] {
 			delete(out, id)
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // Hidden is every entry with Hidden set, the journal tail applied: its
@@ -165,35 +217,75 @@ func (r *Reader) Any() (bool, error) {
 		if err != nil {
 			return err
 		}
-		named := namedIDs(tail)
-		// More rows than named ids: one is not named.
+		has, err = anyEntry(tx, tail)
+		return err
+	})
+	return has, err
+}
+
+// anyEntry is Any inside tx, tail being its journal tail.
+func anyEntry(tx *sql.Tx, tail []feedback.Event) (bool, error) {
+	named := namedIDs(tail)
+	// More rows than named ids: one is not named.
+	unnamed, err := func() (bool, error) {
 		rows, err := tx.Query(`SELECT memory_id FROM memories LIMIT ?`, len(named)+1)
 		if err != nil {
-			return err
+			return false, err
 		}
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
-				return err
+				return false, err
 			}
 			if _, ok := slices.BinarySearch(named, id); !ok {
-				has = true
-				return nil
+				return true, nil
 			}
 		}
-		if err := rows.Err(); err != nil {
+		return false, rows.Err()
+	}()
+	if err != nil || unnamed {
+		return unnamed, err
+	}
+	l := feedback.Ledger{Memories: map[string]feedback.Entry{}}
+	if err := loadEntries(tx, l.Memories, named); err != nil {
+		return false, err
+	}
+	applyTail(&l, tail, nil)
+	return len(l.Memories) > 0, nil
+}
+
+// Stamp is what the reader reads, cheaply: the database's build and
+// generation (StampFile "ledger.db#<build_id>", Size the generation) and
+// each month file's name and size, the tail being read from them; no
+// modification time, so a zero Newest. Two equal stamps read the same
+// ledger: a fold that changes a row bumps the generation, a rebuild
+// draws a new build_id, a line appended grows its file.
+func (r *Reader) Stamp() (feedback.Stamp, error) {
+	var st feedback.Stamp
+	err := r.read(func(tx *sql.Tx) error {
+		m, err := readMeta(context.Background(), tx)
+		if err != nil {
 			return err
 		}
-		l := feedback.Ledger{Memories: map[string]feedback.Entry{}}
-		if err := loadEntries(tx, l.Memories, named); err != nil {
+		st.Files = append(st.Files, feedback.StampFile{Name: FileName + "#" + m.buildID, Size: m.generation})
+		files, err := feedback.MonthFiles(r.dir())
+		if err != nil {
 			return err
 		}
-		applyTail(&l, tail, nil)
-		has = len(l.Memories) > 0
+		for _, name := range files {
+			fi, err := os.Stat(filepath.Join(r.dir(), name))
+			if err != nil {
+				return err
+			}
+			st.Files = append(st.Files, feedback.StampFile{Name: name, Size: fi.Size()})
+		}
 		return nil
 	})
-	return has, err
+	if err != nil {
+		return feedback.Stamp{}, err
+	}
+	return st, nil
 }
 
 // dir is the folder of the reader's file, which holds the journal.

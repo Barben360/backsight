@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // proxyHindsight fronts the fake server on port; a request answer reports
@@ -786,13 +787,13 @@ func TestRestoreOfAMemoryHiddenOnAnotherMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tw := telemetry.New(pathsOf(home).State, telemetry.Common{})
 	hiddenHereNow := func() bool {
-		adjust := ledgerAdjust(pathsOf(home), cfg, time.Now())
+		adjust := ledgerAdjust(pathsOf(home), cfg, time.Now(), tw)
 		if adjust == nil {
 			return false
 		}
-		_, hidden := adjust(uA)
-		return hidden
+		return adjust([]string{uA})[uA].Hidden
 	}
 	if !hiddenHereNow() {
 		t.Fatal("the other machine's hiding does not apply here")

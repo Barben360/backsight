@@ -241,10 +241,10 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			}
 			live, found := deps.live()
 			sec, eng := key.get()
-			res := searchMemory(ctx, deps.dirs, deps.home, deps.cfg, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			res := searchMemory(ctx, deps.dirs, deps.home, deps.cfg, deps.tw, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			if refused(res) && key.refresh(sec.APIKey) {
 				_, eng = key.get()
-				res = searchMemory(ctx, deps.dirs, deps.home, deps.cfg, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+				res = searchMemory(ctx, deps.dirs, deps.home, deps.cfg, deps.tw, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			}
 			text, failed := mcpSearchText(res, deps.cfg.Feedback.Enabled), len(res.Hits) == 0 && !scopesOK(res)
 			if failed {

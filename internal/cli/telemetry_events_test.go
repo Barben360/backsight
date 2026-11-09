@@ -187,7 +187,9 @@ func TestFeedbackErrorsCarryAReasonOnly(t *testing.T) {
 		breakFeedbackDir(t, home)
 		recallAnswer = hits(0.9)
 		call(t, cs, "memory_search", map[string]any{"queries": []string{"billing database"}})
-		if got := reasonsOf(t, home); !slices.Equal(got, []string{telemetry.FeedbackReasonJournalWrite}) {
+		// The ledger cannot be read either: neither ledger.db nor ledger.json.
+		want := []string{telemetry.FeedbackReasonLedgerUnreadable, telemetry.FeedbackReasonLedgerJSON, telemetry.FeedbackReasonJournalWrite}
+		if got := reasonsOf(t, home); !slices.Equal(got, want) {
 			t.Errorf("reasons %v", got)
 		}
 	})

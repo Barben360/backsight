@@ -455,16 +455,10 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 
 // rebuildCurrent is the ledger feedback rebuild compares with: ledger.db
 // with the journal lines since its last fold, or, when it cannot be read
-// (not built yet, say), ledger.json with them.
+// (not built yet, say), ledger.json with them (indexLedger: whatever
+// feedback's switch, its read error reported by the rebuild).
 func rebuildCurrent(o ledgerdb.Options) (feedback.Ledger, error) {
-	if r, err := ledgerdb.OpenReader(o, 5*time.Second); err == nil {
-		l, err := r.All()
-		_ = r.Close()
-		if err == nil {
-			return l, nil
-		}
-	}
-	return feedback.Current(o.Dirs.FeedbackDir())
+	return indexLedger(o.Dirs).All()
 }
 
 // planRebuild is what feedback rebuild would fold: a ledger database

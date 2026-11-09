@@ -33,7 +33,7 @@ type Options struct {
 	Migrations    fs.FS               // nil: Embedded
 	// Ledger is how the ledger table is filled; nil:
 	// feedback.CurrentReader over Dirs.FeedbackDir().
-	Ledger feedback.LedgerReader
+	Ledger LedgerSource
 	// LocalStatus reads the local_status row; nil: not refreshed.
 	LocalStatus func() (LocalStatus, error)
 	// Machines reads the other PCs' cache (metrics/machines.json); nil:
@@ -48,6 +48,13 @@ type Options struct {
 	// Progress receives a long catch-up's progress (CLI callers pass
 	// stderr); nil: silent.
 	Progress io.Writer
+}
+
+// LedgerSource is what the index reads the ledger through: the whole
+// ledger at each catch-up. One that can also Stamp what it reads (as
+// feedback.CurrentReader) is read again only when its stamp changes.
+type LedgerSource interface {
+	All() (feedback.Ledger, error)
 }
 
 func (o Options) withDefaults() Options {

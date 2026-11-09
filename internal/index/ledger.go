@@ -23,8 +23,8 @@ const (
 // table mirrors.
 const metaLedgerSHA = "ledger_sha256"
 
-// stamper is a LedgerReader that can stamp what it reads
-// (feedback.CurrentReader).
+// stamper is a LedgerSource that can stamp what it reads
+// (feedback.CurrentReader, the ledger database's reader).
 type stamper interface {
 	Stamp() (feedback.Stamp, error)
 }

@@ -13,8 +13,10 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -35,31 +37,174 @@ func feedbackParams(cfg config.Config) feedback.Params {
 }
 
 // ledgerAdjust is recall's Engine.Adjust from this machine's ledger, with
-// what was journaled since its last settle (a hiding applies to the next
-// recall) and the other machines' counts and hidings (sharedCounts), read
-// once: a memory's boost at now, and whether it is hidden. Nil, so recall
-// is as without a ledger, when feedback is off, the ledger cannot be read
-// (another schema, a broken file) or both hold nothing.
-func ledgerAdjust(d paths.Dirs, cfg config.Config, at time.Time) func(string) (float64, bool) {
+// what was journaled since its last fold (a hiding applies to the next
+// recall) and the other machines' counts and hidings (sharedCounts): for
+// the ids of one search's hits, read once through ledgerReader (one open,
+// one read, the hook's wait), each memory's boost at now and whether it
+// is hidden. Nil when feedback is off; it answers nil, so recall is as
+// without a ledger, when no ledger can be read or both hold nothing.
+func ledgerAdjust(d paths.Dirs, cfg config.Config, at time.Time, tw *telemetry.Writer) func(ids []string) map[string]recall.Adjustment {
+	r := ledgerReader(d, cfg, true, tw)
+	if r == nil {
+		return nil
+	}
+	return func(ids []string) map[string]recall.Adjustment {
+		entries, has, err := r.GetAny(ids)
+		if err != nil {
+			return nil
+		}
+		shared := sharedCounts(d, cfg, at)
+		if !has && shared.Empty() {
+			return nil
+		}
+		p := feedbackParams(cfg)
+		out := make(map[string]recall.Adjustment, len(ids))
+		for _, id := range ids {
+			m := withShared(entries[id], shared, id, p, at)
+			if m.Hidden != nil {
+				out[id] = recall.Adjustment{Hidden: true}
+			} else {
+				out[id] = recall.Adjustment{Boost: m.Boost(p, at)}
+			}
+		}
+		return out
+	}
+}
+
+// How long a ledger reader waits for a writer's lock: a hook or the MCP
+// server answers within its budget, a command can wait for a fold.
+const (
+	hookLedgerBusy    = 20 * time.Millisecond
+	commandLedgerBusy = 5 * time.Second
+)
+
+// ledgerReader is how this machine's ledger is read, nil when feedback is
+// off. Each call opens ledger.db read-only (waiting at most
+// hookLedgerBusy in a hook or the MCP server, commandLedgerBusy
+// elsewhere), reads it with the journal lines since its last fold, and
+// closes it. A command meeting a ledger.db of a newer schema reads the
+// side file of this binary's writers when there is one. When ledger.db
+// cannot be read it logs one feedback_error naming why (ledger_missing,
+// ledger_busy, ledger_unreadable, ledger_schema) and reads ledger.json
+// instead; when that fails too, one more (ledger_json), and the error
+// comes back: the caller acts as without a ledger.
+func ledgerReader(d paths.Dirs, cfg config.Config, inHook bool, tw *telemetry.Writer) feedback.LedgerReader {
 	if !cfg.Feedback.Enabled {
 		return nil
 	}
-	l, err := feedback.Current(d.FeedbackDir())
+	c := ledgerChain{o: ledgerdb.Options{Dirs: d}, busy: commandLedgerBusy, side: !inHook, tw: tw,
+		fallback: feedback.CurrentReader{Dir: d.FeedbackDir()}}
+	if inHook {
+		c.busy = hookLedgerBusy
+	}
+	return c
+}
+
+// indexLedger is the ledger the metrics index mirrors, and the one
+// feedback rebuild compares with: ledgerReader's chain for a command,
+// whatever feedback's switch, without its telemetry (the index records
+// its read errors itself, the rebuild reports them), and with its Stamp,
+// so that the index reads it again only when it changed.
+func indexLedger(d paths.Dirs) index.LedgerSource {
+	return ledgerChain{o: ledgerdb.Options{Dirs: d}, busy: commandLedgerBusy, side: true,
+		fallback: feedback.CurrentReader{Dir: d.FeedbackDir()}}
+}
+
+// ledgerChain reads ledger.db, else fallback (ledgerReader).
+type ledgerChain struct {
+	o        ledgerdb.Options
+	busy     time.Duration
+	side     bool              // a newer ledger.db: read the side file
+	tw       *telemetry.Writer // nil: no telemetry
+	fallback feedback.CurrentReader
+}
+
+func (c ledgerChain) Get(ids []string) (map[string]feedback.Entry, error) {
+	return chainRead(c, func(r feedback.LedgerReader) (map[string]feedback.Entry, error) { return r.Get(ids) })
+}
+
+func (c ledgerChain) Hidden() (map[string]feedback.Entry, error) {
+	return chainRead(c, feedback.LedgerReader.Hidden)
+}
+
+func (c ledgerChain) All() (feedback.Ledger, error) { return chainRead(c, feedback.LedgerReader.All) }
+
+func (c ledgerChain) Any() (bool, error) { return chainRead(c, feedback.LedgerReader.Any) }
+
+func (c ledgerChain) GetAny(ids []string) (map[string]feedback.Entry, bool, error) {
+	type got struct {
+		m   map[string]feedback.Entry
+		has bool
+	}
+	g, err := chainRead(c, func(r feedback.LedgerReader) (got, error) {
+		m, has, err := r.GetAny(ids)
+		return got{m, has}, err
+	})
+	return g.m, g.has, err
+}
+
+// Stamp is the database reader's stamp, else the fallback's.
+func (c ledgerChain) Stamp() (feedback.Stamp, error) {
+	r, err := c.open()
 	if err != nil {
-		return nil
+		return c.fallback.Stamp()
 	}
-	shared := sharedCounts(d, cfg, at)
-	if len(l.Memories) == 0 && shared.Empty() {
-		return nil
+	defer func() { _ = r.Close() }()
+	if st, err := r.Stamp(); err == nil {
+		return st, nil
 	}
-	p := feedbackParams(cfg)
-	return func(id string) (float64, bool) {
-		m := withShared(l.Memories[id], shared, id, p, at)
-		if m.Hidden != nil {
-			return 0, true
+	return c.fallback.Stamp()
+}
+
+// open opens the database reader: ledger.db, or for a command the side
+// file beside a newer one.
+func (c ledgerChain) open() (*ledgerdb.Reader, error) {
+	r, err := ledgerdb.OpenReader(c.o, c.busy)
+	if c.side && errors.Is(err, ledgerdb.ErrSchema) {
+		if sr, serr := ledgerdb.OpenSideReader(c.o, c.busy); serr == nil {
+			return sr, nil
 		}
-		return m.Boost(p, at), false
 	}
+	return r, err
+}
+
+// chainRead is read through c's database reader, opened and closed
+// around it; on its failure, through c's fallback, each failure logged.
+func chainRead[T any](c ledgerChain, read func(feedback.LedgerReader) (T, error)) (T, error) {
+	r, err := c.open()
+	if err == nil {
+		var v T
+		v, err = read(r)
+		_ = r.Close()
+		if err == nil {
+			return v, nil
+		}
+	}
+	c.emit(ledgerReason(err))
+	v, err := read(c.fallback)
+	if err != nil {
+		c.emit(telemetry.FeedbackReasonLedgerJSON)
+	}
+	return v, err
+}
+
+func (c ledgerChain) emit(reason string) {
+	if c.tw != nil {
+		c.tw.Emit(telemetry.FeedbackError(reason))
+	}
+}
+
+// ledgerReason is the feedback_error reason of a database reader's error.
+func ledgerReason(err error) string {
+	switch {
+	case errors.Is(err, ledgerdb.ErrMissing):
+		return telemetry.FeedbackReasonLedgerMissing
+	case errors.Is(err, ledgerdb.ErrBusy):
+		return telemetry.FeedbackReasonLedgerBusy
+	case errors.Is(err, ledgerdb.ErrSchema):
+		return telemetry.FeedbackReasonLedgerSchema
+	}
+	return telemetry.FeedbackReasonLedgerUnreadable
 }
 
 // sharedCounts is the other machines' counts and hidings as jobs tick
