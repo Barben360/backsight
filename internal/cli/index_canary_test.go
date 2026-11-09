@@ -33,9 +33,9 @@ var canaries = []string{
 	"CANARY-ENUM", "CANARY-UNKNOWN", "CANARY-CONFIG", "CANARY-MEMORY", "CANARY NOTE",
 	"CANARY-JOURNAL", "CANARY-SESSION", "CANARY-NOTE", "CANARY-STATE", "CANARY-TOML",
 	"CANARY-LEDGER",
-	// a folded retire's free text: its note, the project of the memory it
-	// retired, and the fields of a verdict a line may carry
-	"CANARY RETIRE NOTE", "CANARY-RETIRE-PROJECT", "CANARY-RETIRE-EVIDENCE", "CANARY-RETIRE-CORRECTION",
+	// a folded retire's free text: its note and the project of the memory
+	// it retired
+	"CANARY RETIRE NOTE", "CANARY-RETIRE-PROJECT",
 	// what the server holds: a listed memory's fields, a document's text,
 	// the path of an imported document, an operation's error, a scanned
 	// memory, a doctor check's summary; and the config's strings
@@ -183,7 +183,7 @@ func canaryState(t *testing.T) string {
 		`{"schema":1,"seq":2,"ts":"` + ts + `","kind":"hide","session":"s1","ids":["` + mem + `"],"verdict":"wrong","note":"` + ctlHideNote + `"}`,
 		// a retire the ledger folds (it counts the memory wrong), its texts
 		// kept out of ledger.db
-		`{"schema":1,"seq":5,"ts":"` + ts + `","kind":"retire","session":"s1","project":"` + ctlProject + `","ids":["` + ctlRetired + `"],"verdict":"wrong","outcome":"invalidated","note":"CANARY RETIRE NOTE","memory_project":"CANARY-RETIRE-PROJECT","evidence":"CANARY-RETIRE-EVIDENCE","correction":"CANARY-RETIRE-CORRECTION"}`,
+		`{"schema":1,"seq":5,"ts":"` + ts + `","kind":"retire","session":"s1","project":"` + ctlProject + `","ids":["` + ctlRetired + `"],"verdict":"wrong","outcome":"invalidated","note":"CANARY RETIRE NOTE","memory_project":"CANARY-RETIRE-PROJECT"}`,
 		// a note's text on a line the ledger never folds
 		`{"schema":1,"seq":4,"ts":"` + ts + `","kind":"stale","session":"s1","ids":["mem-allowed-2"],"note":"CANARY NOTE"}`,
 		`{"schema":1,"seq":3,"ts":"` + ts + `","kind":"surprise","session":"s1","text":"CANARY-JOURNAL"}`,

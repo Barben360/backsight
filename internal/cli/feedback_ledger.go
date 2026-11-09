@@ -414,8 +414,8 @@ func checkHidden(ctx context.Context, cl *hindsight.Client, bank string, ledger 
 		default:
 			continue
 		}
-		// Under the ledger lock, which the tick's settle has released; a
-		// lock held too long still journals it.
+		// AppendFolded takes feedback-ledger.lock, as in v0.1.32; a lock
+		// held too long still journals it.
 		var held *state.HeldError
 		if err := j.AppendFolded(feedback.Event{Kind: feedback.KindUnhide, TS: at.UTC(), IDs: []string{h.id}, Outcome: outcome}); err == nil || errors.As(err, &held) {
 			lifted++

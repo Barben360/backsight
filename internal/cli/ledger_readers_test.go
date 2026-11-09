@@ -145,7 +145,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 			t.Fatalf("exit %d\n%s%s", code, out, errOut)
 		}
 		if n := indexCount(t, home, `SELECT count(*) FROM ledger WHERE memory_id = ? AND hidden_since IS NOT NULL`, hid); n != 1 {
-			t.Errorf("%d hidden h-db row(s) in the ledger table, want 1", n)
+			t.Errorf("%d hidden %s row(s) in the ledger table, want 1", n, hid)
 		}
 	})
 	noLedgerFallback(t, home)

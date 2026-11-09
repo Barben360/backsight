@@ -92,6 +92,17 @@ const ledgerFallbackWarn = 3
 var ledgerFallbackReasons = []string{telemetry.FeedbackReasonLedgerBusy, telemetry.FeedbackReasonLedgerUnreadable, telemetry.FeedbackReasonLedgerSchema,
 	telemetry.FeedbackReasonLedgerJSON, telemetry.FeedbackReasonLedgerExport, telemetry.FeedbackReasonLedgerFold}
 
+// ledgerFailureWords say what each of ledgerFallbackReasons failed, for
+// the summary.
+var ledgerFailureWords = map[string]string{
+	telemetry.FeedbackReasonLedgerBusy:       "reads of a database in use",
+	telemetry.FeedbackReasonLedgerUnreadable: "reads of an unreadable database",
+	telemetry.FeedbackReasonLedgerSchema:     "reads of a database of another version",
+	telemetry.FeedbackReasonLedgerJSON:       "reads of ledger.json as well",
+	telemetry.FeedbackReasonLedgerExport:     "writes of ledger.json",
+	telemetry.FeedbackReasonLedgerFold:       "updates of the database",
+}
+
 const (
 	ledgerTickFix    = "backsight jobs tick settles it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
 	ledgerRebuildFix = "backsight feedback rebuild recomputes it from the journal"
@@ -154,7 +165,7 @@ func checkFeedbackLedger(d paths.Dirs, enabled bool, f ledgerdb.LedgerFacts, err
 		}
 	}
 	if reason, n := mostFrequent(failures); n >= ledgerFallbackWarn {
-		add(fmt.Sprintf("the feedback ledger failed %d times in 24 h, mostly %s", n, reason),
+		add(fmt.Sprintf("the feedback ledger failed %d times in 24 h, mostly %s", n, ledgerFailureWords[reason]),
 			"a read that fails falls back to ledger.json, then to no learned ranking; a fold or export that fails leaves the counts behind", ledgerRebuildFix)
 	}
 	if len(problems) > 0 {
@@ -168,8 +179,14 @@ func checkFeedbackLedger(d paths.Dirs, enabled bool, f ledgerdb.LedgerFacts, err
 	if c.Summary != "" {
 		return c
 	}
-	if !f.Built {
+	// Built at a tick that settled nothing yet (an empty journal, or
+	// shows still within their turn): no watermark to name.
+	switch {
+	case !f.Built, f.Watermark.IsZero() && !journaled:
 		c.Summary = "nothing journaled yet"
+		return c
+	case f.Watermark.IsZero():
+		c.Summary = "nothing settled yet"
 		return c
 	}
 	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", f.Memories, f.Watermark.UTC().Format("2006-01-02 15:04"))

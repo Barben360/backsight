@@ -18,8 +18,10 @@ concurrency:
 env:
   BACKSIGHT_CI_SLOT: "1"
   # The time budgets (make bench-index's): on Windows the slices skip them
-  # and test-windows-budgets runs them apart.
-  TIME_BUDGETS: ^Test(Index|View|Page|Render)Budgets$
+  # and test-windows-budgets runs them apart (the index, metrics and
+  # dashboard ones only: the ledger lookup and the hook's 20 ms wait are
+  # not measured on Windows yet).
+  TIME_BUDGETS: ^Test((Index|View|Page|Render)Budgets|LedgerLookupBudget|HookReaderWaitsAtMost20ms)$
 jobs:
   changes:
     # Whether a pull request changes more than documentation

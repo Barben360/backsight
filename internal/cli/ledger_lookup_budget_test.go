@@ -14,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -86,6 +87,31 @@ func TestLedgerLookupOnARealCopy(t *testing.T) {
 	}
 
 	tw := telemetry.New(d.State, telemetry.Common{})
+	// what the rounds answer: each id's boost and hiding from the copy's
+	// rows (read whole above), with the other machines' counts
+	at := time.Now()
+	adjust := ledgerAdjust(d, cfg, at, tw)
+	if adjust == nil {
+		t.Fatal("no learned ranking with feedback on")
+	}
+	p, shared, boosted := feedbackParams(cfg), sharedCounts(d, cfg, at), 0
+	for id, a := range adjust(ids) {
+		m := withShared(l.Memories[id], shared, id, p, at)
+		want := recall.Adjustment{Hidden: m.Hidden != nil}
+		if !want.Hidden {
+			want.Boost = m.Boost(p, at)
+		}
+		if a != want {
+			t.Errorf("%s: %+v, want %+v from the copy's ledger", id, a, want)
+		}
+		if a.Boost != 0 {
+			boosted++
+		}
+	}
+	if boosted == 0 {
+		t.Fatalf("no boost among the %d ids: nothing to compare", len(ids))
+	}
+
 	const rounds, warmUp = 500, 20
 	took := make([]time.Duration, 0, rounds)
 	for i := range rounds + warmUp {
@@ -94,12 +120,9 @@ func TestLedgerLookupOnARealCopy(t *testing.T) {
 		if adjust == nil {
 			t.Fatal("no learned ranking with feedback on")
 		}
-		got := adjust(ids)
+		adjust(ids)
 		if i >= warmUp {
 			took = append(took, time.Since(start))
-		}
-		if len(got) != len(ids) {
-			t.Fatalf("%d adjustments for %d ids: no learned ranking from the copy", len(got), len(ids))
 		}
 	}
 	files, _ := filepath.Glob(filepath.Join(d.TelemetryDir(), "events-*.jsonl"))

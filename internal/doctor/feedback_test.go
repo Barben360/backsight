@@ -319,6 +319,24 @@ func TestDoctorLedgerFacts(t *testing.T) {
 		{"built and current", func(t *testing.T) Check {
 			return ledgerCheck(t, feedbackDirs(t, recent, usageNow.Add(-10*time.Minute)))
 		}, OK, []string{"memories, settled up to"}},
+		{"built, a journal of one fresh show: nothing settled yet", func(t *testing.T) Check {
+			d := feedbackDirs(t, usageNow.Add(-10*time.Minute), time.Time{})
+			foldAt(t, d, usageNow) // the show is within its turn: settles nothing, builds ledger.db
+			c := ledgerCheck(t, d)
+			if c.Summary != "nothing settled yet" {
+				t.Errorf("summary %q, want %q", c.Summary, "nothing settled yet")
+			}
+			return c
+		}, OK, nil},
+		{"built, no journal: nothing journaled yet", func(t *testing.T) Check {
+			d := paths.Dirs{State: filepath.Join(t.TempDir(), "state")}
+			foldAt(t, d, usageNow)
+			c := ledgerCheck(t, d)
+			if c.Summary != "nothing journaled yet" {
+				t.Errorf("summary %q, want %q", c.Summary, "nothing journaled yet")
+			}
+			return c
+		}, OK, nil},
 		{"missing, a journal, no tick", func(t *testing.T) Check {
 			return ledgerCheck(t, feedbackDirs(t, recent, time.Time{}))
 		}, OK, []string{"not built yet: it builds at the next jobs tick"}},
@@ -415,6 +433,10 @@ func TestDoctorLedgerFacts(t *testing.T) {
 			if got.ID != "feedback-ledger" || got.Status != c.want {
 				t.Errorf("%+v, want %s", got, c.want)
 			}
+			// a zero time is never shown
+			if all := got.Summary + " " + got.Detail + " " + got.Fix; strings.Contains(all, "0001-01-01") {
+				t.Errorf("%+v: a zero time", got)
+			}
 			for _, h := range c.has {
 				if !strings.Contains(got.Summary+" "+got.Detail+" "+got.Fix, h) {
 					t.Errorf("%+v: no %q", got, h)
@@ -438,10 +460,11 @@ func TestDoctorReportsRepeatedLedgerFallbacks(t *testing.T) {
 		has   []string
 	}{
 		{"2 ledger_busy", map[time.Duration][]string{time.Hour: fallbacks("ledger_busy", 2)}, OK, nil},
-		{"3 ledger_busy", map[time.Duration][]string{time.Hour: fallbacks("ledger_busy", 3)}, Warn, []string{"ledger_busy", "backsight feedback rebuild"}},
+		{"3 ledger_busy", map[time.Duration][]string{time.Hour: fallbacks("ledger_busy", 3)}, Warn, []string{"mostly reads of a database in use", "backsight feedback rebuild"}},
+		{"3 ledger_fold", map[time.Duration][]string{time.Hour: fallbacks("ledger_fold", 3)}, Warn, []string{"mostly updates of the database"}},
 		{"3 older than 24 h", map[time.Duration][]string{25 * time.Hour: fallbacks("ledger_busy", 3)}, OK, nil},
 		{"10 ledger_missing", map[time.Duration][]string{time.Hour: fallbacks("ledger_missing", 10)}, OK, nil},
-		{"the most frequent named", map[time.Duration][]string{time.Hour: append(fallbacks("ledger_busy", 3), fallbacks("ledger_json", 4)...)}, Warn, []string{"mostly ledger_json"}},
+		{"the most frequent named", map[time.Duration][]string{time.Hour: append(fallbacks("ledger_busy", 3), fallbacks("ledger_json", 4)...)}, Warn, []string{"mostly reads of ledger.json as well"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
@@ -455,6 +478,15 @@ func TestDoctorReportsRepeatedLedgerFallbacks(t *testing.T) {
 					t.Errorf("%+v: no %q", got, h)
 				}
 			}
+			if strings.Contains(got.Summary, "ledger_") || strings.HasSuffix(got.Summary, "mostly ") {
+				t.Errorf("summary %q: a raw reason, or none", got.Summary)
+			}
 		})
+	}
+	// each reason counted has its words
+	for _, r := range ledgerFallbackReasons {
+		if ledgerFailureWords[r] == "" {
+			t.Errorf("no words for %s", r)
+		}
 	}
 }

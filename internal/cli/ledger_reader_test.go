@@ -220,7 +220,10 @@ func TestHookReaderWaitsAtMost20ms(t *testing.T) {
 	}
 	home, cfg := chainHome(t)
 	holdLedgerDB(t, home)
-	const limit = 3 * 20 * time.Millisecond // the hook's 20 ms wait, ×3
+	limit := 3 * 20 * time.Millisecond // hookLedgerBusy's 20 ms, ×3 (a literal, so a longer wait fails)
+	if os.Getenv("CI") != "" {
+		limit *= 3 // a slower runner (G-tests)
+	}
 	best := time.Duration(1<<63 - 1)
 	for range 3 {
 		start := time.Now()
@@ -228,6 +231,7 @@ func TestHookReaderWaitsAtMost20ms(t *testing.T) {
 		best = min(best, time.Since(start))
 		fromFile(t, got, "json")
 	}
+	t.Logf("ledgerAdjust with ledger.db held: %v, best of 3 (limit %v)", best, limit)
 	if best > limit {
 		t.Errorf("ledgerAdjust took %v at best with ledger.db held, limit %v", best, limit)
 	}

@@ -82,14 +82,17 @@ test-hooks:
 
 # The metrics index's time budgets on a year of generated history (first
 # build, 15-minute catch-up), the page views' render budget and the
-# dashboard's page budgets on the same history. Without -race, which skips
-# the budget tests. TestIndexBudgets logs the two index times it bounds;
+# dashboard's page budgets on the same history; the ledger lookup and the
+# hook's 20 ms wait for a busy ledger. Without -race, which skips the
+# budget tests. TestIndexBudgets logs the two index times it bounds;
 # BenchmarkFirstBuild and BenchmarkCatchUp15Minutes measure the same two
 # by hand (go test -run '^$$' -bench . ./internal/index/).
 bench-index:
 	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
 	go test -count=1 -run 'TestViewBudgets' -v ./internal/metrics/
 	go test -count=1 -run 'TestPageBudgets|TestRenderBudgets' -v ./internal/dashboard/
+	go test -count=1 -run 'TestLedgerLookupBudget$$' -v ./internal/feedback/ledgerdb/
+	go test -count=1 -run 'TestHookReaderWaitsAtMost20ms$$' -v ./internal/cli/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
 # instead of failing on its lock.
