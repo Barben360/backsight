@@ -141,9 +141,10 @@ func (w *Writer) recoverCorrupt(ctx context.Context, err error) error {
 }
 
 // storedCut is the imports cut (imports_dropped_before_ns) a corrupt
-// file still gives, read only; 0 when it gives none, or cannot be read.
+// file still gives, through a connection that changes nothing (as
+// fileVersion's); 0 when it gives none, or cannot be read.
 func storedCut(ctx context.Context, path string) int64 {
-	db, err := sql.Open(driverName, sqlitedb.ReaderDSN(path, 100*time.Millisecond))
+	db, err := sql.Open(driverName, sqlitedb.ProbeDSN(path, idleWAL(path), 100*time.Millisecond)) // as fileVersion: no -wal or -shm left beside an idle WAL file
 	if err != nil {
 		return 0
 	}

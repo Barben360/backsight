@@ -72,12 +72,15 @@ func (w *Writer) Fold(ctx context.Context, p feedback.Params) (FoldResult, error
 		return FoldResult{}, err
 	}
 	// The fresh file's first build folded the journal; this fold, the
-	// lines journaled since.
+	// lines journaled since, or the whole journal again when it refolds
+	// (the first build's params were none).
 	res, err = w.fold(ctx, p)
 	if err != nil {
 		return FoldResult{}, err
 	}
-	res.Lines, res.Skipped = res.Lines+w.built.Lines, res.Skipped+w.built.Skipped
+	if !res.Refolded {
+		res.Lines, res.Skipped = res.Lines+w.built.Lines, res.Skipped+w.built.Skipped
+	}
 	res.Refolded, res.Reason = true, ReasonSetAside
 	return res, nil
 }

@@ -743,7 +743,7 @@ func TestUnappliedByPredicate(t *testing.T) {
 }
 
 // TestCurrentIgnoresAStrayJournalFile: the fallback reader reads the
-// month files (MonthFiles) only, as ledger.db's folds do: a stray
+// names of month files (monthNames) only, as ledger.db's folds do: a stray
 // journal-old.jsonl holding a hide is applied by neither, through Read
 // (no journal_at) or ReadSince (from journal_at).
 func TestCurrentIgnoresAStrayJournalFile(t *testing.T) {

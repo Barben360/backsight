@@ -238,7 +238,9 @@ func TestPageCorruptionHeldOpenIsSetAsideAfterSeize(t *testing.T) {
 	fakeProbe(t, true) // WAL: an open connection keeps Seize out
 	o := tempOpts(t)
 	w := mustOpenWriter(t, o)
-	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)), hideOf(nov(3), "m1"))
+	// The import makes the fold after the set-aside refold (the fresh
+	// build folded under no params): the lines must count once.
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)), hideOf(nov(3), "m1"), importOf(nov(4), "m2", oct(0)))
 	mustFold(t, w, testParams)
 	corruptPage(t, w, "ledger_cursors")
 	main := mainPath(o)
@@ -273,8 +275,8 @@ func TestPageCorruptionHeldOpenIsSetAsideAfterSeize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the fold after the holder closed: %v", err)
 	}
-	if !res.Refolded || res.Reason != "set_aside" || res.Lines != 2 {
-		t.Errorf("the fold that set the file aside: %+v, want a set_aside refold of the journal's 2 lines", res)
+	if !res.Refolded || res.Reason != "set_aside" || res.Lines != 3 {
+		t.Errorf("the fold that set the file aside: %+v, want a set_aside refold of the journal's 3 lines", res)
 	}
 	if !bytes.Contains(readBytes(t, main+".corrupt"), bytes.Repeat([]byte{0xff}, 4096)) {
 		t.Error("ledger.db.corrupt does not hold the corrupt file")
@@ -442,4 +444,30 @@ func TestABusyProbeNeverOpensReadWrite(t *testing.T) {
 	if !bytes.Equal(readBytes(t, main), before) {
 		t.Error("ledger.db was opened read-write after a busy probe")
 	}
+}
+
+// TestStoredCutLeavesNoCompanions: reading the imports cut of a file
+// about to be set aside (and maybe refused) creates no -wal or -shm
+// beside an idle WAL file.
+func TestStoredCutLeavesNoCompanions(t *testing.T) {
+	forceFS(t, sqlitedb.FSLocal)
+	fakeProbe(t, true)
+	o := tempOpts(t)
+	w := mustOpenWriter(t, o)
+	appendLines(t, o, importOf(nov(1), "m2", oct(0)))
+	if _, err := w.Rebuild(context.Background(), testParams, false); err != nil {
+		t.Fatal(err)
+	}
+	mustCloseWriter(t, w)
+	main := mainPath(o)
+	if !sqlitedb.HeaderIsWAL(main) {
+		t.Fatal("ledger.db is not a WAL file: the case tests nothing")
+	}
+	absent(t, main+"-wal")
+	absent(t, main+"-shm")
+	if got := storedCut(context.Background(), main); got != clock.UnixNano() {
+		t.Errorf("storedCut %d, want the rebuild's %d", got, clock.UnixNano())
+	}
+	absent(t, main+"-wal")
+	absent(t, main+"-shm")
 }

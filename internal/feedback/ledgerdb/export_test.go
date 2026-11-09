@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,21 +166,28 @@ func TestConcurrentExportsAgreeWithTheirGeneration(t *testing.T) {
 	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)))
 	mustFold(t, a, testParams)
 	appendLines(t, o, retireOf(nov(3), "m1"))
+	// A's export, inside its snapshot of generation g, has another fold
+	// commit g+1, then starts B's export and waits: B must wait for A's
+	// lock. Without it, B exports g+1 within the wait and A then writes g
+	// over it. Only the first export to reach the seam acts on it: B's
+	// passes straight through.
+	setSeam(t, &exportLockWait, 10*time.Second)
 	bDone := make(chan error, 1)
-	var once sync.Once
+	var claimed atomic.Bool
 	setSeam(t, &betweenExportReads, func() {
-		once.Do(func() {
-			if _, err := b.Fold(context.Background(), testParams); err != nil {
-				t.Errorf("the fold between the exports: %v", err)
-			}
-			go func() { bDone <- b.Export() }()
-			select {
-			case err := <-bDone:
-				t.Errorf("the second export finished (%v) while the first held its snapshot", err)
-				bDone <- err
-			case <-time.After(300 * time.Millisecond):
-			}
-		})
+		if !claimed.CompareAndSwap(false, true) {
+			return
+		}
+		if _, err := b.Fold(context.Background(), testParams); err != nil {
+			t.Errorf("the fold between the exports: %v", err)
+		}
+		go func() { bDone <- b.Export() }()
+		select {
+		case err := <-bDone:
+			t.Errorf("the second export finished (%v) while the first held its snapshot", err)
+			bDone <- err
+		case <-time.After(time.Second):
+		}
 	})
 	mustExport(t, a)
 	if err := <-bDone; err != nil {
