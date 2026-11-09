@@ -54,7 +54,7 @@ type Hidden struct {
 }
 
 // Ledger is a cache of the journal's settle, import, forget, retire, hide
-// and unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
+// and unhide events, by memory id: feedback rebuild recomputes it. Watermark is when settling last ran,
 // JournalAt where the journal ended when it was read for this ledger,
 // HistoryImported when an import of earlier history last went through
 // every source (zero: never).
@@ -71,23 +71,6 @@ type Ledger struct {
 type JournalPos struct {
 	File   string `json:"file"`
 	Offset int64  `json:"offset"`
-}
-
-// journalEnd is where dir's journal ends: its last month file and that
-// file's size; zero without a journal. Taken under the ledger lock before
-// a read, so that no folded event lands between it and the read.
-func journalEnd(dir string) JournalPos {
-	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
-	if err != nil || len(files) == 0 {
-		return JournalPos{}
-	}
-	slices.Sort(files)
-	last := files[len(files)-1]
-	fi, err := os.Stat(last)
-	if err != nil {
-		return JournalPos{}
-	}
-	return JournalPos{File: filepath.Base(last), Offset: fi.Size()}
 }
 
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
@@ -341,9 +324,12 @@ func laterOf(a, b time.Time) time.Time {
 
 func ledgerFile(dir string) string { return filepath.Join(dir, "ledger.json") }
 
-// ErrCorruptLedger: ledger.json does not parse. The next settle keeps it
-// aside and rebuilds the ledger from the journal.
+// ErrCorruptLedger: ledger.json does not parse. The next settle writes it
+// again from the ledger database.
 var ErrCorruptLedger = errors.New("does not parse")
+
+// ErrLedgerSchema: ledger.json is of another schema than LedgerSchema.
+var ErrLedgerSchema = errors.New("has schema")
 
 // LoadLedger reads dir's ledger. A missing file is an empty ledger; one
 // that does not parse (ErrCorruptLedger) or of another schema is an empty
@@ -361,67 +347,10 @@ func LoadLedger(dir string) (Ledger, error) {
 		return newLedger(), fmt.Errorf("%s %w: %w", ledgerFile(dir), ErrCorruptLedger, err)
 	}
 	if l.Schema != LedgerSchema {
-		return newLedger(), fmt.Errorf("%s has schema %d, this binary reads %d", ledgerFile(dir), l.Schema, LedgerSchema)
+		return newLedger(), fmt.Errorf("%s %w %d, this binary reads %d", ledgerFile(dir), ErrLedgerSchema, l.Schema, LedgerSchema)
 	}
 	if l.Memories == nil {
 		l.Memories = map[string]Entry{}
-	}
-	return l, nil
-}
-
-func saveLedger(dir string, l Ledger) error {
-	raw, err := json.Marshal(l)
-	if err != nil {
-		return err
-	}
-	return fsutil.WriteAtomic(ledgerFile(dir), raw, 0o600)
-}
-
-// Rebuild folds every journal file of dir, under the ledger lock, and
-// writes the result only when write; without withImport, it leaves the
-// import events out (the ledger without earlier history). Each settle
-// or import event folds with the half-lives it recorded, so a rebuild
-// after a config change gives the live ledger back; p's half-lives serve
-// only events that recorded none. Recomputing under other parameters is
-// not a rebuild.
-func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
-	release, err := lockLedger(dir)
-	if err != nil {
-		return Ledger{}, err
-	}
-	defer release()
-	l, err := rebuild(dir, p, withImport)
-	if err != nil {
-		return Ledger{}, err
-	}
-	if write {
-		if err := saveLedger(dir, l); err != nil {
-			return l, err
-		}
-	}
-	return l, nil
-}
-
-// rebuild is Rebuild's fold, written nowhere, for a caller holding the
-// ledger lock.
-func rebuild(dir string, p Params, withImport bool) (Ledger, error) {
-	at := journalEnd(dir)
-	events, _, err := Read(dir, time.Time{})
-	if err != nil {
-		return Ledger{}, err
-	}
-	kept := events
-	if !withImport {
-		kept = DropImports(events)
-	}
-	l := Fold(kept, p)
-	l.JournalAt = at // Fold applied every folded event before it
-	// Nor does the next settle apply them again (an import left out
-	// included): it applies what is newer than the watermark.
-	for _, e := range events {
-		if Folds(e.Kind) {
-			l.Watermark = laterOf(l.Watermark, e.TS)
-		}
 	}
 	return l, nil
 }

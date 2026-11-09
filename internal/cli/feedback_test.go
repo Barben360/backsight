@@ -2,13 +2,16 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -221,8 +224,15 @@ func TestFeedbackRebuildWritesTheFold(t *testing.T) {
 	if err := os.Remove(ledger); err != nil {
 		t.Fatal(err)
 	}
+	// The ledger lock an older settle takes does not hold the rebuild: the
+	// database serializes its writers.
+	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
 	code, out, errOut := run(t, "feedback", "rebuild")
-	if code != output.OK || !strings.Contains(out, "2 new") {
+	if code != output.OK || !strings.Contains(out, "0 new, 0 dropped, 0 changed") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	got, err := feedback.LoadLedger(dir)
@@ -239,19 +249,117 @@ func TestFeedbackRebuildWritesTheFold(t *testing.T) {
 	if !reflect.DeepEqual(got, want) || len(got.Memories) != 2 {
 		t.Errorf("rebuilt %+v\nwant     %+v", got, want)
 	}
+}
 
-	// A tick settling holds the ledger lock: the rebuild waits for it.
-	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
+// setShown writes shown into id's row of the ledger database at path, by
+// hand: a damaged count.
+func setShown(t *testing.T, path, id string, shown int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = lock.Release() }()
-	_ = os.Remove(ledger)
-	if code, out, _ := run(t, "feedback", "rebuild", "--json"); code != output.Blocked || !strings.Contains(out, `"ok": false`) {
-		t.Errorf("lock held: exit %d\n%s", code, out)
+	defer func() { _ = db.Close() }()
+	r, err := db.Exec(`UPDATE memories SET shown = ? WHERE memory_id = ?`, shown, id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(ledger); err == nil {
-		t.Error("a blocked rebuild wrote the ledger")
+	if n, _ := r.RowsAffected(); n != 1 {
+		t.Fatalf("%d row(s) of %s updated", n, id)
+	}
+}
+
+// fileBytes is every file under dir with its content.
+func fileBytes(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, de os.DirEntry, err error) error {
+		if err != nil || de.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		files[p] = string(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+// sameLedgerCounts compares two ledgers' memories count by count, floats and
+// times exactly.
+func sameLedgerCounts(t *testing.T, what string, got, want feedback.Ledger) {
+	t.Helper()
+	if len(got.Memories) != len(want.Memories) {
+		t.Errorf("%s: %d memories, want %d", what, len(got.Memories), len(want.Memories))
+	}
+	for id, w := range want.Memories {
+		g, ok := got.Memories[id]
+		if !ok || g.Shown != w.Shown || g.Credits != w.Credits || g.Misses != w.Misses || g.Wrong != w.Wrong ||
+			!g.CreditsAt.Equal(w.CreditsAt) || !g.MissesAt.Equal(w.MissesAt) || !g.LastShown.Equal(w.LastShown) ||
+			!g.LastCredited.Equal(w.LastCredited) || (g.Hidden == nil) != (w.Hidden == nil) {
+			t.Errorf("%s: %s is %+v, want %+v", what, id, g, w)
+		}
+	}
+}
+
+// TestFeedbackRebuildRecreatesTheDB: a count damaged by hand in ledger.db
+// is gone after feedback rebuild, which equals a fold of the journal;
+// --plan says what it would change and leaves every file of the state
+// directory as it was.
+func TestFeedbackRebuildRecreatesTheDB(t *testing.T) {
+	home := isolate(t)
+	d := pathsOf(home)
+	dir := feedbackJournal(t, home)
+	setShown(t, filepath.Join(dir, ledgerdb.FileName), logM1, 999)
+	events, _, _, err := feedback.ReadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := feedback.Fold(events, feedbackParams(config.Default(d, home)))
+
+	before := fileBytes(t, d.State)
+	code, out, errOut := run(t, "feedback", "rebuild", "--plan")
+	if code != output.OK {
+		t.Fatalf("plan: exit %d\n%s%s", code, out, errOut)
+	}
+	for _, line := range []string{"Rebuild plan, nothing written", "shows       3             1000\n", "0 new, 0 dropped, 1 changed\n"} {
+		if !strings.Contains(out, line) {
+			t.Errorf("the plan lacks %q:\n%s", line, out)
+		}
+	}
+	// The reader of a WAL file may create its -wal and -shm (read-only,
+	// they hold nothing); every other file keeps its bytes.
+	after := fileBytes(t, d.State)
+	for _, sfx := range []string{"-wal", "-shm"} {
+		delete(after, filepath.Join(dir, ledgerdb.FileName+sfx))
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("the plan changed the state directory:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
+	}
+
+	code, out, errOut = run(t, "feedback", "rebuild")
+	if code != output.OK || !strings.Contains(out, "0 new, 0 dropped, 1 changed\n") {
+		t.Fatalf("rebuild: exit %d\n%s%s", code, out, errOut)
+	}
+	r, err := ledgerdb.OpenReader(ledgerOptions(d, home), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	got, err := r.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLedgerCounts(t, "ledger.db", got, want)
+	exported, err := feedback.LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLedgerCounts(t, "ledger.json", exported, want)
+	if code, out, _ := run(t, "feedback", "rebuild", "--plan"); !strings.Contains(out, "0 new, 0 dropped, 0 changed\n") {
+		t.Errorf("a plan after the rebuild: exit %d\n%s", code, out)
 	}
 }
 

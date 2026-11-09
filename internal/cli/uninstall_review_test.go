@@ -469,6 +469,13 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	_ = os.WriteFile(d.FamiliesFile(), []byte("{}"), 0o600)
 	_ = os.MkdirAll(filepath.Join(d.FeedbackDir(), "turns"), 0o700)
 	_ = os.WriteFile(filepath.Join(d.FeedbackDir(), "journal-2026-10.jsonl"), []byte("{}\n"), 0o600)
+	// The ledger database, its companions and a side file beside a newer one.
+	var ledgerFiles []string
+	for _, n := range []string{"ledger.db", "ledger.db-wal", "ledger.db-shm", "ledger-v1.db", "ledger-v1.db-wal", "ledger.db.corrupt", "ledger.json"} {
+		p := filepath.Join(d.FeedbackDir(), n)
+		_ = os.WriteFile(p, []byte("x"), 0o600)
+		ledgerFiles = append(ledgerFiles, p)
+	}
 	for _, f := range []string{filepath.Join(d.IndexDir(), "metrics.db"), filepath.Join(d.MetricsDir(), "x.jsonl"), filepath.Join(d.DashboardDir(), "dashboard.json")} {
 		_ = os.MkdirAll(filepath.Dir(f), 0o700)
 		_ = os.WriteFile(f, []byte("{}\n"), 0o600)
@@ -497,6 +504,11 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(env.Data.Kept, "\n"), d.FeedbackDir()) {
 		t.Errorf("the feedback journal is reported as foreign: %q", env.Data.Kept)
+	}
+	for _, p := range ledgerFiles {
+		if onDisk(p) {
+			t.Errorf("not purged: %s", p)
+		}
 	}
 	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile(), d.AttributionDir(), filepath.Join(d.State, "reattribute.jsonl"), filepath.Join(d.State, "reattribute.json"), filepath.Join(d.State, "noise-history.jsonl"), filepath.Join(d.State, "reach.json"), filepath.Join(d.State, "split-sessions.json"), d.FamiliesFile(), d.FeedbackDir()} {
 		if onDisk(p) {

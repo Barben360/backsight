@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -14,9 +16,12 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/session"
-	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
 // newFeedbackCmd is `feedback`: the journal of the memories shown to
@@ -27,7 +32,7 @@ func newFeedbackCmd(e *env) *cobra.Command {
 		Use:   "feedback",
 		Short: "Read which memories were shown to Claude and which it used, and recompute their counts",
 	}
-	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e), newFeedbackReplayCmd(e))
+	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e), newFeedbackReplayCmd(e), newFeedbackMigrateCmd(e))
 	return cmd
 }
 
@@ -398,43 +403,125 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 		Use:   "rebuild",
 		Short: "Recompute every memory's counts of times shown, credited and missed from the journal",
 		Args:  usageArgs(cobra.NoArgs),
-		RunE: func(*cobra.Command, []string) error {
-			dir, p, err := feedbackSetup()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, p, err := feedbackSetup()
 			if err != nil {
 				return err
 			}
-			// Read before the rebuild takes the lock: a tick settling in
-			// between shows as a difference.
-			current, curErr := feedback.LoadLedger(dir)
+			d, home, err := machine()
+			if err != nil {
+				return err
+			}
+			o := ledgerOptions(d, home)
+			o.Now = now
+			// Read before the rebuild: a tick folding in between shows as a
+			// difference.
+			current, curErr := rebuildCurrent(o)
 			var rebuilt feedback.Ledger
+			var failed error
 			if plan {
-				// Reads only, without the lock: a plan never waits for a tick.
-				events, _, err := feedback.Read(dir, time.Time{})
-				if err != nil {
+				// Built aside, from a copy of the journal: a plan writes
+				// nothing in the state directory.
+				if rebuilt, err = planRebuild(cmd.Context(), o, p, !noImport); err != nil {
 					return blocked(err)
 				}
-				if noImport {
-					events = feedback.DropImports(events)
+			} else if rebuilt, err = rebuildLedger(cmd.Context(), o, p, !noImport); err != nil {
+				if rebuilt.Memories == nil {
+					return rebuildError(err)
 				}
-				rebuilt = feedback.Fold(events, p)
-			} else if rebuilt, err = feedback.Rebuild(dir, p, true, !noImport); err != nil {
-				var held *state.HeldError
-				if errors.As(err, &held) {
-					return &output.Error{Code: output.Blocked, Message: "the ledger is being settled (" + held.Owner.Command + "): try again in a moment"}
-				}
-				return blocked(err)
+				// Rebuilt; only ledger.json could not be written.
+				failed = &output.Error{Code: output.Partial, Message: "ledger.db was rebuilt, but ledger.json could not be written: the next jobs tick writes it"}
 			}
 			res := compareLedgers(rebuilt, current, p, now().UTC())
 			res.Plan, res.NoImport = plan, noImport
 			if curErr != nil {
 				res.CurrentError = curErr.Error()
 			}
-			return e.emit("feedback rebuild", res, func() string { return rebuildText(res) })
+			return e.report("feedback rebuild", res, func() string { return rebuildText(res) }, failed)
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show the counts and the difference with the current ledger, writing nothing")
 	cmd.Flags().BoolVar(&noImport, "no-import", false, "leave out the counts feedback import added from earlier history")
 	return cmd
+}
+
+// rebuildCurrent is the ledger feedback rebuild compares with: ledger.db
+// with the journal lines since its last fold, or, when it cannot be read
+// (not built yet, say), ledger.json with them.
+func rebuildCurrent(o ledgerdb.Options) (feedback.Ledger, error) {
+	if r, err := ledgerdb.OpenReader(o, 5*time.Second); err == nil {
+		l, err := r.All()
+		_ = r.Close()
+		if err == nil {
+			return l, nil
+		}
+	}
+	return feedback.Current(o.Dirs.FeedbackDir())
+}
+
+// planRebuild is what feedback rebuild would fold: a ledger database
+// built in a scratch directory from a copy of the journal's month files,
+// removed afterwards.
+func planRebuild(ctx context.Context, o ledgerdb.Options, p feedback.Params, withImport bool) (feedback.Ledger, error) {
+	scratch, err := os.MkdirTemp("", "backsight-rebuild-plan-")
+	if err != nil {
+		return feedback.Ledger{}, err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	so := o
+	so.Dirs, so.Home = paths.Dirs{State: scratch}, ""
+	if err := copyJournal(o.Dirs.FeedbackDir(), so.Dirs.FeedbackDir()); err != nil {
+		return feedback.Ledger{}, err
+	}
+	return rebuildLedger(ctx, so, p, withImport)
+}
+
+// copyJournal copies the month files of from into to.
+func copyJournal(from, to string) error {
+	names, err := feedback.MonthFiles(from)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.MkdirPrivate(to); err != nil {
+		return err
+	}
+	for _, name := range names {
+		raw, err := fsutil.ReadFileShared(filepath.Join(from, name))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(to, name), raw, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rebuildLedger rebuilds o's ledger database from its journal and
+// exports ledger.json (ledgerdb.Writer.Rebuild): a ledger with an error
+// when only the export failed, an empty one (no memories map) when the
+// rebuild did.
+func rebuildLedger(ctx context.Context, o ledgerdb.Options, p feedback.Params, withImport bool) (feedback.Ledger, error) {
+	w, err := ledgerdb.OpenWriter(ctx, o)
+	if err != nil {
+		return feedback.Ledger{}, err
+	}
+	l, err := w.Rebuild(ctx, p, withImport)
+	if cerr := w.Close(); err == nil && cerr != nil {
+		return feedback.Ledger{}, cerr
+	}
+	return l, err
+}
+
+// rebuildError is a failed rebuild as the command reports it.
+func rebuildError(err error) error {
+	switch {
+	case errors.Is(err, ledgerdb.ErrUpdateInProgress):
+		return &output.Error{Code: output.Blocked, Message: "an update is being applied: run backsight feedback rebuild again once it is done"}
+	case errors.Is(err, ledgerdb.ErrBusy) || sqlitedb.Code(err) == "busy":
+		return &output.Error{Code: output.Blocked, Message: "the ledger is being settled by another backsight: try again in a moment"}
+	}
+	return blocked(err)
 }
 
 // compareLedgers totals both ledgers read at t and counts the memories

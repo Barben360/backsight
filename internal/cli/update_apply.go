@@ -25,6 +25,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/index"
@@ -184,15 +185,17 @@ type updateApplyResult struct {
 	Migrations []string        `json:"migrations"` // applied, or pending with --plan
 	// IndexMigrations: the metrics index's, applied or pending with --plan
 	// (the text says how many, never their ids).
-	IndexMigrations []string      `json:"index_migrations,omitempty"`
-	Plugin          string        `json:"plugin,omitempty"`
-	Server          *updateServer `json:"server,omitempty"`
-	Steps           []step        `json:"steps"`
-	RolledBack      bool          `json:"rolled_back,omitempty"`
-	Resumed         bool          `json:"resumed,omitempty"` // an unfinished update to this binary was finished
-	Warnings        []string      `json:"warnings,omitempty"`
-	MS              int           `json:"ms"`
-	changed         bool          // the update went past its install (the shim step started)
+	IndexMigrations []string `json:"index_migrations,omitempty"`
+	// LedgerMigrations: the feedback ledger's, likewise.
+	LedgerMigrations []string      `json:"ledger_migrations,omitempty"`
+	Plugin           string        `json:"plugin,omitempty"`
+	Server           *updateServer `json:"server,omitempty"`
+	Steps            []step        `json:"steps"`
+	RolledBack       bool          `json:"rolled_back,omitempty"`
+	Resumed          bool          `json:"resumed,omitempty"` // an unfinished update to this binary was finished
+	Warnings         []string      `json:"warnings,omitempty"`
+	MS               int           `json:"ms"`
+	changed          bool          // the update went past its install (the shim step started)
 }
 
 // updateServer is the server step: the version deployed and the new
@@ -664,6 +667,7 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 	}
 	a.refreshScheduler(ctx, staged, true)
 	a.planIndex(ctx, staged)
+	a.planLedger(ctx, staged)
 	if why := serverStepSkipped(a.d, a.cfg); why != "" {
 		add("server", "skipped", why)
 		a.planDocs()
@@ -804,13 +808,14 @@ func (a *applyRun) steps(ctx context.Context) error {
 		a.rb.committed, a.marker.Committed = true, true
 		_ = state.WriteUpdateMarker(a.d, a.marker)
 
-		// 7. The new binary's bank template, docs and metrics index (M5
-		// review rules, decisions 0069 and 0079): warnings, never a
-		// rollback. The index migrates only now: a rollback never meets a
-		// migrated index.
+		// 7. The new binary's bank template, docs, metrics index and
+		// feedback ledger (M5 review rules, decisions 0069 and 0079):
+		// warnings, never a rollback. The databases migrate only now: a
+		// rollback never meets a migrated one.
 		a.bank(ctx)
 		a.docs(ctx)
 		a.metricsIndex(ctx)
+		a.feedbackLedger(ctx)
 		a.supervisor(ctx)
 	}
 
@@ -944,6 +949,120 @@ func indexStep(r index.MigrateResult, plan bool) (status, detail string) {
 		return "skipped", "the metrics index is up to date"
 	}
 	return "done", "the metrics index is up to date"
+}
+
+// noLedgerCommand: a new binary older than the ledger database (exit 2).
+const noLedgerCommand = "the new binary has no feedback ledger database"
+
+// feedbackLedger runs the new binary's feedback migrate, after the commit
+// point, within ledgerMigrateBudget: its migrations, or the first build
+// from the journal. A failure is a warning, never a rollback: the next
+// jobs tick opens the ledger, which migrates or builds it.
+func (a *applyRun) feedbackLedger(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, ledgerMigrateBudget)
+	defer cancel()
+	r, err := runLedgerMigrate(cctx, a.target, false)
+	var ce *childError
+	switch {
+	case errors.As(err, &ce) && ce.code == output.Usage:
+		a.add("ledger", "skipped", noLedgerCommand)
+	case err != nil:
+		why := ledgerMigrateReason(ctx, cctx, err)
+		a.res.Warnings = append(a.res.Warnings, "the feedback ledger was not migrated ("+why+"): the next jobs tick retries")
+		a.add("ledger", "failed", why)
+	default:
+		status, detail := ledgerStep(r, false)
+		a.res.LedgerMigrations = append(a.res.LedgerMigrations, r.Applied...)
+		a.add("ledger", status, detail)
+	}
+}
+
+// planLedger asks the staged binary for its pending ledger migrations. A
+// plan never fails on the ledger, whose migration is only ever a warning.
+func (a *applyRun) planLedger(ctx context.Context, staged string) {
+	cctx, cancel := context.WithTimeout(ctx, ledgerMigrateBudget)
+	defer cancel()
+	r, err := runLedgerMigrate(cctx, staged, true)
+	var ce *childError
+	switch {
+	case errors.As(err, &ce) && ce.code == output.Usage:
+		a.add("ledger", "skipped", noLedgerCommand)
+	case err != nil:
+		a.add("ledger", "skipped", "the new binary cannot list the feedback ledger migrations ("+ledgerMigrateReason(ctx, cctx, err)+")")
+	default:
+		status, detail := ledgerStep(r, true)
+		a.res.LedgerMigrations = append(a.res.LedgerMigrations, r.Pending...)
+		a.add("ledger", status, detail)
+	}
+}
+
+// runLedgerMigrate is exe's feedback migrate (with plan, --plan), its
+// result decoded from its JSON envelope: its text is never relayed.
+func runLedgerMigrate(ctx context.Context, exe string, plan bool) (ledgerdb.MigrateResult, error) {
+	args := []string{"feedback", "migrate"}
+	if plan {
+		args = append(args, "--plan")
+	}
+	env, err := runChild(ctx, exe, args...)
+	if err != nil {
+		return ledgerdb.MigrateResult{}, err
+	}
+	var r ledgerdb.MigrateResult
+	if err := json.Unmarshal(env.Data, &r); err != nil {
+		return ledgerdb.MigrateResult{}, err
+	}
+	return r, nil
+}
+
+// ledgerStep is a ledger migrate result as the ledger step: a build, or
+// how many migrations, never their ids.
+func ledgerStep(r ledgerdb.MigrateResult, plan bool) (status, detail string) {
+	ids, status, verb := r.Applied, "done", "migrated"
+	if plan {
+		ids, status, verb = r.Pending, "planned", "would migrate"
+	}
+	newer := ""
+	if r.Newer {
+		newer = ", beside a newer backsight's"
+	}
+	switch {
+	case len(ids) > 0 && !r.Built && plan:
+		return status, "would build the feedback ledger from the journal" + newer
+	case len(ids) > 0 && !r.Built:
+		return status, "built the feedback ledger from the journal" + newer
+	case len(ids) == 1:
+		return status, verb + " the feedback ledger (1 change)" + newer
+	case len(ids) > 1:
+		return status, fmt.Sprintf("%s the feedback ledger (%d changes)%s", verb, len(ids), newer)
+	case plan:
+		return "skipped", "the feedback ledger is up to date" + newer
+	}
+	return "done", "the feedback ledger is up to date" + newer
+}
+
+// ledgerMigrateReason is why feedback migrate failed, in fixed words:
+// never the child's stderr nor its error's text. ctx is update apply's,
+// cctx the call's bound.
+func ledgerMigrateReason(ctx, cctx context.Context, err error) string {
+	switch {
+	case ctx.Err() != nil:
+		return "interrupted"
+	case cctx.Err() != nil:
+		return "timed out"
+	}
+	var ce *childError
+	if !errors.As(err, &ce) || ce.code != output.Blocked || ce.env == nil {
+		return "failed"
+	}
+	switch ce.env.Message {
+	case ledgerUpdatingSentence:
+		return "an update is in progress"
+	case ledgerBusySentence:
+		return "the ledger is in use"
+	case ledgerUnreadableSentence:
+		return "the ledger is unreadable"
+	}
+	return "failed"
 }
 
 // legacyIndexInUse is index.ErrInUse's sentence before it named the other

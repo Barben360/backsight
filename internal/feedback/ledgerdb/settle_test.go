@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // settleStart is when the tests' sessions begin; settleAt, three hours
@@ -192,12 +193,13 @@ func TestSettleRetriesAFailedExport(t *testing.T) {
 	exportMatches(t, "after the retry", o)
 }
 
-// A ledger.json that does not parse, or is gone, is exported again at
-// the next settle, even with nothing new folded.
+// A ledger.json that does not parse, is gone or has another schema is
+// exported again at the next settle, even with nothing new folded.
 func TestSettleRepairsACorruptLedgerJSON(t *testing.T) {
 	for name, damage := range map[string]func(path string) error{
-		"garbage": func(path string) error { return os.WriteFile(path, []byte("{not json"), 0o600) },
-		"deleted": os.Remove,
+		"garbage":        func(path string) error { return os.WriteFile(path, []byte("{not json"), 0o600) },
+		"deleted":        os.Remove,
+		"another schema": func(path string) error { return os.WriteFile(path, []byte(`{"schema":2,"memories":{}}`), 0o600) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := tempOpts(t)
@@ -219,6 +221,57 @@ func TestSettleRepairsACorruptLedgerJSON(t *testing.T) {
 			exportMatches(t, "after the repair", o)
 		})
 	}
+}
+
+// TestSoundLedgerJSONIsNotRewritten: a settle with nothing new leaves a
+// sound ledger.json as it is, bytes and modification time.
+func TestSoundLedgerJSONIsNotRewritten(t *testing.T) {
+	o := tempOpts(t)
+	settleSessions(t, o)
+	mustSettle(t, o, settleAt)
+	path := filepath.Join(feedbackDir(o), "ledger.json")
+	past := clock.Add(-time.Hour)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+	before := readBytes(t, path)
+	if res := mustSettle(t, o, settleAt.Add(time.Hour)); res != (feedback.SettleResult{}) {
+		t.Errorf("the second settle: %+v, want nothing", res)
+	}
+	if got := readBytes(t, path); !bytes.Equal(got, before) {
+		t.Error("ledger.json's bytes changed")
+	}
+	if fi, err := os.Stat(path); err != nil || !fi.ModTime().Equal(past) {
+		t.Errorf("ledger.json rewritten: mtime %v (%v), want %v", fi.ModTime(), err, past)
+	}
+}
+
+// A ledger.json that cannot be read for another reason than its content
+// (a permission) is written once per generation, not at every settle.
+func TestUnreadableLedgerJSONIsWrittenOncePerGeneration(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a file mode that refuses its owner's read is a Unix permission")
+	o := tempOpts(t)
+	settleSessions(t, o)
+	mustSettle(t, o, settleAt)
+	path := filepath.Join(feedbackDir(o), "ledger.json")
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("this user reads a file of mode 0 (root)")
+	}
+	mustSettle(t, o, settleAt.Add(time.Hour))
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0 {
+		t.Fatalf("a settle with nothing new rewrote an unreadable ledger.json: %v %v", fi.Mode(), err)
+	}
+	// A new generation is exported, over it.
+	appendLines(t, o, hideOf(settleAt.Add(90*time.Minute), "m3"))
+	mustSettle(t, o, settleAt.Add(2*time.Hour))
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("the next generation was not exported: %v %v", fi.Mode(), err)
+	}
+	exportMatches(t, "after the new generation", o)
 }
 
 // A fold that sets a corrupt ledger.db aside says so in its result.

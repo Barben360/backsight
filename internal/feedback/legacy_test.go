@@ -1,6 +1,7 @@
 package feedback
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // afterSettleRead, when set (tests), runs once LegacySettle has read the journal.
@@ -164,4 +166,78 @@ func keepAside(base string, raw []byte) (string, error) {
 		}
 		return name, werr
 	}
+}
+
+// journalEnd is where dir's journal ends: its last month file and that
+// file's size; zero without a journal. Taken under the ledger lock before
+// a read, so that no folded event lands between it and the read.
+func journalEnd(dir string) JournalPos {
+	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	if err != nil || len(files) == 0 {
+		return JournalPos{}
+	}
+	slices.Sort(files)
+	last := files[len(files)-1]
+	fi, err := os.Stat(last)
+	if err != nil {
+		return JournalPos{}
+	}
+	return JournalPos{File: filepath.Base(last), Offset: fi.Size()}
+}
+
+func saveLedger(dir string, l Ledger) error {
+	raw, err := json.Marshal(l)
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(ledgerFile(dir), raw, 0o600)
+}
+
+// Rebuild folds every journal file of dir, under the ledger lock, and
+// writes the result only when write; without withImport, it leaves the
+// import events out (the ledger without earlier history). Each settle
+// or import event folds with the half-lives it recorded, so a rebuild
+// after a config change gives the live ledger back; p's half-lives serve
+// only events that recorded none. Recomputing under other parameters is
+// not a rebuild.
+func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
+	release, err := lockLedger(dir)
+	if err != nil {
+		return Ledger{}, err
+	}
+	defer release()
+	l, err := rebuild(dir, p, withImport)
+	if err != nil {
+		return Ledger{}, err
+	}
+	if write {
+		if err := saveLedger(dir, l); err != nil {
+			return l, err
+		}
+	}
+	return l, nil
+}
+
+// rebuild is Rebuild's fold, written nowhere, for a caller holding the
+// ledger lock.
+func rebuild(dir string, p Params, withImport bool) (Ledger, error) {
+	at := journalEnd(dir)
+	events, _, err := Read(dir, time.Time{})
+	if err != nil {
+		return Ledger{}, err
+	}
+	kept := events
+	if !withImport {
+		kept = DropImports(events)
+	}
+	l := Fold(kept, p)
+	l.JournalAt = at // Fold applied every folded event before it
+	// Nor does the next settle apply them again (an import left out
+	// included): it applies what is newer than the watermark.
+	for _, e := range events {
+		if Folds(e.Kind) {
+			l.Watermark = laterOf(l.Watermark, e.TS)
+		}
+	}
+	return l, nil
 }

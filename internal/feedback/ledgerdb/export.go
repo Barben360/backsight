@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,8 +30,9 @@ var betweenExportReads func()
 // written it records the generation it wrote as exported_generation,
 // and does nothing while that is the current one: a failed export is
 // retried by the next call, even when no fold changed anything since. A
-// ledger.json that is gone or does not parse is written again whatever
-// generation it last held, as an older binary's tick repaired it at once.
+// ledger.json that is gone, does not parse or has another schema is
+// written again whatever generation it last held, as an older binary's
+// tick repaired it at once.
 // Exports are serialized by <state>/locks/feedback-export.lock, so
 // exported_generation always names the snapshot ledger.json holds; one
 // that waits more than exportLockWait for it does nothing (the holder
@@ -48,7 +50,10 @@ func (w *Writer) Export() error {
 	file := filepath.Join(w.journalDir(), "ledger.json")
 	_, statErr := os.Stat(file) // LoadLedger reads a missing file as an empty ledger
 	_, loadErr := feedback.LoadLedger(w.journalDir())
-	force := statErr != nil || loadErr != nil
+	// Gone, unparsable or of another schema: written again at once. One
+	// that cannot be read (a permission) is written once per generation,
+	// as any other: rewriting it at every call would not make it readable.
+	force := errors.Is(statErr, fs.ErrNotExist) || errors.Is(loadErr, feedback.ErrCorruptLedger) || errors.Is(loadErr, feedback.ErrLedgerSchema)
 	ctx := context.Background()
 	l, gen, err := w.snapshot(ctx, force)
 	if isCorrupt(err) {

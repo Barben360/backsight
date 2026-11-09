@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -389,6 +390,43 @@ func TestMaintainRunsTheIndexStep(t *testing.T) {
 	}
 	if r := maintain(); r.MetricsIndex != "pruned 0 row(s) and 0 ingest error(s)" {
 		t.Errorf("second run: %q", r.MetricsIndex)
+	}
+}
+
+// jobs maintain removes the feedback ledger's side file of a lower head,
+// says so, and keeps this head's; with none, its line says nothing.
+func TestMaintainRemovesTheLedgerSideFiles(t *testing.T) {
+	home := devInstall(t, true)
+	configure(t, home, "[backup]\nenabled = false")
+	dir := pathsOf(home).FeedbackDir()
+	maintain := func() maintainResult {
+		t.Helper()
+		code, out, _ := run(t, "jobs", "maintain", "--json")
+		var env maintainEnvelope
+		if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+			t.Fatalf("exit %d: %v\n%s", code, err, out)
+		}
+		return env.Data
+	}
+	if r := maintain(); r.FeedbackLedger != "" {
+		t.Errorf("no side file: %q", r.FeedbackLedger)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{ledgerdb.SideFileName(0), ledgerdb.SideFileName(1)} {
+		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := maintain(); r.FeedbackLedger != "removed "+ledgerdb.SideFileName(0) {
+		t.Errorf("feedback_ledger %q", r.FeedbackLedger)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ledgerdb.SideFileName(0))); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the lower side file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ledgerdb.SideFileName(1))); err != nil {
+		t.Errorf("this head's side file: %v", err)
 	}
 }
 
