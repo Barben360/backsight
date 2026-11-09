@@ -104,7 +104,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n := checkHidden(context.Background(), cl, "b", tickLedger(d, cfg, tw), dir, time.Now()); n != 0 {
+		if n := checkHidden(context.Background(), cl, "b", tickLedger(d, cfg, tw).read, dir, time.Now()); n != 0 {
 			t.Errorf("lifted %d", n)
 		}
 		if len(read) != 1 || !strings.Contains(read[0], "/memories/"+hid+"/history") {
@@ -112,7 +112,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 		}
 	})
 	t.Run("the tick's history import", func(t *testing.T) {
-		if got := importInTick(context.Background(), d, home, cfg, tickLedger(d, cfg, tw)); got != "" {
+		if got := importInTick(context.Background(), d, home, cfg, tickLedger(d, cfg, tw).read); got != "" {
 			t.Errorf("importInTick %q, want nothing to do", got)
 		}
 	})
@@ -121,7 +121,7 @@ func TestEveryReaderReadsTheDB(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if up, err := uploadShared(context.Background(), cl, d, cfg, "pc-a", time.Now(), tickLedger(d, cfg, tw)); !up || err != nil {
+		if up, err := uploadShared(context.Background(), cl, d, cfg, "pc-a", time.Now(), tickLedger(d, cfg, tw).read); !up || err != nil {
 			t.Fatalf("uploaded %v, %v", up, err)
 		}
 		docs, err := retain.ControlDocuments(context.Background(), cl, cfg.Server.Bank, sharedDocPrefix)
@@ -281,7 +281,8 @@ func TestMaintainSweepsOldRebuildPlans(t *testing.T) {
 // TestABadTickLogsOneFallback: a tick whose ledger.db cannot be read
 // (here a folder in its place) logs ledger_fold for its settle and at
 // most one fallback for its later steps (one read of the ledger, not one
-// per step), so doctor's feedback-ledger check stays below its line of
+// per step, and none more when its hidden check makes it read again), so
+// doctor's feedback-ledger check stays below its line of
 // three failures a day after one such tick, and reports them after
 // three.
 func TestABadTickLogsOneFallback(t *testing.T) {
@@ -323,7 +324,12 @@ func TestABadTickLogsOneFallback(t *testing.T) {
 		return fold, other
 	}
 	const line = "times in 24 h"
-	tickJSON(t)
+	// A hiding the first bad tick lifts (gone from the server): the tick
+	// reads the ledger again after its check, and logs no second fallback.
+	hideAll(t, d.FeedbackDir(), time.Now().Add(-time.Minute), "o2")
+	if _, r := tickJSON(t); r.Unhidden != 1 {
+		t.Errorf("the first bad tick lifted %d hiding(s), want o2", r.Unhidden)
+	}
 	if fold, other := fallbacks(); fold != 1 || other > 1 {
 		t.Errorf("one tick: %d ledger_fold, %d other ledger_* event(s), want 1 and at most 1", fold, other)
 	}
@@ -334,5 +340,47 @@ func TestABadTickLogsOneFallback(t *testing.T) {
 	tickJSON(t)
 	if c := ledgerCheck(); !strings.Contains(c.Summary+c.Detail, line) {
 		t.Errorf("after three ticks: %+v", c)
+	}
+}
+
+// TestARestoreIsSharedInTheSameTick: a hiding the tick's hidden check
+// lifts (the server rewrote the memory) is gone from the shared document
+// that same tick uploads: the tick reads the ledger again after the check
+// journaled. A hiding it keeps is still shared.
+func TestARestoreIsSharedInTheSameTick(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pathsOf(home)
+	machine, _ := retain.MachineID(d.State)
+	hidAt := time.Now().Add(-2 * time.Hour).UTC()
+	memoryHistory[shareM1] = `[{"previous_text":"old","changed_at":"` + hidAt.Add(time.Hour).Format(time.RFC3339) + `"}]`
+	// No history, but the memory answers: shareM2 stays hidden.
+	memories[shareM2] = `{"id":"` + shareM2 + `","text":"obs","type":"observation","tags":["project:billing"]}`
+	hideAll(t, d.FeedbackDir(), hidAt, shareM1, shareM2)
+	if r := tickOf(t); r.Unhidden != 1 || !r.SharedUp {
+		t.Fatalf("tick: unhidden %d, shared %v", r.Unhidden, r.SharedUp)
+	}
+	cl, err := hindsight.New(serverURL(t, home), "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, err := retain.ControlDocuments(context.Background(), cl, cfg.Server.Bank, sharedDocPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(docs, func(it hindsight.DocumentItem) bool { return it.ID == sharedDocPrefix+machine })
+	if i < 0 {
+		t.Fatalf("no document of this machine among %d", len(docs))
+	}
+	doc, err := feedback.ParseSharedDoc(docs[i].Metadata[sharedMetaKey])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !doc.Entries[shareM1].HiddenSince.IsZero() || doc.Entries[shareM2].HiddenSince.IsZero() {
+		t.Errorf("entries %+v: want %s no longer hidden, %s still hidden", doc.Entries, shareM1, shareM2)
 	}
 }

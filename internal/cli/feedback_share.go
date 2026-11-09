@@ -79,7 +79,7 @@ var shareTickBudget = 10 * time.Second
 // not parse. A failure keeps the cache and the upload record as they
 // were; the caller never fails for it.
 func shareLedger(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg config.Config, machine string, now time.Time) (uploaded bool, machines, skipped int, err error) {
-	return shareLedgerListed(ctx, cl, &controlListing{}, d, cfg, machine, now, tickLedger(d, cfg, nil))
+	return shareLedgerListed(ctx, cl, &controlListing{}, d, cfg, machine, now, tickLedger(d, cfg, nil).read)
 }
 
 // shareLedgerListed is shareLedger reading the control bank through the

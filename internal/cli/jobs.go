@@ -194,8 +194,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Feedback = settleFeedback(d, home, cfg, tw) // local only: before the server start, which can wait
 			// The ledger the tick's later steps read (hidings, the shared
 			// upload, the history import): read once, at the first of them,
-			// so that a ledger.db that cannot be read logs one fallback per
-			// tick, not one per step.
+			// and again only after the hidden check journaled, so that a
+			// ledger.db that cannot be read logs one fallback per tick, not
+			// one per step.
 			ledger := tickLedger(d, cfg, tw)
 			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
 				tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSharedCombine))
@@ -226,11 +227,13 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil || f.StartedOver() != nil {
 					return
 				}
-				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, ledger, d.FeedbackDir(), now())
+				if res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, ledger.read, d.FeedbackDir(), now()); res.Unhidden > 0 {
+					ledger.again() // the upload and the import see the lifts
+				}
 				sctx, cancel := context.WithTimeout(cmd.Context(), shareTickBudget)
 				defer cancel()
 				var err error
-				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now(), ledger); err != nil {
+				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now(), ledger.read); err != nil {
 					res.SharedError = err.Error()
 				}
 				publishFigures = true
@@ -250,7 +253,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 					res.BriefingTriggers = tickBriefingTriggers(cmd.Context(), d, cfg, f.Client, tw)
 				}
-				res.History = importInTick(cmd.Context(), d, home, cfg, ledger)
+				res.History = importInTick(cmd.Context(), d, home, cfg, ledger.read)
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -334,7 +337,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			feedbackSteps() // after the sends: a slow server delays this look, never them
-			res.History = importInTick(cmd.Context(), d, home, cfg, ledger)
+			res.History = importInTick(cmd.Context(), d, home, cfg, ledger.read)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -426,18 +429,55 @@ func tickText(r tickResult) string {
 	return msg + metrics + "\n"
 }
 
-// tickLedger is the ledger as the tick's steps after the settle read it:
-// ledgerReader's All, read at the first call and kept for the others
-// (what the steps journal meanwhile waits for the next tick). Nil-safe:
-// with feedback off it reads as an empty ledger.
-func tickLedger(d paths.Dirs, cfg config.Config, tw *telemetry.Writer) func() (feedback.Ledger, error) {
-	return sync.OnceValues(func() (feedback.Ledger, error) {
-		r := ledgerReader(d, cfg, false, tw)
-		if r == nil {
-			return feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{}}, nil
-		}
-		return r.All()
-	})
+// tickRead is the ledger as the tick's steps after the settle read it
+// (tickLedger): ledgerReader's All, read at the first read and kept for
+// the others until again, which a step that journaled calls, so that the
+// next read sees what it journaled. The tick logs one fallback at most:
+// once a read fell back, the reads after it log none.
+type tickRead struct {
+	d        paths.Dirs
+	cfg      config.Config
+	tw       *telemetry.Writer
+	mu       sync.Mutex
+	done     bool
+	l        feedback.Ledger
+	err      error
+	fellBack bool
+}
+
+// tickLedger is the tick's read of the ledger, nothing read yet.
+func tickLedger(d paths.Dirs, cfg config.Config, tw *telemetry.Writer) *tickRead {
+	return &tickRead{d: d, cfg: cfg, tw: tw}
+}
+
+// read is the ledger, read at the first call and after again only. With
+// feedback off it reads as an empty ledger.
+func (t *tickRead) read() (feedback.Ledger, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return t.l, t.err
+	}
+	t.done = true
+	r := ledgerReader(t.d, t.cfg, false, t.tw)
+	if r == nil {
+		t.l, t.err = feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{}}, nil
+		return t.l, t.err
+	}
+	c := r.(ledgerChain)
+	if t.fellBack {
+		c.tw = nil
+	}
+	c.fellBack = &t.fellBack
+	t.l, t.err = c.All()
+	return t.l, t.err
+}
+
+// again makes the next read read the ledger again.
+func (t *tickRead) again() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.done = false
 }
 
 // importTickBudget bounds a tick's import of earlier history, its local

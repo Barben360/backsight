@@ -129,6 +129,7 @@ type ledgerChain struct {
 	busy     time.Duration
 	side     bool              // a newer ledger.db: read the side file
 	tw       *telemetry.Writer // nil: no telemetry
+	fellBack *bool             // nil, or set once a read falls back
 	fallback feedback.CurrentReader
 }
 
@@ -213,6 +214,9 @@ func chainRead[T any](c ledgerChain, read func(feedback.LedgerReader) (T, error)
 		return v, nil
 	}
 	c.emit(ledgerReason(err))
+	if c.fellBack != nil {
+		*c.fellBack = true
+	}
 	v, err = read(c.fallback)
 	if err != nil {
 		c.emit(telemetry.FeedbackReasonLedgerJSON)
