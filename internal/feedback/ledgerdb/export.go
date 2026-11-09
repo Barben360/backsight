@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -27,7 +28,9 @@ var betweenExportReads func()
 // only the lines after them, so nothing counts twice. Once the file is
 // written it records the generation it wrote as exported_generation,
 // and does nothing while that is the current one: a failed export is
-// retried by the next call, even when no fold changed anything since.
+// retried by the next call, even when no fold changed anything since. A
+// ledger.json that is gone or does not parse is written again whatever
+// generation it last held, as an older binary's tick repaired it at once.
 // Exports are serialized by <state>/locks/feedback-export.lock, so
 // exported_generation always names the snapshot ledger.json holds; one
 // that waits more than exportLockWait for it does nothing (the holder
@@ -42,13 +45,17 @@ func (w *Writer) Export() error {
 		return err
 	}
 	defer release()
+	file := filepath.Join(w.journalDir(), "ledger.json")
+	_, statErr := os.Stat(file) // LoadLedger reads a missing file as an empty ledger
+	_, loadErr := feedback.LoadLedger(w.journalDir())
+	force := statErr != nil || loadErr != nil
 	ctx := context.Background()
-	l, gen, err := w.snapshot(ctx)
+	l, gen, err := w.snapshot(ctx, force)
 	if isCorrupt(err) {
 		if err := w.recoverCorrupt(ctx, err); err != nil {
 			return err
 		}
-		l, gen, err = w.snapshot(ctx)
+		l, gen, err = w.snapshot(ctx, force)
 	}
 	if err != nil || l == nil {
 		return err
@@ -57,7 +64,7 @@ func (w *Writer) Export() error {
 	if err != nil {
 		return err
 	}
-	if err := fsutil.WriteAtomic(filepath.Join(w.journalDir(), "ledger.json"), raw, 0o600); err != nil {
+	if err := fsutil.WriteAtomic(file, raw, 0o600); err != nil {
 		return fmt.Errorf("export of the feedback ledger: %w", err)
 	}
 	_, err = w.db.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES ('exported_generation', ?)`, strconv.FormatInt(gen, 10))
@@ -91,16 +98,16 @@ func lockExport(d paths.Dirs) (release func(), err error) {
 }
 
 // snapshot is the ledger to export and its generation, read in one
-// transaction; nil when that generation was exported already, or the
-// file was never folded.
-func (w *Writer) snapshot(ctx context.Context) (*feedback.Ledger, int64, error) {
+// transaction; nil when the file was never folded, or (unless force)
+// when that generation was exported already.
+func (w *Writer) snapshot(ctx context.Context, force bool) (*feedback.Ledger, int64, error) {
 	tx, err := w.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true}) // a deferred BEGIN: the snapshot starts at the first read
 	if err != nil {
 		return nil, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	m, err := readMeta(ctx, tx)
-	if err != nil || !m.built || m.exported == m.generation {
+	if err != nil || !m.built || (!force && m.exported == m.generation) {
 		return nil, 0, err
 	}
 	l := &feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{}}

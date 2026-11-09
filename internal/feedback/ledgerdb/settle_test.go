@@ -192,6 +192,50 @@ func TestSettleRetriesAFailedExport(t *testing.T) {
 	exportMatches(t, "after the retry", o)
 }
 
+// A ledger.json that does not parse, or is gone, is exported again at
+// the next settle, even with nothing new folded.
+func TestSettleRepairsACorruptLedgerJSON(t *testing.T) {
+	for name, damage := range map[string]func(path string) error{
+		"garbage": func(path string) error { return os.WriteFile(path, []byte("{not json"), 0o600) },
+		"deleted": os.Remove,
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := tempOpts(t)
+			settleSessions(t, o)
+			mustSettle(t, o, settleAt)
+			if err := damage(filepath.Join(feedbackDir(o), "ledger.json")); err != nil {
+				t.Fatal(err)
+			}
+			gen := metaInt(t, o, "generation")
+			if exported := metaInt(t, o, "exported_generation"); exported != gen {
+				t.Fatalf("exported_generation %d, generation %d: the export is behind before the damage", exported, gen)
+			}
+			if res := mustSettle(t, o, settleAt.Add(time.Hour)); res != (feedback.SettleResult{}) {
+				t.Errorf("the settle after the damage: %+v, want nothing", res)
+			}
+			if got := metaInt(t, o, "generation"); got != gen {
+				t.Fatalf("generation %d, want %d: the settle folded something", got, gen)
+			}
+			exportMatches(t, "after the repair", o)
+		})
+	}
+}
+
+// A fold that sets a corrupt ledger.db aside says so in its result.
+func TestSettleReportsASetAside(t *testing.T) {
+	o := tempOpts(t)
+	settleSessions(t, o)
+	if res := mustSettle(t, o, settleAt); res.Rebuilt != "" {
+		t.Errorf("a settle over a healthy file: Rebuilt %q", res.Rebuilt)
+	}
+	corruptPage(t, mustOpenWriter(t, o), "meta")
+	if res := mustSettle(t, o, settleAt.Add(time.Hour)); res.Rebuilt != ReasonSetAside {
+		t.Errorf("the settle that set the file aside: %+v, want Rebuilt %q", res, ReasonSetAside)
+	}
+	countedOnce(t, "after the set-aside", o)
+	exportMatches(t, "after the set-aside", o)
+}
+
 func TestCrashBetweenAppendAndFold(t *testing.T) {
 	o := tempOpts(t)
 	settleSessions(t, o)
@@ -199,8 +243,8 @@ func TestCrashBetweenAppendAndFold(t *testing.T) {
 	setSeam(t, &beforeFoldCommit, nil)
 	// After the first build (OpenWriter's own fold), before the append.
 	setSeam(t, &afterDecide, func() { beforeFoldCommit = func() error { return crash } })
-	if _, err := Settle(context.Background(), o, testParams, at(settleAt)); !errors.Is(err, crash) {
-		t.Fatalf("Settle with a crash before its fold commits: %v", err)
+	if res, err := Settle(context.Background(), o, testParams, at(settleAt)); !errors.Is(err, crash) || res != (feedback.SettleResult{}) {
+		t.Fatalf("Settle with a crash before its fold commits: %+v, %v; want nothing counted and the crash", res, err)
 	}
 	if n := len(settleEvents(t, o)); n != 1 {
 		t.Fatalf("%d settle lines after the crash, want the 1 journaled before it", n)

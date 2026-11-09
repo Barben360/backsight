@@ -428,11 +428,13 @@ var foldedLockWait = 2 * time.Second
 
 // AppendFolded appends an event the ledger folds as it comes (forget,
 // retire, hide, unhide, import) under the ledger lock, stamped at its ts
-// (now, unless set) or just after the ledger's watermark when that is
-// later.
-// Settle reads the journal and moves the watermark under the same lock,
-// and folds only what is newer: the event is either read by a settle or
-// stamped after it, as a rebuild folds it. When the lock stays held, the
+// (now, unless set) or just after ledger.json's watermark when that is
+// later. The ledger database's fold needs neither: its cursors read
+// every line once. Both are kept for ledger.json's readers: the fallback
+// reader applies only what is newer than the watermark, so it sees the
+// event at once, and an older binary's settle (a rollback), which reads
+// the journal and moves the watermark under this lock, either reads the
+// event or finds it stamped after it. When the lock stays held, the
 // event is journaled all the same (the journal counts a session's
 // retirements) and the lock's error returned, for the caller to log.
 func (j *Journal) AppendFolded(e Event) error {

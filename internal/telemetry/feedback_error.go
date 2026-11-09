@@ -6,7 +6,7 @@ const (
 	FeedbackReasonJournalRead   = "journal_read"
 	FeedbackReasonJournalWrite  = "journal_write"
 	FeedbackReasonTurnPointer   = "turn_pointer"
-	FeedbackReasonSettle        = "settle"
+	FeedbackReasonSettle        = "settle" // kept for older events: no longer emitted (a tick's settle fails as ledger_fold)
 	FeedbackReasonSharedCombine = "shared_combine"
 	// The ledger database: a reader that fell back to ledger.json
 	// (missing, busy, unreadable, of another schema), a ledger.json that

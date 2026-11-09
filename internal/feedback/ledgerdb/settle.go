@@ -27,12 +27,13 @@ var afterDecide func()
 //  3. journals them as one settle event at that time carrying p, when
 //     a show settled or a credit came late;
 //  4. folds the journal into ledger.db (Writer.Fold), then exports
-//     ledger.json when its last export is older than the fold's
-//     generation, a fold of nothing included (a failed export is
-//     retried).
+//     ledger.json (Writer.Export) when its last export is older than the
+//     fold's generation, a fold of nothing included (a failed export is
+//     retried), or when ledger.json is gone or does not parse.
 //
 // It counts the shows decided by outcome, forgotten ones left out, and
-// the late credits. It takes no file lock: two settles at once may both
+// the late credits; Rebuilt is ReasonSetAside when the fold set a corrupt
+// ledger.db aside and built a fresh one from the journal. It takes no file lock: two settles at once may both
 // journal the same shows, and the fold counts each key once. A failed
 // open, read, append or fold is the error, with a zero result; a failed
 // export is an error wrapping ErrExport, with the result.
@@ -65,8 +66,12 @@ func Settle(ctx context.Context, o Options, p feedback.Params, clock func() time
 			return res, err
 		}
 	}
-	if _, err := w.Fold(ctx, p); err != nil {
+	fr, err := w.Fold(ctx, p)
+	if err != nil {
 		return res, err
+	}
+	if fr.Reason == ReasonSetAside {
+		res.Rebuilt = ReasonSetAside
 	}
 	res.Late = late
 	for _, s := range settled {
@@ -83,21 +88,8 @@ func Settle(ctx context.Context, o Options, p feedback.Params, clock func() time
 			res.Unknown++
 		}
 	}
-	if err := w.exportIfBehind(ctx); err != nil {
+	if err := w.Export(); err != nil {
 		return res, fmt.Errorf("%w: %w", ErrExport, err)
 	}
 	return res, nil
-}
-
-// exportIfBehind exports ledger.json unless exported_generation is the
-// generation; a meta it cannot read is left to Export, which sets a
-// corrupt file aside.
-func (w *Writer) exportIfBehind(ctx context.Context) error {
-	if w.broken != nil {
-		return w.broken
-	}
-	if m, err := readMeta(ctx, w.db); err == nil && m.exported >= m.generation {
-		return nil
-	}
-	return w.Export()
 }

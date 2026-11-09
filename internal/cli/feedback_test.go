@@ -650,3 +650,11 @@ func TestTickSettleBuildsTheLedgerDB(t *testing.T) {
 		t.Errorf("ledger.db %s\nledger.json %s", got, want)
 	}
 }
+
+// A settle that set a corrupt ledger.db aside says so on the tick line.
+func TestTickLineNamesASetAside(t *testing.T) {
+	text := tickText(tickResult{Status: "done", Feedback: feedback.SettleResult{Rebuilt: ledgerdb.ReasonSetAside}})
+	if !strings.Contains(text, ", feedback ledger database unreadable: set aside and rebuilt from the journal") || strings.Contains(text, ledgerdb.ReasonSetAside) {
+		t.Errorf("tick line: %s", text)
+	}
+}
