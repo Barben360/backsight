@@ -805,7 +805,7 @@ func TestFeedbackMigrateWithFeedbackOff(t *testing.T) {
 	_ = w.Close()
 	code, out, errOut := run(t, "feedback", "migrate", "--json")
 	env.Data = feedbackMigrateResult{}
-	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || env.Data.Skipped != "" || !env.Data.Built {
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || env.Data.Skipped != "" || !env.Data.Existed {
 		t.Errorf("existing file: exit %d %v\n%s%s", code, err, out, errOut)
 	}
 	if !reflect.DeepEqual(calls, []bool{true, false}) {
@@ -897,5 +897,65 @@ func TestFeedbackRebuildPlanWarnsOfALeftScratch(t *testing.T) {
 	code, out, errOut := run(t, "feedback", "rebuild", "--plan")
 	if code != output.OK || !strings.Contains(out, "warning  the plan's scratch folder ") || !strings.Contains(out, "could not be removed (held): remove it by hand\n") {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// TestFeedbackRebuildRecoversTwiceInADay: feedback rebuild sets a corrupt
+// ledger.db aside and rebuilds it even within a day of the last
+// set-aside (two corruptions in a day), and the result is the journal's
+// fold.
+func TestFeedbackRebuildRecoversTwiceInADay(t *testing.T) {
+	home := isolate(t)
+	d := pathsOf(home)
+	dir := feedbackJournal(t, home)
+	db := filepath.Join(dir, ledgerdb.FileName)
+	events, _, _, err := feedback.ReadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := feedback.Fold(events, feedbackParams(config.Default(d, home)))
+	for _, garbage := range []string{"first corruption ", "second corruption "} {
+		raw := []byte(strings.Repeat(garbage, 200))
+		if err := os.WriteFile(db, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, out, errOut := run(t, "feedback", "rebuild")
+		if code != output.OK {
+			t.Fatalf("%q: exit %d\n%s%s", garbage, code, out, errOut)
+		}
+		if got, _ := os.ReadFile(db + ".corrupt"); string(got) != string(raw) {
+			t.Errorf("%q: ledger.db.corrupt does not hold it", garbage)
+		}
+		r, err := ledgerdb.OpenReader(ledgerOptions(d, home), time.Second)
+		if err != nil {
+			t.Fatalf("%q: %v", garbage, err)
+		}
+		got, err := r.All()
+		_ = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameLedgerCounts(t, garbage, got, want)
+	}
+}
+
+// feedback migrate, run on purpose (update apply), also sets a corrupt
+// ledger.db aside within a day of the last set-aside, and says so.
+func TestFeedbackMigrateSetsAsideWithinTheDay(t *testing.T) {
+	home := isolate(t)
+	dir := feedbackJournal(t, home)
+	db := filepath.Join(dir, ledgerdb.FileName)
+	if err := os.WriteFile(db+".corrupt", []byte("set aside just now"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(db, []byte(strings.Repeat("garbage ", 200)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "feedback", "migrate", "--json")
+	var env struct {
+		Data feedbackMigrateResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || !env.Data.SetAside {
+		t.Errorf("exit %d %v\n%s%s", code, err, out, errOut)
 	}
 }

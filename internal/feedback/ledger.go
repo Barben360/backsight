@@ -82,9 +82,12 @@ func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[stri
 // without one, for a restore here to beat a hiding elsewhere). A settle or an
 // import decays under the half-lives it recorded, p's when it recorded
 // none, each show from its own time; a forgotten show counts nowhere, nor
-// does a store reply's show not credited; an import never counts a miss. Sums
-// decay order-independently, so applying events as they come and folding
-// them all later agree.
+// does a store reply's show not credited; an import never counts a miss.
+// The sums decay order-independently in real numbers only: in floats, two
+// orders of the same events can differ in the last bits, so a result
+// equal bit for bit needs the same global (ts, seq) order. That is why the
+// ledger database refolds the whole journal when a line arrives late,
+// rather than applying it out of order.
 func (l *Ledger) Apply(e Event, p Params) {
 	if l.Memories == nil {
 		l.Memories = map[string]Entry{}

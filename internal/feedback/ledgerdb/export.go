@@ -130,5 +130,12 @@ func (w *Writer) snapshot(ctx context.Context, force bool) (*feedback.Ledger, in
 		return nil, 0, err
 	}
 	l.Watermark, l.HistoryImported, l.JournalAt = fromNS(m.watermark), fromNS(m.historyImported), latestPos(cursors)
+	// A journal that already ends in a later month than now's (a line
+	// dated in the future): a line journaled now goes to now's month,
+	// before that end, so the reader of ledger.json must read the months
+	// since the watermark, not on from JournalAt (as v0.1.32 wrote it).
+	if l.JournalAt.File > feedback.MonthFile(w.opts.Now()) {
+		l.JournalAt = feedback.JournalPos{}
+	}
 	return l, m.generation, nil
 }

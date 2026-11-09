@@ -226,3 +226,27 @@ func TestAnExportThatCannotLockSkips(t *testing.T) {
 	mustExport(t, w)
 	sameLedger(t, "the export once the lock is free", loadExport(t, o), folded(t, o))
 }
+
+// A journal that ends in a later month than now's (a line dated in the
+// future) is exported without journal_at, as v0.1.32 wrote it: a hide
+// journaled now, in now's month, is then seen by Current.
+func TestExportOmitsALaterMonthsJournalAt(t *testing.T) {
+	o := tempOpts(t) // now: 2026-11-08
+	w := mustOpenWriter(t, o)
+	defer mustCloseWriter(t, w)
+	december := time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC)
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)), showsOf(december, "m1"))
+	mustFold(t, w, testParams)
+	mustExport(t, w)
+	if got := loadExport(t, o).JournalAt; got != (feedback.JournalPos{}) {
+		t.Errorf("journal_at %+v, want none: the journal ends in %s", got, feedback.MonthFile(december))
+	}
+	appendLines(t, o, hideOf(clock, "m1"))
+	cur, err := feedback.Current(feedbackDir(o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Memories["m1"].Hidden == nil {
+		t.Error("Current misses a hide journaled now, in now's month")
+	}
+}

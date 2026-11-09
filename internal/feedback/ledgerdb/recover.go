@@ -55,7 +55,7 @@ func asCorrupt(path string, err error) error {
 //   - an update is uncommitted: ErrUpdateInProgress (the fresh file is a
 //     migration), nothing moved;
 //   - <path>.corrupt is less than setAsideEvery old: ErrUnreadable, the
-//     file left in place;
+//     file left in place (unless o.ForceSetAside);
 //   - another connection holds the file (sqlitedb.Seize): ErrBusy,
 //     nothing moved.
 func setAside(ctx context.Context, o Options, ce *corruptErr) error {
@@ -64,7 +64,8 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 	}
 	now := o.Now()
 	aside := ce.path + ".corrupt"
-	if fi, err := os.Stat(aside); err == nil && within(fi.ModTime(), now) {
+	before, _ := os.Stat(aside)
+	if before != nil && within(before.ModTime(), now) && !o.ForceSetAside {
 		return fmt.Errorf("%w: %w (%s was set aside less than a day ago)", ErrUnreadable, ce.err, filepath.Base(aside))
 	}
 	release, err := sqlitedb.Seize(ctx, ce.path)
@@ -85,8 +86,8 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 	if _, err := os.Lstat(ce.path); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	if fi, err := os.Stat(aside); err == nil && within(fi.ModTime(), o.Now()) {
-		return nil
+	if fi, err := os.Stat(aside); err == nil && within(fi.ModTime(), o.Now()) && (!o.ForceSetAside || before == nil || !fi.ModTime().Equal(before.ModTime())) {
+		return nil // forced: only a stamp newer than the one seen before the lock is another process's
 	}
 	if !holdWhileRenaming {
 		release()

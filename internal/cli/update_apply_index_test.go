@@ -544,7 +544,7 @@ func TestUpdatePlanListsLedgerMigrations(t *testing.T) {
 		if !plan {
 			return ledgerdb.MigrateResult{}, errors.New("a plan applied a migration")
 		}
-		return ledgerdb.MigrateResult{Built: true, File: ledgerdb.FileName, Pending: []string{"0002-x"}, Applied: []string{}}, nil
+		return ledgerdb.MigrateResult{Existed: true, File: ledgerdb.FileName, Pending: []string{"0002-x"}, Applied: []string{}}, nil
 	}
 	t.Cleanup(func() { ledgerMigrate = old })
 

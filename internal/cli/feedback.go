@@ -562,10 +562,12 @@ func copyMonthFile(from, to string) error {
 }
 
 // rebuildLedger rebuilds o's ledger database from its journal and
-// exports ledger.json (ledgerdb.Writer.Rebuild): a ledger with an error
+// exports ledger.json (ledgerdb.Writer.Rebuild), a corrupt file set aside
+// first even within a day of the last set-aside: a ledger with an error
 // when only the export failed, an empty one (no memories map) when the
 // rebuild did.
 func rebuildLedger(ctx context.Context, o ledgerdb.Options, p feedback.Params, withImport bool) (feedback.Ledger, error) {
+	o.ForceSetAside = true // run on purpose: a corrupt file is set aside even within a day of the last
 	w, err := ledgerdb.OpenWriter(ctx, o)
 	if err != nil {
 		return feedback.Ledger{}, err

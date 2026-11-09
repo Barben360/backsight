@@ -35,6 +35,11 @@ type Options struct {
 	BinaryVersion string              // "": buildinfo.Version
 	Migrations    fs.FS               // nil: Embedded
 	Now           func() time.Time    // nil: time.Now
+	// ForceSetAside lifts the once-a-day bound on setting a corrupt file
+	// aside (setAsideEvery), never the Seize before it: for a command the
+	// user runs on purpose (feedback rebuild, feedback migrate), never
+	// for the tick, whose bound stops an automatic loop.
+	ForceSetAside bool
 }
 
 func (o Options) withDefaults() Options {

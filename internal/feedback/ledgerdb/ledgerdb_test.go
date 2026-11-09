@@ -614,6 +614,41 @@ func TestCorruptFileIsSetAsideOncePerDay(t *testing.T) {
 	}
 }
 
+// TestForcedSetAsideIgnoresTheDay: with ForceSetAside (a command run on
+// purpose) a corrupt file is set aside within a day of the last
+// set-aside; without it (the tick) the bound holds.
+func TestForcedSetAsideIgnoresTheDay(t *testing.T) {
+	o := tempOpts(t)
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)))
+	main := mainPath(o)
+	corrupt := main + ".corrupt"
+	writeFile(t, corrupt, []byte("set aside an hour ago"))
+	hour := clock.Add(-time.Hour)
+	if err := os.Chtimes(corrupt, hour, hour); err != nil {
+		t.Fatal(err)
+	}
+	garbage := bytes.Repeat([]byte("garbage "), 200)
+	writeFile(t, main, garbage)
+	if _, err := OpenWriter(context.Background(), o); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("the tick's open within the day: %v, want ErrUnreadable", err)
+	}
+	forced := o
+	forced.ForceSetAside = true
+	w := mustOpenWriter(t, forced)
+	mustFold(t, w, testParams)
+	mustCloseWriter(t, w)
+	if !bytes.Equal(readBytes(t, corrupt), garbage) {
+		t.Error("the forced open did not set the garbage file aside")
+	}
+	matchesOracle(t, "the fresh file", o, testParams)
+
+	// The bound still holds for the tick after a forced set-aside.
+	writeFile(t, main, garbage)
+	if _, err := OpenWriter(context.Background(), o); !errors.Is(err, ErrUnreadable) {
+		t.Errorf("the tick's open after a forced set-aside: %v, want ErrUnreadable", err)
+	}
+}
+
 // staleWAL is a -wal holding one commit of a table's page, not of the
 // header page: beside a garbage file, the header still reads as garbage.
 func staleWAL(t *testing.T) []byte {

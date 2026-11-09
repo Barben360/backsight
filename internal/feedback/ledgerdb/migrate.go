@@ -12,10 +12,10 @@ import (
 
 // MigrateResult is what Migrate found and did.
 type MigrateResult struct {
-	// Built is true when the file (File) already existed before this
-	// call, false when it did not: Applied then lists the migrations of
-	// the file this call built from the journal (nothing with plan).
-	Built bool `json:"built"`
+	// Existed: the file (File) already existed before this call. False:
+	// this call built it from the journal (Applied lists its migrations;
+	// nothing with plan).
+	Existed bool `json:"existed"`
 	// Newer: ledger.db is newer than this binary, which uses its own side
 	// file instead (File).
 	Newer bool `json:"newer"`
@@ -58,7 +58,7 @@ func Migrate(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 	}
 	_, serr := os.Lstat(t.path)
 	res := MigrateResult{
-		Built: !errors.Is(serr, fs.ErrNotExist), Newer: t.side, File: filepath.Base(t.path),
+		Existed: !errors.Is(serr, fs.ErrNotExist), Newer: t.side, File: filepath.Base(t.path),
 		Pending: []string{}, Applied: []string{},
 	}
 	if t.known {

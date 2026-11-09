@@ -1029,9 +1029,9 @@ func ledgerStep(r feedbackMigrateResult, plan bool) (status, detail string) {
 		return "skipped", r.Skipped
 	case r.SetAside:
 		return status, "set aside a damaged feedback ledger and rebuilt it from the journal" + newer
-	case len(ids) > 0 && !r.Built && plan:
+	case len(ids) > 0 && !r.Existed && plan:
 		return status, "would build the feedback ledger from the journal" + newer
-	case len(ids) > 0 && !r.Built:
+	case len(ids) > 0 && !r.Existed:
 		return status, "built the feedback ledger from the journal" + newer
 	case len(ids) == 1:
 		return status, verb + " the feedback ledger (1 change)" + newer

@@ -75,6 +75,12 @@ func TestDoctorFeedbackChecks(t *testing.T) {
 	if c := checkFeedbackJournal(huge, true); c.Status != Warn || !strings.Contains(c.Summary, "MB") || c.Fix == "" {
 		t.Errorf("201 MB: %+v", c)
 	}
+	// The month files are what the counts are rebuilt from: the advice
+	// never has them moved away as if the counts stayed.
+	if c := checkFeedbackJournal(huge, true); strings.Contains(c.Fix, "move the month files") || strings.Contains(c.Fix, "stay") ||
+		!strings.Contains(c.Detail, "drops the counts it held") || !strings.Contains(c.Fix, "keep the month files") {
+		t.Errorf("201 MB advice: %+v", c)
+	}
 
 	// The newest month file cannot be opened for append: an error.
 	if os.Geteuid() != 0 {

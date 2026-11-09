@@ -33,8 +33,9 @@ var afterDecide func()
 //
 // It counts the shows decided by outcome, forgotten ones left out, and
 // the late credits; Rebuilt is ReasonSetAside when the fold set a corrupt
-// ledger.db aside and built a fresh one from the journal. It takes no file lock: two settles at once may both
-// journal the same shows, and the fold counts each key once. A failed
+// ledger.db aside and built a fresh one from the journal. It takes no
+// file lock: two settles at once may both journal the same shows, and
+// the fold counts each key once. A failed
 // open, read, append or fold is the error, with a zero result; a failed
 // export is an error wrapping ErrExport, with the result.
 func Settle(ctx context.Context, o Options, p feedback.Params, clock func() time.Time) (feedback.SettleResult, error) {

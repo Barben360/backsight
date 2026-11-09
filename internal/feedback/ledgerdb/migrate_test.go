@@ -25,7 +25,7 @@ func mustMigrate(t *testing.T, o Options, plan bool) MigrateResult {
 
 func sameMigrate(t *testing.T, what string, got, want MigrateResult) {
 	t.Helper()
-	if got.Built != want.Built || got.Newer != want.Newer || got.File != want.File || got.SetAside != want.SetAside ||
+	if got.Existed != want.Existed || got.Newer != want.Newer || got.File != want.File || got.SetAside != want.SetAside ||
 		!slices.Equal(got.Pending, want.Pending) || !slices.Equal(got.Applied, want.Applied) {
 		t.Errorf("%s: %+v, want %+v", what, got, want)
 	}
@@ -67,7 +67,7 @@ func TestMigrateBuildsAndPlans(t *testing.T) {
 	matchesOracle(t, "after Migrate", o, feedback.Params{})
 	sameLedger(t, "the reader after Migrate", readerAll(t, o), oracle(t, feedbackDir(o), feedback.Params{}))
 
-	upToDate := MigrateResult{Built: true, File: FileName, Pending: []string{}, Applied: []string{}}
+	upToDate := MigrateResult{Existed: true, File: FileName, Pending: []string{}, Applied: []string{}}
 	sameMigrate(t, "plan, at the head", mustMigrate(t, o, true), upToDate)
 	gen := metaInt(t, o, "generation")
 	sameMigrate(t, "again, at the head", mustMigrate(t, o, false), upToDate)
@@ -86,7 +86,7 @@ func TestMigrateAppliesAPendingMigration(t *testing.T) {
 	next := "0002-test"
 
 	sameMigrate(t, "plan", mustMigrate(t, o, true),
-		MigrateResult{Built: true, File: FileName, Pending: []string{next}, Applied: []string{}})
+		MigrateResult{Existed: true, File: FileName, Pending: []string{next}, Applied: []string{}})
 	if v := headerVersion(t, mainPath(o)); v != 1 {
 		t.Errorf("user_version %d after a plan, want 1", v)
 	}
@@ -105,7 +105,7 @@ func TestMigrateAppliesAPendingMigration(t *testing.T) {
 	}
 
 	sameMigrate(t, "migrate", mustMigrate(t, o, false),
-		MigrateResult{Built: true, File: FileName, Pending: []string{next}, Applied: []string{next}})
+		MigrateResult{Existed: true, File: FileName, Pending: []string{next}, Applied: []string{next}})
 	if v := headerVersion(t, mainPath(o)); v != 2 {
 		t.Errorf("user_version %d after Migrate, want 2", v)
 	}
@@ -145,7 +145,7 @@ func TestMigrateReportsASetAside(t *testing.T) {
 	writeFile(t, mainPath(o), []byte("not a database, not at all, long enough to be read as one"))
 	res := mustMigrate(t, o, false)
 	sameMigrate(t, "a corrupt file", res,
-		MigrateResult{Built: true, File: FileName, Pending: []string{}, Applied: []string{"0001-initial"}, SetAside: true})
+		MigrateResult{Existed: true, File: FileName, Pending: []string{}, Applied: []string{"0001-initial"}, SetAside: true})
 	if _, err := os.Stat(mainPath(o) + ".corrupt"); err != nil {
 		t.Errorf("ledger.db.corrupt: %v", err)
 	}

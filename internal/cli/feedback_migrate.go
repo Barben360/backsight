@@ -65,6 +65,7 @@ func newFeedbackMigrateCmd(e *env) *cobra.Command {
 			}
 			o := ledgerOptions(d, home)
 			o.Now = now
+			o.ForceSetAside = true // run on purpose (update apply, or by hand), never by the tick
 			var res feedbackMigrateResult
 			if !cfg.Feedback.Enabled {
 				// Off: an existing file still migrates (it is at the head
@@ -74,7 +75,7 @@ func newFeedbackMigrateCmd(e *env) *cobra.Command {
 				if err != nil {
 					return ledgerError(err)
 				}
-				if !pr.Built {
+				if !pr.Existed {
 					res = feedbackMigrateResult{MigrateResult: pr, Skipped: feedbackOff}
 					return e.emit("feedback migrate", res, func() string { return ledgerMigrateText(res, plan) })
 				}
@@ -117,9 +118,9 @@ func ledgerMigrateText(r feedbackMigrateResult, plan bool) string {
 		s = "feedback ledger: damaged, set aside as " + r.File + ".corrupt and built again from the journal"
 	case len(ids) == 0:
 		s = "feedback ledger: up to date"
-	case !r.Built && plan:
+	case !r.Existed && plan:
 		s = "feedback ledger: would be built from the journal"
-	case !r.Built:
+	case !r.Existed:
 		s = "feedback ledger: built from the journal"
 	default:
 		s = "feedback ledger: " + what + strings.Join(ids, ", ")

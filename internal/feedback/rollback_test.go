@@ -269,24 +269,51 @@ func TestAppendFoldedStillTakesTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// done is signalled once AppendFolded returns. Its error is the lock's
+	// only when it waited the whole of its wait for the lock (lockLedgerWait
+	// returns it at the deadline, never before), so the error says exactly
+	// that it waited, and the hide is journaled by then.
 	done := make(chan error, 1)
 	go func() {
 		done <- feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindHide, TS: early, IDs: []string{"m1"}, Verdict: "wrong"})
 	}()
-	time.Sleep(300 * time.Millisecond)
-	if _, ok := journaled(t, dir, feedback.KindHide, "m1"); ok {
-		t.Error("journaled while the lock was held, without waiting for it")
+	select {
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("AppendFolded never returned")
 	}
-	err = <-done
 	var held *state.HeldError
 	if !errors.As(err, &held) {
-		t.Errorf("AppendFolded with the lock held: %v, want the lock's error", err)
+		t.Errorf("AppendFolded with the lock held: %v, want the lock's error (it waited its whole wait)", err)
 	}
 	if e, ok := journaled(t, dir, feedback.KindHide, "m1"); !ok || !e.TS.After(watermark) {
 		t.Errorf("hide %+v (journaled %v): want it journaled after the watermark %v", e, ok, watermark)
 	}
 	if err := lock.Release(); err != nil {
 		t.Fatal(err)
+	}
+
+	// Released while it waits: it takes the lock (no error) instead of
+	// giving up.
+	if lock, err = state.TryAcquire(filepath.Join(o.Dirs.LocksDir(), "feedback-ledger.lock"), "test"); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		done <- feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindHide, TS: early, IDs: []string{"m3"}, Verdict: "wrong"})
+	}()
+	<-started
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("AppendFolded never returned")
+	}
+	if err != nil {
+		t.Errorf("AppendFolded with the lock released during its wait: %v, want nil", err)
 	}
 
 	if err := feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindUnhide, TS: early, IDs: []string{"m2"}}); err != nil {
