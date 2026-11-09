@@ -19,6 +19,8 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb/ledgerdbtest"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -56,21 +58,35 @@ func newShareMachine(t *testing.T) *shareMachine {
 	return &shareMachine{t: t, cl: cl, d: d, cfg: config.Default(d, root)}
 }
 
-// ledger writes this machine's ledger.json.
+// ledger seeds this machine's ledger.db.
 func (m *shareMachine) ledger(memories map[string]feedback.Entry) {
 	m.t.Helper()
 	writeShareLedger(m.t, m.d, memories)
 }
 
+// writeShareLedger makes memories the machine's ledger: ledger.db seeded
+// from a journal that folds to them, replacing the last ledger and journal
+// the machine held. A credited entry that names no LastCredited gets its
+// CreditsAt, as a journal gives it.
 func writeShareLedger(t *testing.T, d paths.Dirs, memories map[string]feedback.Entry) {
 	t.Helper()
-	raw, _ := json.Marshal(feedback.Ledger{Schema: feedback.LedgerSchema, Memories: memories})
-	if err := os.MkdirAll(d.FeedbackDir(), 0o700); err != nil {
-		t.Fatal(err)
+	files, _ := filepath.Glob(filepath.Join(d.FeedbackDir(), "journal-*.jsonl"))
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		files = append(files, filepath.Join(d.FeedbackDir(), ledgerdb.FileName+suffix))
 	}
-	if err := os.WriteFile(filepath.Join(d.FeedbackDir(), "ledger.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
+	for _, f := range files {
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
 	}
+	held := map[string]feedback.Entry{}
+	for id, e := range memories {
+		if e.Credits > 0 && e.LastCredited.IsZero() {
+			e.LastCredited = e.CreditsAt
+		}
+		held[id] = e
+	}
+	ledgerdbtest.Seed(t, d, feedback.Ledger{Schema: feedback.LedgerSchema, Memories: held})
 }
 
 func (m *shareMachine) share(at time.Time) (bool, int, int, error) {
@@ -341,7 +357,7 @@ func TestShareSurvivesAnUnreachableServer(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	d := pathsOf(home)
 	machine, _ := retain.MachineID(d.State)
-	writeShareLedger(t, d, map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: time.Now(), LastShown: time.Now()}})
+	writeShareLedger(t, d, map[string]feedback.Entry{shareM1: creditedNow()})
 	if r := tickOf(t); !r.SharedUp || r.Status != "done" {
 		t.Fatalf("healthy tick: %+v", r)
 	}
@@ -374,7 +390,7 @@ func TestShareSurvivesAnUnreachableServer(t *testing.T) {
 	other := devInstall(t, true)
 	pointAt(t, other, fakeHindsight(t))
 	recordMismatch(t, other)
-	writeShareLedger(t, pathsOf(other), map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: time.Now(), LastShown: time.Now()}})
+	writeShareLedger(t, pathsOf(other), map[string]feedback.Entry{shareM1: creditedNow()})
 	if r := tickOf(t); r.SharedUp || r.SharedMachines != 0 {
 		t.Errorf("another server: %+v", r)
 	}
@@ -398,7 +414,7 @@ func TestShareSurvivesAnUnreachableServer(t *testing.T) {
 	t.Cleanup(front.Close)
 	frontPort, _ := strconv.Atoi(front.URL[strings.LastIndex(front.URL, ":")+1:])
 	pointAt(t, sick, frontPort)
-	writeShareLedger(t, pathsOf(sick), map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: time.Now(), LastShown: time.Now()}})
+	writeShareLedger(t, pathsOf(sick), map[string]feedback.Entry{shareM1: creditedNow()})
 	if r := tickOf(t); r.SharedUp || sharedSends.Load() != 0 {
 		t.Errorf("health failing: %+v, %d send(s)", r, sharedSends.Load())
 	}
@@ -406,7 +422,7 @@ func TestShareSurvivesAnUnreachableServer(t *testing.T) {
 
 	// ...nor while the server is down.
 	down := devInstall(t, true)
-	writeShareLedger(t, pathsOf(down), map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: time.Now(), LastShown: time.Now()}})
+	writeShareLedger(t, pathsOf(down), map[string]feedback.Entry{shareM1: creditedNow()})
 	if _, out, _ := run(t, "jobs", "tick"); strings.Contains(out, "counts sent") {
 		t.Errorf("server down:\n%s", out)
 	}
@@ -895,4 +911,10 @@ func TestViewRebuildNeedsNoServer(t *testing.T) {
 	if again, _ := os.ReadFile(feedback.SharedCombinedFile(dir)); string(again) != legacy {
 		t.Errorf("without shared.json the view changed:\n%s", again)
 	}
+}
+
+// creditedNow is a memory shown once, and credited by that show, just now.
+func creditedNow() feedback.Entry {
+	at := time.Now()
+	return feedback.Entry{Shown: 1, Credits: 1, CreditsAt: at, LastShown: at}
 }

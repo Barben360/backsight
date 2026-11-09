@@ -305,24 +305,45 @@ func TestSetAsideLeavesAnotherProcessesWork(t *testing.T) {
 			t.Errorf("the older ledger.db.corrupt was stamped again (%v, %v)", fi.ModTime(), err)
 		}
 	})
-	t.Run("set aside meanwhile", func(t *testing.T) {
-		o := tempOpts(t)
-		main := mainPath(o)
-		garbage := bytes.Repeat([]byte("garbage "), 100)
-		writeFile(t, main, garbage)
-		setSeam(t, &afterSeize, func() {
-			writeFile(t, main+".corrupt", []byte("the other process's"))
-			if err := os.Chtimes(main+".corrupt", clock, clock); err != nil {
-				t.Fatal(err)
+	// Another process sets the file aside between this one's day check and
+	// its lock: its work stands, forced or not. A forced call yields only to
+	// a stamp newer than the one it saw before the lock.
+	for _, c := range []struct {
+		name   string
+		forced bool
+		older  bool // a .corrupt from before the lock
+	}{
+		{"set aside meanwhile", false, false},
+		{"set aside meanwhile over an older one", false, true},
+		{"forced, set aside meanwhile", true, false},
+		{"forced, set aside meanwhile over an older one", true, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := tempOpts(t)
+			o.ForceSetAside = c.forced
+			main := mainPath(o)
+			garbage := bytes.Repeat([]byte("garbage "), 100)
+			writeFile(t, main, garbage)
+			if c.older {
+				writeFile(t, main+".corrupt", []byte("from two days ago"))
+				if err := os.Chtimes(main+".corrupt", clock.Add(-48*time.Hour), clock.Add(-48*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			setSeam(t, &afterSeize, func() {
+				writeFile(t, main+".corrupt", []byte("the other process's"))
+				if err := os.Chtimes(main+".corrupt", clock, clock); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err := setAside(context.Background(), o, &corruptErr{path: main, err: errors.New("corrupt")}); err != nil {
+				t.Fatalf("setAside after another process did it: %v", err)
+			}
+			if !bytes.Equal(readBytes(t, main), garbage) || string(readBytes(t, main+".corrupt")) != "the other process's" {
+				t.Error("the file was set aside a second time")
 			}
 		})
-		if err := setAside(context.Background(), o, &corruptErr{path: main, err: errors.New("corrupt")}); err != nil {
-			t.Fatalf("setAside after another process did it: %v", err)
-		}
-		if !bytes.Equal(readBytes(t, main), garbage) || string(readBytes(t, main+".corrupt")) != "the other process's" {
-			t.Error("the file was set aside a second time")
-		}
-	})
+	}
 }
 
 // TestSetAsideKeepsTheImportsCut: the fresh file built after a set-aside

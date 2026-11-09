@@ -352,8 +352,10 @@ const (
 	hiddenCheckTimeout = 10 * time.Second
 )
 
-// checkHidden lifts the hidings the server made moot, the hidings those
-// of ledger (the tick's one read) and the lifts journaled in dir: an observation with a change
+// checkHidden lifts the hidings the server made moot. It reads the hidings
+// from ledger, the tick's read of the ledger; when this check journals a
+// lift the tick reads the ledger again, so the next step sees it. Each
+// lift is journaled in dir: an observation with a change
 // in its history after it was hidden is journaled unhide rewritten, one
 // the server no longer holds (its history and the memory itself both not
 // found) unhide gone. Any other answer leaves the hiding as it is. The

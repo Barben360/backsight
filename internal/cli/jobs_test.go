@@ -397,7 +397,7 @@ func configPredatesConnect(t *testing.T) (hosts func() []string, newHost, cursor
 	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
 	appendConfig(t, home, "[feedback]\nenabled = true\nshare_ledger = true")
-	writeShareLedger(t, pathsOf(home), map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: time.Now(), LastShown: time.Now()}})
+	writeShareLedger(t, pathsOf(home), map[string]feedback.Entry{shareM1: creditedNow()})
 	var mu sync.Mutex
 	var seen, feedbackWrites []string
 	fakeHook = func(r *http.Request) {

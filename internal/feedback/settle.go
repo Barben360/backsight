@@ -249,6 +249,10 @@ func turnOver(s *pendingShow, turn string, turns []Event, stopped map[string]boo
 	return false
 }
 
+// inLockWait, when set (tests), runs each time lockLedgerWait finds the
+// lock held and is about to try again.
+var inLockWait func()
+
 // lockLedgerWait is lockLedger, trying again while a live owner holds
 // the lock, for at most wait.
 func lockLedgerWait(dir string, wait time.Duration) (release func(), err error) {
@@ -258,6 +262,9 @@ func lockLedgerWait(dir string, wait time.Duration) (release func(), err error) 
 		var held *state.HeldError
 		if !errors.As(err, &held) || !time.Now().Before(deadline) {
 			return release, err
+		}
+		if inLockWait != nil {
+			inLockWait()
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

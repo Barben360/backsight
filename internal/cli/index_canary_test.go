@@ -18,6 +18,8 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
@@ -64,9 +66,20 @@ var serverCanaries = []string{
 	"CANARY-OPERROR", "CANARY-SCAN-TEXT", "CANARY-BRIEF-TEXT", "CANARY-BRIEF-CLEAN", briefFlagged, briefClean, noteDocument, noteDocumentID,
 }
 
+// canaryFiles are the bytes of the index file and its companions.
 func canaryFiles(t *testing.T, home string) []string {
 	t.Helper()
-	main := filepath.Join(pathsOf(home).IndexDir(), "metrics.db")
+	return dbFileBytes(t, filepath.Join(pathsOf(home).IndexDir(), "metrics.db"))
+}
+
+// ledgerFiles are the bytes of ledger.db and its companions.
+func ledgerFiles(t *testing.T, home string) []string {
+	t.Helper()
+	return dbFileBytes(t, filepath.Join(pathsOf(home).FeedbackDir(), "ledger.db"))
+}
+
+func dbFileBytes(t *testing.T, main string) []string {
+	t.Helper()
 	var out []string
 	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 		b, err := os.ReadFile(main + suffix)
@@ -86,6 +99,9 @@ func canaryFiles(t *testing.T, home string) []string {
 const (
 	ctlMemory  = "mem-ctl-91c2d4"
 	ctlProject = "proj-ctl-7f3a"
+	// the document id a hide's note is: a word of the ledger database,
+	// which keeps ids, numbers and the verdict word, never a text
+	ctlHideNote = "doc-ctl-e9d41c7a"
 )
 
 // noCanary fails when a canary is in the index files, or when a control
@@ -107,6 +123,25 @@ func noCanary(t *testing.T, step, home string, extra ...string) {
 	for _, want := range append([]string{ctlMemory, ctlProject}, extra...) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("%s: control %q not in the index file bytes", step, want)
+		}
+	}
+	// ledger.db, built from a journal that carries the same canaries,
+	// holds none of them, and holds the ids and the verdict word it keeps.
+	lfiles := ledgerFiles(t, home)
+	if len(lfiles) == 0 {
+		t.Errorf("%s: no ledger.db to scan", step)
+	}
+	for _, b := range lfiles {
+		for _, c := range canaries {
+			if strings.Contains(b, c) {
+				t.Errorf("%s: %q found in the ledger.db bytes", step, c)
+			}
+		}
+	}
+	ljoined := strings.Join(lfiles, "\x00")
+	for _, want := range []string{ctlMemory, ctlHideNote, "wrong"} {
+		if !strings.Contains(ljoined, want) {
+			t.Errorf("%s: control %q not in the ledger.db bytes", step, want)
 		}
 	}
 }
@@ -139,7 +174,9 @@ func canaryState(t *testing.T) string {
 
 	jr := strings.Join([]string{
 		`{"schema":1,"seq":1,"ts":"` + ts + `","kind":"shows","session":"s1","turn":"t1","project":"` + ctlProject + `","path":"prompt","items":[{"id":"` + mem + `","rank":1,"text":"CANARY-MEMORY"},{"id":"mem-allowed-2","rank":2},{"id":"mem-allowed-3","rank":3}]}`,
-		`{"schema":1,"seq":2,"ts":"` + ts + `","kind":"hide","session":"s1","ids":["` + mem + `"],"verdict":"wrong","note":"CANARY NOTE"}`,
+		`{"schema":1,"seq":2,"ts":"` + ts + `","kind":"hide","session":"s1","ids":["` + mem + `"],"verdict":"wrong","note":"` + ctlHideNote + `"}`,
+		// a note's text on a line the ledger never folds
+		`{"schema":1,"seq":4,"ts":"` + ts + `","kind":"stale","session":"s1","ids":["mem-allowed-2"],"note":"CANARY NOTE"}`,
 		`{"schema":1,"seq":3,"ts":"` + ts + `","kind":"surprise","session":"s1","text":"CANARY-JOURNAL"}`,
 		``,
 	}, "\n")
@@ -149,6 +186,17 @@ func canaryState(t *testing.T) string {
 	}
 	ledger := `{"schema":1,"memories":{"` + mem + `":{"shown":1,"hidden":{"since":"` + ts + `","verdict":"wrong","note":"CANARY-LEDGER"}}}}`
 	if err := os.WriteFile(filepath.Join(d.FeedbackDir(), "ledger.json"), []byte(ledger), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// ledger.db, folded from that journal as the tick would
+	w, err := ledgerdb.OpenWriter(context.Background(), ledgerdb.Options{Dirs: d, Getenv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Fold(context.Background(), feedback.Params{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 

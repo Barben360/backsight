@@ -298,15 +298,23 @@ func TestAppendFoldedStillTakesTheLock(t *testing.T) {
 	if lock, err = state.TryAcquire(filepath.Join(o.Dirs.LocksDir(), "feedback-ledger.lock"), "test"); err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{})
+	// The wait finds the lock held, so the hide must not be journaled yet:
+	// the first time it looks, this releases the lock after checking the
+	// journal, and only then may the hide be written.
+	var sawBefore, checked bool
+	var released error
+	clear := feedback.OnLockWait(func() {
+		if checked {
+			return
+		}
+		checked = true
+		_, sawBefore = journaled(t, dir, feedback.KindHide, "m3")
+		released = lock.Release()
+	})
+	t.Cleanup(clear)
 	go func() {
-		close(started)
 		done <- feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindHide, TS: early, IDs: []string{"m3"}, Verdict: "wrong"})
 	}()
-	<-started
-	if err := lock.Release(); err != nil {
-		t.Fatal(err)
-	}
 	select {
 	case err = <-done:
 	case <-time.After(30 * time.Second):
@@ -315,6 +323,16 @@ func TestAppendFoldedStillTakesTheLock(t *testing.T) {
 	if err != nil {
 		t.Errorf("AppendFolded with the lock released during its wait: %v, want nil", err)
 	}
+	if !checked || released != nil {
+		t.Fatalf("the wait never saw the lock held (checked %v), or it could not be released: %v", checked, released)
+	}
+	if sawBefore {
+		t.Error("the hide was journaled before the lock wait ended: it must be journaled under the lock")
+	}
+	if _, ok := journaled(t, dir, feedback.KindHide, "m3"); !ok {
+		t.Error("the hide is not journaled once the lock was released")
+	}
+	clear()
 
 	if err := feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindUnhide, TS: early, IDs: []string{"m2"}}); err != nil {
 		t.Errorf("AppendFolded with the lock free: %v", err)
