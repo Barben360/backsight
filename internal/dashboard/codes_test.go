@@ -274,6 +274,85 @@ func TestAcceptRace(t *testing.T) {
 	}
 }
 
+// fakeLstat makes the code files read as Windows reads them while another
+// request removes them: denied for the first denials reads, then gone (or
+// still denied, denials < 0). It returns the count of reads.
+func fakeLstat(t *testing.T, system string, denials int) *int {
+	t.Helper()
+	oldLstat, oldGOOS := lstat, goos
+	t.Cleanup(func() { lstat, goos = oldLstat, oldGOOS })
+	goos = system
+	reads := 0
+	lstat = func(name string) (fs.FileInfo, error) {
+		reads++
+		if denials < 0 || reads <= denials {
+			return nil, &fs.PathError{Op: "CreateFile", Path: name, Err: fs.ErrPermission}
+		}
+		return nil, &fs.PathError{Op: "CreateFile", Path: name, Err: fs.ErrNotExist}
+	}
+	return &reads
+}
+
+// Windows: the code another request has just spent is still delete-pending,
+// and reads as Access is denied for a moment. This request lost the race:
+// ErrNoCode, not an internal error (issue 249).
+func TestAcceptDeletePendingCode(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	code := mint(t, d, now)
+	reads := fakeLstat(t, "windows", 3)
+	if err := AcceptCode(d, code, now); !errors.Is(err, ErrNoCode) {
+		t.Errorf("delete-pending code: %v, want ErrNoCode", err)
+	}
+	if *reads != 4 {
+		t.Errorf("%d reads, want 4: three denied, then gone", *reads)
+	}
+}
+
+// A denial that lasts is a real one: reported, after a bounded wait.
+func TestAcceptLastingDenial(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	code := mint(t, d, now)
+	reads := fakeLstat(t, "windows", -1)
+	err := AcceptCode(d, code, now)
+	if !errors.Is(err, fs.ErrPermission) || errors.Is(err, ErrNoCode) {
+		t.Errorf("lasting denial: %v, want the permission error", err)
+	}
+	if *reads != deletePendingTries+1 {
+		t.Errorf("%d reads, want %d", *reads, deletePendingTries+1)
+	}
+}
+
+// Elsewhere a denial never means delete-pending: reported at once.
+func TestAcceptDenialOffWindows(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	code := mint(t, d, now)
+	reads := fakeLstat(t, "linux", 3)
+	if err := AcceptCode(d, code, now); !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("denial on linux: %v, want the permission error", err)
+	}
+	if *reads != 1 {
+		t.Errorf("%d reads, want 1", *reads)
+	}
+}
+
+// spend's Windows branch asks gone() whether the code it could not claim
+// was spent: a delete-pending file was.
+func TestGoneCountsDeletePending(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "code")
+	fakeLstat(t, "windows", 2)
+	if !gone(p) {
+		t.Error("delete-pending file: not gone, want gone")
+	}
+	fakeLstat(t, "windows", -1)
+	if gone(p) {
+		t.Error("lasting denial: gone, want present")
+	}
+	fakeLstat(t, "linux", 1)
+	if gone(p) {
+		t.Error("denial on linux: gone, want present")
+	}
+}
+
 // Another request spends the code between this one's check and its
 // removal: this one is refused.
 func TestAcceptLosesTheRace(t *testing.T) {
