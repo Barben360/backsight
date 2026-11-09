@@ -706,6 +706,57 @@ func TestCurrentSkipsATailLineAtOrBeforeTheWatermark(t *testing.T) {
 	}
 }
 
+// Two processes can append a later hide before an earlier unhide, and a
+// later forget before an earlier hide: Current applies its tail by
+// (ts, seq), not in file order, and reads what the next fold writes.
+func TestCurrentAppliesTheTailInTimeOrder(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	j := NewJournal(dir, Common{Session: "s"})
+	j.now = func() time.Time { return at }
+	if err := j.AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1", "m2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LegacySettle(dir, Params{TurnTimeout: TurnTimeout}, fixedClock(at.Add(time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := LoadLedger(dir); err != nil || saved.JournalAt.File == "" || len(saved.Memories) != 2 {
+		t.Fatalf("after the settle: %v %+v", err, saved)
+	}
+	h := func(n int) time.Time { return at.Add(time.Duration(n) * time.Hour) }
+	for _, e := range []Event{
+		{Kind: KindHide, TS: h(2), IDs: []string{"m1"}, Verdict: "wrong"}, {Kind: KindUnhide, TS: h(1), IDs: []string{"m1"}},
+		{Kind: "forget", TS: h(4), IDs: []string{"m2"}}, {Kind: KindHide, TS: h(3), IDs: []string{"m2"}, Verdict: "wrong"},
+	} {
+		if err := j.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(what string, l Ledger) {
+		t.Helper()
+		if e, ok := l.Memories["m1"]; !ok || e.Hidden == nil || !e.Hidden.Since.Equal(h(2)) || !e.UnhiddenAt.Equal(h(1)) {
+			t.Errorf("%s: m1 %+v (%v), want unhidden at %v then hidden since %v", what, e, ok, h(1), h(2))
+		}
+		if e, ok := l.Memories["m2"]; ok {
+			t.Errorf("%s: m2 %+v, want forgotten (the later forget wins)", what, e)
+		}
+	}
+	cur, err := Current(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("Current", cur)
+	if _, err := Rebuild(dir, Params{TurnTimeout: TurnTimeout}, true, true); err != nil {
+		t.Fatal(err)
+	}
+	next, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("the next fold", next)
+	assertSameEntries(t, cur, next, 1e-12)
+}
+
 // Only an entry holding nothing but its restore time is RestoreOnly:
 // any count, verdict, hiding or show makes it a memory.
 func TestRestoreOnlyEntries(t *testing.T) {

@@ -217,7 +217,12 @@ func TestRotateKeepsThirteenMonths(t *testing.T) {
 		}
 	}
 	want = []string{"server-daily-2025-09.jsonl"}
-	for _, n := range []string{"notes.txt", "server-daily-2025-9.jsonl", "other-2020-01.jsonl", "scan-history-2025-13.jsonl"} {
+	// Not backsight's: no month 00 or 13 is ever written. The two old ones
+	// would read as December 2024 and January 2025, outside the window:
+	// only the month guard keeps them.
+	foreign := []string{"notes.txt", "server-daily-2025-9.jsonl", "other-2020-01.jsonl", "scan-history-2025-13.jsonl",
+		"doctor-history-2025-00.jsonl", "memory-docs-2024-13.jsonl"}
+	for _, n := range foreign {
 		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -227,8 +232,8 @@ func TestRotateKeepsThirteenMonths(t *testing.T) {
 		t.Fatalf("removed %v, want %v", got, want)
 	}
 	left, _ := os.ReadDir(dir)
-	if len(left) != 13+4 {
-		t.Fatalf("%d files left, want 17", len(left))
+	if len(left) != 13+len(foreign) {
+		t.Fatalf("%d files left, want %d", len(left), 13+len(foreign))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "server-daily-2025-10.jsonl")); err != nil {
 		t.Fatal("2025-10 was removed")

@@ -309,6 +309,17 @@ func TestRootCauseCollapse(t *testing.T) {
 		{"breaker open, server answering", fxNow, func(x *fx) {
 			x.local(index.LocalStatus{ReachLastOK: today(8, 30), BreakerOpenUntil: fxNow.Add(10 * time.Minute), NotesQueued: 1, NotesOldestAt: fxNow.Add(-10 * time.Minute)})
 		}, &Item{Severity: SeverityWatch, Text: "Memory server unreachable since 08:30: 1 note and 0 sessions wait on this PC, nothing is lost."}, nil},
+		{"breaker open until 1 ms from now", fxNow, func(x *fx) {
+			x.local(index.LocalStatus{ReachLastOK: today(8, 30), BreakerOpenUntil: fxNow.Add(time.Millisecond)})
+		}, &Item{Severity: SeverityWatch, Text: "Memory server unreachable since 08:30: 0 notes and 0 sessions wait on this PC, nothing is lost."}, nil},
+		// breaker.json keeps open_until after the pause ends, until the next
+		// hook records a result: an elapsed pause is not a server down.
+		{"breaker elapsed an hour ago, server answering", fxNow, func(x *fx) {
+			x.local(index.LocalStatus{ReachLastOK: today(11, 0), BreakerOpenUntil: ago(time.Hour)})
+		}, nil, nil},
+		{"breaker open until exactly now: the pause has ended", fxNow, func(x *fx) {
+			x.local(index.LocalStatus{ReachLastOK: today(11, 0), BreakerOpenUntil: fxNow})
+		}, nil, nil},
 		{"every read unreachable, reach not yet recorded failing", fxNow, func(x *fx) {
 			x.local(index.LocalStatus{ReachLastOK: today(11, 0)})
 			x.server.failAll(hindsight.ErrUnreachable)

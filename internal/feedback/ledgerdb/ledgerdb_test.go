@@ -664,6 +664,36 @@ func TestCorruptFileIsSetAsideOncePerDay(t *testing.T) {
 	}
 }
 
+// TestSetAsideFromTheFuture: a .corrupt stamped after now (the clock
+// stepped back since) is not "within the day": the corrupt ledger.db is
+// set aside at once, not left failing until the clock passes the stamp.
+func TestSetAsideFromTheFuture(t *testing.T) {
+	o := tempOpts(t)
+	main := mainPath(o)
+	corrupt := main + ".corrupt"
+	writeFile(t, corrupt, []byte("set aside in the clock's future"))
+	future := clock.Add(time.Hour)
+	if err := os.Chtimes(corrupt, future, future); err != nil {
+		t.Fatal(err)
+	}
+	garbage := bytes.Repeat([]byte("garbage "), 200)
+	writeFile(t, main, garbage)
+	w, err := OpenWriter(context.Background(), o)
+	if err != nil {
+		t.Fatalf("a corrupt ledger.db beside a .corrupt from the future: %v, want it set aside", err)
+	}
+	mustCloseWriter(t, w)
+	if !bytes.HasPrefix(readBytes(t, corrupt), garbage) {
+		t.Error("ledger.db.corrupt does not hold the garbage file")
+	}
+	if fi, err := os.Stat(corrupt); err != nil || !fi.ModTime().Equal(clock) {
+		t.Errorf("ledger.db.corrupt mtime %v (%v), want now %v", fi.ModTime(), err, clock)
+	}
+	if v := headerVersion(t, main); v != 1 {
+		t.Errorf("the fresh ledger.db is at user_version %d, want 1", v)
+	}
+}
+
 // TestForcedSetAsideIgnoresTheDay: with ForceSetAside (a command run on
 // purpose) a corrupt file is set aside within a day of the last
 // set-aside; without it (the tick) the bound holds.

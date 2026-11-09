@@ -254,6 +254,39 @@ func TestQuickCheckRunsAtMostDaily(t *testing.T) {
 	}
 }
 
+// TestQuickCheckStampFromTheFuture: a check stamp (passed or tried) after
+// now, the clock stepped back since, is not fresh: quick_check runs at
+// the next open and stamps now, not once the clock passes the stamp.
+func TestQuickCheckStampFromTheFuture(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stamp func(s *recoveryState, at time.Time)
+	}{
+		{"checked_at", func(s *recoveryState, at time.Time) { s.CheckedAt = at }},
+		{"check_tried_at", func(s *recoveryState, at time.Time) { s.CheckedAt, s.CheckTriedAt = time.Time{}, at }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := 0
+			prev := onQuickCheck
+			onQuickCheck = func() { n++ }
+			t.Cleanup(func() { onQuickCheck = prev })
+			r := newRecEnv(t)
+			r.build()
+			if n != 1 {
+				t.Fatalf("first open: %d quick_check(s)", n)
+			}
+			r.setStatus(func(s *recoveryState) { tc.stamp(s, clock.Add(time.Hour)) })
+			r.build()
+			if n != 2 {
+				t.Errorf("%s an hour in the future: %d quick_check(s), want 2", tc.name, n)
+			}
+			if st := r.status(); !sameTime(st.CheckedAt, clock) || !st.CheckTriedAt.IsZero() {
+				t.Errorf("checked_at %v, check_tried_at %v: want checked now %v, no attempt pending", st.CheckedAt, st.CheckTriedAt, clock)
+			}
+		})
+	}
+}
+
 func TestASecondCorruptionWithin24hStops(t *testing.T) {
 	r := newRecEnv(t)
 	writeFile(t, r.main(), "not a database")

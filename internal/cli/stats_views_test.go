@@ -477,8 +477,32 @@ func TestFirstBuildShowsProgress(t *testing.T) {
 	}
 }
 
+// TestStatsAgreement: the overview's activity table and the old `stats`
+// report count the same window alike, on each rule where the two code
+// paths could differ: a machine prompt is not a human one, a refused
+// credit is no verdict, a failed send is counted under its status.
 func TestStatsAgreement(t *testing.T) {
 	viewsFixture(t)
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i, e := range []telemetry.Event{
+		telemetry.Prompt{N: 4, Decision: "skip", Reason: "machine", Plen: 900},
+		telemetry.Credit{Verdict: "used", IDs: 1, OK: false},
+		telemetry.Retain{Document: "conversation:d2", Items: 1, Status: "failed", MS: 100},
+	} {
+		b.WriteString(telLineAt(t, goldenNow.Add(-time.Duration(5+i)*time.Hour), e))
+	}
+	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-2026-10.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
 	win := []string{"--since", "2026-10-01T12:00:00Z", "--until", "2026-10-08T12:00:00Z"}
 	view := runView(t, append([]string{"stats", "overview"}, win...)...)
 	legacy := runView(t, append([]string{"stats"}, win...)...)
@@ -490,17 +514,21 @@ func TestStatsAgreement(t *testing.T) {
 		name  string
 		view  any
 		other any
+		want  any // the hand count of the fixture
 	}{
-		{"prompts", at(act, "prompts"), at(legacy.env.Data, "prompts", "human")},
-		{"machine", at(act, "machine"), at(legacy.env.Data, "prompts", "machine")},
-		{"recalls", at(act, "recalls"), at(legacy.env.Data, "prompts", "recalls")},
-		{"with_hits", at(act, "with_hits"), at(legacy.env.Data, "prompts", "with_hits")},
-		{"credits", at(act, "credits"), at(legacy.env.Data, "feedback", "verdicts")},
-		{"retains", at(act, "retains"), at(legacy.env.Data, "retains")},
+		{"prompts", at(act, "prompts"), at(legacy.env.Data, "prompts", "human"), float64(6)},
+		{"machine", at(act, "machine"), at(legacy.env.Data, "prompts", "machine"), float64(1)},
+		{"recalls", at(act, "recalls"), at(legacy.env.Data, "prompts", "recalls"), float64(5)},
+		{"with_hits", at(act, "with_hits"), at(legacy.env.Data, "prompts", "with_hits"), float64(4)},
+		{"credits", at(act, "credits"), at(legacy.env.Data, "feedback", "verdicts"), map[string]any{"used": float64(1)}},
+		{"retains", at(act, "retains"), at(legacy.env.Data, "retains"), map[string]any{"ok": float64(1), "failed": float64(1)}},
 	} {
-		if c.view == nil || !reflect.DeepEqual(c.view, c.other) {
-			t.Errorf("%s: view %v, report %v", c.name, c.view, c.other)
+		if !reflect.DeepEqual(c.view, c.want) || !reflect.DeepEqual(c.other, c.want) {
+			t.Errorf("%s: view %v, report %v, want both %v", c.name, c.view, c.other, c.want)
 		}
+	}
+	if got := at(legacy.env.Data, "feedback", "refused"); got != float64(1) {
+		t.Errorf("report: refused credits %v, want the 1 refused", got)
 	}
 	hr := at(view.env.Data, "metrics", "recall.hit_rate")
 	if at(hr, "num") != at(act, "with_hits") || at(hr, "den") != at(act, "recalls") || at(hr, "den") == float64(0) {
