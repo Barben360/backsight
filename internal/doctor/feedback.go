@@ -67,8 +67,8 @@ func checkFeedbackJournal(d paths.Dirs, enabled bool) Check {
 	c.Summary = fmt.Sprintf("%d month file(s), %.1f MB", len(files), mb)
 	if total > feedbackJournalWarn {
 		c.Status, c.Summary = Warn, fmt.Sprintf("the journal holds %.0f MB in %d month file(s), above %d MB", mb, len(files), feedbackJournalWarn>>20)
-		c.Detail = "the tick reads its last two months, a rebuild all of it"
-		c.Fix = "move the month files older than two months out of " + dir + ": the counts already settled stay; backsight feedback rebuild would then drop what they counted"
+		c.Detail = "the month files are the history the counts are rebuilt from: moving or deleting one drops the counts it held at the next jobs tick"
+		c.Fix = "keep the month files in " + dir + "; remove the oldest only if losing the counts they hold is acceptable"
 	}
 	return c
 }

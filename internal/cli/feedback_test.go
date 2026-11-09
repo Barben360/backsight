@@ -1,19 +1,25 @@
 package cli
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -45,7 +51,7 @@ func feedbackJournal(t *testing.T, home string) string {
 			t.Fatal(err)
 		}
 	}
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerOptions(pathsOf(home), home), feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -219,8 +225,15 @@ func TestFeedbackRebuildWritesTheFold(t *testing.T) {
 	if err := os.Remove(ledger); err != nil {
 		t.Fatal(err)
 	}
+	// The ledger lock an older settle takes does not hold the rebuild: the
+	// database serializes its writers.
+	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
 	code, out, errOut := run(t, "feedback", "rebuild")
-	if code != output.OK || !strings.Contains(out, "2 new") {
+	if code != output.OK || !strings.Contains(out, "0 new, 0 dropped, 0 changed") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	got, err := feedback.LoadLedger(dir)
@@ -237,19 +250,117 @@ func TestFeedbackRebuildWritesTheFold(t *testing.T) {
 	if !reflect.DeepEqual(got, want) || len(got.Memories) != 2 {
 		t.Errorf("rebuilt %+v\nwant     %+v", got, want)
 	}
+}
 
-	// A tick settling holds the ledger lock: the rebuild waits for it.
-	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
+// setShown writes shown into id's row of the ledger database at path, by
+// hand: a damaged count.
+func setShown(t *testing.T, path, id string, shown int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = lock.Release() }()
-	_ = os.Remove(ledger)
-	if code, out, _ := run(t, "feedback", "rebuild", "--json"); code != output.Blocked || !strings.Contains(out, `"ok": false`) {
-		t.Errorf("lock held: exit %d\n%s", code, out)
+	defer func() { _ = db.Close() }()
+	r, err := db.Exec(`UPDATE memories SET shown = ? WHERE memory_id = ?`, shown, id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(ledger); err == nil {
-		t.Error("a blocked rebuild wrote the ledger")
+	if n, _ := r.RowsAffected(); n != 1 {
+		t.Fatalf("%d row(s) of %s updated", n, id)
+	}
+}
+
+// fileBytes is every file under dir with its content.
+func fileBytes(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, de os.DirEntry, err error) error {
+		if err != nil || de.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		files[p] = string(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+// sameLedgerCounts compares two ledgers' memories count by count, floats and
+// times exactly.
+func sameLedgerCounts(t *testing.T, what string, got, want feedback.Ledger) {
+	t.Helper()
+	if len(got.Memories) != len(want.Memories) {
+		t.Errorf("%s: %d memories, want %d", what, len(got.Memories), len(want.Memories))
+	}
+	for id, w := range want.Memories {
+		g, ok := got.Memories[id]
+		if !ok || g.Shown != w.Shown || g.Credits != w.Credits || g.Misses != w.Misses || g.Wrong != w.Wrong ||
+			!g.CreditsAt.Equal(w.CreditsAt) || !g.MissesAt.Equal(w.MissesAt) || !g.LastShown.Equal(w.LastShown) ||
+			!g.LastCredited.Equal(w.LastCredited) || (g.Hidden == nil) != (w.Hidden == nil) {
+			t.Errorf("%s: %s is %+v, want %+v", what, id, g, w)
+		}
+	}
+}
+
+// TestFeedbackRebuildRecreatesTheDB: a count damaged by hand in ledger.db
+// is gone after feedback rebuild, which equals a fold of the journal;
+// --plan says what it would change and leaves every file of the state
+// directory as it was.
+func TestFeedbackRebuildRecreatesTheDB(t *testing.T) {
+	home := isolate(t)
+	d := pathsOf(home)
+	dir := feedbackJournal(t, home)
+	setShown(t, filepath.Join(dir, ledgerdb.FileName), logM1, 999)
+	events, _, _, err := feedback.ReadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := feedback.Fold(events, feedbackParams(config.Default(d, home)))
+
+	before := fileBytes(t, d.State)
+	code, out, errOut := run(t, "feedback", "rebuild", "--plan")
+	if code != output.OK {
+		t.Fatalf("plan: exit %d\n%s%s", code, out, errOut)
+	}
+	for _, line := range []string{"Rebuild plan, nothing written", "shows       3             1000\n", "0 new, 0 dropped, 1 changed\n"} {
+		if !strings.Contains(out, line) {
+			t.Errorf("the plan lacks %q:\n%s", line, out)
+		}
+	}
+	// The reader of a WAL file may create its -wal and -shm (read-only,
+	// they hold nothing); every other file keeps its bytes.
+	after := fileBytes(t, d.State)
+	for _, sfx := range []string{"-wal", "-shm"} {
+		delete(after, filepath.Join(dir, ledgerdb.FileName+sfx))
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("the plan changed the state directory:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
+	}
+
+	code, out, errOut = run(t, "feedback", "rebuild")
+	if code != output.OK || !strings.Contains(out, "0 new, 0 dropped, 1 changed\n") {
+		t.Fatalf("rebuild: exit %d\n%s%s", code, out, errOut)
+	}
+	r, err := ledgerdb.OpenReader(ledgerOptions(d, home), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	got, err := r.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLedgerCounts(t, "ledger.db", got, want)
+	exported, err := feedback.LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLedgerCounts(t, "ledger.json", exported, want)
+	if code, out, _ := run(t, "feedback", "rebuild", "--plan"); !strings.Contains(out, "0 new, 0 dropped, 0 changed\n") {
+		t.Errorf("a plan after the rebuild: exit %d\n%s", code, out)
 	}
 }
 
@@ -511,7 +622,7 @@ func ptr(v float64) *float64 { return &v }
 func TestReplayIsReadOnly(t *testing.T) {
 	home := isolate(t)
 	dir := replayJournal(t, home)
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerOptions(pathsOf(home), home), feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
@@ -599,5 +710,252 @@ func TestARestoreAloneIsNotAMemory(t *testing.T) {
 	}
 	if res := compareReplays(nil, withRestore, withRestore, p, p, at, 3); res.Memories != 1 {
 		t.Errorf("replay counts %d memories", res.Memories)
+	}
+}
+
+// One tick builds ledger.db from the journal, settles into it, and
+// exports ledger.json, the two equal.
+func TestTickSettleBuildsTheLedgerDB(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	start := time.Now().UTC().Add(-3 * time.Hour)
+	j := feedback.NewJournal(d.FeedbackDir(), feedback.Common{Session: "s1"})
+	for _, e := range []feedback.Event{
+		{Kind: "turn", Turn: "p1", N: 1, TS: start},
+		{Kind: "shows", Turn: "p1", Path: "prompt", TS: start.Add(time.Minute), Items: []feedback.Item{{ID: logM1, Rank: 1}, {ID: logM2, Rank: 2}}},
+		{Kind: "credit", Turn: "p1", Verdict: "used", IDs: []string{logM1}, TS: start.Add(2 * time.Minute)},
+		{Kind: "stop", Turn: "p1", Outcome: "declared", StopCheck: "always", TS: start.Add(3 * time.Minute)},
+	} {
+		if err := j.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := tickOf(t); r.Feedback.Shows != 2 || r.Feedback.Credits != 1 || r.Feedback.Misses != 1 {
+		t.Errorf("the tick settled %+v, want 2 shows, 1 credit, 1 miss", r.Feedback)
+	}
+	r, err := ledgerdb.OpenReader(ledgerOptions(d, home), time.Second)
+	if err != nil {
+		t.Fatalf("no ledger.db after the tick: %v", err)
+	}
+	db, err := r.All()
+	_ = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := feedback.LoadLedger(d.FeedbackDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(d.FeedbackDir(), "ledger.json")); err != nil {
+		t.Fatalf("no ledger.json after the tick: %v", err)
+	}
+	if m := db.Memories[logM1]; m.Shown != 1 || m.Credits != 1 {
+		t.Errorf("ledger.db %s: %+v, want shown once and credited", logM1, m)
+	}
+	got, _ := json.Marshal(db.Memories)
+	want, _ := json.Marshal(exported.Memories)
+	if string(got) != string(want) {
+		t.Errorf("ledger.db %s\nledger.json %s", got, want)
+	}
+}
+
+// A settle that set a corrupt ledger.db aside says so on the tick line.
+func TestTickLineNamesASetAside(t *testing.T) {
+	text := tickText(tickResult{Status: "done", Feedback: feedback.SettleResult{Rebuilt: ledgerdb.ReasonSetAside}})
+	if !strings.Contains(text, ", feedback ledger database unreadable: set aside and rebuilt from the journal") || strings.Contains(text, ledgerdb.ReasonSetAside) {
+		t.Errorf("tick line: %s", text)
+	}
+}
+
+// With feedback off, feedback migrate never builds a missing ledger.db
+// (skipped, "feedback is off") but still migrates an existing one.
+func TestFeedbackMigrateWithFeedbackOff(t *testing.T) {
+	home := devInstall(t, true)
+	configure(t, home, "[feedback]\nenabled = false")
+	db := filepath.Join(pathsOf(home).FeedbackDir(), ledgerdb.FileName)
+	var env struct {
+		Data feedbackMigrateResult `json:"data"`
+	}
+	for _, args := range [][]string{{"feedback", "migrate", "--plan", "--json"}, {"feedback", "migrate", "--json"}} {
+		code, out, errOut := run(t, args...)
+		if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || env.Data.Skipped != "feedback is off" || len(env.Data.Applied) != 0 {
+			t.Errorf("%v, no file: exit %d %v\n%s%s", args, code, err, out, errOut)
+		}
+		if _, err := os.Stat(db); err == nil {
+			t.Fatalf("%v built ledger.db with feedback off", args)
+		}
+	}
+	if code, out, _ := run(t, "feedback", "migrate"); code != output.OK || out != "feedback ledger: not built, feedback is off\n" {
+		t.Errorf("text: exit %d %q", code, out)
+	}
+
+	// An existing file: migrated (here: found at the head), not skipped.
+	var calls []bool
+	old := ledgerMigrate
+	ledgerMigrate = func(ctx context.Context, o ledgerdb.Options, plan bool) (ledgerdb.MigrateResult, error) {
+		calls = append(calls, plan)
+		return old(ctx, o, plan)
+	}
+	t.Cleanup(func() { ledgerMigrate = old })
+	w, err := ledgerdb.OpenWriter(context.Background(), ledgerOptions(pathsOf(home), home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	code, out, errOut := run(t, "feedback", "migrate", "--json")
+	env.Data = feedbackMigrateResult{}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || env.Data.Skipped != "" || !env.Data.Existed {
+		t.Errorf("existing file: exit %d %v\n%s%s", code, err, out, errOut)
+	}
+	if !reflect.DeepEqual(calls, []bool{true, false}) {
+		t.Errorf("Migrate calls (plan?) %v, want a look then the migration", calls)
+	}
+}
+
+// feedback rebuild's refusals: exit 20 during an uncommitted update and
+// while another backsight holds the database, exit 40 when only
+// ledger.json could not be written (ledger.db rebuilt).
+func TestFeedbackRebuildExitCodes(t *testing.T) {
+	t.Run("update in progress", func(t *testing.T) {
+		home := isolate(t)
+		dir := feedbackJournal(t, home)
+		if err := os.Remove(filepath.Join(dir, ledgerdb.FileName)); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.WriteUpdateMarker(pathsOf(home), state.UpdateMarker{From: "v1", To: "v2"}); err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := run(t, "feedback", "rebuild", "--json")
+		if code != output.Blocked || !strings.Contains(out, "an update is being applied: run backsight feedback rebuild again once it is done") {
+			t.Errorf("exit %d\n%s", code, out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ledgerdb.FileName)); err == nil {
+			t.Error("a refused rebuild built ledger.db")
+		}
+	})
+	t.Run("busy", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("waits out the writer's 5 s busy timeout")
+		}
+		home := isolate(t)
+		dir := feedbackJournal(t, home)
+		db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, ledgerdb.FileName)+"?_pragma=busy_timeout(0)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		db.SetMaxOpenConns(1)
+		conn, err := db.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = conn.ExecContext(context.Background(), "ROLLBACK") }()
+		code, out, _ := run(t, "feedback", "rebuild", "--json")
+		if code != output.Blocked || !strings.Contains(out, "the ledger is being settled by another backsight: try again in a moment") {
+			t.Errorf("exit %d\n%s", code, out)
+		}
+	})
+	t.Run("export failed", func(t *testing.T) {
+		home := isolate(t)
+		dir := feedbackJournal(t, home)
+		db := filepath.Join(dir, ledgerdb.FileName)
+		setShown(t, db, logM1, 999)
+		ledger := filepath.Join(dir, "ledger.json")
+		if err := os.Remove(ledger); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(ledger, 0o700); err != nil { // a directory: the export cannot replace it
+			t.Fatal(err)
+		}
+		code, out, _ := run(t, "feedback", "rebuild", "--json")
+		if code != output.Partial || !strings.Contains(out, "ledger.db was rebuilt, but ledger.json could not be written: the next jobs tick writes it") {
+			t.Errorf("exit %d\n%s", code, out)
+		}
+		r, err := ledgerdb.OpenReader(ledgerOptions(pathsOf(home), home), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = r.Close() }()
+		if got, err := r.All(); err != nil || got.Memories[logM1].Shown != 2 {
+			t.Errorf("ledger.db not rebuilt: shown %d (%v)", got.Memories[logM1].Shown, err)
+		}
+	})
+}
+
+// A plan whose scratch folder cannot be removed says so, as a warning.
+func TestFeedbackRebuildPlanWarnsOfALeftScratch(t *testing.T) {
+	home := isolate(t)
+	feedbackJournal(t, home)
+	old := removeTree
+	removeTree = func(string) error { return errors.New("held") }
+	t.Cleanup(func() { removeTree = old })
+	code, out, errOut := run(t, "feedback", "rebuild", "--plan")
+	if code != output.OK || !strings.Contains(out, "warning  the plan's scratch folder ") || !strings.Contains(out, "could not be removed (held): remove it by hand\n") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// TestFeedbackRebuildRecoversTwiceInADay: feedback rebuild sets a corrupt
+// ledger.db aside and rebuilds it even within a day of the last
+// set-aside (two corruptions in a day), and the result is the journal's
+// fold.
+func TestFeedbackRebuildRecoversTwiceInADay(t *testing.T) {
+	home := isolate(t)
+	d := pathsOf(home)
+	dir := feedbackJournal(t, home)
+	db := filepath.Join(dir, ledgerdb.FileName)
+	events, _, _, err := feedback.ReadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := feedback.Fold(events, feedbackParams(config.Default(d, home)))
+	for _, garbage := range []string{"first corruption ", "second corruption "} {
+		raw := []byte(strings.Repeat(garbage, 200))
+		if err := os.WriteFile(db, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, out, errOut := run(t, "feedback", "rebuild")
+		if code != output.OK {
+			t.Fatalf("%q: exit %d\n%s%s", garbage, code, out, errOut)
+		}
+		if got, _ := os.ReadFile(db + ".corrupt"); string(got) != string(raw) {
+			t.Errorf("%q: ledger.db.corrupt does not hold it", garbage)
+		}
+		r, err := ledgerdb.OpenReader(ledgerOptions(d, home), time.Second)
+		if err != nil {
+			t.Fatalf("%q: %v", garbage, err)
+		}
+		got, err := r.All()
+		_ = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameLedgerCounts(t, garbage, got, want)
+	}
+}
+
+// feedback migrate, run on purpose (update apply), also sets a corrupt
+// ledger.db aside within a day of the last set-aside, and says so.
+func TestFeedbackMigrateSetsAsideWithinTheDay(t *testing.T) {
+	home := isolate(t)
+	dir := feedbackJournal(t, home)
+	db := filepath.Join(dir, ledgerdb.FileName)
+	if err := os.WriteFile(db+".corrupt", []byte("set aside just now"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(db, []byte(strings.Repeat("garbage ", 200)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "feedback", "migrate", "--json")
+	var env struct {
+		Data feedbackMigrateResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || !env.Data.SetAside {
+		t.Errorf("exit %d %v\n%s%s", code, err, out, errOut)
 	}
 }

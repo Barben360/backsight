@@ -51,6 +51,9 @@ type maintainResult struct {
 	Rename string `json:"rename,omitempty"`
 	// MetricsIndex: the pruning of the metrics index (maintainIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
+	// FeedbackLedger: the side files of the feedback ledger removed
+	// (maintainLedger), "" when there were none.
+	FeedbackLedger string `json:"feedback_ledger,omitempty"`
 	// MetricsRotated: the metrics month files removed past the months kept.
 	MetricsRotated []string `json:"metrics_rotated,omitempty"`
 	// DoctorHistory: "<n> check(s)" kept in the day's history line, or
@@ -115,6 +118,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
 			res.MetricsRotated = metricsfile.Rotate(d.MetricsDir(), now(), metricsfile.KeepMonths)
 			res.MetricsIndex = maintainIndex(cmd.Context(), d, home)
+			res.FeedbackLedger = maintainLedger(cmd.Context(), d, home)
 			archive, noBackup := "", "backup.enabled is off, and the moves wait for a backup"
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
@@ -326,6 +330,9 @@ func maintainText(r maintainResult) string {
 	metrics := ""
 	if r.MetricsIndex != "" {
 		metrics = ", metrics index " + r.MetricsIndex
+	}
+	if r.FeedbackLedger != "" {
+		metrics += ", feedback ledger " + r.FeedbackLedger
 	}
 	history := ""
 	switch {

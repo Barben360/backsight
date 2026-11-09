@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -453,6 +455,197 @@ func TestIndexMigrateReason(t *testing.T) {
 		t.Errorf("past the bound: %q", got)
 	}
 	if got := indexMigrateReason(done, done, errors.New("x")); got != "interrupted" {
+		t.Errorf("interrupted: %q", got)
+	}
+}
+
+const ledgerWarningFailed = "the feedback ledger was not migrated (failed): the next jobs tick retries"
+
+// TestUpdateApplyMigratesTheLedgerAfterTheCommit: the new binary's
+// feedback migrate runs after the commit point, beside the index's; its
+// failure is a warning in fixed words, and the update is kept.
+func TestUpdateApplyMigratesTheLedgerAfterTheCommit(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	bins.fail["0.2.0 feedback migrate"] = output.Blocked
+	bins.failStderr = "STDERR-CANARY /home/someone/secret/ledger.db\n"
+	var committed *bool
+	bins.onFail = func(line string) {
+		if strings.HasPrefix(line, "0.2.0 feedback migrate") {
+			m, err := state.ReadUpdateMarker(d)
+			c := err == nil && m != nil && m.Committed
+			committed = &c
+		}
+	}
+
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || !env.OK || env.Data.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if st, _ := state.Load(d.StateFile()); !strings.HasPrefix(st.ShimTarget, filepath.Join(d.Data, "bin", "0.2.0-")) {
+		t.Errorf("not recorded: %q", st.ShimTarget)
+	}
+	if bins.ran("0.2.0 feedback migrate") != 1 || bins.ran("0.2.0 feedback migrate --plan") != 0 {
+		t.Errorf("calls %q", bins.calls)
+	}
+	if committed == nil || !*committed {
+		t.Errorf("the ledger migration ran before the commit point (committed %v)", committed)
+	}
+	if !slices.Contains(env.Data.Warnings, ledgerWarningFailed) {
+		t.Errorf("warnings %q", env.Data.Warnings)
+	}
+	iIndex, _ := applyStep(env.Data.Steps, "index")
+	iLedger, st := applyStep(env.Data.Steps, "ledger")
+	if st.Status != "failed" || st.Detail != "failed" || iIndex < 0 || iLedger < iIndex {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+	for _, canary := range []string{"STDERR-CANARY", "secret", "failing on purpose"} {
+		if strings.Contains(out+errOut, canary) {
+			t.Errorf("%q relayed:\n%s%s", canary, out, errOut)
+		}
+	}
+}
+
+// Without a failure the step builds the ledger from the journal, and says
+// so; a second update finds it up to date.
+func TestUpdateApplyBuildsTheLedger(t *testing.T) {
+	home, _, _ := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || env.Data.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if _, st := applyStep(env.Data.Steps, "ledger"); st.Status != "done" || st.Detail != "built the feedback ledger from the journal" {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+	if _, err := os.Stat(filepath.Join(d.FeedbackDir(), "ledger.db")); err != nil {
+		t.Errorf("ledger.db: %v", err)
+	}
+	if slices.Contains(env.Data.Warnings, ledgerWarningFailed) {
+		t.Errorf("warnings %q", env.Data.Warnings)
+	}
+}
+
+// TestUpdatePlanListsLedgerMigrations: the plan lists the migrations the
+// new binary's feedback migrate --plan reports pending, by count in the
+// text.
+func TestUpdatePlanListsLedgerMigrations(t *testing.T) {
+	_, _, bins := installedAt(t, "0.1.0")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	old := ledgerMigrate
+	ledgerMigrate = func(_ context.Context, _ ledgerdb.Options, plan bool) (ledgerdb.MigrateResult, error) {
+		if !plan {
+			return ledgerdb.MigrateResult{}, errors.New("a plan applied a migration")
+		}
+		return ledgerdb.MigrateResult{Existed: true, File: ledgerdb.FileName, Pending: []string{"0002-x"}, Applied: []string{}}, nil
+	}
+	t.Cleanup(func() { ledgerMigrate = old })
+
+	code, out, errOut := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || !env.Data.Plan {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	var r struct {
+		LedgerMigrations []string `json:"ledger_migrations"`
+	}
+	jsonData(t, out, &r)
+	if !slices.Equal(r.LedgerMigrations, []string{"0002-x"}) {
+		t.Errorf("ledger_migrations %q", r.LedgerMigrations)
+	}
+	iIndex, _ := applyStep(env.Data.Steps, "index")
+	iLedger, st := applyStep(env.Data.Steps, "ledger")
+	if st.Status != "planned" || st.Detail != "would migrate the feedback ledger (1 change)" || iLedger < iIndex {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+	if bins.ran("0.2.0 feedback migrate --plan") != 1 || bins.ran("0.2.0 feedback migrate") != 1 {
+		t.Errorf("calls %q", bins.calls)
+	}
+	code, out, errOut = run(t, "update", "apply", "--plan", "--source", src)
+	if code != output.OK || !strings.Contains(out, "planned  ledger: would migrate the feedback ledger (1 change)\n") || strings.Contains(out+errOut, "0002-x") {
+		t.Errorf("plan text: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// A new binary without feedback migrate (exit 2, as v0.1.32 answers) has
+// no ledger database to migrate: a skipped step, no warning.
+func TestUpdateApplyLedgerWithABinaryWithoutIt(t *testing.T) {
+	_, _, bins := installedAt(t, "0.1.0")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	bins.fail["0.2.0 feedback migrate"] = output.Usage
+	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	if _, st := applyStep(decodeApply(t, out).Data.Steps, "ledger"); code != output.OK || st.Status != "skipped" || st.Detail != "the new binary has no feedback ledger database" {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if _, st := applyStep(env.Data.Steps, "ledger"); code != output.OK || st.Status != "skipped" || st.Detail != "the new binary has no feedback ledger database" || strings.Contains(strings.Join(env.Data.Warnings, "\n"), "feedback ledger") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if bins.ran("0.2.0 feedback migrate") != 2 {
+		t.Errorf("calls %q", bins.calls)
+	}
+}
+
+// With feedback off the step builds nothing: skipped, "feedback is off".
+func TestUpdateApplyLedgerWithFeedbackOff(t *testing.T) {
+	home, _, _ := installedAt(t, "0.1.0")
+	configure(t, home, "[feedback]\nenabled = false")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if _, st := applyStep(env.Data.Steps, "ledger"); code != output.OK || st.Status != "skipped" || st.Detail != "feedback is off" {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(pathsOf(home).FeedbackDir(), ledgerdb.FileName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ledger.db built with feedback off: %v", err)
+	}
+}
+
+// Each failure feedback migrate reports maps to its fixed phrase;
+// anything else is "failed", never the child's text.
+func TestLedgerMigrateReason(t *testing.T) {
+	envOf := func(err error) error {
+		var oe *output.Error
+		if !errors.As(ledgerError(err), &oe) {
+			t.Fatalf("%v: not an output.Error", err)
+		}
+		return &childError{code: oe.Code, env: oe, msg: oe.Message}
+	}
+	bg := context.Background()
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{envOf(ledgerdb.ErrUpdateInProgress), "an update is in progress"},
+		{envOf(fmt.Errorf("x: %w", ledgerdb.ErrBusy)), "the ledger is in use"},
+		{envOf(fmt.Errorf("x: %w", ledgerdb.ErrUnreadable)), "the ledger is unreadable"},
+		{envOf(fmt.Errorf("x: %w", ledgerdb.ErrSchema)), "the ledger is unreadable"},
+		{envOf(errors.New("CANARY other")), "failed"},
+		{&childError{code: output.Blocked, msg: "CANARY stderr tail"}, "failed"},
+		{&childError{code: output.Blocked, env: &output.Error{Code: output.Blocked, Message: "CANARY sentence"}, msg: "CANARY sentence"}, "failed"},
+		{&childError{code: output.Partial, env: &output.Error{Code: output.Partial, Message: ledgerBusySentence}, msg: ledgerBusySentence}, "failed"},
+		{errors.New("CANARY exec failure"), "failed"},
+	} {
+		if got := ledgerMigrateReason(bg, bg, c.err); got != c.want {
+			t.Errorf("%v: %q, want %q", c.err, got, c.want)
+		}
+	}
+	done, cancel := context.WithCancel(bg)
+	cancel()
+	if got := ledgerMigrateReason(bg, done, errors.New("x")); got != "timed out" {
+		t.Errorf("past the bound: %q", got)
+	}
+	if got := ledgerMigrateReason(done, done, errors.New("x")); got != "interrupted" {
 		t.Errorf("interrupted: %q", got)
 	}
 }

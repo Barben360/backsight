@@ -11,7 +11,7 @@ import (
 func TestCurrentReaderReadsWithoutTheLock(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
+	if _, err := LegacySettle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	writeJournal(t, dir, Event{Kind: KindHide, TS: at(130), IDs: []string{"o1"}, Verdict: "wrong", Note: "n1"})

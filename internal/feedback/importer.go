@@ -71,7 +71,7 @@ func (t ImportTurn) Credited() []ImportShow {
 // each item a show's key, id, rank, time and outcome (shown or credit),
 // with the half-lives of p, so that every fold decays it alike.
 func ImportEvent(source, session string, shows []ImportShow, p Params) Event {
-	e := Event{Kind: KindImport, Session: session, Source: source, Params: p.record()}
+	e := Event{Kind: KindImport, Session: session, Source: source, Params: p.Record()}
 	for _, s := range shows {
 		outcome := OutcomeShown
 		if s.Credit {

@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -14,9 +17,12 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/session"
-	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
 // newFeedbackCmd is `feedback`: the journal of the memories shown to
@@ -27,7 +33,7 @@ func newFeedbackCmd(e *env) *cobra.Command {
 		Use:   "feedback",
 		Short: "Read which memories were shown to Claude and which it used, and recompute their counts",
 	}
-	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e), newFeedbackReplayCmd(e))
+	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e), newFeedbackReplayCmd(e), newFeedbackMigrateCmd(e))
 	return cmd
 }
 
@@ -390,6 +396,7 @@ type rebuildResult struct {
 	New          int          `json:"new"`
 	Dropped      int          `json:"dropped"`
 	Changed      int          `json:"changed"`
+	Warnings     []string     `json:"warnings,omitempty"`
 }
 
 func newFeedbackRebuildCmd(e *env) *cobra.Command {
@@ -398,43 +405,189 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 		Use:   "rebuild",
 		Short: "Recompute every memory's counts of times shown, credited and missed from the journal",
 		Args:  usageArgs(cobra.NoArgs),
-		RunE: func(*cobra.Command, []string) error {
-			dir, p, err := feedbackSetup()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, p, err := feedbackSetup()
 			if err != nil {
 				return err
 			}
-			// Read before the rebuild takes the lock: a tick settling in
-			// between shows as a difference.
-			current, curErr := feedback.LoadLedger(dir)
+			d, home, err := machine()
+			if err != nil {
+				return err
+			}
+			o := ledgerOptions(d, home)
+			o.Now = now
+			// Read before the rebuild: a tick folding in between shows as a
+			// difference.
+			current, curErr := rebuildCurrent(o)
 			var rebuilt feedback.Ledger
+			var failed error
+			var warnings []string
 			if plan {
-				// Reads only, without the lock: a plan never waits for a tick.
-				events, _, err := feedback.Read(dir, time.Time{})
+				// Built aside, from a copy of the journal: a plan writes
+				// nothing in the state directory.
+				var cleanup string
+				rebuilt, cleanup, err = planRebuild(cmd.Context(), o, p, !noImport)
 				if err != nil {
 					return blocked(err)
 				}
-				if noImport {
-					events = feedback.DropImports(events)
+				if cleanup != "" {
+					warnings = append(warnings, cleanup)
 				}
-				rebuilt = feedback.Fold(events, p)
-			} else if rebuilt, err = feedback.Rebuild(dir, p, true, !noImport); err != nil {
-				var held *state.HeldError
-				if errors.As(err, &held) {
-					return &output.Error{Code: output.Blocked, Message: "the ledger is being settled (" + held.Owner.Command + "): try again in a moment"}
+			} else if rebuilt, err = rebuildLedger(cmd.Context(), o, p, !noImport); err != nil {
+				if rebuilt.Memories == nil {
+					return rebuildError(err)
 				}
-				return blocked(err)
+				// Rebuilt; only ledger.json could not be written.
+				failed = &output.Error{Code: output.Partial, Message: "ledger.db was rebuilt, but ledger.json could not be written: the next jobs tick writes it"}
 			}
 			res := compareLedgers(rebuilt, current, p, now().UTC())
-			res.Plan, res.NoImport = plan, noImport
+			res.Plan, res.NoImport, res.Warnings = plan, noImport, warnings
 			if curErr != nil {
 				res.CurrentError = curErr.Error()
 			}
-			return e.emit("feedback rebuild", res, func() string { return rebuildText(res) })
+			return e.report("feedback rebuild", res, func() string { return rebuildText(res) }, failed)
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show the counts and the difference with the current ledger, writing nothing")
 	cmd.Flags().BoolVar(&noImport, "no-import", false, "leave out the counts feedback import added from earlier history")
 	return cmd
+}
+
+// rebuildCurrent is the ledger feedback rebuild compares with: ledger.db
+// with the journal lines since its last fold, or, when it cannot be read
+// (not built yet, say), ledger.json with them.
+func rebuildCurrent(o ledgerdb.Options) (feedback.Ledger, error) {
+	if r, err := ledgerdb.OpenReader(o, 5*time.Second); err == nil {
+		l, err := r.All()
+		_ = r.Close()
+		if err == nil {
+			return l, nil
+		}
+	}
+	return feedback.Current(o.Dirs.FeedbackDir())
+}
+
+// planRebuild is what feedback rebuild would fold: a ledger database
+// built in a scratch directory under <state>/staging (backsight's private
+// work area) from a copy of the journal's month files. The scratch is
+// removed afterwards; cleanup is a removal it could not make (a warning:
+// the plan itself stands).
+func planRebuild(ctx context.Context, o ledgerdb.Options, p feedback.Params, withImport bool) (l feedback.Ledger, cleanup string, err error) {
+	staging := filepath.Join(o.Dirs.State, "staging")
+	_, serr := os.Lstat(staging)
+	if err := fsutil.MkdirPrivate(staging); err != nil {
+		return feedback.Ledger{}, "", err
+	}
+	scratch, err := os.MkdirTemp(staging, "rebuild-plan-")
+	if err != nil {
+		return feedback.Ledger{}, "", err
+	}
+	defer func() {
+		if rerr := removeTree(scratch); rerr != nil {
+			cleanup = "the plan's scratch folder " + scratch + " could not be removed (" + rerr.Error() + "): remove it by hand"
+			return
+		}
+		if errors.Is(serr, fs.ErrNotExist) { // made for this plan; kept when another command uses it now
+			_ = fsutil.RemoveRetry(staging)
+		}
+	}()
+	so := o
+	so.Dirs, so.Home = paths.Dirs{State: scratch}, ""
+	if err := copyJournal(o.Dirs.FeedbackDir(), so.Dirs.FeedbackDir()); err != nil {
+		return feedback.Ledger{}, "", err
+	}
+	l, err = rebuildLedger(ctx, so, p, withImport)
+	return l, "", err
+}
+
+// removeTree is removeAllRetry (a variable for the tests).
+var removeTree = removeAllRetry
+
+// removeAllRetry removes dir and everything under it, deepest first, each
+// entry through fsutil.RemoveRetry.
+func removeAllRetry(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, e := range ents {
+		p := filepath.Join(dir, e.Name())
+		if e.IsDir() {
+			err = removeAllRetry(p)
+		} else {
+			err = fsutil.RemoveRetry(p)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if err := fsutil.RemoveRetry(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// copyJournal copies the month files of from into to, streamed.
+func copyJournal(from, to string) error {
+	names, err := feedback.MonthFiles(from)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.MkdirPrivate(to); err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := copyMonthFile(filepath.Join(from, name), filepath.Join(to, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyMonthFile(from, to string) error {
+	src, err := fsutil.OpenShared(from)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+	dst, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(dst, src)
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// rebuildLedger rebuilds o's ledger database from its journal and
+// exports ledger.json (ledgerdb.Writer.Rebuild), a corrupt file set aside
+// first even within a day of the last set-aside: a ledger with an error
+// when only the export failed, an empty one (no memories map) when the
+// rebuild did.
+func rebuildLedger(ctx context.Context, o ledgerdb.Options, p feedback.Params, withImport bool) (feedback.Ledger, error) {
+	o.ForceSetAside = true // run on purpose: a corrupt file is set aside even within a day of the last
+	w, err := ledgerdb.OpenWriter(ctx, o)
+	if err != nil {
+		return feedback.Ledger{}, err
+	}
+	l, err := w.Rebuild(ctx, p, withImport)
+	if cerr := w.Close(); err == nil && cerr != nil {
+		return feedback.Ledger{}, cerr
+	}
+	return l, err
+}
+
+// rebuildError is a failed rebuild as the command reports it.
+func rebuildError(err error) error {
+	switch {
+	case errors.Is(err, ledgerdb.ErrUpdateInProgress):
+		return &output.Error{Code: output.Blocked, Message: "an update is being applied: run backsight feedback rebuild again once it is done"}
+	case errors.Is(err, ledgerdb.ErrBusy) || sqlitedb.Code(err) == "busy":
+		return &output.Error{Code: output.Blocked, Message: "the ledger is being settled by another backsight: try again in a moment"}
+	}
+	return blocked(err)
 }
 
 // compareLedgers totals both ledgers read at t and counts the memories
@@ -498,6 +651,9 @@ func rebuildText(r rebuildResult) string {
 		fmt.Fprintf(&b, "the ledger could not be read: %s\n", r.CurrentError)
 	}
 	fmt.Fprintf(&b, "%d new, %d dropped, %d changed\n", r.New, r.Dropped, r.Changed)
+	for _, w := range r.Warnings {
+		fmt.Fprintf(&b, "warning  %s\n", w)
+	}
 	if r.Plan {
 		if r.NoImport {
 			b.WriteString("backsight feedback rebuild --no-import writes it\n")

@@ -216,7 +216,7 @@ func TestFeedbackErrorsCarryAReasonOnly(t *testing.T) {
 		pointAt(t, home, fakeHindsight(t))
 		breakFeedbackDir(t, home)
 		run(t, "jobs", "tick")
-		if got := reasonsOf(t, home); !slices.Contains(got, telemetry.FeedbackReasonSettle) {
+		if got := reasonsOf(t, home); !slices.Contains(got, telemetry.FeedbackReasonLedgerFold) {
 			t.Errorf("reasons %v", got)
 		}
 	})

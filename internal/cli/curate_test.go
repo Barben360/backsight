@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -485,7 +487,7 @@ func TestRestoreUndoesARetirement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := feedback.Settle(dir, feedback.Params{}, time.Now); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerOptions(pathsOf(home), home), feedback.Params{}, time.Now); err != nil {
 		t.Fatal(err)
 	}
 	// Hidden after the last settle: the ledger file does not know it yet.
@@ -520,7 +522,7 @@ func TestRestoreUndoesARetirement(t *testing.T) {
 		t.Errorf("unhide events %q, want %q", unhiddenIDs(t, home), want)
 	}
 
-	if _, err := feedback.Settle(dir, feedback.Params{}, func() time.Time { return time.Now().Add(time.Minute) }); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerOptions(pathsOf(home), home), feedback.Params{}, func() time.Time { return time.Now().Add(time.Minute) }); err != nil {
 		t.Fatal(err)
 	}
 	l, err := feedback.LoadLedger(dir)

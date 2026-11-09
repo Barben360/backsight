@@ -190,7 +190,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// After the maintenance check: it writes state.json, whose lock
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
-			res.Feedback = settleFeedback(d, cfg, tw) // local only: before the server start, which can wait
+			res.Feedback = settleFeedback(d, home, cfg, tw) // local only: before the server start, which can wait
 			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
 				tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSharedCombine))
 			}
@@ -391,7 +391,7 @@ func tickText(r tickResult) string {
 		msg += ", " + r.Server
 	}
 	if r.Feedback.Rebuilt != "" {
-		msg += ", feedback ledger unreadable: kept as " + r.Feedback.Rebuilt + ", rebuilt from the journal"
+		msg += ", feedback ledger database unreadable: set aside and rebuilt from the journal"
 	}
 	if r.Unhidden > 0 {
 		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, no longer marked hidden", r.Unhidden)

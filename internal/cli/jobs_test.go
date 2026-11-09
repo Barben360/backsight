@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
@@ -594,23 +595,26 @@ func TestTickSettlesWhileTheServerIsDown(t *testing.T) {
 	}
 }
 
-// A ledger.json that does not parse: the tick keeps it aside, rebuilds
-// it from the journal, and its line says so.
-func TestTickRebuildsACorruptLedger(t *testing.T) {
-	home := devInstall(t, true) // closed port: the rebuild is local
+// A ledger.json that does not parse (left by an older binary) is never
+// read by the tick: it builds ledger.db from the journal and exports
+// over it.
+func TestTickExportsOverACorruptLedgerJSON(t *testing.T) {
+	home := devInstall(t, true) // closed port: the settle is local
 	dir := feedbackJournal(t, home)
+	if err := os.Remove(filepath.Join(dir, ledgerdb.FileName)); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, out, errOut := run(t, "jobs", "tick")
-	if !strings.Contains(out, ", feedback ledger unreadable: kept as ledger.json.corrupt-") || !strings.Contains(out, "rebuilt from the journal") {
+	if _, out, errOut := run(t, "jobs", "tick"); strings.Contains(out+errOut, "unreadable") {
 		t.Errorf("tick line:\n%s%s", out, errOut)
 	}
 	if l, err := feedback.LoadLedger(dir); err != nil || l.Counted() != 2 {
 		t.Errorf("ledger %+v %v", l, err)
 	}
-	if files, _ := filepath.Glob(filepath.Join(dir, "ledger.json.corrupt-*")); len(files) != 1 {
-		t.Errorf("corrupt files %v", files)
+	if files, _ := filepath.Glob(filepath.Join(dir, "ledger.json.corrupt*")); len(files) != 0 {
+		t.Errorf("corrupt files %v: the export replaces ledger.json", files)
 	}
 }
 

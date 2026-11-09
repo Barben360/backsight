@@ -55,7 +55,8 @@ var (
 	retainStatuses  = []string{"ok", "queued", "quarantined", "failed", "retry"}
 	failureKinds    = []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"}
 	jobStatuses     = []string{"done", "skipped", "partial", "failed", "started"}
-	feedbackReasons = []string{"journal_read", "journal_write", "turn_pointer", "settle", "shared_combine"}
+	feedbackReasons = []string{"journal_read", "journal_write", "turn_pointer", "settle", "shared_combine",
+		"ledger_missing", "ledger_busy", "ledger_unreadable", "ledger_schema", "ledger_json", "ledger_export", "ledger_fold"}
 	storeResults    = []string{"saved", "updated", "refused"}
 	dashActions     = []string{"start", "stop"}
 	verdicts        = []string{"used", "confirmed", "none", "wrong", "outdated", "invalid"}

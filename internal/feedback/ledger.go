@@ -54,7 +54,7 @@ type Hidden struct {
 }
 
 // Ledger is a cache of the journal's settle, import, forget, retire, hide
-// and unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
+// and unhide events, by memory id: feedback rebuild recomputes it. Watermark is when settling last ran,
 // JournalAt where the journal ended when it was read for this ledger,
 // HistoryImported when an import of earlier history last went through
 // every source (zero: never).
@@ -73,23 +73,6 @@ type JournalPos struct {
 	Offset int64  `json:"offset"`
 }
 
-// journalEnd is where dir's journal ends: its last month file and that
-// file's size; zero without a journal. Taken under the ledger lock before
-// a read, so that no folded event lands between it and the read.
-func journalEnd(dir string) JournalPos {
-	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
-	if err != nil || len(files) == 0 {
-		return JournalPos{}
-	}
-	slices.Sort(files)
-	last := files[len(files)-1]
-	fi, err := os.Stat(last)
-	if err != nil {
-		return JournalPos{}
-	}
-	return JournalPos{File: filepath.Base(last), Offset: fi.Size()}
-}
-
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
 
 // Apply adds a settle event's shows to the ledger, adds an import event's
@@ -99,9 +82,12 @@ func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[stri
 // without one, for a restore here to beat a hiding elsewhere). A settle or an
 // import decays under the half-lives it recorded, p's when it recorded
 // none, each show from its own time; a forgotten show counts nowhere, nor
-// does a store reply's show not credited; an import never counts a miss. Sums
-// decay order-independently, so applying events as they come and folding
-// them all later agree.
+// does a store reply's show not credited; an import never counts a miss.
+// The sums decay order-independently in real numbers only: in floats, two
+// orders of the same events can differ in the last bits, so a result
+// equal bit for bit needs the same global (ts, seq) order. That is why the
+// ledger database refolds the whole journal when a line arrives late,
+// rather than applying it out of order.
 func (l *Ledger) Apply(e Event, p Params) {
 	if l.Memories == nil {
 		l.Memories = map[string]Entry{}
@@ -171,15 +157,19 @@ func (m Entry) settled(s Settled, p Params) Entry {
 	return m
 }
 
-// folded: an event Settle applies to the ledger as it comes, besides its
-// own settle events.
-func folded(kind string) bool {
+// Folds reports whether kind is an event Settle applies to the ledger as it
+// comes, besides its own settle events.
+func Folds(kind string) bool {
 	switch kind {
 	case "forget", KindRetire, KindHide, KindUnhide, KindImport:
 		return true
 	}
 	return false
 }
+
+// Applied reports whether kind is an event the ledger applies: a settle, or
+// one that Folds.
+func Applied(kind string) bool { return kind == "settle" || Folds(kind) }
 
 // recorded is p with the half-lives a settle event's params carry.
 func (p Params) recorded(params map[string]float64) Params {
@@ -201,9 +191,9 @@ func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Ho
 func Fold(events []Event, p Params) Ledger {
 	l := newLedger()
 	applied := map[string]bool{}
-	for _, e := range sortedByTime(events) {
+	for _, e := range SortByTime(events) {
 		if e.Kind == "settle" {
-			e = unapplied(e, applied)
+			e = Unapplied(e, seenOnce(applied))
 			l.Watermark = laterOf(l.Watermark, e.TS)
 		}
 		l.Apply(e, p)
@@ -211,13 +201,12 @@ func Fold(events []Event, p Params) Ledger {
 	return l
 }
 
-// unapplied is settle event e without the shows whose key applied holds;
-// the keys it keeps join applied.
-func unapplied(e Event, applied map[string]bool) Event {
+// Unapplied is settle event e without the shows whose key seen reports;
+// seen is called once per show, in order, and may record the key.
+func Unapplied(e Event, seen func(key string) bool) Event {
 	var fresh []Settled
 	for _, s := range e.Settled {
-		if !applied[s.Key] {
-			applied[s.Key] = true
+		if !seen(s.Key) {
 			fresh = append(fresh, s)
 		}
 	}
@@ -225,9 +214,21 @@ func unapplied(e Event, applied map[string]bool) Event {
 	return e
 }
 
-// sortedByTime is a copy of events in (ts, seq) order, file order kept
+// seenOnce is a seen predicate over applied that records each key it meets:
+// the first show of a key is kept, later ones dropped.
+func seenOnce(applied map[string]bool) func(string) bool {
+	return func(key string) bool {
+		if applied[key] {
+			return true
+		}
+		applied[key] = true
+		return false
+	}
+}
+
+// SortByTime is a copy of events in (ts, seq) order, file order kept
 // between equals.
-func sortedByTime(events []Event) []Event {
+func SortByTime(events []Event) []Event {
 	out := slices.Clone(events)
 	slices.SortStableFunc(out, func(a, b Event) int {
 		if c := a.TS.Compare(b.TS); c != 0 {
@@ -326,15 +327,18 @@ func laterOf(a, b time.Time) time.Time {
 
 func ledgerFile(dir string) string { return filepath.Join(dir, "ledger.json") }
 
-// ErrCorruptLedger: ledger.json does not parse. The next settle keeps it
-// aside and rebuilds the ledger from the journal.
+// ErrCorruptLedger: ledger.json does not parse. The next settle writes it
+// again from the ledger database.
 var ErrCorruptLedger = errors.New("does not parse")
+
+// ErrLedgerSchema: ledger.json is of another schema than LedgerSchema.
+var ErrLedgerSchema = errors.New("has schema")
 
 // LoadLedger reads dir's ledger. A missing file is an empty ledger; one
 // that does not parse (ErrCorruptLedger) or of another schema is an empty
 // ledger and an error, for doctor to report: never guessed.
 func LoadLedger(dir string) (Ledger, error) {
-	raw, err := os.ReadFile(ledgerFile(dir))
+	raw, err := fsutil.ReadFileShared(ledgerFile(dir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return newLedger(), nil
 	}
@@ -346,67 +350,10 @@ func LoadLedger(dir string) (Ledger, error) {
 		return newLedger(), fmt.Errorf("%s %w: %w", ledgerFile(dir), ErrCorruptLedger, err)
 	}
 	if l.Schema != LedgerSchema {
-		return newLedger(), fmt.Errorf("%s has schema %d, this binary reads %d", ledgerFile(dir), l.Schema, LedgerSchema)
+		return newLedger(), fmt.Errorf("%s %w %d, this binary reads %d", ledgerFile(dir), ErrLedgerSchema, l.Schema, LedgerSchema)
 	}
 	if l.Memories == nil {
 		l.Memories = map[string]Entry{}
-	}
-	return l, nil
-}
-
-func saveLedger(dir string, l Ledger) error {
-	raw, err := json.Marshal(l)
-	if err != nil {
-		return err
-	}
-	return fsutil.WriteAtomic(ledgerFile(dir), raw, 0o600)
-}
-
-// Rebuild folds every journal file of dir, under the ledger lock, and
-// writes the result only when write; without withImport, it leaves the
-// import events out (the ledger without earlier history). Each settle
-// or import event folds with the half-lives it recorded, so a rebuild
-// after a config change gives the live ledger back; p's half-lives serve
-// only events that recorded none. Recomputing under other parameters is
-// not a rebuild.
-func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
-	release, err := lockLedger(dir)
-	if err != nil {
-		return Ledger{}, err
-	}
-	defer release()
-	l, err := rebuild(dir, p, withImport)
-	if err != nil {
-		return Ledger{}, err
-	}
-	if write {
-		if err := saveLedger(dir, l); err != nil {
-			return l, err
-		}
-	}
-	return l, nil
-}
-
-// rebuild is Rebuild's fold, written nowhere, for a caller holding the
-// ledger lock.
-func rebuild(dir string, p Params, withImport bool) (Ledger, error) {
-	at := journalEnd(dir)
-	events, _, err := Read(dir, time.Time{})
-	if err != nil {
-		return Ledger{}, err
-	}
-	kept := events
-	if !withImport {
-		kept = DropImports(events)
-	}
-	l := Fold(kept, p)
-	l.JournalAt = at // Fold applied every folded event before it
-	// Nor does the next settle apply them again (an import left out
-	// included): it applies what is newer than the watermark.
-	for _, e := range events {
-		if folded(e.Kind) {
-			l.Watermark = laterOf(l.Watermark, e.TS)
-		}
 	}
 	return l, nil
 }
@@ -426,8 +373,8 @@ func Current(dir string) (Ledger, error) {
 	if err != nil {
 		return l, err
 	}
-	for _, e := range sortedByTime(events) {
-		if folded(e.Kind) && e.TS.After(l.Watermark) {
+	for _, e := range SortByTime(events) {
+		if Folds(e.Kind) && e.TS.After(l.Watermark) {
 			l.Apply(e, Params{})
 		}
 	}

@@ -1,6 +1,6 @@
 //go:build darwin
 
-package index
+package sqlitedb
 
 import "golang.org/x/sys/unix"
 
@@ -13,5 +13,5 @@ func osFSType(dir string) FSInfo {
 		// the common case; the path rules still run.
 		return FSInfo{FSLocal, ""}
 	}
-	return classifyDarwin(unix.ByteSliceToString(st.Fstypename[:]))
+	return ClassifyDarwin(unix.ByteSliceToString(st.Fstypename[:]))
 }

@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -157,10 +158,10 @@ func NewJournal(dir string, c Common) *Journal {
 	return &Journal{dir: dir, common: c, now: time.Now}
 }
 
-func (j *Journal) file(t time.Time) string { return filepath.Join(j.dir, monthFile(t)) }
+func (j *Journal) file(t time.Time) string { return filepath.Join(j.dir, MonthFile(t)) }
 
-// monthFile is the base name of the journal file of t's UTC month.
-func monthFile(t time.Time) string { return "journal-" + t.UTC().Format("2006-01") + ".jsonl" }
+// MonthFile is the base name of the journal file of t's UTC month.
+func MonthFile(t time.Time) string { return "journal-" + t.UTC().Format("2006-01") + ".jsonl" }
 
 // Append writes e as one line of its ts's month file, after setting its
 // schema, its seq, its ts (now, unless set) and the common fields it
@@ -221,21 +222,21 @@ func (j *Journal) Position() (file string, offset int64) {
 	return file, offset
 }
 
-// Read returns the events of every month file from from's month on, in
-// file order. Lines that do not parse or carry another schema are skipped
-// and counted, empty lines ignored; a missing dir is no events.
+// Read returns the events of every month file (monthNames) from from's
+// month on, in file order. Lines that do not parse or carry another schema
+// are skipped and counted, empty lines ignored; a missing dir is no
+// events.
 func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
-	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	files, err := monthNames(dir)
 	if err != nil {
 		return nil, 0, err
 	}
-	slices.Sort(files) // journal-YYYY-MM sorts by month
-	first := monthFile(from)
-	for _, f := range files {
-		if filepath.Base(f) < first {
+	first := MonthFile(from)
+	for _, name := range files {
+		if name < first {
 			continue
 		}
-		ev, sk, err := ReadFrom(f, 0)
+		ev, sk, err := ReadFrom(filepath.Join(dir, name), 0)
 		events, skipped = append(events, ev...), skipped+sk
 		if err != nil {
 			return events, skipped, err
@@ -244,7 +245,119 @@ func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
 	return events, skipped, nil
 }
 
-// decodedLine, when set (tests), runs for each line ReadFrom decodes.
+// MonthFiles returns the base names of the month journal files in dir
+// (journal-YYYY-MM.jsonl, and nothing else), oldest month first; a missing
+// dir is none.
+func MonthFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && monthFileName.MatchString(e.Name()) {
+			files = append(files, e.Name())
+		}
+	}
+	slices.Sort(files) // journal-YYYY-MM sorts by month
+	return files, nil
+}
+
+var monthFileName = regexp.MustCompile(`^journal-[0-9]{4}-[0-9]{2}\.jsonl$`)
+
+// monthNames is the base names in dir that a month file has
+// (MonthFiles's pattern), oldest month first, whatever they are: a
+// directory or another entry that cannot be read is listed, for its read
+// to fail as it did. A stray name, journal-old.jsonl say, is not.
+func monthNames(dir string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, p := range paths {
+		if name := filepath.Base(p); monthFileName.MatchString(name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names) // journal-YYYY-MM sorts by month
+	return names, nil
+}
+
+// ReadComplete returns the events of file from byte offset up to and
+// including its last newline, and end, the offset just after it (offset
+// when no complete line follows): a last line without its newline is a
+// write in progress, left for the next read from end. Complete lines that
+// do not parse or carry another schema are skipped and counted, empty ones
+// ignored; a missing file is no events and end = offset.
+func ReadComplete(file string, offset int64) (events []Event, end int64, skipped int, err error) {
+	f, err := fsutil.OpenShared(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, offset, 0, nil
+	}
+	if err != nil {
+		return nil, offset, 0, err
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, offset, 0, err
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, offset, 0, err
+	}
+	cut := bytes.LastIndexByte(data, '\n') + 1
+	for _, line := range bytes.SplitAfter(data[:cut], []byte{'\n'}) {
+		if e, ok, empty := decodeLine(line); !empty {
+			if ok {
+				events = append(events, e)
+			} else {
+				skipped++
+			}
+		}
+	}
+	return events, offset + int64(cut), skipped, nil
+}
+
+// ReadAll returns the events of every month file of dir (MonthFiles order)
+// read from 0 through ReadComplete, and ends: each file's base name to
+// where its complete lines end, the cursor to resume that file from.
+func ReadAll(dir string) (events []Event, ends map[string]int64, skipped int, err error) {
+	files, err := MonthFiles(dir)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	ends = make(map[string]int64, len(files))
+	for _, name := range files {
+		ev, end, sk, err := ReadComplete(filepath.Join(dir, name), 0)
+		events, skipped = append(events, ev...), skipped+sk
+		if err != nil {
+			return events, ends, skipped, err
+		}
+		ends[name] = end
+	}
+	return events, ends, skipped, nil
+}
+
+// decodeLine decodes one journal line: empty when it holds only space, ok
+// when it parses with this binary's schema.
+func decodeLine(line []byte) (e Event, ok, empty bool) {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return e, false, true
+	}
+	if decodedLine != nil {
+		decodedLine()
+	}
+	if json.Unmarshal(line, &e) != nil || e.Schema != Schema {
+		return Event{}, false, false
+	}
+	return e, true, false
+}
+
+// decodedLine, when set (tests), runs for each line ReadFrom and ReadComplete decode.
 var decodedLine func()
 
 // ReadFrom returns the events of file from byte offset on; a missing file is
@@ -264,15 +377,11 @@ func ReadFrom(file string, offset int64) (events []Event, skipped int, err error
 	r := bufio.NewReader(f)
 	for {
 		line, rerr := r.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			if decodedLine != nil {
-				decodedLine()
-			}
-			var e Event
-			if json.Unmarshal(line, &e) != nil || e.Schema != Schema {
-				skipped++
-			} else {
+		if e, ok, empty := decodeLine(line); !empty {
+			if ok {
 				events = append(events, e)
+			} else {
+				skipped++
 			}
 		}
 		if errors.Is(rerr, io.EOF) {
@@ -285,8 +394,8 @@ func ReadFrom(file string, offset int64) (events []Event, skipped int, err error
 }
 
 // ReadSince returns the events of file from byte offset on, then those of
-// the later month files beside it: a turn that began before a month's end
-// goes on in the next file.
+// the later month files (monthNames) beside it: a turn that began before a
+// month's end goes on in the next file.
 func ReadSince(file string, offset int64) (events []Event, skipped int, err error) {
 	if file == "" {
 		return nil, 0, errors.New("no journal position")
@@ -294,16 +403,16 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 	if events, skipped, err = ReadFrom(file, offset); err != nil {
 		return events, skipped, err
 	}
-	files, err := filepath.Glob(filepath.Join(filepath.Dir(file), "journal-*.jsonl"))
+	dir := filepath.Dir(file)
+	files, err := monthNames(dir)
 	if err != nil {
 		return events, skipped, err
 	}
-	slices.Sort(files)
-	for _, f := range files {
-		if filepath.Base(f) <= filepath.Base(file) {
+	for _, name := range files {
+		if name <= filepath.Base(file) {
 			continue
 		}
-		ev, sk, err := ReadFrom(f, 0)
+		ev, sk, err := ReadFrom(filepath.Join(dir, name), 0)
 		events, skipped = append(events, ev...), skipped+sk
 		if err != nil {
 			return events, skipped, err
@@ -319,11 +428,13 @@ var foldedLockWait = 2 * time.Second
 
 // AppendFolded appends an event the ledger folds as it comes (forget,
 // retire, hide, unhide, import) under the ledger lock, stamped at its ts
-// (now, unless set) or just after the ledger's watermark when that is
-// later.
-// Settle reads the journal and moves the watermark under the same lock,
-// and folds only what is newer: the event is either read by a settle or
-// stamped after it, as a rebuild folds it. When the lock stays held, the
+// (now, unless set) or just after ledger.json's watermark when that is
+// later. The ledger database's fold needs neither: its cursors read
+// every line once. Both are kept for ledger.json's readers: the fallback
+// reader applies only what is newer than the watermark, so it sees the
+// event at once, and an older binary's settle (a rollback), which reads
+// the journal and moves the watermark under this lock, either reads the
+// event or finds it stamped after it. When the lock stays held, the
 // event is journaled all the same (the journal counts a session's
 // retirements) and the lock's error returned, for the caller to log.
 func (j *Journal) AppendFolded(e Event) error {

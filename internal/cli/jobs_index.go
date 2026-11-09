@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
 // tickIndexBudget bounds the tick's catch-up of the metrics index: a
@@ -73,6 +75,25 @@ func maintainIndex(ctx context.Context, d paths.Dirs, home string) string {
 	o.Now = now
 	r, err := index.Maintain(ctx, o)
 	return maintainIndexText(r, err)
+}
+
+// maintainLedger removes the side files of the feedback ledger an older
+// backsight left (ledgerdb.Maintain); best effort, as maintainIndex. ""
+// when there was nothing to remove.
+func maintainLedger(ctx context.Context, d paths.Dirs, home string) string {
+	ctx, cancel := context.WithTimeout(ctx, indexStepTimeout)
+	defer cancel()
+	o := ledgerOptions(d, home)
+	o.Now = now
+	removed, err := ledgerdb.Maintain(ctx, o)
+	var out []string
+	if len(removed) > 0 {
+		out = append(out, "removed "+strings.Join(removed, ", "))
+	}
+	if err != nil {
+		out = append(out, "failed: "+sqlitedb.Code(err))
+	}
+	return strings.Join(out, ", ")
 }
 
 // maintainIndexText is maintainIndex's line: what was pruned (or why

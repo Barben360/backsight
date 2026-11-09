@@ -8,12 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"runtime"
-	"sync"
-	"syscall"
 	"time"
 
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
 // The index is derived: a corrupt file is set aside and built again from
@@ -66,7 +63,8 @@ func Class(err error) string { return classify(err) }
 
 // classify is err's class, the only form an index error is stored or
 // shown in: corrupt | notadb | full | busy | readonly | io | other ("" for
-// nil).
+// nil). The index's own sentinels come first, then sqlitedb.Code, whose
+// cantopen the index shows as io.
 func classify(err error) string {
 	switch {
 	case err == nil:
@@ -78,35 +76,10 @@ func classify(err error) string {
 	case errors.Is(err, ErrInUse):
 		return "busy"
 	}
-	var se *sqlite.Error
-	if errors.As(err, &se) {
-		switch se.Code() & 0xff {
-		case sqlite3.SQLITE_CORRUPT:
-			return "corrupt"
-		case sqlite3.SQLITE_NOTADB:
-			return "notadb"
-		case sqlite3.SQLITE_FULL:
-			return "full"
-		case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
-			return "busy"
-		case sqlite3.SQLITE_READONLY:
-			return "readonly"
-		case sqlite3.SQLITE_IOERR, sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_PERM, sqlite3.SQLITE_NOLFS:
-			return "io"
-		}
-		return "other"
+	if c := sqlitedb.Code(err); c != "cantopen" {
+		return c
 	}
-	if errors.Is(err, syscall.ENOSPC) {
-		return "full"
-	}
-	var pe *fs.PathError
-	var le *os.LinkError
-	var sc *os.SyscallError
-	if errors.As(err, &pe) || errors.As(err, &le) || errors.As(err, &sc) ||
-		errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) {
-		return "io"
-	}
-	return "other"
+	return "io"
 }
 
 func isCorrupt(err error) bool {
@@ -224,78 +197,20 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 	return nil
 }
 
-// lockDSN connects to a file to take it whole: no wait, and exclusive
-// locking (no shared memory: the lock fails while any other connection
-// has the file open in WAL mode, even idle).
-func lockDSN(path string) string {
-	return fileURI(path) + "?_pragma=busy_timeout(0)&_pragma=locking_mode(EXCLUSIVE)"
-}
+// lockDSN connects to a file to take it whole (sqlitedb.LockDSN): no
+// wait, and exclusive locking.
+func lockDSN(path string) string { return sqlitedb.LockDSN(path) }
 
 // seize takes path's exclusive lock for a replacement and returns its
-// release (idempotent). Any other connection: ErrInUse, nothing written (the lock is
-// taken with a read only). Then the file leaves WAL mode, which folds and
-// removes its -wal: no -wal of the old file is left for the new one, and
-// closing this connection after the rename removes no file by name. A
-// file SQLite cannot read (corrupt, not a database) cannot be locked
-// through it either, and is of no use to whoever holds it: it is replaced
-// as it is, with a no-op release. A missing file needs no lock.
+// release (sqlitedb.Seize): another connection is ErrInUse, nothing
+// written; a file SQLite cannot read is replaced as it is, with a no-op
+// release; a missing file needs no lock.
 func seize(ctx context.Context, path string) (func(), error) {
-	noop := func() {}
-	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-		return noop, nil
-	}
-	db, err := sql.Open(driverName, lockDSN(path))
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		_ = db.Close()
-		return seizeErr(err)
-	}
-	var once sync.Once
-	release := func() { // idempotent
-		once.Do(func() {
-			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
-			_ = conn.Close()
-			_ = db.Close()
-		})
-	}
-	exec := func(q string) error { _, err := conn.ExecContext(ctx, q); return err }
-	var n int64
-	var mode string
-	for _, step := range []func() error{
-		func() error { return exec("BEGIN EXCLUSIVE") },
-		func() error { return conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema").Scan(&n) },
-		func() error { return exec("COMMIT") },
-		func() error {
-			if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode=DELETE").Scan(&mode); err != nil {
-				return err
-			}
-			if mode != "delete" {
-				return ErrInUse
-			}
-			return nil
-		},
-		func() error { return exec("BEGIN EXCLUSIVE") },
-	} {
-		if err := step(); err != nil {
-			release()
-			return seizeErr(err)
-		}
-	}
-	return release, nil
-}
-
-func seizeErr(err error) (func(), error) {
-	switch {
-	case classify(err) == "busy":
+	release, err := sqlitedb.Seize(ctx, path)
+	if errors.Is(err, sqlitedb.ErrInUse) {
 		return nil, ErrInUse
-	case isCorrupt(err):
-		return func() {}, nil
 	}
-	return nil, err
+	return release, err
 }
 
 // removeCompanions removes path's -wal, -shm and -journal.

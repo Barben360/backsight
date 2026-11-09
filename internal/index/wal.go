@@ -1,13 +1,10 @@
 package index
 
 import (
-	"database/sql"
 	"errors"
-	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
 // walVerdict is the WAL probe's answer per index folder, for the life of
@@ -37,7 +34,7 @@ func useWAL(path string, fsi FSInfo) bool {
 	if fsi.Kind != FSLocal {
 		return false
 	}
-	if headerIsWAL(path) {
+	if sqlitedb.HeaderIsWAL(path) {
 		return true
 	}
 	dir := filepath.Dir(path)
@@ -49,61 +46,19 @@ func useWAL(path string, fsi FSInfo) bool {
 	return v
 }
 
-// headerIsWAL: path is a database whose header (bytes 18 and 19) says WAL.
-func headerIsWAL(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	var h [20]byte
-	if n, _ := f.Read(h[:]); n < len(h) {
-		return false
-	}
-	return h[18] == 2 && h[19] == 2
-}
+// errWALRefused: the folder failed the WAL probe (sqlitedb.ProbeWAL).
+var errWALRefused = errors.New("the folder refused the write-ahead log")
 
-// probeName is the scratch file of this process's probe.
-func probeName() string { return fmt.Sprintf(".wal-probe-%d.db", os.Getpid()) }
+// probeName is the scratch file of this process's probe
+// (sqlitedb.ProbeWALName).
+func probeName() string { return sqlitedb.ProbeWALName() }
 
-// probeWAL does in dir what the index will do: opens a scratch database,
-// sets journal_mode=WAL, creates a table and writes a row (the step a
-// folder without shared memory fails), then deletes the file and its
-// -wal and -shm, whatever happened.
-func probeWAL(dir string) (err error) {
-	p := filepath.Join(dir, probeName())
-	remove := func() error {
-		var errs []error
-		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-			if e := os.Remove(p + suffix); e != nil && !errors.Is(e, fs.ErrNotExist) {
-				errs = append(errs, e)
-			}
-		}
-		return errors.Join(errs...)
+// probeWAL does in dir what the index will do, on a scratch file it
+// removes whatever happened (sqlitedb.ProbeWAL): nil when dir takes the
+// write-ahead log.
+func probeWAL(dir string) error {
+	if !sqlitedb.ProbeWAL(dir) {
+		return errWALRefused
 	}
-	_ = remove() // a leftover of a run that died
-	defer func() {
-		if e := remove(); err == nil {
-			err = e
-		}
-	}()
-	db, err := sql.Open(driverName, fileURI(p)+"?_pragma=busy_timeout("+busyMS()+")")
-	if err != nil {
-		return err
-	}
-	db.SetMaxOpenConns(1)
-	defer func() {
-		if e := db.Close(); err == nil {
-			err = e
-		}
-	}()
-	var mode string
-	if err := db.QueryRow("PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
-		return err
-	}
-	if !strings.EqualFold(mode, "wal") {
-		return fmt.Errorf("journal_mode=WAL answered %q", mode)
-	}
-	_, err = db.Exec("CREATE TABLE probe(x INTEGER); INSERT INTO probe VALUES (1)")
-	return err
+	return nil
 }

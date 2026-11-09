@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/paths"
@@ -85,15 +87,27 @@ func withShared(m feedback.Entry, shared feedback.Combined, id string, p feedbac
 	return m
 }
 
-// settleFeedback is the tick's settle: local files only, so a server down
-// never delays it. A failure is logged and never fails the tick.
-func settleFeedback(d paths.Dirs, cfg config.Config, tw *telemetry.Writer) feedback.SettleResult {
+// ledgerOptions says where this machine's ledger database lives and how
+// its writer opens it.
+func ledgerOptions(d paths.Dirs, home string) ledgerdb.Options {
+	return ledgerdb.Options{Dirs: d, Home: home, Getenv: os.Getenv, BinaryVersion: buildinfo.Version}
+}
+
+// settleFeedback is the tick's settle into the ledger database: local
+// files only, so a server down never delays it. A failure is logged and
+// never fails the tick: a failed settle or fold as ledger_fold (nothing
+// counted), a failed export of ledger.json as ledger_export (the settle
+// stands, the next tick exports again).
+func settleFeedback(d paths.Dirs, home string, cfg config.Config, tw *telemetry.Writer) feedback.SettleResult {
 	if !cfg.Feedback.Enabled {
 		return feedback.SettleResult{}
 	}
-	res, err := feedback.Settle(d.FeedbackDir(), feedbackParams(cfg), now)
-	if err != nil {
-		tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSettle))
+	res, err := ledgerdb.Settle(context.Background(), ledgerOptions(d, home), feedbackParams(cfg), now)
+	switch {
+	case errors.Is(err, ledgerdb.ErrExport):
+		tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonLedgerExport))
+	case err != nil:
+		tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonLedgerFold))
 		return feedback.SettleResult{}
 	}
 	if res != (feedback.SettleResult{}) {
