@@ -72,5 +72,5 @@ func newRecallPromptCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&cwd, "cwd", "", "the directory the prompt was typed in (default: here)")
 	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "read the prompt from stdin")
-	return cmd
+	return setLook(cmd, lookPlain) // a program reads its output
 }

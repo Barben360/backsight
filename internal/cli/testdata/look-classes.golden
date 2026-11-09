@@ -1,0 +1,121 @@
+backsight	full
+backsight __install-shim	plain
+backsight ask	full
+backsight backup	full
+backsight backup create	full
+backsight backup identity	full
+backsight backup identity import	full
+backsight backup identity show	plain
+backsight backup list	full
+backsight backup verify	full
+backsight bank	full
+backsight bank apply	full
+backsight bank rename	full
+backsight changelog	full
+backsight client	full
+backsight client config	full
+backsight client config apply	full
+backsight client config plan	full
+backsight client config restore	full
+backsight client install	full
+backsight client retention	full
+backsight client retire	full
+backsight completion	plain
+backsight completion bash	plain
+backsight completion fish	plain
+backsight completion powershell	plain
+backsight completion zsh	plain
+backsight connect	full
+backsight dashboard	full
+backsight dashboard link	full
+backsight detect-replay	plain
+backsight doctor	full
+backsight feedback	full
+backsight feedback import	full
+backsight feedback log	full
+backsight feedback migrate	full
+backsight feedback rebuild	full
+backsight feedback replay	full
+backsight forget	full
+backsight guide	no-splash
+backsight guide index	no-splash
+backsight guide search	no-splash
+backsight help	full
+backsight import	full
+backsight import list	full
+backsight import purge	full
+backsight jobs	plain
+backsight jobs install	plain
+backsight jobs maintain	plain
+backsight jobs refresh	plain
+backsight jobs start	plain
+backsight jobs tick	plain
+backsight jobs uninstall	plain
+backsight mcp	plain
+backsight memory	full
+backsight memory notes	full
+backsight memory scan	full
+backsight memory stale	full
+backsight paths	full
+backsight pause	full
+backsight projects	full
+backsight read	full
+backsight recall-prompt	plain
+backsight report	full
+backsight restore	full
+backsight resume	full
+backsight retain	full
+backsight retain backfill	full
+backsight retain flush	full
+backsight retain purge-again	full
+backsight retain reattribute	full
+backsight retain resend-failed	full
+backsight retain retry-quarantine	full
+backsight retain waiting	full
+backsight search	full
+backsight secret	plain
+backsight secret list	plain
+backsight secret set	plain
+backsight server	full
+backsight server expose	full
+backsight server install	full
+backsight server llm	full
+backsight server llm check	full
+backsight server native-check	plain
+backsight server render	full
+backsight server runtime	full
+backsight server runtime clean	full
+backsight server runtime fingerprint	full
+backsight server runtime switch	full
+backsight server start	full
+backsight server status	full
+backsight server stop	full
+backsight server supervise	plain
+backsight server token	plain
+backsight server upgrade	full
+backsight setup	full
+backsight stats	full
+backsight stats bank	full
+backsight stats cost	full
+backsight stats days	full
+backsight stats defs	full
+backsight stats index	full
+backsight stats index migrate	full
+backsight stats index rebuild	full
+backsight stats memories	full
+backsight stats overview	full
+backsight stats pipeline	full
+backsight stats projects	full
+backsight stats quality	full
+backsight stats releases	full
+backsight stats sessions	full
+backsight stats system	full
+backsight store	full
+backsight uninstall	full
+backsight update	full
+backsight update apply	full
+backsight update check	full
+backsight update migrate	full
+backsight verify	full
+backsight version	full
+backsight why	full

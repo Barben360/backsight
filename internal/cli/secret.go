@@ -26,7 +26,7 @@ var (
 func newSecretCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "secret", Short: "List and set secrets (values are never shown)", Args: cobra.NoArgs}
 	cmd.AddCommand(newSecretListCmd(e), newSecretSetCmd(e))
-	return cmd
+	return setLook(cmd, lookPlain)
 }
 
 func newSecretListCmd(e *env) *cobra.Command {

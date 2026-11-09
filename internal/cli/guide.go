@@ -57,7 +57,7 @@ func newGuideCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newGuideSearchCmd(e), newGuideIndexCmd(e))
-	return cmd
+	return setLook(cmd, lookNoSplash) // its text goes to a pager
 }
 
 type guideTopic struct {

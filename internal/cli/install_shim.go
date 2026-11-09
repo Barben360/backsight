@@ -38,7 +38,7 @@ var releaseVersion = regexp.MustCompile(`^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$`)
 // BACKSIGHT_HOME included), and the swap is client install's, so the
 // script re-implements neither.
 func newInstallShimCmd(e *env) *cobra.Command {
-	return &cobra.Command{
+	return setLook(&cobra.Command{
 		Use:    "__install-shim <version>",
 		Short:  "Install this binary as <data>/bin/<version> and point the shim and the PATH command at it (install.ps1)",
 		Args:   usageArgs(cobra.ExactArgs(1)),
@@ -97,5 +97,5 @@ func newInstallShimCmd(e *env) *cobra.Command {
 				return fmt.Sprintf("backsight %s installed: %s\n", r.Version, r.Target)
 			})
 		},
-	}
+	}, lookPlain)
 }

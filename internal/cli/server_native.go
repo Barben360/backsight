@@ -37,7 +37,7 @@ type nativeCheckResult struct {
 // runs only the bundled pg_controldata and pg_ctl; its output goes to the
 // journal.
 func newServerNativeCheckCmd(e *env) *cobra.Command {
-	return &cobra.Command{
+	return setLook(&cobra.Command{
 		Use:    "native-check",
 		Short:  "Check the native database before its unit starts it (the db unit's ExecStartPre)",
 		Args:   usageArgs(cobra.NoArgs),
@@ -65,7 +65,7 @@ func newServerNativeCheckCmd(e *env) *cobra.Command {
 				return "the native database " + res.Instance + " is the one recorded\n"
 			})
 		},
-	}
+	}, lookPlain) // backsight runs it and reads its output
 }
 
 // nativeGuard is native-check's guard, which the supervisor also runs
@@ -160,7 +160,7 @@ func newServerSuperviseCmd(*env) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noAPI, "no-api", false, "start the database alone (the API on api-start)")
-	return cmd
+	return setLook(cmd, lookPlain) // the Windows task runs it on a headless console
 }
 
 // logSuperviseFailure appends what stopped server supervise before the
