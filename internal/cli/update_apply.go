@@ -25,7 +25,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
-	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/index"
@@ -998,25 +997,25 @@ func (a *applyRun) planLedger(ctx context.Context, staged string) {
 
 // runLedgerMigrate is exe's feedback migrate (with plan, --plan), its
 // result decoded from its JSON envelope: its text is never relayed.
-func runLedgerMigrate(ctx context.Context, exe string, plan bool) (ledgerdb.MigrateResult, error) {
+func runLedgerMigrate(ctx context.Context, exe string, plan bool) (feedbackMigrateResult, error) {
 	args := []string{"feedback", "migrate"}
 	if plan {
 		args = append(args, "--plan")
 	}
 	env, err := runChild(ctx, exe, args...)
 	if err != nil {
-		return ledgerdb.MigrateResult{}, err
+		return feedbackMigrateResult{}, err
 	}
-	var r ledgerdb.MigrateResult
+	var r feedbackMigrateResult
 	if err := json.Unmarshal(env.Data, &r); err != nil {
-		return ledgerdb.MigrateResult{}, err
+		return feedbackMigrateResult{}, err
 	}
 	return r, nil
 }
 
 // ledgerStep is a ledger migrate result as the ledger step: a build, or
 // how many migrations, never their ids.
-func ledgerStep(r ledgerdb.MigrateResult, plan bool) (status, detail string) {
+func ledgerStep(r feedbackMigrateResult, plan bool) (status, detail string) {
 	ids, status, verb := r.Applied, "done", "migrated"
 	if plan {
 		ids, status, verb = r.Pending, "planned", "would migrate"
@@ -1026,6 +1025,10 @@ func ledgerStep(r ledgerdb.MigrateResult, plan bool) (status, detail string) {
 		newer = ", beside a newer backsight's"
 	}
 	switch {
+	case r.Skipped != "":
+		return "skipped", r.Skipped
+	case r.SetAside:
+		return status, "set aside a damaged feedback ledger and rebuilt it from the journal" + newer
 	case len(ids) > 0 && !r.Built && plan:
 		return status, "would build the feedback ledger from the journal" + newer
 	case len(ids) > 0 && !r.Built:

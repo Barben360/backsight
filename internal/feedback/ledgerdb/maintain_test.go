@@ -36,15 +36,18 @@ func mustMaintain(t *testing.T, o Options) []string {
 
 // TestMaintainRemovesLowerLedgerSideFiles: a side file of a lower head
 // than this binary's goes, with its -wal and -shm, once nobody holds it;
-// this head's side file, ledger.db and its companions stay.
+// this head's side file, a higher head's, ledger.db and its companions
+// stay.
 func TestMaintainRemovesLowerLedgerSideFiles(t *testing.T) {
 	o := tempOpts(t)
 	dir := feedbackDir(o)
 	mustCloseWriter(t, mustOpenWriter(t, o))
 	lower := filepath.Join(dir, SideFileName(0))
 	head := filepath.Join(dir, SideFileName(1))
+	higher := filepath.Join(dir, SideFileName(2)) // a newer binary's, beside a ledger.db newer still
 	sqliteFile(t, lower)
 	sqliteFile(t, head)
+	sqliteFile(t, higher)
 	writeFile(t, lower+"-wal", nil)
 	writeFile(t, lower+"-shm", nil)
 	writeFile(t, head+"-wal", []byte("its log"))
@@ -79,7 +82,7 @@ func TestMaintainRemovesLowerLedgerSideFiles(t *testing.T) {
 	for _, sfx := range []string{"", "-wal", "-shm", "-journal"} {
 		absent(t, lower+sfx)
 	}
-	for _, p := range []string{head, head + "-wal", mainPath(o), stray} {
+	for _, p := range []string{head, head + "-wal", higher, mainPath(o), stray} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s: %v", filepath.Base(p), err)
 		}

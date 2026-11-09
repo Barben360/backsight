@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -570,5 +571,81 @@ func TestUpdatePlanListsLedgerMigrations(t *testing.T) {
 	code, out, errOut = run(t, "update", "apply", "--plan", "--source", src)
 	if code != output.OK || !strings.Contains(out, "planned  ledger: would migrate the feedback ledger (1 change)\n") || strings.Contains(out+errOut, "0002-x") {
 		t.Errorf("plan text: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// A new binary without feedback migrate (exit 2, as v0.1.32 answers) has
+// no ledger database to migrate: a skipped step, no warning.
+func TestUpdateApplyLedgerWithABinaryWithoutIt(t *testing.T) {
+	_, _, bins := installedAt(t, "0.1.0")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	bins.fail["0.2.0 feedback migrate"] = output.Usage
+	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	if _, st := applyStep(decodeApply(t, out).Data.Steps, "ledger"); code != output.OK || st.Status != "skipped" || st.Detail != "the new binary has no feedback ledger database" {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if _, st := applyStep(env.Data.Steps, "ledger"); code != output.OK || st.Status != "skipped" || st.Detail != "the new binary has no feedback ledger database" || strings.Contains(strings.Join(env.Data.Warnings, "\n"), "feedback ledger") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if bins.ran("0.2.0 feedback migrate") != 2 {
+		t.Errorf("calls %q", bins.calls)
+	}
+}
+
+// With feedback off the step builds nothing: skipped, "feedback is off".
+func TestUpdateApplyLedgerWithFeedbackOff(t *testing.T) {
+	home, _, _ := installedAt(t, "0.1.0")
+	configure(t, home, "[feedback]\nenabled = false")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if _, st := applyStep(env.Data.Steps, "ledger"); code != output.OK || st.Status != "skipped" || st.Detail != "feedback is off" {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(pathsOf(home).FeedbackDir(), ledgerdb.FileName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ledger.db built with feedback off: %v", err)
+	}
+}
+
+// Each failure feedback migrate reports maps to its fixed phrase;
+// anything else is "failed", never the child's text.
+func TestLedgerMigrateReason(t *testing.T) {
+	envOf := func(err error) error {
+		var oe *output.Error
+		if !errors.As(ledgerError(err), &oe) {
+			t.Fatalf("%v: not an output.Error", err)
+		}
+		return &childError{code: oe.Code, env: oe, msg: oe.Message}
+	}
+	bg := context.Background()
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{envOf(ledgerdb.ErrUpdateInProgress), "an update is in progress"},
+		{envOf(fmt.Errorf("x: %w", ledgerdb.ErrBusy)), "the ledger is in use"},
+		{envOf(fmt.Errorf("x: %w", ledgerdb.ErrUnreadable)), "the ledger is unreadable"},
+		{envOf(fmt.Errorf("x: %w", ledgerdb.ErrSchema)), "the ledger is unreadable"},
+		{envOf(errors.New("CANARY other")), "failed"},
+		{&childError{code: output.Blocked, msg: "CANARY stderr tail"}, "failed"},
+		{&childError{code: output.Blocked, env: &output.Error{Code: output.Blocked, Message: "CANARY sentence"}, msg: "CANARY sentence"}, "failed"},
+		{&childError{code: output.Partial, env: &output.Error{Code: output.Partial, Message: ledgerBusySentence}, msg: ledgerBusySentence}, "failed"},
+		{errors.New("CANARY exec failure"), "failed"},
+	} {
+		if got := ledgerMigrateReason(bg, bg, c.err); got != c.want {
+			t.Errorf("%v: %q, want %q", c.err, got, c.want)
+		}
+	}
+	done, cancel := context.WithCancel(bg)
+	cancel()
+	if got := ledgerMigrateReason(bg, done, errors.New("x")); got != "timed out" {
+		t.Errorf("past the bound: %q", got)
+	}
+	if got := ledgerMigrateReason(done, done, errors.New("x")); got != "interrupted" {
+		t.Errorf("interrupted: %q", got)
 	}
 }

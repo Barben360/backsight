@@ -12,8 +12,9 @@ import (
 
 // MigrateResult is what Migrate found and did.
 type MigrateResult struct {
-	// Built: the file existed before this run (false and Applied set: this
-	// run built it from the journal).
+	// Built is true when the file (File) already existed before this
+	// call, false when it did not: Applied then lists the migrations of
+	// the file this call built from the journal (nothing with plan).
 	Built bool `json:"built"`
 	// Newer: ledger.db is newer than this binary, which uses its own side
 	// file instead (File).
@@ -22,13 +23,19 @@ type MigrateResult struct {
 	File    string   `json:"file"`
 	Pending []string `json:"pending"`
 	Applied []string `json:"applied"`
+	// SetAside: the file was corrupt; it was set aside as
+	// <File>.corrupt and a fresh one built from the journal (Applied
+	// lists its migrations).
+	SetAside bool `json:"set_aside,omitempty"`
 }
 
 // Migrate brings the ledger database to this binary's head: it applies
 // the pending migrations of an existing file and builds a missing one
 // from the journal (OpenWriter), so that the first tick after an update
 // only folds. A ledger.db newer than this binary is left as it is: its
-// side file is migrated, or built, instead. plan only lists the pending
+// side file is migrated, or built, instead. A corrupt file is set aside
+// and a fresh one built (OpenWriter), which SetAside reports. plan only
+// lists the pending
 // migrations, every one of them for a missing file, and creates nothing.
 // During an uncommitted update a file that needs either returns
 // ErrUpdateInProgress, nothing written. Applied is what was pending when
@@ -67,6 +74,8 @@ func Migrate(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 		}
 		return res, nil
 	}
+	aside := t.path + ".corrupt"
+	before, _ := os.Stat(aside)
 	w, err := OpenWriter(ctx, o)
 	if err != nil {
 		return res, err
@@ -75,5 +84,22 @@ func Migrate(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 	// then took the side file.
 	res.Newer, res.File = w.side, filepath.Base(w.path)
 	res.Applied = append(res.Applied, res.Pending...)
+	if setAsideDuring(before, aside) {
+		// The fresh file was built at the head: every migration applied.
+		res.SetAside, res.Applied = true, []string{}
+		for _, m := range reg {
+			res.Applied = append(res.Applied, m.ID)
+		}
+	}
 	return res, w.Close()
+}
+
+// setAsideDuring: aside, missing or as before was before the open, is a
+// corrupt file the open set aside (setAside stamps its mtime).
+func setAsideDuring(before fs.FileInfo, aside string) bool {
+	after, err := os.Stat(aside)
+	if err != nil {
+		return false
+	}
+	return before == nil || !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size()
 }

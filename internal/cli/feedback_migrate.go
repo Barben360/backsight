@@ -30,6 +30,17 @@ const (
 	ledgerFailedSentence     = "the feedback ledger could not be migrated: the next jobs tick retries"
 )
 
+// feedbackOff is why feedback migrate built nothing: feedback.enabled is
+// false and there was no file to migrate.
+const feedbackOff = "feedback is off"
+
+// feedbackMigrateResult is feedback migrate's JSON: ledgerdb's result,
+// and why nothing was done when it was skipped.
+type feedbackMigrateResult struct {
+	ledgerdb.MigrateResult
+	Skipped string `json:"skipped,omitempty"`
+}
+
 // newFeedbackMigrateCmd is the hidden `feedback migrate`, which `update
 // apply` runs with the new binary after its commit point: it applies the
 // pending migrations of the ledger database and builds a missing one from
@@ -48,10 +59,27 @@ func newFeedbackMigrateCmd(e *env) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), ledgerMigrateBudget)
 			defer cancel()
+			_, cfg, err := feedbackConfig()
+			if err != nil {
+				return err
+			}
 			o := ledgerOptions(d, home)
 			o.Now = now
-			res, err := ledgerMigrate(ctx, o, plan)
-			if err != nil {
+			var res feedbackMigrateResult
+			if !cfg.Feedback.Enabled {
+				// Off: an existing file still migrates (it is at the head
+				// when feedback is turned on again); a missing one is never
+				// built.
+				pr, err := ledgerMigrate(ctx, o, true)
+				if err != nil {
+					return ledgerError(err)
+				}
+				if !pr.Built {
+					res = feedbackMigrateResult{MigrateResult: pr, Skipped: feedbackOff}
+					return e.emit("feedback migrate", res, func() string { return ledgerMigrateText(res, plan) })
+				}
+			}
+			if res.MigrateResult, err = ledgerMigrate(ctx, o, plan); err != nil {
 				return ledgerError(err)
 			}
 			return e.emit("feedback migrate", res, func() string { return ledgerMigrateText(res, plan) })
@@ -76,13 +104,17 @@ func ledgerError(err error) error {
 	return &output.Error{Code: output.Blocked, Message: msg}
 }
 
-func ledgerMigrateText(r ledgerdb.MigrateResult, plan bool) string {
+func ledgerMigrateText(r feedbackMigrateResult, plan bool) string {
 	ids, what := r.Applied, "applied "
 	if plan {
 		ids, what = r.Pending, "would apply "
 	}
 	var s string
 	switch {
+	case r.Skipped != "":
+		s = "feedback ledger: not built, " + r.Skipped
+	case r.SetAside:
+		s = "feedback ledger: damaged, set aside as " + r.File + ".corrupt and built again from the journal"
 	case len(ids) == 0:
 		s = "feedback ledger: up to date"
 	case !r.Built && plan:

@@ -25,7 +25,7 @@ func mustMigrate(t *testing.T, o Options, plan bool) MigrateResult {
 
 func sameMigrate(t *testing.T, what string, got, want MigrateResult) {
 	t.Helper()
-	if got.Built != want.Built || got.Newer != want.Newer || got.File != want.File ||
+	if got.Built != want.Built || got.Newer != want.Newer || got.File != want.File || got.SetAside != want.SetAside ||
 		!slices.Equal(got.Pending, want.Pending) || !slices.Equal(got.Applied, want.Applied) {
 		t.Errorf("%s: %+v, want %+v", what, got, want)
 	}
@@ -134,5 +134,24 @@ func TestMigrateLeavesANewerFile(t *testing.T) {
 	}
 	if got := readBytes(t, mainPath(o)); !bytes.Equal(got, before) {
 		t.Error("the newer ledger.db changed")
+	}
+}
+
+// A corrupt ledger.db is set aside and built again from the journal, and
+// Migrate says so: never "up to date".
+func TestMigrateReportsASetAside(t *testing.T) {
+	o := tempOpts(t)
+	journalTwoSettles(t, o)
+	writeFile(t, mainPath(o), []byte("not a database, not at all, long enough to be read as one"))
+	res := mustMigrate(t, o, false)
+	sameMigrate(t, "a corrupt file", res,
+		MigrateResult{Built: true, File: FileName, Pending: []string{}, Applied: []string{"0001-initial"}, SetAside: true})
+	if _, err := os.Stat(mainPath(o) + ".corrupt"); err != nil {
+		t.Errorf("ledger.db.corrupt: %v", err)
+	}
+	matchesOracle(t, "the fresh file", o, feedback.Params{})
+	again := mustMigrate(t, o, false)
+	if again.SetAside || len(again.Applied) != 0 {
+		t.Errorf("the next Migrate: %+v, want up to date", again)
 	}
 }
