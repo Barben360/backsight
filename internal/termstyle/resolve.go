@@ -64,9 +64,11 @@ type Inputs struct {
 }
 
 // Resolve applies 0084 D1, first decisive rule wins: --json and plain
-// commands are off; then --color, BACKSIGHT_COLOR (always or never; auto
-// and invalid values fall through), NO_COLOR; then auto: a terminal, TERM
-// not dumb, and not inside Claude Code (CLAUDECODE). FORCE_COLOR and
+// commands are off; then --color; then inside Claude Code (CLAUDECODE)
+// off, so that only an explicit --color=always reaches Claude, never a
+// BACKSIGHT_COLOR exported in a shell profile (author, 2026-11-09); then
+// BACKSIGHT_COLOR (always or never; auto and invalid values fall
+// through), NO_COLOR; then auto: a terminal and TERM not dumb. FORCE_COLOR and
 // CLICOLOR_FORCE are never read: a shell profile exporting one would send
 // escapes into Claude's Bash calls, which inherit that environment.
 func Resolve(in Inputs) Level {
@@ -80,6 +82,9 @@ func Resolve(in Inputs) Level {
 	if lvl, ok := decide(in.Flag, getenv); ok {
 		return lvl
 	}
+	if getenv("CLAUDECODE") != "" {
+		return None
+	}
 	if m, err := ParseMode(getenv("BACKSIGHT_COLOR")); err == nil {
 		if lvl, ok := decide(m, getenv); ok {
 			return lvl
@@ -88,7 +93,7 @@ func Resolve(in Inputs) Level {
 	if getenv("NO_COLOR") != "" {
 		return None
 	}
-	if !in.Terminal || getenv("TERM") == "dumb" || getenv("CLAUDECODE") != "" {
+	if !in.Terminal || getenv("TERM") == "dumb" {
 		return None
 	}
 	return DetectLevel(getenv)
