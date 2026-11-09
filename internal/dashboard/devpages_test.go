@@ -887,7 +887,7 @@ func TestComparisonPage(t *testing.T) {
 func TestComparisonShowsWhatItAsksAndHowToAskIt(t *testing.T) {
 	c := compareCard(t, compareHTML(t, recordComparison(), func(d *PageData) { d.P.Measure = "recall.hit_rate" }))
 	cmd := needFirst(t, c, "details.cli code").Text
-	if cmd != "backsight stats releases --days 30 --compare v0.1.16-m7,v0.1.17-m7 --measure recall.hit_rate" {
+	if cmd != "backsight stats releases --days 30 --compare "+posixOrPS("v0.1.16-m7,v0.1.17-m7", "'v0.1.16-m7,v0.1.17-m7'")+" --measure recall.hit_rate" { // PowerShell reads a bare comma as an array
 		t.Errorf("command %q", cmd)
 	}
 	if got := needAll(t, c, "p.sub", 1)[0].text(); got != "Comparing v0.1.16-m7 with v0.1.17-m7 on turns where Claude used memory:" {

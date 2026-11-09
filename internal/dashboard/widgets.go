@@ -9,6 +9,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/shellword"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -362,22 +363,9 @@ func drillHref(drill string, p views.Params) string {
 	return path + "?" + q.Encode()
 }
 
-// quoteArg is s as one shell word: bare when it holds only characters that
-// mean nothing to a shell, else in single quotes (a ' written '\”).
-func quoteArg(s string) string {
-	safe := s != ""
-	for _, r := range s {
-		plain := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./:=@%+,-", r)
-		if !plain {
-			safe = false
-			break
-		}
-	}
-	if safe {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+// quoteArg is s as one word of the shell this PC's commands are pasted in
+// (shellword.Word).
+func quoteArg(s string) string { return shellword.Word(s) }
 
 // cliFor is the command that prints what the page shows.
 func cliFor(view, id string, p views.Params) string {

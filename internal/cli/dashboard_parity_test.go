@@ -316,6 +316,12 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 		{"days out of range", "overview", "", []pair{{"days", "0"}}, http.StatusBadRequest},
 		{"days and since", "overview", "", []pair{{"days", "3"}, {"since", "2026-10-01"}}, http.StatusBadRequest},
 		{"until alone", "overview", "", []pair{{"until", "2026-10-01"}}, http.StatusBadRequest},
+		// windows the index could never fill: bounded before a bucket is built
+		{"window of a century", "overview", "", []pair{{"since", "2000-01-01"}, {"until", "2099-12-31"}}, http.StatusBadRequest},
+		{"until in year 9999", "overview", "", []pair{{"since", "2026-01-03"}, {"until", "9999-12-31"}}, http.StatusBadRequest},
+		{"since in year 1", "overview", "", []pair{{"since", "0001-01-01"}}, http.StatusBadRequest},
+		{"a week in year 9999", "days", "", []pair{{"since", "9999-12-01"}, {"until", "9999-12-08"}}, http.StatusBadRequest},
+		{"window one day over the cap", "overview", "", []pair{{"since", "2025-09-01"}, {"until", "2026-10-07"}}, http.StatusBadRequest},
 		{"unknown zone", "overview", "", []pair{{"tz", "Mars/Olympus"}}, http.StatusBadRequest},
 		{"unknown filter value", "sessions", "", []pair{{"has", "nothing"}}, http.StatusBadRequest},
 		{"unknown id", "sessions", "zzzzzzzzzz", nil, http.StatusNotFound},
@@ -351,6 +357,20 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 			}
 		})
 	}
+
+	// The longest window taken, 400 days, is a result on both sides.
+	t.Run("window exactly at the cap", func(t *testing.T) {
+		q := []pair{{"since", "2025-09-01"}, {"until", "2026-10-06"}}
+		status, raw := dashGet(t, base, c, apiPath("overview", "", q))
+		cli := runView(t, cliArgs("overview", "", q)...)
+		if status != http.StatusOK || cli.code != output.OK {
+			t.Fatalf("API %d, CLI exit %d\nAPI: %.300s\nCLI: %.300s", status, cli.code, raw, cli.raw)
+		}
+		w := decodeEnvelope(t, "API", raw)["data"].(map[string]any)["window"].(map[string]any)
+		if w["days"] != float64(400) {
+			t.Errorf("window days %v, want 400", w["days"])
+		}
+	})
 
 	// dev=2: the API refuses it with the sentence the CLI's other flags
 	// use; the CLI cannot be compared, its flag parser answers first.

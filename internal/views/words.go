@@ -27,7 +27,7 @@ var Questions = map[string]string{
 	"releases": "Did a release or a setting help?",
 	"projects": "Which projects use memory?",
 	"sessions": "Which sessions used memory?",
-	"memories": "Which memories were shown?",
+	"memories": "Which memories does recall show?",
 	"days":     "How did each day go?",
 	"defs":     "What does each number mean?",
 }

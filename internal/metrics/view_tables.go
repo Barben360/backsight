@@ -9,6 +9,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/shellword"
 )
 
 // The tables the page views list beside their metrics, each read inside
@@ -366,9 +367,9 @@ func review(e env) (Review, error) {
 		return out
 	}
 	return Review{
-		NeverUsed: rows(lists.NeverUsed, func(id string) string { return "backsight forget " + id }),
-		Hidden:    rows(lists.Hidden, func(id string) string { return "backsight forget --restore " + id }),
-		Reported:  rows(lists.Reported, func(id string) string { return "backsight forget " + id + " --purge" }),
+		NeverUsed: rows(lists.NeverUsed, func(id string) string { return "backsight forget " + shellword.Word(id) }),
+		Hidden:    rows(lists.Hidden, func(id string) string { return "backsight forget --restore " + shellword.Word(id) }),
+		Reported:  rows(lists.Reported, func(id string) string { return "backsight forget " + shellword.Word(id) + " --purge" }),
 	}, nil
 }
 

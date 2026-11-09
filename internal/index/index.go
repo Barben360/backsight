@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/sqlitedb"
 )
 
 // FileName is the index file inside Dirs.IndexDir.
@@ -290,6 +291,7 @@ func openWriter(ctx context.Context, path string, fs FSInfo) (*sql.DB, error) {
 // openWriterMode is openWriter with the journal mode decided: wal, or the
 // rollback journal.
 func openWriterMode(ctx context.Context, path string, wal bool) (*sql.DB, error) {
+	sqlitedb.MakePrivate(path) // the index, its side file and a rebuild's temp file
 	w, err := sql.Open(driverName, dsn(path, wal, false))
 	if err != nil {
 		return nil, err

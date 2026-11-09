@@ -609,6 +609,10 @@ func (d PageData) machinesCard(r *metrics.Result) *MachinesCard {
 	silent := serverSilent(d.Frame)
 	c.Short = (only || silent) && len(m.Rows) > 0 && len(c.Ignored) == 0 && !stale
 	switch {
+	case frameNoServer(d.Frame):
+		c.Head.Pill = Word{"no server", "st-info"}
+		c.Notice = &Notice{Icon: "server", Class: "st-info", Text: "No memory server is set up on this PC, so other PCs’ figures are not fetched."}
+		return c
 	case silent:
 		c.Head.Pill = Word{"not answering", "st-watch"}
 		text := "Memory server not answering"

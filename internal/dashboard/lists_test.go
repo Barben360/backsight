@@ -381,8 +381,8 @@ func TestEmptyListsSayWhy(t *testing.T) {
 	}{
 		{"sessions", func(d *PageData) { d.V["sessions"].Tables.Sessions = nil }, "No session in this window."},
 		{"sessions", func(d *PageData) { d.V["sessions"].Tables.Sessions = nil; d.P.Has = "used" }, "No session in this window matches this filter."},
-		{"memories", func(d *PageData) { d.V["memories"].Tables.Memories = nil }, "No memory has been shown in this window."},
-		{"memories", func(d *PageData) { d.V["memories"].Tables.Memories = nil; d.P.State = "hidden" }, "No memory in this window matches this filter."},
+		{"memories", func(d *PageData) { d.V["memories"].Tables.Memories = nil }, "No memory in the feedback ledger yet."},
+		{"memories", func(d *PageData) { d.V["memories"].Tables.Memories = nil; d.P.State = "hidden" }, "No memory in the feedback ledger matches this filter."},
 		{"days", func(d *PageData) { d.V["days"].Tables.Days = nil }, "No day in this window has any activity."},
 		{"projects", func(d *PageData) { d.V["projects"].Tables.Projects, d.V["projects"].Tables.Pooled = nil, nil }, "No project has any activity in this window."},
 		{"day", func(d *PageData) { d.V["days"].Tables.Day.Sessions = nil }, "No sessions that day."},

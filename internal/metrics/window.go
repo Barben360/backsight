@@ -36,6 +36,41 @@ const day = 24 * time.Hour
 // hourlyMax is the longest window drawn by the hour.
 const hourlyMax = 48 * time.Hour
 
+// MaxWindowDays is the longest window a view takes, in calendar days. Every
+// window the product offers fits: --days up to 365, the dashboard's picker
+// (from the first day of the month 12 months back to today, at most 397
+// days) and the 13-month calendar; the daily document shared between PCs
+// has the same 400-day cap. A longer window would only cost memory (a
+// bucket per day, for the window, its previous window and the baselines):
+// its previous window already reaches past the 25 months the index keeps.
+const MaxWindowDays = 400
+
+// FirstYear and LastYear bound the days a window may start and end in,
+// read in the window's zone: from FirstYear-01-01 00:00 to the end of
+// LastYear. Outside them a date is a typo, and the window's arithmetic (its
+// length and its previous window) could overflow.
+const (
+	FirstYear = 2000
+	LastYear  = 2099
+)
+
+// InRange reports whether t, read in loc, lies within the years a window
+// may cover: FirstYear-01-01 00:00 to (LastYear+1)-01-01 00:00 included.
+func InRange(t time.Time, loc *time.Location) bool {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return !t.In(loc).Before(time.Date(FirstYear, 1, 1, 0, 0, 0, 0, loc)) &&
+		!t.In(loc).After(time.Date(LastYear+1, 1, 1, 0, 0, 0, 0, loc))
+}
+
+// Errors of NewWindow a caller can tell apart.
+var (
+	ErrWindowEmpty      = errors.New("the end of the window is not after its start")
+	ErrWindowTooLong    = errors.New("the window is longer than 400 days")
+	ErrWindowOutOfRange = errors.New("the window starts before 2000 or ends after 2099")
+)
+
 // NewWindow builds a window ending at until (now when zero) that either
 // spans the last days*24 h (days > 0) or starts at since; exactly one of
 // the two must be given. Elapsed time, not calendar days: across a DST
@@ -52,6 +87,8 @@ func NewWindow(now time.Time, days int, since, until time.Time, loc *time.Locati
 		return Window{}, errors.New("give either a number of days or a start, not both")
 	case days <= 0 && since.IsZero():
 		return Window{}, errors.New("a window needs a number of days or a start")
+	case days > MaxWindowDays:
+		return Window{}, ErrWindowTooLong
 	case days > 0:
 		until = now
 		since = now.Add(-time.Duration(days) * day)
@@ -59,9 +96,19 @@ func NewWindow(now time.Time, days int, since, until time.Time, loc *time.Locati
 		if until.IsZero() {
 			until = now
 		}
-		if !until.After(since) {
-			return Window{}, errors.New("the end of the window is not after its start")
-		}
+	}
+	// The range first: it keeps the length and the calendar arithmetic
+	// below far from time.Duration's 292 years.
+	if !InRange(since, loc) || !InRange(until, loc) {
+		return Window{}, ErrWindowOutOfRange
+	}
+	if !until.After(since) {
+		return Window{}, ErrWindowEmpty
+	}
+	// Calendar days in loc, so that a window across a DST change is not
+	// refused for its extra hour.
+	if until.After(since.In(loc).AddDate(0, 0, MaxWindowDays)) {
+		return Window{}, ErrWindowTooLong
 	}
 	w := Window{Since: since.In(loc), Until: until.In(loc), TZ: tz, Loc: loc}
 	w.Days = ceilDays(w.Length())

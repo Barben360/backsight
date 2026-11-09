@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/shellword"
 )
 
 // The memory states of the memories view.
@@ -266,7 +267,7 @@ func memoryPage(ctx context.Context, s Source, q Query, id string) (Result, erro
 	key := memoryKeyPrefix + full
 	return runView(ctx, s, q, "memories", []string{key}, func(e env, r *Result) error {
 		page := MemoryPage{Shows: []ShowMark{}, Retirements: []RetireMark{}, RankHistogram: map[string]int64{},
-			Commands: []string{"backsight read " + full, "backsight forget " + full, "backsight forget --restore " + full}}
+			Commands: []string{"backsight read " + shellword.Word(full), "backsight forget " + shellword.Word(full), "backsight forget --restore " + shellword.Word(full)}}
 		l, err := e.ledger()
 		if err != nil {
 			return err

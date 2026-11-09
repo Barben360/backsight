@@ -113,7 +113,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 	case "sessions":
 		use, short, args = "sessions [<id>]", "List the sessions of the window, or show one (an id prefix of 8 characters is enough)", cobra.MaximumNArgs(1)
 	case "memories":
-		use, short, args = "memories [<id>]", "List the memories shown in the window, or show one (an id prefix of 8 characters is enough)", cobra.MaximumNArgs(1)
+		use, short, args = "memories [<id>]", "List the memories of the feedback ledger with their counts (the window sets only the review counts), or show one (an id prefix of 8 characters is enough)", cobra.MaximumNArgs(1)
 	case "days":
 		use, short, args = "days [<YYYY-MM-DD>]", "List the days of the window, or show one", cobra.MaximumNArgs(1)
 	case "defs":
@@ -156,7 +156,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 	case "sessions":
 		cmd.Flags().StringVar(&f.has, "has", "", "only sessions that have this: "+strings.Join(hasValues, ", "))
 	case "memories":
-		cmd.Flags().StringVar(&f.sort, "sort", "", "order: "+strings.Join(sortValues, ", ")+" (default used)")
+		cmd.Flags().StringVar(&f.sort, "sort", "", "order: "+strings.Join(sortValues, ", ")+" (default shown)")
 		cmd.Flags().StringVar(&f.state, "state", "", "only memories in this state: "+strings.Join(stateValues, ", "))
 		cmd.Flags().BoolVar(&f.text, "text", false, "with an id: add the memory's text, read from the server")
 	}

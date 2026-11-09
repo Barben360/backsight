@@ -95,6 +95,33 @@ func at(m any, keys ...string) any {
 	return m
 }
 
+// The memories view lists the whole feedback ledger, and its help says
+// so: not "shown in the window", and the default order it names is the one
+// it uses (shown: mem-long-2, shown 12 and never used, before mem-long-1).
+func TestMemoriesHelpTellsWhatItLists(t *testing.T) {
+	viewsFixture(t)
+	browseFixture(t)
+	code, help, _ := run(t, "stats", "memories", "--help")
+	if code != output.OK || !strings.Contains(help, "feedback ledger") || strings.Contains(help, "in the window, or") ||
+		!strings.Contains(help, "last_shown (default shown)") {
+		t.Errorf("help (exit %d):\n%s", code, help)
+	}
+	order := func(args ...string) string {
+		t.Helper()
+		v := runView(t, append([]string{"stats", "memories", "--tz", "Europe/Paris"}, args...)...)
+		rows, _ := at(v.env.Data, "tables", "memories").([]any)
+		var ids []string
+		for _, r := range rows {
+			ids = append(ids, at(r, "id").(string))
+		}
+		return strings.Join(ids, " ")
+	}
+	def := order()
+	if def != order("--sort", "shown") || def == order("--sort", "used") || def != "mem-long-2 mem-long-1" {
+		t.Errorf("default order %q, want --sort shown's (mem-long-2 mem-long-1), unlike --sort used's", def)
+	}
+}
+
 func TestStatsViewsRun(t *testing.T) {
 	viewsFixture(t)
 	for _, view := range metrics.Views {

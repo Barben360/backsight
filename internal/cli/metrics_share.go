@@ -117,7 +117,7 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	if !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger || machine == "" || cfg.ServerOnly() {
 		return metricsShare{}, nil
 	}
-	dir, target := d.MetricsDir(), shareTarget(d, cfg)
+	dir, target := d.MetricsDir(), machines.TargetKey(shareTarget(d, cfg)) // the record keeps a hash, never the address and bank
 	rec, ok := machines.LoadPublished(dir)
 	if !metricsDue(rec, ok, target, machine, now) {
 		return metricsShare{}, nil

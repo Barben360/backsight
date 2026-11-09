@@ -30,6 +30,7 @@ import (
 	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
+	"github.com/Barben360/backsight/internal/shellword"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -110,12 +111,7 @@ func (f uninstallFlags) resume() string {
 }
 
 // shellWord quotes s for a POSIX shell when it is not one plain word.
-func shellWord(s string) string {
-	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=./:,@+%") == "" {
-		return s
-	}
-	return shellQuote(s)
-}
+func shellWord(s string) string { return shellword.POSIX(s) }
 
 // jobLockWait bounds the wait for a running jobs tick or jobs maintain.
 var jobLockWait = 2 * time.Minute

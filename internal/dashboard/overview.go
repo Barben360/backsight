@@ -370,7 +370,7 @@ func summaryOf(r *metrics.Result, l format.Locale) SummaryLine {
 		out.Cost = l.Money(*s.ExtractionCost, s.Currency)
 	}
 	if down {
-		out.Scope = "(the memory server is not answering)."
+		out.Scope = "(" + serverAbsent(r) + ")."
 	}
 	if r.Scope.Machines == "all" && r.Scope.PCs != nil {
 		out.Who = ", on all PCs (" + strconv.Itoa(r.Scope.PCs.Count) + ")"

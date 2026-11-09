@@ -185,7 +185,10 @@ func glanceFor(r *metrics.Result, l format.Locale, loc *time.Location, p views.P
 	if r.Server != nil {
 		down, lastOK = !r.Server.OK, r.Server.LastOK
 	}
-	if down {
+	switch {
+	case down && noServerSetUp(r):
+		g.Down = noServerSentence
+	case down:
 		g.Down = "Memory server not answering"
 		if lastOK != nil && !lastOK.IsZero() {
 			g.Down += " since " + format.Clock(r.GeneratedAt, *lastOK, loc)
