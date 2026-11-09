@@ -27,6 +27,20 @@ var randRead = rand.Read
 // spend the code there, as a concurrent request would.
 var beforeCodeRemove = func() {}
 
+// lstat and goos are seams: tests make a code file read, on any system,
+// as Windows reads one another request is removing.
+var (
+	lstat = os.Lstat
+	goos  = runtime.GOOS
+)
+
+// A code file read as delete-pending is read again every deletePendingPause,
+// at most deletePendingTries times: about 100 ms in all.
+const (
+	deletePendingTries = 20
+	deletePendingPause = 5 * time.Millisecond
+)
+
 var (
 	ErrBadCode     = errors.New("malformed login code")
 	ErrNoCode      = errors.New("unknown or already used login code")
@@ -85,7 +99,7 @@ func AcceptCode(d paths.Dirs, code string, now time.Time) error {
 		return ErrBadCode
 	}
 	path := filepath.Join(CodesDir(d), codeName(code))
-	fi, err := os.Lstat(path)
+	fi, err := statCode(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return ErrNoCode
 	}
@@ -129,7 +143,7 @@ func spend(path string, result func(error) error) error {
 	if errors.Is(err, fs.ErrExist) {
 		return ErrNoCode
 	}
-	if err != nil && runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) && gone(path) {
+	if err != nil && goos == "windows" && errors.Is(err, fs.ErrPermission) && gone(path) {
 		// Windows denies a name another request's claim still holds while
 		// it is being removed: that request has spent the code.
 		return ErrNoCode
@@ -200,10 +214,29 @@ func expired(fi fs.FileInfo, now time.Time) bool {
 	return age > CodeTTL || age < -CodeTTL
 }
 
-// gone: nothing is left at path.
+// gone: nothing is left at path, a file being removed included.
 func gone(path string) bool {
-	_, err := os.Lstat(path)
+	_, err := statCode(path)
 	return errors.Is(err, fs.ErrNotExist)
+}
+
+// statCode is os.Lstat of a code file, made to agree with other systems.
+// On Windows a file another request has just removed stays delete-pending
+// while any handle to it is open, and Lstat on it is denied instead of
+// finding nothing. A denial there is read again for a short while, until
+// the file is gone; one that lasts is a real denial and is returned.
+func statCode(path string) (fs.FileInfo, error) {
+	fi, err := lstat(path)
+	for i := 0; i < deletePendingTries && deletePending(err); i++ {
+		time.Sleep(deletePendingPause)
+		fi, err = lstat(path)
+	}
+	return fi, err
+}
+
+// deletePending: err is how Windows answers a read of a file being removed.
+func deletePending(err error) bool {
+	return goos == "windows" && errors.Is(err, fs.ErrPermission)
 }
 
 // codeOrClaim: name is a code file's or a claim's.
