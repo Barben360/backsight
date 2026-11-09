@@ -63,6 +63,9 @@ func TestWriterResolvesOnceAndLazily(t *testing.T) {
 		t.Fatalf("resolved at construction")
 	}
 	_, _ = w.Write([]byte("a\x00b"))
+	if calls != 1 {
+		t.Fatalf("first Write did not resolve the level (%d calls)", calls)
+	}
 	_, _ = io.WriteString(w, "c\n")
 	for range 3 {
 		if w.Level() != Basic {

@@ -23,7 +23,12 @@ func NewWriter(w io.Writer, resolve func() Level) *Writer {
 	return &Writer{w: w, resolve: resolve}
 }
 
-func (w *Writer) Write(p []byte) (int, error) { return w.w.Write(p) }
+// Write resolves the level first (on Windows that turns the console's
+// escape processing on before any byte reaches it), then passes p through.
+func (w *Writer) Write(p []byte) (int, error) {
+	w.Level()
+	return w.w.Write(p)
+}
 
 // Level is the stream's color level, resolved on the first call.
 func (w *Writer) Level() Level {

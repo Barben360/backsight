@@ -185,6 +185,9 @@ func (f colorFlag) Set(s string) error {
 	return nil
 }
 
+// enableVT turns on a Windows console's escape processing; tests replace it.
+var enableVT = termstyle.EnableVT
+
 // isTerminalFd says whether a descriptor is a terminal; tests replace it.
 var isTerminalFd = func(fd uintptr) bool { return term.IsTerminal(int(fd)) }
 
@@ -218,7 +221,7 @@ func (e *env) styled(w io.Writer, plain bool, restores *vtRestores) *termstyle.W
 		if lvl == termstyle.None {
 			return lvl
 		}
-		restore, ok := termstyle.EnableVT(w)
+		restore, ok := enableVT(w)
 		if !ok {
 			return termstyle.None
 		}

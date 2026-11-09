@@ -26,8 +26,10 @@ func cleanColorEnv(t *testing.T) {
 // (every descriptor when none is given).
 func fakeTerminal(t *testing.T, fds ...uintptr) {
 	t.Helper()
-	old := isTerminalFd
-	t.Cleanup(func() { isTerminalFd = old })
+	old, oldVT := isTerminalFd, enableVT
+	t.Cleanup(func() { isTerminalFd, enableVT = old, oldVT })
+	// A temp file is never a Windows console: the faked terminal is one.
+	enableVT = func(io.Writer) (func(), bool) { return func() {}, true }
 	isTerminalFd = func(fd uintptr) bool {
 		if len(fds) == 0 {
 			return true
@@ -150,7 +152,8 @@ func TestColorFlagHonouredOnParseError(t *testing.T) {
 	for mode, want := range map[string]termstyle.Level{"never": termstyle.None, "always": termstyle.Basic} {
 		errf := outFile(t)
 		fakeTerminal(t, errf.Fd())
-		code, e := executeContext(context.Background(), []string{"--color=" + mode, "version", "--bogus"}, io.Discard, errf)
+		// After --bogus: pflag stops there, so only the pre-scan sees it.
+		code, e := executeContext(context.Background(), []string{"version", "--bogus", "--color=" + mode}, io.Discard, errf)
 		if code != 2 {
 			t.Errorf("%s: exit %d", mode, code)
 		}
@@ -161,7 +164,8 @@ func TestColorFlagHonouredOnParseError(t *testing.T) {
 }
 
 func TestJSONEqualsTrueOnParseError(t *testing.T) {
-	code, out, _ := run(t, "--json=true", "version", "--bogus")
+	// After --bogus: pflag stops there, so only the pre-scan sees it.
+	code, out, _ := run(t, "version", "--bogus", "--json=true")
 	var env struct {
 		OK bool `json:"ok"`
 	}
@@ -184,4 +188,46 @@ func TestPagerGetsTheRawStream(t *testing.T) {
 	if cmd.Stdout != io.Writer(f) {
 		t.Errorf("the pager's stdout is %T, want the *os.File itself", cmd.Stdout)
 	}
+}
+
+func TestColorFlagSeparateValueOnParseError(t *testing.T) {
+	cleanColorEnv(t)
+	errf := outFile(t)
+	fakeTerminal(t, errf.Fd())
+	// never, not always: auto at this faked terminal would already color.
+	_, e := executeContext(context.Background(), []string{"version", "--bogus", "--color", "never"}, io.Discard, errf)
+	if got := termstyle.LevelOf(e.stderr); got != termstyle.None {
+		t.Errorf("stderr level %v, want None", got)
+	}
+}
+
+func TestVTFailureTurnsTheStreamOff(t *testing.T) {
+	cleanColorEnv(t)
+	f := outFile(t)
+	fakeTerminal(t, f.Fd())
+	enableVT = func(io.Writer) (func(), bool) { return func() {}, false }
+	_, e := executeContext(context.Background(), []string{"version", "--color=always"}, f, io.Discard)
+	if got := termstyle.LevelOf(e.stdout); got != termstyle.None {
+		t.Errorf("level %v with the console refusing VT, want None", got)
+	}
+}
+
+func TestVTRestoredWhenTheCommandEnds(t *testing.T) {
+	cleanColorEnv(t)
+	for name, ctx := range map[string]context.Context{"done": context.Background(), "cancelled": cancelledCtx()} {
+		f := outFile(t)
+		fakeTerminal(t, f.Fd())
+		restored := 0
+		enableVT = func(io.Writer) (func(), bool) { return func() { restored++ }, true }
+		executeContext(ctx, []string{"version", "--color=always"}, f, io.Discard)
+		if restored != 1 {
+			t.Errorf("%s: console mode restored %d times, want 1", name, restored)
+		}
+	}
+}
+
+func cancelledCtx() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }
