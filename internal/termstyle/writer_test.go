@@ -82,7 +82,7 @@ func TestRawAndLevelOf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	inner := NewWriter(f, func() Level { return Basic })
 	outer := NewWriter(inner, func() Level { return TrueColor })
 	if Raw(outer) != io.Writer(f) {
