@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/shellword"
 )
 
 // Projects is the projects view: one row per project the window's sessions
@@ -247,7 +249,7 @@ WHERE ts >= ? AND ts < ? AND COALESCE(subagent, 0) = 0 AND applied = ? AND COALE
 		if tags != nil {
 			if _, has := tags[id]; !has {
 				page.NoMemories = true
-				page.Command = "backsight retain backfill --project " + id + " --plan"
+				page.Command = "backsight retain backfill --project " + shellword.Word(id) + " --plan"
 			}
 		}
 		r.Tables.Project, r.Tables.Page = &page, &pg
@@ -322,11 +324,11 @@ func projectMemories(e env, id string) (top, never []ReviewRow, err error) {
 	})
 	top, never = []ReviewRow{}, []ReviewRow{}
 	for _, u := range us[:min(limit, len(us))] {
-		top = append(top, row(u.id, "backsight read "+u.id))
+		top = append(top, row(u.id, "backsight read "+shellword.Word(u.id)))
 	}
 	for _, mid := range lists.NeverUsed {
 		if projects[mid] == id && len(never) < limit {
-			never = append(never, row(mid, "backsight forget "+mid))
+			never = append(never, row(mid, "backsight forget "+shellword.Word(mid)))
 		}
 	}
 	return top, never, nil

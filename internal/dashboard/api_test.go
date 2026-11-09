@@ -436,3 +436,43 @@ func TestAPIUnknownPathsAreEnvelopes(t *testing.T) {
 		}
 	}
 }
+
+// A since/until window past 400 days or outside 2000-2099, typed in the URL
+// rather than picked, is a bad request on the pages and in the API, with
+// the CLI's sentence; one of exactly 400 days is answered. It used to
+// build a bucket per day: a 9999 end took 18 GB, year 1 a 500.
+func TestWindowBoundsOnPagesAndAPI(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	const (
+		tooLong = "--since/--until: a window of at most 400 days"
+		outside = "--since and --until: dates from 2000-01-01 to 2099-12-31"
+	)
+	for q, want := range map[string]string{
+		"since=2000-01-01&until=2099-12-31": tooLong,
+		"since=2026-01-03&until=9999-12-31": outside,
+		"since=0001-01-01":                  outside,
+		"since=9999-12-01&until=9999-12-08": outside,
+		"since=2025-09-01&until=2026-10-07": tooLong,
+	} {
+		r, m := apiGet(t, h, ck, "/api/v1/overview?"+q)
+		if r.StatusCode != http.StatusBadRequest || dig(t, m, "ok") != false ||
+			dig(t, m, "error.code") != float64(2) || dig(t, m, "error.message") != want {
+			t.Errorf("API %s: %d %v, want 400 %q", q, r.StatusCode, m["error"], want)
+		}
+		for _, page := range []string{"/", "/quality", "/days"} {
+			r := h.do("GET", page+"?"+q, cookieHdr(ck)...)
+			raw := body(t, r)
+			if r.StatusCode != http.StatusBadRequest || !strings.Contains(raw, want+".") {
+				t.Errorf("page %s?%s: %d, want 400 saying %q", page, q, r.StatusCode, want)
+			}
+		}
+	}
+	q := "since=2025-09-01&until=2026-10-06"
+	if r, m := apiGet(t, h, ck, "/api/v1/overview?"+q); r.StatusCode != http.StatusOK || dig(t, m, "data.window.days") != float64(400) {
+		t.Errorf("API %s: %d %v, want 200 and 400 days", q, r.StatusCode, m["error"])
+	}
+	if r := h.do("GET", "/quality?"+q, cookieHdr(ck)...); r.StatusCode != http.StatusOK {
+		t.Errorf("page /quality?%s: %d, want 200", q, r.StatusCode)
+	}
+}

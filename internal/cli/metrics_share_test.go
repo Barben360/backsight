@@ -310,6 +310,45 @@ func TestPublishTooLargeIsAFailureClass(t *testing.T) {
 	}
 }
 
+// The publish record tells a change of server or bank by a hash: the file
+// in metrics/ never holds the server's address or the bank's name. An
+// older binary's record, holding them as text, still counts as sent to the
+// same target (no second send that day); another bank is a new target.
+func TestPublishRecordHoldsNoServerText(t *testing.T) {
+	m := newShareMachine(t)
+	writes := watchMetricsWrites(t)
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	if s := m.publish(pubT0); !s.Up {
+		t.Fatalf("publish: %+v", s)
+	}
+	raw, err := os.ReadFile(machines.PublishedFile(m.d.MetricsDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(m.cfg.Server.URL, "http://"), "https://")
+	for _, text := range []string{host, m.cfg.Server.Bank, shareTarget(m.d, m.cfg)} {
+		if strings.Contains(string(raw), text) {
+			t.Errorf("published.json holds %q: %s", text, raw)
+		}
+	}
+	if rec := m.record(); rec.Server != machines.TargetKey(shareTarget(m.d, m.cfg)) {
+		t.Errorf("server %q, want the target's hash", rec.Server)
+	}
+
+	legacy := m.record()
+	legacy.Server = shareTarget(m.d, m.cfg)
+	if err := machines.SavePublished(m.d.MetricsDir(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if s := m.publish(pubT0.Add(15 * time.Minute)); s.Up || len(writes()) != 1 {
+		t.Errorf("an older record of the same target: sent again (%+v, %d writes)", s, len(writes()))
+	}
+	m.cfg.Server.Bank = "another-bank"
+	if s := m.publish(pubT0.Add(30 * time.Minute)); !s.Up {
+		t.Errorf("another bank: not sent (%+v)", s)
+	}
+}
+
 func TestPublishWaitsForAFullCatchUp(t *testing.T) {
 	m := newShareMachine(t)
 	writes := watchMetricsWrites(t)

@@ -48,12 +48,12 @@ func summaryText(r *metrics.Result, p views.Params, loc *time.Location, window, 
 	}
 	add(joinSegments(segs)...)
 	if all {
-		add("Activity on all PCs on this server (" + strconv.Itoa(r.Scope.PCs.Count) + ") · memory on " + memoryHost(r.Scope.Server))
+		add("Activity on all PCs on this server (" + strconv.Itoa(r.Scope.PCs.Count) + ") · " + memoryOn(r.Scope.Server))
 		if notes := pcNotes(r.Scope, r.GeneratedAt); notes != "" {
 			add(notes)
 		}
 	} else {
-		add("Activity on this PC · memory on " + memoryHost(r.Scope.Server))
+		add("Activity on this PC · " + memoryOn(r.Scope.Server))
 	}
 	add("")
 
@@ -369,7 +369,7 @@ func reportedWrong(r *metrics.Result, p views.Params, l format.Locale, loc *time
 func memoryLine(r *metrics.Result, l format.Locale, window string) string {
 	size := r.Metrics["bank.size"]
 	if size.Value == nil {
-		return "Memory: size not known (the memory server is not answering)."
+		return "Memory: size not known (" + serverAbsent(r) + ")."
 	}
 	s := "Memory: " + l.Int(int64(*size.Value)) + " memories"
 	if grow, ok := r.Metrics["bank.growth"]; ok && grow.Value != nil {

@@ -322,7 +322,7 @@ func TestCacheAndRecordRoundTrip(t *testing.T) {
 		t.Fatalf("cache round trip: %v %+v", err, got)
 	}
 
-	p := Published{At: at, Server: "https://example.test", Until: "2026-11-05", FirstSeen: "2026-09-02", Bytes: 1234,
+	p := Published{At: at, Server: TargetKey("url https://example.test bank b"), Until: "2026-11-05", FirstSeen: "2026-09-02", Bytes: 1234,
 		FailedAt: at.Add(time.Hour), FailedSince: at, Failure: "server"}
 	if err := SavePublished(dir, p); err != nil {
 		t.Fatal(err)
@@ -331,6 +331,22 @@ func TestCacheAndRecordRoundTrip(t *testing.T) {
 	if !ok || !gp.At.Equal(p.At) || !gp.FailedAt.Equal(p.FailedAt) || !gp.FailedSince.Equal(p.FailedSince) ||
 		gp.Server != p.Server || gp.Until != p.Until || gp.FirstSeen != p.FirstSeen || gp.Bytes != p.Bytes || gp.Failure != p.Failure {
 		t.Fatalf("record round trip: %v %+v", ok, gp)
+	}
+	// An older binary's record, with the target's text, reads as its key.
+	legacy := p
+	legacy.Server = "url https://example.test bank b"
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(PublishedFile(dir), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if gp, ok := LoadPublished(dir); !ok || gp.Server != p.Server {
+		t.Fatalf("legacy record: %v %q, want %q", ok, gp.Server, p.Server)
+	}
+	if err := SavePublished(dir, p); err != nil {
+		t.Fatal(err)
 	}
 
 	if runtime.GOOS != "windows" {

@@ -374,9 +374,9 @@ func memoriesOf(d PageData) MemoriesPage {
 		p.Rows = append(p.Rows, ln)
 	}
 	if len(p.Rows) == 0 {
-		p.Note = NoData{Text: "No memory has been shown in this window."}
+		p.Note = NoData{Text: "No memory in the feedback ledger yet."}
 		if d.P.State != "" {
-			p.Note.Text = "No memory in this window matches this filter."
+			p.Note.Text = "No memory in the feedback ledger matches this filter."
 		}
 	}
 	p.Foot = "Counts are recent-weighted: older uses count less."

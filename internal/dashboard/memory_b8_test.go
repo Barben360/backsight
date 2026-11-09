@@ -183,7 +183,7 @@ func TestMemorySharedCardStates(t *testing.T) {
 		for _, code := range c.find("div.cmd code") {
 			cmds = append(cmds, code.Text)
 		}
-		if !slices.Contains(cmds, `backsight forget --restore 'it'\''s; rm -rf'`) {
+		if !slices.Contains(cmds, "backsight forget --restore "+posixOrPS(`'it'\''s; rm -rf'`, `'it''s; rm -rf'`)) {
 			t.Errorf("commands %q", cmds)
 		}
 	})

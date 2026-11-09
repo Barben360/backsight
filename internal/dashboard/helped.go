@@ -82,7 +82,10 @@ func helpedOf(r *metrics.Result, l format.Locale, loc *time.Location, p views.Pa
 	in := windowIn(window)
 	h := Helped{Head: helpedHead(p), Intro: "Used most " + in + ".", Foot: helpedFoot}
 	down, lastOK := serverDown(r)
-	if down {
+	switch {
+	case down && noServerSetUp(r):
+		h.Down = "No memory server is set up on this PC: the counts are from this PC, and no text can be read."
+	case down:
 		h.Down = "Memory server not answering"
 		if lastOK != nil && !lastOK.IsZero() {
 			h.Down += " since " + format.Clock(r.GeneratedAt, *lastOK, loc)

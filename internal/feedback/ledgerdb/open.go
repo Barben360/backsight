@@ -243,6 +243,7 @@ func (w *Writer) Close() error {
 // SQLITE_BUSY at once, the busy timeout aside (waiting would deadlock),
 // so that one tries again.
 func openDB(ctx context.Context, path string, wal bool) (*sql.DB, error) {
+	sqlitedb.MakePrivate(path) // the ledger and its side file
 	db, err := sql.Open(driverName, sqlitedb.DSN(path, sqlitedb.Mode{WAL: wal}, writerBusy, ""))
 	if err != nil {
 		return nil, err

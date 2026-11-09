@@ -1,10 +1,13 @@
 package machines
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
@@ -93,13 +96,25 @@ func SaveCache(metricsDir string, c Cache) error {
 // Published is the publish record (published.json), written by the publish step only.
 type Published struct {
 	At          time.Time `json:"at,omitzero"`
-	Server      string    `json:"server,omitempty"`
+	Server      string    `json:"server,omitempty"` // TargetKey of the share target, never its text
 	Until       string    `json:"until,omitempty"`
 	FirstSeen   string    `json:"first_seen,omitempty"`
 	Bytes       int       `json:"bytes"`
 	FailedAt    time.Time `json:"failed_at,omitzero"`
 	FailedSince time.Time `json:"failed_since,omitzero"`
 	Failure     string    `json:"failure,omitempty"`
+}
+
+// targetKeyPrefix starts a TargetKey.
+const targetKeyPrefix = "sha256:"
+
+// TargetKey is the form the publish record keeps the share target in:
+// "sha256:" and the hex SHA-256 of its text. The text names the server's
+// address and the bank, settings that metrics/ never holds as text; the
+// record only needs to tell a change of target.
+func TargetKey(target string) string {
+	sum := sha256.Sum256([]byte(target))
+	return targetKeyPrefix + hex.EncodeToString(sum[:])
 }
 
 // PublishedFile is the path of the publish record in metricsDir.
@@ -114,6 +129,11 @@ func LoadPublished(metricsDir string) (Published, bool) {
 	var p Published
 	if err := json.Unmarshal(b, &p); err != nil {
 		return Published{}, false
+	}
+	// An older binary kept the target's text: read as its key, the same
+	// target still compares equal, and the next save writes the key.
+	if p.Server != "" && !strings.HasPrefix(p.Server, targetKeyPrefix) {
+		p.Server = TargetKey(p.Server)
 	}
 	return p, true
 }

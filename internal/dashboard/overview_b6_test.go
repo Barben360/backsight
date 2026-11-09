@@ -112,7 +112,7 @@ func TestSummaryTextHidesRemoteHosts(t *testing.T) {
 		{"http://nas.lan:18888", "memory on a remote server"},
 		{"nas.lan:18888", "memory on a remote server"},
 		{"localhost.example.com:18888", "memory on a remote server"},
-		{"", "memory on a remote server"},
+		{"", "no memory server set up"}, // none set up: not a remote one
 	} {
 		r := scenarioNamed(t, "healthy")
 		r.Scope.Server = c.server

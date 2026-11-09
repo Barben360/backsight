@@ -168,3 +168,52 @@ func TestMachinesParam(t *testing.T) {
 		t.Errorf("machines twice: %v", err)
 	}
 }
+
+// A window is at most 400 calendar days and lies within 2000-2099: a longer
+// or wilder one is a usage error with its own sentence, before any bucket
+// is built. Exactly 400 days is taken, across a DST change too.
+func TestQueryBoundsTheWindow(t *testing.T) {
+	now := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
+	const (
+		tooLong = "--since/--until: a window of at most 400 days"
+		outside = "--since and --until: dates from 2000-01-01 to 2099-12-31"
+	)
+	for _, c := range []struct {
+		name, since, until, tz, err string
+	}{
+		{"a century", "2000-01-01", "2099-12-31", "UTC", tooLong},
+		{"until in 9999", "2026-01-03", "9999-12-31", "UTC", outside},
+		{"since in year 1", "0001-01-01", "", "UTC", outside},
+		{"since in 1900", "1900-01-01", "", "UTC", outside},
+		{"a week in 9999", "9999-12-01", "9999-12-08", "UTC", outside},
+		{"until a second past 2099", "2099-12-01", "2100-01-01T00:00:01Z", "UTC", outside},
+		{"one day over", "2025-09-01", "2026-10-07", "UTC", tooLong},
+		{"one day over in Paris", "2025-09-01", "2026-10-07", "Europe/Paris", tooLong},
+		{"at the cap", "2025-09-01", "2026-10-06", "UTC", ""},
+		{"at the cap across DST", "2025-10-01", "2026-11-05", "Europe/Paris", ""},
+		{"one day over across DST", "2025-10-01", "2026-11-06", "Europe/Paris", tooLong},
+		{"first day", "2000-01-01", "2000-01-02", "UTC", ""},
+		{"last day", "2099-12-31", "2100-01-01", "UTC", ""},
+		{"since alone, within 400 days of now", "2025-09-26", "", "UTC", ""},
+		{"since alone, over 400 days before now", "2025-09-25", "", "UTC", tooLong},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			q, err := Query("overview", Params{Since: c.since, Until: c.until, TZ: c.tz, Limit: 50}, "", now)
+			if c.err != "" {
+				if err == nil || err.Error() != c.err {
+					t.Fatalf("error %v, want %q", err, c.err)
+				}
+				if code := codeOf(t, err); code != output.Usage {
+					t.Errorf("code %d, want %d", code, output.Usage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if q.Window.Days < 1 || q.Window.Days > 401 {
+				t.Errorf("window days %d", q.Window.Days)
+			}
+		})
+	}
+}

@@ -12,7 +12,7 @@ The server turns this text into memories: short facts tagged with their project,
 
 ## The metrics index
 
-backsight keeps a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it). It builds it there, from its own usage events, the feedback journal and the local status files; `backsight stats index` shows its state. The statistics views and the dashboard read it.
+backsight keeps a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it), readable by your user only on Linux and macOS (mode 0600, as are the feedback database `ledger.db` and their companion files). It builds it there, from its own usage events, the feedback journal and the local status files; `backsight stats index` shows its state. The statistics views and the dashboard read it.
 
 The views (`backsight stats overview`, `quality`, `sessions`…) read this index and make read-only calls to your server. They print counts, times, ids, and project and session names; they never print the text of a memory, a prompt or an error, except `backsight stats memories <id> --text`, which you ask for.
 
@@ -31,6 +31,7 @@ Four kinds of file in the `metrics/` folder of the state directory (`backsight p
 | `memory-docs-` | For each memory the server lists as created on a day: its id, the day, its kind, and what its source is: for a conversation, its document's id (such as `conversation:<session>@<project>#<n>`, which names the session and its project) and the session's id; for a note, an imported file or anything else, only the word `note`, `import` or `other` (never a file's name or path), or `none`. It also holds the days already listed, and for the sessions this PC sent in the last 7 days, the server's task that stored each one (id, status, times, retries) and how many memories the document gave. |
 | `scan-history-` | One line per complete `backsight memory scan`: how many memories it flagged (stored, forgotten and briefing pages), how long it took. No id, no text. |
 
+- Two more files sit beside them. `machines.json` caches the daily figures the other PCs sharing this server sent (see [What your PCs share with each other](#what-your-pcs-share-with-each-other)). `published.json` records this PC's last daily send of its own figures: when, up to which day, its size, and the class of a failure; the server and bank it went to are kept as a hash, to tell a change of server, never as their text.
 - They hold ids, numbers, fixed words and times only: never the text of a memory, a prompt, an error or a document, never a file's name or path, never a setting's text or a key. Collecting them only reads the server: the calls are `GET` requests, each cut at 3 seconds.
 - They stay on this machine. `backsight report` never includes them, and `backsight uninstall --purge-local` deletes them with the index; a plain `backsight uninstall` keeps them.
 - The same daily job also adds one line to the usage log (`telemetry/`) a day, and again when you change a setting: the numeric and on-or-off settings of `[recall]` and `[feedback]`, and a hash of them, so the statistics can tell when a setting changed. A setting that is text is left out.

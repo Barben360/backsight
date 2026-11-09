@@ -1,6 +1,7 @@
 package views
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -82,8 +83,13 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 				return metrics.Query{}, Usage("--until: %v", err)
 			}
 		}
+		// Checked here too: year 1 at midnight UTC is the zero time, which
+		// NewWindow reads as no start given.
+		if !metrics.InRange(since, loc) || (p.Until != "" && !metrics.InRange(until, loc)) {
+			return metrics.Query{}, windowUsage(metrics.ErrWindowOutOfRange)
+		}
 		if w, err = metrics.NewWindow(now, 0, since, until, loc, name); err != nil {
-			return metrics.Query{}, Usage("--since must be before --until (or now)")
+			return metrics.Query{}, windowUsage(err)
 		}
 	default:
 		days := 7
@@ -129,6 +135,18 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 	return metrics.Query{Window: w, Project: p.Project, Path: p.Path, ID: id, Limit: p.Limit, Offset: p.Offset,
 		Has: p.Has, Sort: p.Sort, State: p.State, Dev: p.Dev, Text: p.Text,
 		Compare: cmp, Measure: p.Measure, Machines: machines}, nil
+}
+
+// windowUsage is the usage error for a --since/--until window NewWindow
+// refused.
+func windowUsage(err error) error {
+	switch {
+	case errors.Is(err, metrics.ErrWindowOutOfRange):
+		return Usage("--since and --until: dates from %d-01-01 to %d-12-31", metrics.FirstYear, metrics.LastYear)
+	case errors.Is(err, metrics.ErrWindowTooLong):
+		return Usage("--since/--until: a window of at most %d days", metrics.MaxWindowDays)
+	}
+	return Usage("--since must be before --until (or now)")
 }
 
 // compareOf reads --compare A,B and --measure: two different, non-empty

@@ -3,16 +3,27 @@ package dashboard
 import (
 	"bytes"
 	"html/template"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/shellword"
 	"github.com/Barben360/backsight/internal/views"
 )
 
 var en = format.Locale{}
+
+// posixOrPS is posix, or ps on Windows, where commands are quoted for
+// PowerShell.
+func posixOrPS(posix, ps string) string {
+	if runtime.GOOS == "windows" {
+		return ps
+	}
+	return posix
+}
 
 func def(t *testing.T, id string) metrics.Def {
 	t.Helper()
@@ -143,7 +154,7 @@ func TestCLIFor(t *testing.T) {
 		{"overview", "", views.Params{Days: 7, Limit: 50}, "backsight stats overview"},
 		{"overview", "", views.Params{Days: 30, DaysSet: true, Project: "p1", Limit: 50}, "backsight stats overview --days 30 --project p1"},
 		{"overview", "", views.Params{Project: "my proj", Limit: 50}, "backsight stats overview --project 'my proj'"},
-		{"overview", "", views.Params{Project: "it's", Limit: 50}, `backsight stats overview --project 'it'\''s'`},
+		{"overview", "", views.Params{Project: "it's", Limit: 50}, "backsight stats overview --project " + posixOrPS(`'it'\''s'`, `'it''s'`)},
 		{"sessions", "", views.Params{Has: "used", Limit: 2, Offset: 1}, "backsight stats sessions --limit 2 --offset 1 --has used"},
 		{"quality", "", views.Params{Dev: true, Limit: 50}, "backsight stats quality --dev"},
 		{"sessions", "sess-a1", views.Params{Since: "2026-10-01", Until: "2026-10-08", TZ: "UTC", Path: "/a b", Sort: "rate", State: "hidden", Limit: 50},
@@ -175,6 +186,9 @@ func TestCLIForQuotesWhatAShellReads(t *testing.T) {
 		"!x":                         `'!x'`,
 		"my-proj_1.v2/a:b=c@d%e+f,g": "my-proj_1.v2/a:b=c@d%e+f,g",
 	} {
+		if runtime.GOOS == "windows" { // PowerShell's own table: internal/shellword
+			want = shellword.PowerShell(in)
+		}
 		got := cliFor("overview", "", views.Params{Project: in, Limit: 50})
 		if want2 := "backsight stats overview --project " + want; got != want2 {
 			t.Errorf("project %q: %q, want %q", in, got, want2)

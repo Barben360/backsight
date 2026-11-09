@@ -203,6 +203,20 @@ func TestPublishedDocumentHoldsNoCanary(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Feedback.Enabled, cfg.Feedback.ShareLedger = true, true
+	// The server's address and the bank, the two settings canaryConfig
+	// leaves as they are to reach the fake server, are checked here: the
+	// publish record names its target by a hash only.
+	cfg.Server.Bank = "CANARY-CFG-Server-Bank"
+	serverHost := strings.TrimPrefix(cfg.Server.URL, "http://")
+	defer func() {
+		for name, b := range metricsFilesOf(t, home) {
+			for _, c := range []string{cfg.Server.Bank, serverHost} {
+				if strings.Contains(b, c) {
+					t.Errorf("%q in metrics/%s", c, name)
+				}
+			}
+		}
+	}()
 	cl, err := hindsight.New(cfg.Server.URL, "k", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)

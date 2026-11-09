@@ -979,6 +979,8 @@ func whichPCs(d PageData, pcs *metrics.PCs) *WhichPCs {
 		}
 	}
 	switch {
+	case frameNoServer(d.Frame):
+		w.Fetched = "No memory server is set up on this PC, so other PCs’ figures are not fetched."
 	case pcs.FetchedAt == nil:
 		w.Fetched = "Other PCs’ figures have not been fetched yet; they are fetched every 6 h."
 	case serverSilent(d.Frame):

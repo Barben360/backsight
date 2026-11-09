@@ -90,7 +90,7 @@ func noDataOf(v MetricView, f Frame, l format.Locale, loc *time.Location) (NoDat
 		}
 		return NoData{Text: s, Class: "st-watch"}, true
 	case metrics.ReasonNotConfigured:
-		return NoData{Text: "No memory server is set up on this PC."}, true
+		return NoData{Text: noServerSentence}, true
 	case metrics.ReasonServerUnsupported:
 		return NoData{Text: "This memory server does not provide it."}, true
 	}

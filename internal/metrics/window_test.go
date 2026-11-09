@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"errors"
 	"testing"
 	"time"
 	_ "time/tzdata" // the DST tests name Europe/Paris whatever the host has
@@ -152,6 +153,7 @@ func TestWindowFromSince(t *testing.T) {
 		"days and since":     {7, since, until},
 		"neither":            {0, time.Time{}, time.Time{}},
 		"negative days":      {-1, time.Time{}, time.Time{}},
+		"401 days":           {401, time.Time{}, time.Time{}},
 	} {
 		if w, err := NewWindow(now, c.days, c.since, c.until, paris, "Europe/Paris"); err == nil {
 			t.Errorf("%s: no error, window %v", name, w)
@@ -338,5 +340,38 @@ func TestBucketsInUTC(t *testing.T) {
 	wp := mustWindow(t, time.Time{}, 0, local(t, paris, "2026-10-24T00:00"), local(t, paris, "2026-10-27T00:00"), paris)
 	if dayOf(w) != "2026-10-24" || dayOf(wp) != "2026-10-25" {
 		t.Errorf("UTC day %q, Paris day %q", dayOf(w), dayOf(wp))
+	}
+}
+
+// A window is bounded: at most 400 calendar days, within [2000, 2100). A
+// longer one used to overflow Days (negative past 292 years) and DayBuckets
+// then walked millions of days.
+func TestWindowIsBounded(t *testing.T) {
+	paris := parisLoc(t)
+	now := at(t, "2026-10-30T15:44:00+01:00")
+	for name, c := range map[string]struct {
+		since, until time.Time
+		want         error
+	}{
+		"until in 9999":   {at(t, "2026-01-03T00:00:00Z"), at(t, "9999-12-31T00:00:00Z"), ErrWindowOutOfRange},
+		"since in year 1": {at(t, "0001-01-02T00:00:00Z"), time.Time{}, ErrWindowOutOfRange},
+		"a week in 9999":  {at(t, "9999-12-01T00:00:00Z"), at(t, "9999-12-08T00:00:00Z"), ErrWindowOutOfRange},
+		"a century":       {at(t, "2000-01-01T00:00:00Z"), at(t, "2099-12-31T00:00:00Z"), ErrWindowTooLong},
+		"401 local days":  {local(t, paris, "2025-09-01T00:00"), local(t, paris, "2026-10-07T00:00"), ErrWindowTooLong},
+		"empty":           {local(t, paris, "2025-09-01T00:00"), local(t, paris, "2025-09-01T00:00"), ErrWindowEmpty},
+	} {
+		w, err := NewWindow(now, 0, c.since, c.until, paris, "Europe/Paris")
+		if !errors.Is(err, c.want) {
+			t.Errorf("%s: %v (window %v), want %v", name, err, w, c.want)
+		}
+	}
+	// 400 local days over three DST changes, one more autumn than spring:
+	// 400×24 h + 1 h, taken.
+	w := mustWindow(t, now, 0, local(t, paris, "2025-10-01T00:00"), local(t, paris, "2026-11-05T00:00"), paris)
+	if w.Days != 401 || len(w.DayBuckets()) != 400 {
+		t.Errorf("400 local days: Days %d, %d day buckets", w.Days, len(w.DayBuckets()))
+	}
+	if w := mustWindow(t, now, 400, time.Time{}, time.Time{}, paris); w.Days != 400 {
+		t.Errorf("--days 400: Days %d", w.Days)
 	}
 }
