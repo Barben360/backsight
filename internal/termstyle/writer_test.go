@@ -107,3 +107,27 @@ func TestStrip(t *testing.T) {
 		t.Errorf("Strip changed plain text: %q", got)
 	}
 }
+
+// TestPaletteApprovedShades pins the shades the author approved on
+// 2026-11-09 (issue 258): at least 3.5:1 contrast on white and on dark.
+func TestPaletteApprovedShades(t *testing.T) {
+	cases := []struct {
+		r          Role
+		true, x256 string
+	}{
+		{Warn, "\x1b[38;2;181;120;0m", "\x1b[38;5;136m"},
+		{Accent, "\x1b[38;2;204;108;20m", "\x1b[38;5;166m"},
+		{Command, "\x1b[38;2;30;140;175m", "\x1b[38;5;31m"},
+		{OK, "\x1b[38;2;56;150;60m", "\x1b[38;5;28m"},
+		{Brand, "\x1b[1;38;2;201;80;122m", "\x1b[1;38;5;168m"},
+		{Fail, "\x1b[38;2;220;70;60m", "\x1b[38;5;167m"},
+	}
+	for _, c := range cases {
+		if got := Paint(at(TrueColor), c.r, "x"); got != c.true+"x"+reset {
+			t.Errorf("role %d truecolor = %q", c.r, got)
+		}
+		if got := Paint(at(Ansi256), c.r, "x"); got != c.x256+"x"+reset {
+			t.Errorf("role %d 256 = %q", c.r, got)
+		}
+	}
+}

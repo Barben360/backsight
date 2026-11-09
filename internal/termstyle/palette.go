@@ -28,17 +28,19 @@ type shade struct {
 	basic     int   // 16-color SGR code
 }
 
-// palette is provisional until the design issue settles the shades on
-// dark and light themes (https://github.com/Barben360/backsight/issues/258).
+// palette: approved by the author on 2026-11-09 after renders on dark and
+// light themes (https://github.com/Barben360/backsight/issues/258). Text
+// shades keep at least 3.5:1 contrast on white and on a dark background;
+// the logo's dot keeps the logo orange #E8913A (phase 2).
 var palette = map[Role]shade{
 	Brand:     {bold: true, rgb: []int{201, 80, 122}, idx: 168, basic: 35},
-	Accent:    {rgb: []int{232, 145, 58}, idx: 208, basic: 33},
-	OK:        {rgb: []int{76, 175, 80}, idx: 71, basic: 32},
-	Warn:      {rgb: []int{224, 170, 40}, idx: 178, basic: 33},
+	Accent:    {rgb: []int{204, 108, 20}, idx: 166, basic: 33},
+	OK:        {rgb: []int{56, 150, 60}, idx: 28, basic: 32},
+	Warn:      {rgb: []int{181, 120, 0}, idx: 136, basic: 33},
 	Fail:      {rgb: []int{220, 70, 60}, idx: 167, basic: 31},
 	Label:     {bold: true},
 	Secondary: {dim: true},
-	Command:   {rgb: []int{60, 170, 200}, idx: 74, basic: 36},
+	Command:   {rgb: []int{30, 140, 175}, idx: 31, basic: 36},
 }
 
 // sgr is the escape that starts role r at lvl ("" when off).
