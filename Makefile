@@ -22,7 +22,7 @@ OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
-.PHONY: build check test test-shard test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
+.PHONY: build check test test-shard test-durations test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
@@ -56,12 +56,29 @@ test:
 
 # One slice of make test's -race line, SHARD of SHARDS (from 0): CI runs
 # the SHARDS slices in parallel jobs (ci.yml test-race), each test in
-# exactly one of them (scripts/testshard). The listing builds what the
-# run then reuses (-race).
+# exactly one of them (scripts/testshard), the slices balanced by the
+# tests' times recorded on CI (make test-durations). The listing builds
+# what the run then reuses (-race). The run goes through go test -json,
+# printed as go test would print it (testshard -report) and kept in
+# TEST_JSON when set: CI uploads it for make test-durations. pipefail
+# keeps go test's status.
+TEST_JSON ?=
 test-shard:
-	@pattern=$$(CGO_ENABLED=1 go run ./scripts/testshard -index "$(SHARD)" -total "$(SHARDS)" -- -race ./...) && \
+	@pattern=$$(CGO_ENABLED=1 go run ./scripts/testshard -index "$(SHARD)" -total "$(SHARDS)" -durations scripts/testshard/durations.txt -- -race ./...) && \
 		echo "go test -race -timeout 20m -run '$$pattern' ./..." && \
-		GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m -run "$$pattern" ./...
+		GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 bash -o pipefail -c \
+			'go test -race -json -timeout 20m -run "$$0" ./... | go run ./scripts/testshard -report "$$1"' "$$pattern" "$(TEST_JSON)"
+
+# Records the times make test-shard balances its slices by, from the
+# test-race slices of a CI run (scripts/test-durations.sh): the latest
+# successful run of ci on main, or RUN=<run id>. Times taken on another
+# machine would not do: a 24-core workstation's did not carry over to the
+# 4-vCPU runner (internal/cli: 130 s by them in two slices, 409 and 229 s
+# there). A test added since weighs 0.05 s until the next record:
+# re-record when the slices of ci.yml test-race drift apart.
+RUN ?=
+test-durations:
+	scripts/test-durations.sh $(RUN)
 
 # make test's second line: the dashboard's page sweep, without -race.
 test-sweep:

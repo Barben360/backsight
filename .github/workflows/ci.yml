@@ -98,9 +98,18 @@ jobs:
       # install.sh's minisign path (TestInstallWithMinisign fails on CI
       # without minisign rather than skip).
       - run: scripts/ci-minisign.sh
-      - run: make test-shard SHARD="$SHARD" SHARDS=4
+      - run: make test-shard SHARD="$SHARD" SHARDS=4 TEST_JSON="$RUNNER_TEMP/test-race-$SHARD.json"
         env:
           SHARD: ${{ matrix.shard }}
+      # The slice's test times, measured on this runner: make
+      # test-durations balances the slices by them (from main's latest
+      # successful run). A failed slice uploads nothing.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-race-times-${{ matrix.shard }}
+          path: ${{ runner.temp }}/test-race-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name == 'push' && matrix.shard == 0 && steps.go-cache.outputs.cache-hit != 'true'
         with:
@@ -321,12 +330,23 @@ jobs:
   test-windows-budgets:
     # The time budgets on Windows apart from the slices, as bench does on
     # Linux: one package at a time, nothing else on the runner (beside
-    # other packages in a slice, TestPageBudgets passed its limit). Skipped
-    # for a docs-only pull request.
+    # other packages in a slice, TestPageBudgets passed its limit). In two
+    # parts at once: the dashboard's alone (about 470 s), the index's and
+    # the metrics' (about 90 s together); in one job they took 10 minutes.
+    # Skipped for a docs-only pull request.
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    name: test-windows-budgets (${{ matrix.part }})
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: dashboard
+            packages: ./internal/dashboard/
+          - part: index-metrics
+            packages: ./internal/index/ ./internal/metrics/
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -352,14 +372,17 @@ jobs:
           path: |
             ${{ steps.go-paths.outputs.build }}
             ${{ steps.go-paths.outputs.mod }}
-          key: go-${{ runner.os }}-${{ github.job }}-${{ hashFiles('go.mod', 'go.sum') }}
-          restore-keys: go-${{ runner.os }}-${{ github.job }}-
+          key: go-${{ runner.os }}-${{ github.job }}-${{ matrix.part }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ github.job }}-${{ matrix.part }}-
       - name: The time budgets, one package at a time
         shell: pwsh
         env:
           # The runner's local disk (D:), as test-windows.
           BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
-        run: go test -count=1 -p 1 -timeout 20m -v -run $env:TIME_BUDGETS ./internal/index/ ./internal/metrics/ ./internal/dashboard/
+          PACKAGES: ${{ matrix.packages }}
+        run: go test -count=1 -p 1 -timeout 20m -v -run $env:TIME_BUDGETS @($env:PACKAGES -split ' ')
+      # Each part keeps its own cache (key with matrix.part): each builds
+      # its own packages' tests.
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name == 'push' && steps.go-cache.outputs.cache-hit != 'true'
         with:
@@ -427,17 +450,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # A hosted runner's disk: its preinstalled toolchains leave too little
-      # for the images, the model cache and the data (setup's doctor wants
-      # 6 GB free).
-      - name: Free the hosted runner's disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A hosted runner's disk: the images, the model cache and the data need room
+      # (scripts/ci-free-disk.sh frees it only when short).
+      - name: Free the hosted runner's disk when it is short
+        run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
@@ -478,17 +497,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
-      # A hosted runner's disk: its preinstalled toolchains leave too little
-      # for the images, the model cache and the data (setup's doctor wants
-      # 6 GB free).
-      - name: Free the hosted runner's disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A hosted runner's disk: the images, the model cache and the data need room
+      # (scripts/ci-free-disk.sh frees it only when short).
+      - name: Free the hosted runner's disk when it is short
+        run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
@@ -543,17 +558,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      # A hosted runner's disk: its preinstalled toolchains leave too little
-      # for the images, the model cache and the data (setup's doctor wants
-      # 6 GB free).
-      - name: Free the hosted runner's disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A hosted runner's disk: the images, the model cache and the data need room
+      # (scripts/ci-free-disk.sh frees it only when short).
+      - name: Free the hosted runner's disk when it is short
+        run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
@@ -608,16 +619,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      # A hosted runner's disk: native's Python, venvs and models beside
-      # Docker's images, model cache and data.
-      - name: Free the hosted runner's disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A hosted runner's disk: native's Python, venvs and models beside Docker's
+      # images, model cache and data need room
+      # (scripts/ci-free-disk.sh frees it only when short).
+      - name: Free the hosted runner's disk when it is short
+        run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
