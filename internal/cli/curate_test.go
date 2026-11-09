@@ -581,6 +581,20 @@ func writeStaleLedger(t *testing.T, home string) []byte {
 	return raw
 }
 
+// walSize is the size of a -wal file, 0 when there is none: a reader
+// may leave an empty one (R11), a write fills it.
+func walSize(t *testing.T, path string) int64 {
+	t.Helper()
+	st, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Size()
+}
+
 type staleOut struct {
 	Data struct {
 		NeverUsed []staleMemory `json:"never_used"`
@@ -683,12 +697,18 @@ func TestMemoryStaleIsReadOnlyButJournals(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	before := writeStaleLedger(t, home)
 	dir := pathsOf(home).FeedbackDir()
+	wal := filepath.Join(dir, ledgerdb.FileName+"-wal")
+	walBefore := walSize(t, wal)
 	code, out, _ := run(t, "memory", "stale")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if after, _ := os.ReadFile(filepath.Join(dir, ledgerdb.FileName)); !bytes.Equal(after, before) {
 		t.Errorf("ledger.db was written (%d bytes, was %d)", len(after), len(before))
+	}
+	// a write still in the -wal leaves the main file as it was
+	if got := walSize(t, wal); got != walBefore {
+		t.Errorf("ledger.db-wal holds %d bytes, held %d: written", got, walBefore)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ledger.json")); err == nil {
 		t.Error("memory stale wrote ledger.json")
