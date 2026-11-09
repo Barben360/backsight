@@ -1,8 +1,9 @@
 Is it flowing? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
 
 Flowing
-Sessions sent                                5 of 5                   (n=5, ok)
+Items sent                                   5 of 5                   (n=5, ok)
   sent 5, failed 0, set aside after an error 0, waiting 0
+  items: 5 from sessions
 Sends by result                              5                        (ok, +5 vs previous)
 Waiting on this PC                           0                        (ok)
 Waiting on the server                        0                        (ok)

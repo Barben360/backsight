@@ -135,6 +135,7 @@ func bannerOf(r *metrics.Result, l format.Locale, loc *time.Location, p views.Pa
 	}
 	b := Banner{ThisPC: p.Machines == "all"}
 	cause := rootCause(v)
+	r = verdictView(r) // the lines quote the verdict's last 7 days, whatever the window
 	for _, an := range views.AxisNames {
 		ax, ok := v.Axes[an.Key]
 		if !ok {
@@ -195,6 +196,15 @@ func bannerOf(r *metrics.Result, l format.Locale, loc *time.Location, p views.Pa
 	}
 	b.Head = bannerHead(b.Title, p)
 	return b
+}
+
+// verdictView is r with the figures its verdict's lines quote: the
+// verdict's last 7 days, whatever the window (metrics.Result.VerdictFigures),
+// so the lines under "last 7 days" never read the window's figures.
+func verdictView(r *metrics.Result) *metrics.Result {
+	v := *r
+	v.Metrics = r.VerdictFigures()
+	return &v
 }
 
 // firstReason is the text of the axis's first reason, else none.
@@ -325,7 +335,7 @@ func flowingNote(r *metrics.Result, l format.Locale, ax metrics.Axis, cause bool
 	if flow.Num == nil || flow.Den == nil {
 		return "", false
 	}
-	return ofCount(l, *flow.Num, *flow.Den, "session", "sessions") + " sent", true
+	return ofCount(l, *flow.Num, *flow.Den, "item", "items") + " sent", true
 }
 
 // SummaryLine is the figures of the line under the banner.

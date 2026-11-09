@@ -30,8 +30,9 @@ New memories per day                         —                        (no data
 Summaries waiting                            0                        (ok, no history)
 
 Flowing
-Sessions sent                                1 of 1                   (n=1, ok)
+Items sent                                   1 of 1                   (n=1, ok)
   sent 1, failed 0, set aside after an error 0, waiting 0
+  items: 1 from a session
 Waiting on this PC                           0                        (ok)
 Waiting on the server                        0                        (ok)
   waiting 0, running 0, failed in the last 7 days 0, failed in all 0

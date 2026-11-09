@@ -52,7 +52,7 @@ var tileSpecs = []tileSpec{
 	{"Right", "Reported wrong", "verdict.wrong_rate", "", "verdict", "verdicts", "sessions", "wrong"},
 	{"Cost", "Context", "context.per_session", "", "session", "sessions", "cost", ""},
 	{"Cost", "Speed", "recall.latency", "", "prompt", "prompts", "cost", ""},
-	{"Flowing", "Flowing", "pipeline.flow", "", "session", "sessions", "pipeline", ""},
+	{"Flowing", "Flowing", "pipeline.flow", "", "item", "items", "pipeline", ""},
 }
 
 // tilesOf are the Overview's six tiles in their four groups, times read in
@@ -297,7 +297,7 @@ func flowingTile(t *Tile, r *metrics.Result, l format.Locale, p views.Params, m 
 		return
 	}
 	if haveND {
-		t.Sub = ofCount(l, num, den, "session", "sessions") + " sent"
+		t.Sub = ofCount(l, num, den, "item", "items") + " sent"
 	}
 }
 

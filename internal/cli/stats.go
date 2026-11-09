@@ -327,43 +327,29 @@ func parseWhen(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%q is not a time (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD)", s)
 }
 
-// extractionOver reads Hindsight's LLM token use over the window, from its
-// daily buckets: the server answers 1d or 30d only (anything else silently
-// gives 7 days), so 30d is asked and the days outside [from, to] dropped.
-// A server that cannot be read leaves the rest of the report intact.
+// extractionOver reads Hindsight's LLM token use over the window as the
+// dashboard's views do: the same server period (metrics.LLMPeriodOf: it
+// counts back from now, 1, 7 or 30 days) and the same UTC days
+// (metrics.ExtractionOver), so the two give the same figures on every
+// window. A server that cannot be read leaves the rest of the report
+// intact.
 func extractionOver(cmd *cobra.Command, from, to time.Time) extraction {
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 10*time.Second)
+	ro, err := hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, 10*time.Second)
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	byDay, err := cl.LLMTokensByDay(cmd.Context(), cfg.Server.Bank, "30d")
+	readAt := now()
+	period := metrics.LLMPeriodOf(readAt, from, to)
+	bs, err := ro.LLMStats(cmd.Context(), period, "")
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	// The window's days are [from, to): a to at midnight leaves its day out.
-	// The server's 30 buckets count back from today, not from to.
-	firstDay := from.UTC().Truncate(24 * time.Hour)
-	lastDay := to.UTC().Add(-time.Nanosecond).Truncate(24 * time.Hour)
-	if kept := now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -29); firstDay.Before(kept) {
-		firstDay = kept
-	}
-	x := extraction{Days: max(0, int(lastDay.Sub(firstDay)/(24*time.Hour))+1)}
-	first, last := firstDay.Format("2006-01-02"), lastDay.Format("2006-01-02")
-	var thoughts int64
-	for day, t := range byDay {
-		if day < first || day > last {
-			continue
-		}
-		x.Input += t.Input
-		x.Cached += t.Cached
-		x.Output += t.Output
-		thoughts += t.Thoughts
-	}
-	x.Output += thoughts // billed as output
+	var x extraction
+	x.Input, x.Cached, x.Output, x.Days = metrics.ExtractionOver(bs, period, readAt, from, to)
 	if p := retain.PricesForLLM(cfg.LLM); p.Known() {
 		x.Cost, x.Currency = p.Cost(x.Input, x.Cached, x.Output, 0), p.Currency
 	}

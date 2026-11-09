@@ -368,7 +368,7 @@
           "check_failed": false
         },
         "index": {
-          "schema": 4,
+          "schema": 5,
           "ingested_at": "2026-10-08T14:00:00+02:00",
           "lag_seconds": 0,
           "partial": false

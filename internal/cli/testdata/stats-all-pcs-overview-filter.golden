@@ -32,8 +32,9 @@ New memories per day                         —                        (no data
 Summaries waiting                            0                        (ok, not filtered by project, no history)
 
 Flowing
-Sessions sent                                91 % (83–95 %)           (n=85, status on this PC: ok)
+Items sent                                   91 % (83–95 %)           (n=85, status on this PC: ok)
   sent 5, failed 0, set aside after an error 0, waiting 0
+  items on this PC: 5 from sessions
 Waiting on this PC                           0                        (ok)
 Waiting on the server                        0                        (ok, not filtered by project)
   waiting 0, running 0, failed in the last 7 days 0, failed in all 0

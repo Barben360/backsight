@@ -32,7 +32,7 @@ bank.consolidation       Summaries waiting                           count   0  
 bank.churn               Retired, hidden, restored                   count   0        0      —
 notes.stored             Facts stored                                count   0        0      —
 imports.sent             Files imported                              count   0        0      —
-pipeline.flow            Sessions sent                               rate    0        1      too few to tell
+pipeline.flow            Items sent                                  rate    0        1      too few to tell
 retain.outcomes          Sends by result                             count   0        0      —
 local.backlog            Waiting on this PC                          count   0        0      —
 server.queue             Waiting on the server                       count   0        0      —

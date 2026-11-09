@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -119,7 +120,7 @@ func TestLocalStatusOfAnEmptyState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ls != (index.LocalStatus{}) {
+	if !reflect.DeepEqual(ls, index.LocalStatus{}) {
 		t.Errorf("%+v", ls)
 	}
 }

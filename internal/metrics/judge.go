@@ -52,7 +52,8 @@ type Judgement struct {
 
 // Judge reads one metric, in one order for every metric:
 //  1. the source is absent: no_data, with the observation's reason;
-//  2. the denominator is under min_n: too_few;
+//  2. the denominator is under min_n, or the p95 a p95 threshold reads
+//     could not be computed: too_few;
 //  3. the absolute thresholds: a rate's good-side bound, a percentile's or
 //     count's value; a rate whose point is past a threshold its bound is
 //     not past is borderline (and keeps the bound's status);
@@ -70,7 +71,10 @@ func Judge(d Def, o Observation) Judgement {
 	if (d.CI == "wilson" || d.CI == "wilson_approx") && o.Den > 0 {
 		j.CI = &[2]float64{lo, hi}
 	}
-	if o.Den < int64(d.MinN) {
+	// A p95 threshold with no p95 (it needs MinForP95 samples, which a
+	// metric's own min_n may not reach: the time to recall's judged step)
+	// was never judged: too few, never ok.
+	if o.Den < int64(d.MinN) || (d.Absolute.On == "p95" && o.P95 == nil) {
 		j.Status = StatusTooFew
 		return j
 	}

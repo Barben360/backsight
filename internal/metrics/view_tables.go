@@ -261,7 +261,7 @@ func extractionRows(e env, w Window) ([]ExtractionRow, error) {
 		return out, nil
 	}
 	buckets := w.Buckets()
-	_, allDays, _ := inWindow(all, w.Since, w.Until, w.Loc, buckets)
+	_, allDays, _ := inWindow(all, llmSpanOf(e, "llm:"), w.Since, w.Until, w.Loc, buckets)
 	prices := retain.PricesForLLM(e.src.Config.LLM)
 	byOp := map[string][]tokens{}
 	named := map[string]tokens{}
@@ -270,7 +270,7 @@ func extractionRows(e env, w Window) ([]ExtractionRow, error) {
 		if reason != "" {
 			continue
 		}
-		_, days, _ := inWindow(bs, w.Since, w.Until, w.Loc, buckets)
+		_, days, _ := inWindow(bs, llmSpanOf(e, "llm:"+op), w.Since, w.Until, w.Loc, buckets)
 		byOp[op], named[op] = days, tokens{}
 	}
 	// Past the server's 30 days, the record gives the days before its first.

@@ -677,7 +677,7 @@ func TestPipelineCards(t *testing.T) {
 	t.Run("sent", func(t *testing.T) {
 		c := cardOf(t, n, "w-pipeline-flow")
 		lead := c.first("div.row.lead")
-		if lead == nil || !strings.HasPrefix(lead.text(), "188 of 192 · 98 % (95–99 %) sent") {
+		if lead == nil || !strings.HasPrefix(lead.text(), "188 of 192 · 98 % (95–99 %) items sent") {
 			t.Errorf("lead %q", lead.text())
 		}
 		if pill := c.first("span.pill"); pill == nil || pill.text() != "attention" || !strings.Contains(pill.attr("class"), "st-bad") {
@@ -871,7 +871,7 @@ func TestPipelineBanner(t *testing.T) {
 	if b == nil || !strings.Contains(b.attr("class"), "st-bad") {
 		t.Fatalf("banner %+v", b)
 	}
-	if b.first("b").text() != "3 sessions could not be sent; 1 set aside after an error." {
+	if b.first("b").text() != "3 items could not be sent; 1 set aside after an error." {
 		t.Errorf("lead sentence %q", b.first("b").text())
 	}
 	if txt := b.text(); !strings.Contains(txt, "The oldest item has waited on this PC for 26 h.") || !strings.Contains(txt, "2 steps crashed in the last 24 h.") {
@@ -890,7 +890,7 @@ func TestPipelineBanner(t *testing.T) {
 			m.Extra = map[string]any{"by_kind": map[string]int64{}, "last_24h": map[string]int64{"panic": 1}}
 		})
 	})
-	if w == nil || !strings.Contains(w.attr("class"), "st-watch") || w.first("b").text() != "1 session could not be sent." || !strings.Contains(w.text(), "1 step crashed in the last 24 h.") {
+	if w == nil || !strings.Contains(w.attr("class"), "st-watch") || w.first("b").text() != "1 item could not be sent." || !strings.Contains(w.text(), "1 step crashed in the last 24 h.") {
 		t.Errorf("watch banner %+v", w)
 	}
 	if strings.Contains(w.text(), "waited") {

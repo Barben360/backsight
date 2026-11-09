@@ -160,6 +160,7 @@ func axisLines(r *metrics.Result, l format.Locale, p views.Params, loc *time.Loc
 	cause := rootCause(r.Verdict)
 	wordWidth := 6
 	all := r.Scope.Machines == "all" && r.Scope.PCs != nil
+	vr := verdictView(r) // the lines quote the verdict's last 7 days, as the banner says
 	var tiles map[string]Tile
 	if all {
 		tiles = map[string]Tile{}
@@ -180,11 +181,11 @@ func axisLines(r *metrics.Result, l format.Locale, p views.Params, loc *time.Loc
 			for _, name := range []string{"Speed", "Context"} {
 				t := tiles[name]
 				wordWidth = max(wordWidth, utf8.RuneCountInString(t.Word))
-				rows = append(rows, row{name, t.Word, mergedCostLine(r, l, name)})
+				rows = append(rows, row{name, t.Word, mergedCostLine(vr, l, name)})
 			}
 			continue
 		}
-		note := axisSentence(r, l, an.Key, ax, cause)
+		note := axisSentence(vr, l, an.Key, ax, cause)
 		if all && (ax.State == metrics.AxisOK || ax.State == metrics.AxisAttention) && mergedAxis(an.Key, note) {
 			note += ", all PCs"
 		}

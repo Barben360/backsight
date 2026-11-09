@@ -588,8 +588,11 @@
         "extra": {
           "backlog_oldest_ms": 0,
           "failed": 0,
+          "notes": 0,
           "ok": 5,
+          "sessions": 5,
           "set_aside": 0,
+          "subagent_reports": 0,
           "waiting": 0
         }
       },

@@ -186,16 +186,34 @@ func (f *Flusher) Waiting(files []string) []Waiter {
 	return out
 }
 
+// CaughtUp says live retain has nothing of the transcript at file left to
+// send: its cursor, readable and not set aside, reached the end of the file
+// (Waiting skips it the same way). A transcript with no cursor, or one that
+// cannot be read, is not caught up.
+func (f *Flusher) CaughtUp(file string) bool {
+	fi, err := os.Stat(file)
+	if err != nil {
+		return false
+	}
+	cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), strings.TrimSuffix(filepath.Base(file), ".jsonl"))
+	return err == nil && ok && !cur.Quarantined && cur.Offset >= fi.Size()
+}
+
 // Unsent counts the sessions Waiting lists that a send can still move:
 // settled or not, not the quarantined ones (counted apart).
-func (f *Flusher) Unsent(files []string) int {
-	n := 0
+func (f *Flusher) Unsent(files []string) int { return len(f.UnsentSessions(files)) }
+
+// UnsentSessions are the ids of the sessions Unsent counts, sorted; never
+// nil (none is an empty list).
+func (f *Flusher) UnsentSessions(files []string) []string {
+	out := []string{}
 	for _, w := range f.Waiting(files) {
 		if w.Reason != WaitQuarantined {
-			n++
+			out = append(out, w.Session)
 		}
 	}
-	return n
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // Notes are the explicit saves of a session that may be replayed, recs

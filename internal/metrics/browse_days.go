@@ -16,9 +16,10 @@ var errBadDay = errors.New("a day is written YYYY-MM-DD")
 // them): typed prompts, recalls (typed or not), prompts that got memory,
 // the turns where Claude used memory (by the turn's first show), memories
 // reported wrong or outdated, characters added, the sessions active, and the
-// documents sent ok or failed. With q.ID (YYYY-MM-DD in the window's zone)
-// it is that day's page: the six tile metrics over the day and its sessions;
-// a day with no data reads zeros, it is not an error.
+// documents sent ok or failed (each once a day, at its last send of the
+// day). With q.ID (YYYY-MM-DD in the window's zone) it is that day's page:
+// the six tile metrics over the day and its sessions; a day with no data
+// reads zeros, it is not an error.
 func Days(ctx context.Context, s Source, q Query) (Result, error) {
 	if _, err := checkSort(q, "day", "day"); err != nil {
 		return Result{}, err
@@ -113,29 +114,42 @@ SELECT ts FROM tel_prompt WHERE ts >= ? AND ts < ? AND decision = 'recall' AND `
 	if err := recalls.Err(); err != nil {
 		return nil, err
 	}
+	// Sent and failed count documents, as the pipeline does, not send
+	// events: a document sent in parts, or again, counts once a day, at its
+	// last send of the day (ok or failed).
 	sends, err := e.tx.QueryContext(e.ctx, `
-SELECT ts, status FROM tel_retain WHERE ts >= ? AND ts < ? AND status IN ('ok', 'failed') AND `+projectClause,
+SELECT document, ts, status FROM tel_retain
+WHERE document IS NOT NULL AND ts >= ? AND ts < ? AND status IN ('ok', 'failed') AND `+projectClause+`
+ORDER BY ts, source_file, "offset"`,
 		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = sends.Close() }()
+	type dayDoc struct {
+		day *DayRow
+		doc string
+	}
+	last := map[dayDoc]string{}
 	for sends.Next() {
+		var doc, status string
 		var ts int64
-		var status string
-		if err := sends.Scan(&ts, &status); err != nil {
+		if err := sends.Scan(&doc, &ts, &status); err != nil {
 			return nil, err
 		}
 		if r := at(ts); r != nil {
-			if status == "ok" {
-				r.SentOK++
-			} else {
-				r.SentFailed++
-			}
+			last[dayDoc{r, doc}] = status
 		}
 	}
 	if err := sends.Err(); err != nil {
 		return nil, err
+	}
+	for k, status := range last {
+		if status == "ok" {
+			k.day.SentOK++
+		} else {
+			k.day.SentFailed++
+		}
 	}
 	turns, err := mainTurns(e, w)
 	if err != nil {

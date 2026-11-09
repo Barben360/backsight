@@ -59,6 +59,21 @@ type Result struct {
 	// own is this PC's answer to the same query, set only by a run that merged (Scope.Machines "all") and
 	// was asked for it (Query.WithOwn). Unexported, so no encoder emits it: the view's JSON is unchanged.
 	own *Result
+	// verdictFigures: the overview's figures of the verdict's own window,
+	// which its axis lines quote (VerdictFigures). Unexported: the JSON is
+	// unchanged.
+	verdictFigures map[string]Metric
+}
+
+// VerdictFigures are the figures the verdict's axis lines quote: the
+// verdict's last 7 days whatever the view's window. A result that does not
+// carry them (not an overview, or one read back from JSON) gives its own
+// figures.
+func (r Result) VerdictFigures() map[string]Metric {
+	if r.verdictFigures != nil {
+		return r.verdictFigures
+	}
+	return r.Metrics
 }
 
 // ThisPC is this PC's own answer to the query a merged result answers: what `--machines this` returns for the

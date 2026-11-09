@@ -113,6 +113,9 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 		}
 		v := a.Verdict
 		r.Verdict, r.Summary, r.Metrics, r.Info = &v, &sum, m, a.Info
+		if r.verdictFigures, err = verdictFigures(e, a, m, reused); err != nil {
+			return err
+		}
 		r.Attention = a.Items
 		if len(r.Attention) > attentionShown {
 			r.Attention, r.AttentionMore = r.Attention[:attentionShown], len(r.Attention)-attentionShown
@@ -128,6 +131,44 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 		r.Tables.Helped, err = helped(e, e.q.Window)
 		return err
 	})
+}
+
+// verdictFigures are the figures the verdict's axis lines quote: the
+// verdict's last 7 days whatever the view's window (the banner says "last
+// 7 days"), in the view's scope (this PC, or every PC added up), the time
+// to recall included. The view's own figures when its window is the
+// verdict's (reused); else the axes' metrics over the verdict's window,
+// figures as of now included (the window is made the view's for them, as
+// assess does). Right's are its 28-day figures when it was judged on them
+// (this PC's, as the verdict).
+func verdictFigures(e env, a assessment, view map[string]Metric, reused bool) (map[string]Metric, error) {
+	var out map[string]Metric
+	if reused {
+		out = maps.Clone(view)
+	} else {
+		ev := e
+		ev.q.Window = a.Window
+		ids := []string{timeToRecallID}
+		for _, axis := range axisOrder {
+			ids = append(ids, axisMetrics[axis]...)
+		}
+		var err error
+		if out, err = computeMetrics(ev, a.Window, ids); err != nil {
+			return nil, err
+		}
+	}
+	if a.Right28 == nil {
+		return out, nil
+	}
+	for _, id := range axisMetrics["right"] {
+		if m, ok := a.Right28[id]; ok && e.q.Machines != "all" {
+			out[id] = m
+		} else if m, ok := out[id]; ok && !slices.Contains(m.Tags, tagJudged28d) {
+			m.Tags = append(slices.Clone(m.Tags), tagJudged28d)
+			out[id] = m
+		}
+	}
+	return out, nil
 }
 
 // Quality is "is the memory shown right?": the reach and quality metrics

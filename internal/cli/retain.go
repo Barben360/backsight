@@ -147,6 +147,15 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 	for _, file := range files {
 		start := time.Now()
 		r := f.FlushFile(cmd.Context(), file, opt)
+		if r.Status == retain.Retry && r.FailedDocument == "" && len(r.Documents) == 0 && !r.NeedsFix && f.CaughtUp(file) {
+			// Failed before sending (a hold, a restore, sends started
+			// over) on a session that had nothing left to send: there was
+			// nothing to retry. No retry is logged (no later line would
+			// supersede it, and the dashboard would read the session as
+			// waiting for ever), and the run goes on to the sessions that
+			// do wait, whose flush meets the same failure and logs it.
+			r.Status, r.Detail, r.Stop = retain.Nothing, "", false
+		}
 		for _, ev := range retainEvents(r, int(time.Since(start).Milliseconds())) {
 			tw.Emit(ev)
 		}

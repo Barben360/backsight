@@ -14,6 +14,25 @@ const PricesHint = "costs need prices, set price_input, price_cached and price_o
 
 // Reading the extras, whose types are those of the computing code.
 
+// FlowKinds names what pipeline.flow's items are ("35 from sessions, 160
+// notes, 80 subagent reports"), the kinds with none left out; "" when the
+// metric does not say or holds none.
+func FlowKinds(m metrics.Metric) string {
+	var parts []string
+	for _, k := range []struct{ key, one, many string }{
+		{"sessions", "from a session", "from sessions"}, {"notes", "note", "notes"}, {"subagent_reports", "subagent report", "subagent reports"},
+	} {
+		if n, _ := extraInt(m, k.key); n > 0 {
+			if n == 1 {
+				parts = append(parts, "1 "+k.one)
+			} else {
+				parts = append(parts, Grouped(n)+" "+k.many)
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 func extraInt(m metrics.Metric, key string) (int64, bool) {
 	switch v := m.Extra[key].(type) {
 	case int64:
@@ -159,6 +178,13 @@ func details(d metrics.Def, m metrics.Metric, loc *time.Location, page bool, rng
 		aside, _ := extraInt(m, "set_aside")
 		wait, _ := extraInt(m, "waiting")
 		add("sent %s, failed %s, set aside after an error %s, waiting %s", Grouped(ok), Grouped(failed), Grouped(aside), Grouped(wait))
+		if k := FlowKinds(m); k != "" {
+			if slices.Contains(m.Tags, "status_this_pc") { // merged: the kinds, as the counts above, are this PC's
+				add("items on this PC: %s", k)
+			} else {
+				add("items: %s", k)
+			}
+		}
 	case "local.backlog":
 		notes, _ := extraInt(m, "notes_queued")
 		sess, _ := extraInt(m, "sessions_waiting")

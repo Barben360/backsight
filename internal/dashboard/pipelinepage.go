@@ -97,10 +97,16 @@ func pipelineOf(d PageData) PipelinePage {
 	p.Flow = Card{Head: h, Note: d.noData(flow, outcomes), Dev: d.devIDs(flow, outcomes)}
 	if p.Flow.Note.Text == "" {
 		if flow.M.Num != nil && flow.M.Den != nil && flow.M.Value != nil {
-			p.Flow.Leads = []Lead{{Big: l.Int(*flow.M.Num) + " of " + l.Int(*flow.M.Den), CI: "· " + l.Value(flow.Def, flow.M), Label: "sent"}}
+			label := "items sent"
+			if k := views.FlowKinds(flow.M); k != "" && slices.Contains(flow.M.Tags, "status_this_pc") {
+				label += " (on this PC: " + k + ")" // added up, the kinds stay this PC's
+			} else if k != "" {
+				label += " (" + k + ")"
+			}
+			p.Flow.Leads = []Lead{{Big: l.Int(*flow.M.Num) + " of " + l.Int(*flow.M.Den), CI: "· " + l.Value(flow.Def, flow.M), Label: label}}
 		}
 		p.Flow.Charts = []PathChart{
-			{Name: "Share sent, per day", HTML: linesOf(l, "Share of sessions sent, per day", d.more(), true, flow)},
+			{Name: "Share sent, per day", HTML: linesOf(l, "Share of items sent, per day", d.more(), true, flow)},
 			{Name: outcomes.Def.Question, HTML: flowOf(l, d.more(), outcomes)},
 		}
 		p.Flow.Extras = extrasOf(d.L, flow, outcomes)
@@ -246,7 +252,7 @@ func (d PageData) pipelineAlert(flow, backlog, hooks MetricView) *Alert {
 	var sentences []string
 	var lead []string
 	if n, _ := extraAs[int64](flow.M, "failed"); n > 0 {
-		lead = append(lead, format.Count(l, n, "session could not be sent", "sessions could not be sent"))
+		lead = append(lead, format.Count(l, n, "item could not be sent", "items could not be sent"))
 	}
 	if n, _ := extraAs[int64](flow.M, "set_aside"); n > 0 {
 		lead = append(lead, l.Int(n)+" set aside after an error")

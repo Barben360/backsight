@@ -13,8 +13,9 @@ Context added per session                    —                        (n=4, to
 Time memory adds to a prompt                 —                        (n=4, too few, 96 more needed)
 
 Flowing
-Sessions sent                                2 of 2                   (n=2, ok, no change vs previous)
+Items sent                                   2 of 2                   (n=2, ok, no change vs previous)
   sent 2, failed 0, set aside after an error 0, waiting 0
+  items: 2 from sessions
 
 Sessions of 2026-10-08
 Session   Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent

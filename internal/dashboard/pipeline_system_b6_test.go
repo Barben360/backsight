@@ -257,26 +257,14 @@ func TestFunnelStates(t *testing.T) {
 		}
 	})
 
-	t.Run("too few by status alone", func(t *testing.T) {
-		in := funnelNormal
-		in.status = metrics.StatusTooFew // the typical times are all there
-		c := funnelNode(t, in, nil)
-		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "too few" {
-			t.Errorf("pill %v", p)
-		}
-		if st := c.find("div.state"); len(st) != 1 || !strings.HasPrefix(st[0].text(), "Too few to time yet:") {
-			t.Errorf("state %v", texts(st))
-		}
-		if len(c.find("div.chart-plot")) != 0 {
-			t.Error("times drawn under a too few status")
-		}
-	})
-	t.Run("too few by the missing typical time alone", func(t *testing.T) {
+	t.Run("the pill is the status", func(t *testing.T) {
+		// The status judges the slowest 1 in 20 of one step; the card's own
+		// count of recalled sessions decides only whether times are told.
 		in := funnelFew
-		in.status = metrics.StatusOK // the status says ok; fewer than 20 were recalled
+		in.status = metrics.StatusOK
 		c := funnelNode(t, in, nil)
-		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "too few" || !strings.Contains(p.attr("class"), "st-few") {
-			t.Errorf("pill %v: the sentence and the word must agree", p)
+		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "ok" || !strings.Contains(p.attr("class"), "st-ok") {
+			t.Errorf("pill %v, want the status's ok", p)
 		}
 		if st := c.find("div.state"); len(st) != 1 || !strings.HasPrefix(st[0].text(), "Too few to time yet:") {
 			t.Errorf("state %v", texts(st))
@@ -322,8 +310,9 @@ func TestFunnelStates(t *testing.T) {
 	})
 
 	t.Run("typical only", func(t *testing.T) {
-		// 30 recalled: the typical times show, the slowest 1 in 20 needs 100.
-		in := funnelIn{status: metrics.StatusOK,
+		// 30 recalled: the typical times show, the slowest 1 in 20 needs 100,
+		// so the status, judged on it, is too few, and so is the pill.
+		in := funnelIn{status: metrics.StatusTooFew,
 			f:    map[string]int64{"ended": 40, "sent": 40, "extracted": 40, "recalled": 30, "not_recalled": 10},
 			hops: [4]hopIn{{5, 0, 40}, {4, 0, 40}, {600, 0, 30}, {610, 0, 30}}}
 		c := funnelNode(t, in, nil)
@@ -334,6 +323,15 @@ func TestFunnelStates(t *testing.T) {
 		}
 		if p := c.first("p.small.sub"); p == nil || p.text() != fmt.Sprintf(wholeWay, "10 h 10 min", "—") {
 			t.Errorf("whole way %v", p)
+		}
+		if p := c.first("div.card-head span.pill"); p == nil || p.text() != "too few" || !strings.Contains(p.attr("class"), "st-few") {
+			t.Errorf("pill %v, want too few", p)
+		}
+		if st := c.find("div.state"); len(st) != 0 {
+			t.Errorf("states %q: the times are told", texts(st))
+		}
+		if info := c.first("details.info").text(); !strings.Contains(info, "the slowest 1 in 20 needs 100 sessions timed from sent to turned into memories (40 so far)") {
+			t.Errorf("based on: %q", info)
 		}
 	})
 

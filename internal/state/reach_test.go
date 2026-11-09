@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -41,9 +42,23 @@ func TestRecordReachSetsAndClearsFailingSince(t *testing.T) {
 	if r := LoadReach(d); !r.LastOK.Equal(t0.Add(32 * time.Minute)) {
 		t.Errorf("an answer a minute later is not recorded: %+v", r)
 	}
-	RecordWaiting(d, 3)
-	if r := LoadReach(d); r.SessionsWaiting != 3 || !r.LastOK.Equal(t0.Add(32*time.Minute)) {
+	RecordWaiting(d, []string{"s1", "s2", "s3"})
+	if r := LoadReach(d); r.SessionsWaiting != 3 || !slices.Equal(r.WaitingSessions, []string{"s1", "s2", "s3"}) || !r.LastOK.Equal(t0.Add(32*time.Minute)) {
 		t.Errorf("waiting: %+v", r)
+	}
+	// The same count with other sessions is recorded; none is an empty
+	// list, which a file of an earlier version (no list) is not.
+	RecordWaiting(d, []string{"s4", "s5", "s6"})
+	if r := LoadReach(d); !slices.Equal(r.WaitingSessions, []string{"s4", "s5", "s6"}) {
+		t.Errorf("other sessions: %+v", r)
+	}
+	RecordWaiting(d, nil)
+	if r := LoadReach(d); r.SessionsWaiting != 0 || r.WaitingSessions == nil || len(r.WaitingSessions) != 0 {
+		t.Errorf("none: %#v", r.WaitingSessions)
+	}
+	_ = os.WriteFile(filepath.Join(d.State, "reach.json"), []byte(`{"sessions_waiting":1}`), 0o600)
+	if r := LoadReach(d); r.SessionsWaiting != 1 || r.WaitingSessions != nil {
+		t.Errorf("an earlier file: %#v", r)
 	}
 }
 

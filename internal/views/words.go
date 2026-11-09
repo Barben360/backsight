@@ -106,8 +106,11 @@ func StatusText(d metrics.Def, m metrics.Metric) string {
 		s := "too few"
 		if m.Den != nil && d.MinN > 0 {
 			if need := int64(d.MinN) - *m.Den; need > 0 {
-				s += ", " + Grouped(need) + " more needed"
+				return s + ", " + Grouped(need) + " more needed"
 			}
+		}
+		if d.Absolute.On == "p95" && d.MinN < metrics.MinForP95 { // its own n is met, not the p95's it is judged on
+			s += ", the slowest 1 in 20 needs " + Grouped(metrics.MinForP95)
 		}
 		return s
 	}

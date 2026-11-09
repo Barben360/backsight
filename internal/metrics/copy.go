@@ -171,7 +171,14 @@ func itemText(d Def, m Metric, days int, median float64, hasMedian bool) string 
 		failed, _ := m.Extra["failed"].(int64)
 		setAside, _ := m.Extra["set_aside"].(int64)
 		if failed+setAside > 0 {
-			return fmt.Sprintf("%s could not be sent; %s set aside after an error.", count(failed, "session", "sessions"), grouped(setAside))
+			return fmt.Sprintf("%s could not be sent; %s set aside after an error.", count(failed, "item", "items"), grouped(setAside))
+		}
+		if ms, _ := m.Extra["backlog_oldest_ms"].(int64); ms > 0 {
+			return fmt.Sprintf("An item has waited %s to be sent.", duration(time.Duration(ms)*time.Millisecond))
+		}
+	case "local.backlog":
+		if ms, _ := m.Extra["oldest_ms"].(int64); ms > 0 {
+			return fmt.Sprintf("The oldest item has waited on this PC for %s.", duration(time.Duration(ms)*time.Millisecond))
 		}
 	}
 	if v == nil {

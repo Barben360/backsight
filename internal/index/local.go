@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -18,6 +19,9 @@ type LocalStatus struct {
 	NotesOldestAt, QuarantineOldestAt, ReachLastOK, ReachFailingSince, BreakerOpenUntil,
 	BackupCreatedAt, BackupVerifiedAt, UpdateCheckedAt time.Time
 	BackupOK, UpdateCheckFailed, BackfillPaused bool
+	// WaitingSessions: the ids of the sessions jobs tick last counted as
+	// waiting (SessionsWaiting's); nil when it did not record them.
+	WaitingSessions []string
 }
 
 // localCols are local_status's columns but id and ingested_at, in the
@@ -25,7 +29,7 @@ type LocalStatus struct {
 const localCols = `notes_queued, notes_oldest_at, quarantined, quarantine_oldest_at, sessions_waiting,
 	reach_last_ok, reach_failing_since, breaker_failures, breaker_open_until, backup_created_at,
 	backup_verified_at, backup_ok, update_checked_at, update_newer, update_check_failed,
-	backfill_sessions, backfill_paused`
+	backfill_sessions, backfill_paused, waiting_sessions`
 
 // localValues is ls as local_status stores it: int64, unix ms or NULL,
 // 0/1.
@@ -40,7 +44,18 @@ func localValues(ls LocalStatus) []any {
 	return []any{n(ls.NotesQueued), msOrNil(ls.NotesOldestAt), n(ls.Quarantined), msOrNil(ls.QuarantineOldestAt),
 		n(ls.SessionsWaiting), msOrNil(ls.ReachLastOK), msOrNil(ls.ReachFailingSince), n(ls.BreakerFailures),
 		msOrNil(ls.BreakerOpenUntil), msOrNil(ls.BackupCreatedAt), msOrNil(ls.BackupVerifiedAt), b(ls.BackupOK),
-		msOrNil(ls.UpdateCheckedAt), n(ls.UpdateNewer), b(ls.UpdateCheckFailed), n(ls.BackfillSessions), b(ls.BackfillPaused)}
+		msOrNil(ls.UpdateCheckedAt), n(ls.UpdateNewer), b(ls.UpdateCheckFailed), n(ls.BackfillSessions), b(ls.BackfillPaused),
+		idsOrNil(ls.WaitingSessions)}
+}
+
+// idsOrNil is a list of ids as local_status stores it: a JSON array, NULL
+// for a nil list (not known).
+func idsOrNil(ids []string) any {
+	if ids == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(ids)
+	return string(raw)
 }
 
 // refreshLocal replaces the local_status row with what

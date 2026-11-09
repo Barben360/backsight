@@ -2,9 +2,11 @@ package metrics
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -143,9 +145,11 @@ func telemetryAbsent(e env, tables ...string) (string, bool, error) {
 // not reset it. Set-aside items are not waiting. 0 when nothing waits; never
 // negative (a clock ahead of now reads 0).
 //
-// status is each document's last status (documentStatus's map), so a view
-// reads document_status once. The waits are read in one grouped pass over
-// tel_retain, whatever the number of waiting documents.
+// status is each document's last status (documentStatus's map: a wait the
+// local status settled reads ok, waitNow.settles), so a view reads
+// document_status once and the age is bounded by what waits now. The
+// waits are read in one grouped pass over tel_retain, whatever the number
+// of waiting documents.
 func backlogAgeOf(tx *sql.Tx, now time.Time, status map[string]string) (time.Duration, error) {
 	var oldest sql.NullInt64
 	if err := tx.QueryRow(`SELECT notes_oldest_at FROM local_status WHERE id = 1`).Scan(&oldest); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -211,10 +215,33 @@ func (e env) documentStatus() (map[string]string, error) {
 }
 
 // readDocumentStatus is document_status as a map, a queued document that
-// left the outbox read as sent (sentStatus).
+// left the outbox read as sent (sentStatus), a home document settled by a
+// sibling's later ok read as sent (settledHomes), and a waiting document
+// the local status says no longer waits read as sent (waitNow.settles).
 func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
-	var outbox sql.NullInt64
-	if err := tx.QueryRow(`SELECT notes_oldest_at FROM local_status WHERE id = 1`).Scan(&outbox); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var outbox, notes, sessions sql.NullInt64
+	var named sql.NullString
+	err := tx.QueryRow(`SELECT notes_oldest_at, notes_queued, sessions_waiting, waiting_sessions FROM local_status WHERE id = 1`).Scan(&outbox, &notes, &sessions, &named)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	haveLocal := err == nil
+	w := waitNow{notesQueued: notes.Int64, sessionsWaiting: sessions.Int64}
+	if named.Valid {
+		var ids []string
+		if json.Unmarshal([]byte(named.String), &ids) == nil {
+			w.named = make(map[string]bool, len(ids))
+			for _, id := range ids {
+				w.named[id] = true
+			}
+		}
+	}
+	// The last tick that counted the waiting sessions, by its start: it
+	// counts them during its run, so a line logged after it began is not
+	// in its count.
+	var tick sql.NullInt64
+	err = tx.QueryRow(`SELECT ts - COALESCE(ms, 0) FROM tel_job WHERE name = 'tick' AND status IN ('done', 'partial') ORDER BY ts DESC LIMIT 1`).Scan(&tick)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	rows, err := tx.Query(`SELECT document, status, ts FROM document_status WHERE document IS NOT NULL`)
@@ -245,7 +272,59 @@ func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
 			out[home] = "ok"
 		}
 	}
+	if haveLocal && tick.Valid {
+		for doc, st := range out {
+			if (st == "queued" || st == "retry") && w.settles(doc, at[doc], tick.Int64) {
+				out[doc] = "ok"
+			}
+		}
+	}
 	return out, nil
+}
+
+// waitNow is what the local status says waits on this PC: the outbox's
+// notes, and the sessions the last jobs tick counted, with their ids
+// (named, nil when that tick did not record them: an earlier version).
+type waitNow struct {
+	notesQueued, sessionsWaiting int64
+	named                        map[string]bool
+}
+
+// settles says a document last logged queued or retry at ts waits no more,
+// by the local status, the truth of what waits on this PC as the outbox is
+// for queued notes (sentStatus). A flush that fails before sending (an
+// extraction hold, a restore) logged a retry on the session's home document
+// even when the session had nothing new to send, and no later line
+// supersedes it: telemetry alone would keep it waiting for ever.
+//
+// jobs tick lists the sessions still to send from the transcripts and
+// cursors, settled or not (reach.json, then local_status), before it logs
+// its own end; tickStart is the start of the last tick that did (done or
+// partial; a skipped or failed one never counts), so a line logged during
+// its run is not taken for counted. A session document logged before that
+// start waits no more when the tick did not name its session: the session
+// had nothing left to send, whatever other session (one still being
+// written, a real backlog) the tick named. Without the names (a tick of an
+// earlier version) the count decides: none waiting. Any other document
+// (notes, subagent reports: the outbox) waits no more when no note is
+// queued. The index holds neither the cursors' sent_at nor their records,
+// and a count with no time of its own would settle a retry logged after
+// the tick: hence the tick's own list and start.
+func (w waitNow) settles(doc string, ts, tickStart int64) bool {
+	if ts >= tickStart {
+		return false
+	}
+	rest, ok := strings.CutPrefix(doc, "conversation:")
+	if !ok {
+		return w.notesQueued == 0
+	}
+	if w.named == nil {
+		return w.sessionsWaiting == 0
+	}
+	if i := strings.IndexAny(rest, "@#"); i >= 0 {
+		rest = rest[:i]
+	}
+	return !w.named[rest]
 }
 
 // siblingOKSQL gives, per home document conversation:<sid>, the latest ts
@@ -408,9 +487,22 @@ WHERE document IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause,
 	okN, failed, setAside := byStatus["ok"], byStatus["failed"], byStatus["quarantined"]
 	waiting := byStatus["queued"] + byStatus["retry"]
 
+	// What the items are: a session's document per project, a note, a
+	// subagent's report (the outbox's two kinds).
+	var sessions, notes, reports int64
+	for doc := range docs {
+		switch {
+		case strings.HasPrefix(doc, "conversation:"):
+			sessions++
+		case strings.HasPrefix(doc, "note:"):
+			notes++
+		case strings.HasPrefix(doc, "subagent:"):
+			reports++
+		}
+	}
 	flow := Metric{Num: i64(okN), Den: i64(total), Value: ratio(okN, total), Extra: map[string]any{
 		"ok": okN, "failed": failed, "set_aside": setAside, "waiting": waiting,
-		"backlog_oldest_ms": age.Milliseconds()}}
+		"backlog_oldest_ms": age.Milliseconds(), "sessions": sessions, "notes": notes, "subagent_reports": reports}}
 	out := Metric{Value: ptr(float64(total)), Extra: map[string]any{"by_status": byStatus}}
 	_, p95 := p50p95(okMS)
 	out.Extra["p95_ms"] = p95

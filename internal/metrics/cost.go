@@ -397,19 +397,19 @@ func llmWidth(bs []hindsight.LLMBucket) time.Duration {
 	return bucketWidth(bs[0].Trunc)
 }
 
-// inWindow sums the buckets that overlap [since, until), in total and by
-// bucket of buckets (as wide as the response's trunc says), and counts the distinct local days they cover. A
-// bucket straddling the start is kept whole, as extractionOver keeps whole
-// UTC days, so the dashboard and `backsight stats` agree on one window, and
-// counts in the first local day (as bank.growth's), so the days sum to the
-// total. A bucket is placed by its start instant: west of UTC a UTC day's
-// bucket starts on the previous local day.
-func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
+// inWindow sums the buckets of [since, until) (bucketIn: the midday rule), in
+// total and by bucket of buckets (as wide as the response's trunc says), and
+// counts the distinct local days they cover. src is what the read can hold
+// (llmSpan: the server's period counts back from the read). A kept bucket that starts before the window counts in the first local day (as
+// bank.growth's), so the days sum to the total. A bucket is placed by its
+// start instant: west of UTC a UTC day's bucket starts on the previous local
+// day.
+func inWindow(bs []hindsight.LLMBucket, src llmSpan, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
 	byDay = make([]tokens, len(buckets))
 	width := llmWidth(bs)
 	seen := map[string]bool{}
 	for _, b := range bs {
-		if !b.Time.Add(width).After(since) || !b.Time.Before(until) {
+		if !bucketIn(b.Time, width, src, since, until) {
 			continue
 		}
 		total.add(b)
@@ -423,6 +423,63 @@ func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Locati
 		}
 	}
 	return total, byDay, len(seen)
+}
+
+// llmSpan is what an LLM stats read can hold: the server counts its period
+// back from the read's time, so nothing before From nor after To; zero
+// times bound nothing (the record's whole UTC days).
+type llmSpan struct{ From, To time.Time }
+
+// LLMPeriodOf is the LLM-stats period the views read for the window
+// [since, until) at readAt (loadServer's): `backsight stats` asks the
+// server for the same one.
+func LLMPeriodOf(readAt, since, until time.Time) string {
+	return llmPeriod(viewSpan(readAt, Window{Since: since, Until: until}))
+}
+
+// ExtractionOver is the extraction tokens of an LLM-stats read of period,
+// made at readAt, over [since, until), by the views' rule (bucketIn), the
+// output holding the thoughts; and how many days of the window the read can
+// hold, counted as the report counts the window's (a part day is a day; the
+// server keeps 30, so a window reaching further back is cut), a minute's
+// leeway for the clock moving on since the window was built. `backsight stats` reports it, so the old report and the views give
+// the same figures on every window.
+func ExtractionOver(bs []hindsight.LLMBucket, period string, readAt, since, until time.Time) (input, cached, output int64, days int) {
+	src := llmSpan{From: readAt.Add(-periodLength(period)), To: readAt}
+	t, _, _ := inWindow(bs, src, since, until, time.UTC, nil)
+	end, start := until, since
+	if readAt.Before(end) {
+		end = readAt
+	}
+	if src.From.After(start) {
+		start = src.From
+	}
+	held := end.Sub(start)
+	return t.input, t.cached, t.output, ceilDays(max(0, held-time.Minute))
+}
+
+// bucketIn says a bucket [start, start+width) of the server's LLM stats (or
+// of the record) is the window [since, until)'s: the midday rule the merged
+// PCs' days follow (othersAt), a UTC day counts when its 12:00 UTC lies in
+// the window, so an N-day window counts exactly N days, whatever its zone;
+// an hour bucket by its middle the same way. The middle is taken of what
+// the bucket can hold (src): a rolling window's first day, which the server
+// cut at the window's start, and today, cut at now, are the window's, while
+// a whole UTC day straddling a custom window's local midnight counts only
+// on the side of its noon.
+func bucketIn(start time.Time, width time.Duration, src llmSpan, since, until time.Time) bool {
+	lo, hi := start, start.Add(width)
+	if !src.From.IsZero() && src.From.After(lo) {
+		lo = src.From
+	}
+	if !src.To.IsZero() && src.To.Before(hi) {
+		hi = src.To
+	}
+	if !hi.After(lo) {
+		return false
+	}
+	mid := lo.Add(hi.Sub(lo) / 2)
+	return !mid.Before(since) && mid.Before(until)
 }
 
 // llmRead is the server's LLM buckets of key ("" = all operations, or
@@ -485,7 +542,7 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		fail(reason)
 		return nil
 	}
-	total, byDay, covered := inWindow(all, w.Since, w.Until, w.Loc, buckets)
+	total, byDay, covered := inWindow(all, llmSpanOf(e, "llm:"), w.Since, w.Until, w.Loc, buckets)
 	// The total has its own read. An operation that cannot be read (the
 	// server refuses it) only shrinks by_operation, even when every
 	// operation fails: the metric is tagged partial and the failed reads
@@ -498,7 +555,7 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 			failedOps++
 			continue
 		}
-		named[op], _, _ = inWindow(bs, w.Since, w.Until, w.Loc, buckets)
+		named[op], _, _ = inWindow(bs, llmSpanOf(e, "llm:"+op), w.Since, w.Until, w.Loc, buckets)
 	}
 	// Past the server's 30 days, the record gives the days before its first.
 	rec, srcs, err := recordedExtraction(e, w, buckets, all, named)
@@ -591,7 +648,7 @@ func costPerSession(e env, w Window, obs map[string]Observation, met map[string]
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	total, _, covered := inWindow(bs, since, until, w.Loc, nil)
+	total, _, covered := inWindow(bs, llmSpanOf(e, llm30dKey), since, until, w.Loc, nil)
 	m := Metric{Extra: map[string]any{"sessions_sent": sent, "window_days": 28}}
 	if sent == 0 || covered == 0 { // no document, or nothing of the server in the 28 days: no 0
 		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, m

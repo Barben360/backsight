@@ -241,7 +241,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			files := transcripts(home)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
 				recordReach(d, cfg, herr)
-				state.RecordWaiting(d, f.Unsent(files))
+				state.RecordWaiting(d, f.UnsentSessions(files))
 				res.Status, res.Reason = "skipped", "components.write is off"
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
@@ -274,7 +274,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Sessions = rep.Counts
 			// Every unsent session, from the transcripts: a flush that stops
 			// at the first failure (server down, a hold) counts one.
-			state.RecordWaiting(d, f.Unsent(files))
+			state.RecordWaiting(d, f.UnsentSessions(files))
 			tags, terr := f.Client.Tags(cmd.Context(), cfg.Server.Bank, "project:")
 			if terr != nil {
 				tags = nil // not read: no project is taken for forgotten

@@ -14,8 +14,9 @@ Context added per session                    —                        (n=5, to
 Time memory adds to a prompt                 —                        (n=6, too few, 94 more needed)
 
 Flowing
-Sessions sent                                1 of 1                   (n=1, ok)
+Items sent                                   1 of 1                   (n=1, ok)
   sent 1, failed 0, set aside after an error 0, waiting 0
+  items: 1 from a session
 
 Project p1
 It has no memories yet.

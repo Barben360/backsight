@@ -30,8 +30,9 @@ New memories per day                         —                        (no data
 Summaries waiting                            —                        (no data: memory server not answering)
 
 Flowing
-Sessions sent                                1 of 1                   (n=1, ok)
+Items sent                                   1 of 1                   (n=1, ok)
   sent 1, failed 0, set aside after an error 0, waiting 0
+  items: 1 from a session
 Waiting on this PC                           0                        (ok)
 Waiting on the server                        —                        (no data: memory server not answering)
 Steps that crashed                           0                        (ok, no change vs previous)
