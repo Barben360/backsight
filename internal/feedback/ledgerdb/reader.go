@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
@@ -62,46 +62,73 @@ func OpenReader(o Options, busy time.Duration) (*Reader, error) {
 // Close closes the reader's connection.
 func (r *Reader) Close() error { return r.db.Close() }
 
-// Get is the entries of ids that have one.
+// Get is the entries of ids that have one: their rows, with the journal
+// tail's lines naming them applied.
 func (r *Reader) Get(ids []string) (map[string]feedback.Entry, error) {
 	out := map[string]feedback.Entry{}
 	if len(ids) == 0 {
 		return out, nil
 	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
 	err := r.read(func(tx *sql.Tx) error {
-		for start := 0; start < len(ids); start += maxIDs {
-			chunk := ids[start:min(start+maxIDs, len(ids))]
-			args := make([]any, len(chunk))
-			for i, id := range chunk {
-				args[i] = id
-			}
-			q := `SELECT ` + memoryColumns + ` FROM memories WHERE memory_id IN (?` + strings.Repeat(", ?", len(chunk)-1) + `)`
-			if err := scanEntries(tx, out, q, args...); err != nil {
-				return err
-			}
+		if err := loadEntries(tx, out, ids); err != nil {
+			return err
 		}
+		tail, err := readTail(tx, r.dir())
+		if err != nil {
+			return err
+		}
+		l := feedback.Ledger{Memories: out}
+		applyTail(&l, tail, func(id string) bool { return want[id] })
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
-}
-
-// Hidden is every entry with Hidden set.
-func (r *Reader) Hidden() (map[string]feedback.Entry, error) {
-	out := map[string]feedback.Entry{}
-	err := r.read(func(tx *sql.Tx) error {
-		return scanEntries(tx, out, `SELECT `+memoryColumns+` FROM memories WHERE hidden_since IS NOT NULL`)
-	})
-	if err != nil {
-		return nil, err
+	for id := range out { // an import of the tail names others
+		if !want[id] {
+			delete(out, id)
+		}
 	}
 	return out, nil
 }
 
-// All is the whole ledger: every entry, the latest applied event's time
-// as its watermark, and when earlier history was last imported.
+// Hidden is every entry with Hidden set, the journal tail applied: its
+// hides and unhides, and the rows of every id it names.
+func (r *Reader) Hidden() (map[string]feedback.Entry, error) {
+	out := map[string]feedback.Entry{}
+	err := r.read(func(tx *sql.Tx) error {
+		if err := scanEntries(tx, out, `SELECT `+memoryColumns+` FROM memories WHERE hidden_since IS NOT NULL`); err != nil {
+			return err
+		}
+		tail, err := readTail(tx, r.dir())
+		if err != nil {
+			return err
+		}
+		if err := loadEntries(tx, out, namedIDs(tail)); err != nil {
+			return err
+		}
+		l := feedback.Ledger{Memories: out}
+		applyTail(&l, tail, nil)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for id, e := range out {
+		if e.Hidden == nil {
+			delete(out, id)
+		}
+	}
+	return out, nil
+}
+
+// All is the whole ledger, the journal tail applied: every entry, the
+// latest applied event's time as its watermark, and when earlier history
+// was last imported.
 func (r *Reader) All() (feedback.Ledger, error) {
 	l := feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{}}
 	err := r.read(func(tx *sql.Tx) error {
@@ -112,7 +139,15 @@ func (r *Reader) All() (feedback.Ledger, error) {
 		if l.HistoryImported, err = metaTime(tx, "history_imported_ns"); err != nil {
 			return err
 		}
-		return scanEntries(tx, l.Memories, `SELECT `+memoryColumns+` FROM memories`)
+		if err := scanEntries(tx, l.Memories, `SELECT `+memoryColumns+` FROM memories`); err != nil {
+			return err
+		}
+		tail, err := readTail(tx, r.dir())
+		if err != nil {
+			return err
+		}
+		applyTail(&l, tail, nil)
+		return nil
 	})
 	if err != nil {
 		return feedback.Ledger{}, err
@@ -120,14 +155,49 @@ func (r *Reader) All() (feedback.Ledger, error) {
 	return l, nil
 }
 
-// Any reports whether the ledger has any entry.
+// Any reports whether All would hold any entry: a row the journal tail
+// does not name, or an entry left once the tail is applied to the rows
+// it names.
 func (r *Reader) Any() (bool, error) {
 	var has bool
 	err := r.read(func(tx *sql.Tx) error {
-		return tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM memories)`).Scan(&has)
+		tail, err := readTail(tx, r.dir())
+		if err != nil {
+			return err
+		}
+		named := namedIDs(tail)
+		// More rows than named ids: one is not named.
+		rows, err := tx.Query(`SELECT memory_id FROM memories LIMIT ?`, len(named)+1)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			if _, ok := slices.BinarySearch(named, id); !ok {
+				has = true
+				return nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		l := feedback.Ledger{Memories: map[string]feedback.Entry{}}
+		if err := loadEntries(tx, l.Memories, named); err != nil {
+			return err
+		}
+		applyTail(&l, tail, nil)
+		has = len(l.Memories) > 0
+		return nil
 	})
 	return has, err
 }
+
+// dir is the folder of the reader's file, which holds the journal.
+func (r *Reader) dir() string { return filepath.Dir(r.path) }
 
 // read runs fn in one read transaction, after checking the file is at
 // this binary's head and was folded once.
@@ -143,6 +213,18 @@ func (r *Reader) read(fn func(tx *sql.Tx) error) error {
 		return r.class(err)
 	}
 	if v != r.head {
+		// At user_version 0 without schema_migrations, the file was just
+		// created and its first migration has not committed: a first
+		// build in progress, not another schema.
+		var migrated bool
+		if v == 0 {
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE name = 'schema_migrations')`).Scan(&migrated); err != nil {
+				return r.class(err)
+			}
+			if !migrated {
+				return fmt.Errorf("%w: it is being built", ErrMissing)
+			}
+		}
 		return fmt.Errorf("%w: schema %d, this binary reads %d", ErrSchema, v, r.head)
 	}
 	var gen string

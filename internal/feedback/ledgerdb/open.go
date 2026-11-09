@@ -84,8 +84,11 @@ type Writer struct {
 // for an uncommitted update (ErrUpdateInProgress, nothing created or
 // written); (4) the file is opened, its version read again (above the
 // head: back to 2, once) and each pending migration applied in its own
-// transaction. A corrupt file is set aside and a fresh one built, once a
-// day at most (recover.go).
+// transaction; (5) a file this open created is built: the whole journal
+// folded in, imports kept, in one transaction after the migrations'
+// (until it commits, readers find no generation row: ErrMissing). A
+// corrupt file is set aside and a fresh one built, once a day at most
+// (recover.go).
 func OpenWriter(ctx context.Context, o Options) (*Writer, error) {
 	o = o.withDefaults()
 	reg, err := registry(o)
@@ -138,6 +141,8 @@ func openTarget(ctx context.Context, o Options, reg []sqlitedb.Migration, t targ
 	if err := fsutil.MkdirPrivate(dir); err != nil {
 		return nil, err
 	}
+	_, serr := os.Lstat(t.path)
+	created := errors.Is(serr, fs.ErrNotExist)
 	db, err := openDB(ctx, t.path, useWAL(t.path, detectFS(dir, o.Home, o.Getenv)))
 	if err != nil {
 		return nil, asCorrupt(t.path, err)
@@ -146,6 +151,12 @@ func openTarget(ctx context.Context, o Options, reg []sqlitedb.Migration, t targ
 	if err := w.migrate(ctx, reg); err != nil {
 		_ = db.Close()
 		return nil, asCorrupt(t.path, err)
+	}
+	if created {
+		if err := w.firstBuild(ctx); err != nil {
+			_ = db.Close()
+			return nil, asCorrupt(t.path, err)
+		}
 	}
 	return w, nil
 }

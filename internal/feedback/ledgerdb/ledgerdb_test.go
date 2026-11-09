@@ -304,7 +304,9 @@ func TestReaderNeverCreatesOrMigrates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec("CREATE TABLE other(x INTEGER)"); err != nil {
+		// schema_migrations marks a file migrations ran on: without it, a
+		// file at user_version 0 is one being built (ErrMissing).
+		if _, err := db.Exec("CREATE TABLE other(x INTEGER); CREATE TABLE schema_migrations(id TEXT)"); err != nil {
 			t.Fatal(err)
 		}
 		_ = db.Close()
@@ -313,6 +315,12 @@ func TestReaderNeverCreatesOrMigrates(t *testing.T) {
 		if v := headerVersion(t, mainPath(o)); v != 0 {
 			t.Errorf("user_version %d after the reader, want 0", v)
 		}
+	})
+	t.Run("user_version 0, being built", func(t *testing.T) {
+		o := tempOpts(t)
+		writeFile(t, mainPath(o), nil) // created, not yet migrated
+		_, err := OpenReader(o, 20*time.Millisecond)
+		onlyErr(t, "a file being built", err, ErrMissing)
 	})
 	t.Run("newer", func(t *testing.T) {
 		o := tempOpts(t)
@@ -327,7 +335,10 @@ func TestReaderNeverCreatesOrMigrates(t *testing.T) {
 	})
 	t.Run("never folded", func(t *testing.T) {
 		o := tempOpts(t)
-		mustCloseWriter(t, mustOpenWriter(t, o))
+		setSeam(t, &beforeFoldCommit, func() error { return errors.New("crash before the first build's commit") })
+		if _, err := OpenWriter(context.Background(), o); err == nil {
+			t.Fatal("OpenWriter succeeded without its first build")
+		}
 		_, err := OpenReader(o, 20*time.Millisecond)
 		onlyErr(t, "no generation row", err, ErrMissing)
 	})

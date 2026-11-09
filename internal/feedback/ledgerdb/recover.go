@@ -73,6 +73,19 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 		return fmt.Errorf("%w: %w", ErrUnreadable, err)
 	}
 	defer release()
+	if afterSeize != nil {
+		afterSeize()
+	}
+	// Another process may have set the file aside between the day check
+	// and the lock: the file is then gone (no lock was needed), or a
+	// fresh one stands where it was, its .corrupt just stamped. Its work
+	// stands; the caller opens what is there.
+	if _, err := os.Lstat(ce.path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if fi, err := os.Stat(aside); err == nil && within(fi.ModTime(), o.Now()) {
+		return nil
+	}
 	if !holdWhileRenaming {
 		release()
 	}
@@ -87,6 +100,33 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 	// sooner.
 	_ = os.Chtimes(aside, now, now)
 	return nil
+}
+
+// afterSeize, when set (tests), runs once setAside holds the file.
+var afterSeize func()
+
+// recoverCorrupt answers err, a corruption a fold or a rebuild met past
+// the header (the open read that fine): w's connection is closed, for
+// Seize wants the file whole, the file set aside, and w opened again,
+// on a fresh file built from the journal. When the set-aside cannot be
+// done (another connection holds the file; one was set aside less than
+// a day ago), w is opened again on the file as it is and the error, the
+// corruption's and the set-aside's, returned: the next fold tries again.
+func (w *Writer) recoverCorrupt(ctx context.Context, err error) error {
+	var ce *corruptErr
+	if !errors.As(asCorrupt(w.path, err), &ce) {
+		return err
+	}
+	_ = w.db.Close()
+	serr := setAside(ctx, w.opts, ce)
+	nw, oerr := OpenWriter(ctx, w.opts)
+	if oerr == nil {
+		*w = *nw
+	}
+	if serr != nil {
+		return fmt.Errorf("%w (it could not be set aside: %w)", ce, serr)
+	}
+	return oerr
 }
 
 // within: at is set, not after now, and less than setAsideEvery before

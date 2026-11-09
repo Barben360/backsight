@@ -46,15 +46,22 @@ func sideTarget(ctx context.Context, o Options, head int) (target, error) {
 	return t, nil
 }
 
-// probe reads t.path's version. A read that fails while a -wal exists
-// (one a killed process left, say) leaves it unknown instead: the writer,
-// which recovers the WAL, reads it. Otherwise a corrupt file is the
-// file's corruption (set aside by OpenWriter).
+// probe reads t.path's version. A read that finds the file corrupt, or
+// not a database, while a -wal exists (one a killed process left, say)
+// leaves it unknown instead: the writer, which recovers the WAL, reads
+// it. Otherwise such a file is the file's corruption (set aside by
+// OpenWriter). Any other failure (busy, I/O) is returned as it is: it
+// says nothing of the file's version, which may be above this binary's
+// head, and a read-write open sets the journal mode of a file this
+// binary must never write.
 func (t *target) probe(ctx context.Context) error {
 	v, err := fileVersion(ctx, t.path)
 	if err == nil {
 		t.version, t.known = v, true
 		return nil
+	}
+	if !isCorrupt(err) {
+		return err
 	}
 	if _, serr := os.Stat(t.path + "-wal"); serr == nil {
 		t.version, t.known = 0, false
