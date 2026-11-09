@@ -9,20 +9,28 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/redact"
+	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/token"
 )
 
 // env is what every command needs: where to write and whether to emit JSON.
+// stdout and stderr are termstyle writers knowing their color level
+// (decision 0084); color is the --color flag, noSplash --no-splash.
 type env struct {
 	stdout, stderr io.Writer
 	json           bool
+	color          termstyle.Mode
+	noSplash       bool
 }
 
 // emit prints a command result: an envelope with --json, else text(data).
@@ -96,6 +104,8 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
+	root.PersistentFlags().Var(colorFlag{&e.color}, "color", "color the text at a terminal: auto, always or never")
+	root.PersistentFlags().BoolVar(&e.noSplash, "no-splash", false, "print no splash before the output")
 	// What a scheduled task passes instead of the variables it cannot carry.
 	root.PersistentFlags().Var(dirFlag("BACKSIGHT_HOME"), "backsight-home", "backsight's directory (BACKSIGHT_HOME), which a scheduled task cannot set")
 	root.PersistentFlags().Var(dirFlag("BACKSIGHT_STATE_DIR"), "backsight-state-dir", "backsight's state directory (BACKSIGHT_STATE_DIR), which a scheduled task cannot set")
@@ -160,6 +170,68 @@ func usageArgs(check cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
+// colorFlag is --color: auto, always or never.
+type colorFlag struct{ m *termstyle.Mode }
+
+func (f colorFlag) String() string { return f.m.String() }
+func (colorFlag) Type() string     { return "mode" }
+
+func (f colorFlag) Set(s string) error {
+	m, err := termstyle.ParseMode(s)
+	if err != nil {
+		return err
+	}
+	*f.m = m
+	return nil
+}
+
+// enableVT turns on a Windows console's escape processing; tests replace it.
+var enableVT = termstyle.EnableVT
+
+// isTerminalFd says whether a descriptor is a terminal; tests replace it.
+var isTerminalFd = func(fd uintptr) bool { return term.IsTerminal(int(fd)) }
+
+// isTerminal: w itself is a file on a terminal. A buffer, a pipe writer
+// or a tee never is, whatever this process's own stdout is.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && isTerminalFd(f.Fd())
+}
+
+// vtRestores are the console modes to put back when the command ends.
+type vtRestores struct {
+	mu  sync.Mutex
+	fns []func()
+}
+
+func (r *vtRestores) run() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, fn := range r.fns {
+		fn()
+	}
+	r.fns = nil
+}
+
+// styled wraps w in a termstyle writer whose level is resolved on first
+// use, once cobra has parsed --json and --color (decision 0084 D1).
+func (e *env) styled(w io.Writer, plain bool, restores *vtRestores) *termstyle.Writer {
+	return termstyle.NewWriter(w, func() termstyle.Level {
+		lvl := termstyle.Resolve(termstyle.Inputs{JSON: e.json, Plain: plain, Flag: e.color, Terminal: isTerminal(w)})
+		if lvl == termstyle.None {
+			return lvl
+		}
+		restore, ok := enableVT(w)
+		if !ok {
+			return termstyle.None
+		}
+		restores.mu.Lock()
+		restores.fns = append(restores.fns, restore)
+		restores.mu.Unlock()
+		return lvl
+	})
+}
+
 // Execute runs backsight with args and returns the process exit code.
 func Execute(args []string, stdout, stderr io.Writer) int {
 	return ExecuteContext(context.Background(), args, stdout, stderr)
@@ -167,36 +239,61 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 
 // ExecuteContext is Execute with a context commands can watch (Ctrl-C).
 func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	code, _ := executeContext(ctx, args, stdout, stderr)
+	return code
+}
+
+// executeContext is ExecuteContext, also returning the command's env (nil
+// for hooks) so tests can read what it resolved.
+func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer) (int, *env) {
 	// Redaction also replaces the exact values of the secret stores, read
 	// once at the first redaction of this command (H1, security review).
 	redact.SetLocalSecrets(localSecretValues)
 	// Hooks bypass the command parser: no usage error (exit 2 blocks in
 	// Claude Code) can come out of a hook call, whatever its arguments.
 	if len(args) > 0 && args[0] == "hook" {
-		return runHook(ctx, args[1:], hookStdin, stdout)
+		return runHook(ctx, args[1:], hookStdin, stdout), nil
 	}
 	if len(args) > 0 && args[0] == "hook-child" {
-		return runHookChild(ctx, args[1:], hookStdin, stdout)
+		return runHookChild(ctx, args[1:], hookStdin, stdout), nil
 	}
-	e := &env{stdout: stdout, stderr: stderr}
+	e := &env{}
 	root := newRoot(e)
+	plain := classForArgs(root, args) == lookPlain
+	var restores vtRestores
+	defer restores.run()
+	e.stdout, e.stderr = e.styled(stdout, plain, &restores), e.styled(stderr, plain, &restores)
 	root.SetArgs(args)
-	root.SetOut(stdout)
-	root.SetErr(stderr)
+	root.SetOut(e.stdout)
+	root.SetErr(e.stderr)
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
-	// --json must be honoured even when parsing fails before flags are bound.
-	for _, a := range args {
-		if a == "--json" {
+	// --json and --color must be honoured even when parsing fails before
+	// flags are bound.
+	for i, a := range args {
+		switch {
+		case a == "--json":
 			e.json = true
+		case strings.HasPrefix(a, "--json="):
+			if v, err := strconv.ParseBool(strings.TrimPrefix(a, "--json=")); err == nil && v {
+				e.json = true
+			}
+		case strings.HasPrefix(a, "--color="):
+			if m, err := termstyle.ParseMode(strings.TrimPrefix(a, "--color=")); err == nil {
+				e.color = m
+			}
+		case a == "--color" && i+1 < len(args):
+			if m, err := termstyle.ParseMode(args[i+1]); err == nil {
+				e.color = m
+			}
 		}
 	}
 	cmd, err := root.ExecuteContextC(ctx)
 	if err == nil {
-		return output.OK
+		return output.OK, e
 	}
 	var rep reported
 	if errors.As(err, &rep) {
-		return rep.code
+		return rep.code, e
 	}
 	code := output.CodeOf(err)
 	var ue usageError
@@ -207,11 +304,11 @@ func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	err = maskTokens(err)
 	if e.json {
-		_ = output.WriteJSON(stdout, strings.TrimPrefix(cmd.CommandPath(), "backsight "), nil, err)
+		_ = output.WriteJSON(e.stdout, strings.TrimPrefix(cmd.CommandPath(), "backsight "), nil, err)
 	} else {
-		_, _ = fmt.Fprintf(stderr, "backsight: %v\n", err)
+		_, _ = fmt.Fprintf(e.stderr, "backsight: %v\n", err)
 	}
-	return code
+	return code, e
 }
 
 // tokenInText is a connection token, or its start, inside a message.

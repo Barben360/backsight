@@ -689,7 +689,7 @@ func storeReply(res storeResult, err error, hits []recall.Hit, min float64) stri
 }
 
 func newMCPCmd() *cobra.Command {
-	return &cobra.Command{
+	return setLook(&cobra.Command{
 		Use:    "mcp",
 		Short:  "Serve the memory tools to Claude Code over stdio (started by the plugin)",
 		Args:   usageArgs(cobra.NoArgs),
@@ -720,5 +720,5 @@ func newMCPCmd() *cobra.Command {
 			}
 			return nil
 		},
-	}
+	}, lookPlain)
 }

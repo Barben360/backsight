@@ -22,7 +22,7 @@ type detectInput struct {
 // (decision 0056 block 4: its follow-up is measured on replayed
 // transcripts). No config, no server, no state.
 func newDetectReplayCmd() *cobra.Command {
-	return &cobra.Command{
+	return setLook(&cobra.Command{
 		Use:    "detect-replay",
 		Short:  "Run the save detector over JSON lines {prompt, last_assistant, subagent_done} on stdin",
 		Args:   usageArgs(cobra.NoArgs),
@@ -30,7 +30,7 @@ func newDetectReplayCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return detectLines(cmd.InOrStdin(), cmd.OutOrStdout())
 		},
-	}
+	}, lookPlain)
 }
 
 func detectLines(in io.Reader, out io.Writer) error {

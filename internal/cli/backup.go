@@ -523,7 +523,7 @@ func newBackupListCmd(e *env) *cobra.Command {
 func newBackupIdentityCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "identity", Short: "The age identity that decrypts this install's backups", Args: cobra.NoArgs}
 	importCmd := newBackupIdentityImportCmd(e)
-	cmd.AddCommand(&cobra.Command{
+	cmd.AddCommand(setLook(&cobra.Command{
 		Use:   "show",
 		Short: "Print the backup identity, to keep somewhere else: alone on stdout, so it pipes to a password manager",
 		Args:  usageArgs(cobra.NoArgs),
@@ -563,7 +563,7 @@ func newBackupIdentityCmd(e *env) *cobra.Command {
 			fmt.Fprintln(e.stderr, "Keep it somewhere safe and apart from this machine: without it the backups cannot be read.")
 			return nil
 		},
-	}, importCmd)
+	}, lookPlain), importCmd)
 	return cmd
 }
 

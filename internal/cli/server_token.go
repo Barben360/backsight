@@ -188,7 +188,7 @@ func newServerTokenCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "write the token to this file "+privateNote(runtime.GOOS)+" instead of the terminal")
 	cmd.Flags().BoolVar(&rotate, "rotate", false, "give the server a new API key first: every token handed out before stops working")
 	cmd.Flags().BoolVar(&plan, "plan", false, "with --rotate: say what the rotation would do, changing nothing")
-	return cmd
+	return setLook(cmd, lookPlain) // the token is a secret meant to be captured
 }
 
 func tokenText(r tokenResult, rotated bool) string {

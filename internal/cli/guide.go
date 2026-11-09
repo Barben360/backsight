@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // guideDocs is the docs the guide shows and searches; tests replace it.
@@ -57,7 +58,7 @@ func newGuideCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newGuideSearchCmd(e), newGuideIndexCmd(e))
-	return cmd
+	return setLook(cmd, lookNoSplash) // its text goes to a pager
 }
 
 type guideTopic struct {
@@ -154,8 +155,7 @@ func page(e *env, text string) error {
 			args = []string{"less", "-FRX"}
 		}
 		if bin, err := exec.LookPath(args[0]); err == nil {
-			cmd := exec.Command(bin, args[1:]...)
-			cmd.Stdin, cmd.Stdout, cmd.Stderr = strings.NewReader(text), e.stdout, e.stderr
+			cmd := pagerCmd(e, args[1:], bin, text)
 			if err := cmd.Start(); err == nil {
 				_ = cmd.Wait()
 				return nil
@@ -164,6 +164,15 @@ func page(e *env, text string) error {
 	}
 	_, err := io.WriteString(e.stdout, text)
 	return err
+}
+
+// pagerCmd is the pager reading text, on the streams under the style
+// writers: os/exec would turn a wrapping writer into a pipe, and a pager
+// on a pipe stops paging.
+func pagerCmd(e *env, args []string, bin, text string) *exec.Cmd {
+	cmd := exec.Command(bin, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = strings.NewReader(text), termstyle.Raw(e.stdout), termstyle.Raw(e.stderr)
+	return cmd
 }
 
 // guideSearchResult is what guide search answers, and which search did.
