@@ -38,6 +38,7 @@ var released = map[string]string{
 	"0002-collection": "71de9e2b47e97357ff58bd793ef4214e6a5b2aff71999383539b5b74278c9500",
 	"0003-machines":   "56ecc20ae3dc7e45e6d287313addffac6f277b8fe741019da27a000167f766ef",
 	"0004-telemetry":  "aaf75e2f8a157bcb6bbd81f2ffad7baa37049dba73b543277596a87b347f98c1",
+	"0005-waiting":    "a36ea344d07e8cc422223b4e6bb06664e4b0c43cfdc5ba22c4ad0aed987c8f7e",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -79,7 +80,7 @@ var schemaTables = []struct{ name, cols string }{
 	{"imports", rowKey + "pos ts source key memory_id at outcome rank"},
 	{"journal_other", rowKey + "ts session kind"},
 	{"ledger", "memory_id shown credits credits_at misses misses_at last_shown last_credited wrong hidden_since unhidden_at imported_shown imported_credits"},
-	{"local_status", "id ingested_at notes_queued notes_oldest_at quarantined quarantine_oldest_at sessions_waiting reach_last_ok reach_failing_since breaker_failures breaker_open_until backup_created_at backup_verified_at backup_ok update_checked_at update_newer update_check_failed backfill_sessions backfill_paused"},
+	{"local_status", "id ingested_at notes_queued notes_oldest_at quarantined quarantine_oldest_at sessions_waiting reach_last_ok reach_failing_since breaker_failures breaker_open_until backup_created_at backup_verified_at backup_ok update_checked_at update_newer update_check_failed backfill_sessions backfill_paused waiting_sessions"},
 	{"cursors", "source_file kind size offset head_len head_sha256 ingested_at last_ts missing"},
 	{"ingest_errors", "source_file offset reason at"},
 	{"meta", "key value"},
@@ -116,8 +117,8 @@ func TestReleasedMigrationsArePinned(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
 	defer mustClose(t, ix)
-	if ix.Schema() != 4 {
-		t.Fatalf("schema %d, want 4", ix.Schema())
+	if ix.Schema() != 5 {
+		t.Fatalf("schema %d, want 5", ix.Schema())
 	}
 	for _, tc := range schemaTables {
 		got := columnsOf(t, ix.sh.w, tc.name)
@@ -172,7 +173,7 @@ var (
 		"breaker_failures": "INTEGER", "breaker_open_until": "INTEGER", "backup_created_at": "INTEGER",
 		"backup_verified_at": "INTEGER", "backup_ok": "INTEGER", "update_checked_at": "INTEGER",
 		"update_newer": "INTEGER", "update_check_failed": "INTEGER", "backfill_sessions": "INTEGER",
-		"backfill_paused": "INTEGER", "size": "INTEGER", "head_len": "INTEGER", "last_ts": "INTEGER",
+		"backfill_paused": "INTEGER", "waiting_sessions": "TEXT", "size": "INTEGER", "head_len": "INTEGER", "last_ts": "INTEGER",
 		"missing": "INTEGER", "world": "INTEGER", "experience": "INTEGER", "observation": "INTEGER",
 		"documents": "INTEGER", "links": "INTEGER", "observations": "INTEGER", "ops_pending": "INTEGER",
 		"ops_processing": "INTEGER", "ops_completed": "INTEGER", "ops_failed": "INTEGER", "ops_other": "INTEGER",

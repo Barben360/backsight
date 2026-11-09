@@ -41,7 +41,53 @@ func TestBacklogBoundByWhatWaitsNow(t *testing.T) {
 			t.Errorf("local.backlog oldest_ms = %d, want 0", got)
 		}
 	})
-	t.Run("a stale retry followed by a real backlog", func(t *testing.T) {
+	t.Run("a stale retry beside a session still being written", func(t *testing.T) {
+		// The common case: someone works in Claude Code, so the tick counts
+		// a session that waits (s3, not settled yet); the stale s1 is not
+		// among the sessions it named: sent, nothing bad.
+		x := pipeFx(t)
+		x.local(index.LocalStatus{SessionsWaiting: 1, WaitingSessions: []string{"s3"}})
+		stale(x)
+		tick(x, ago(10*time.Minute), "partial")
+		ms := pipeOf(x, x.query(7))
+		flow := ms["pipeline.flow"]
+		if *flow.Num != 2 || *flow.Den != 2 || extraInt(t, flow, "waiting") != 0 || extraInt(t, flow, "backlog_oldest_ms") != 0 {
+			t.Errorf("flow %v/%v extra %v, want 2/2, nothing waiting, no backlog", *flow.Num, *flow.Den, flow.Extra)
+		}
+		wantStatus(t, "pipeline.flow", flow, StatusOK)
+		wantStatus(t, "local.backlog", ms["local.backlog"], StatusOK)
+	})
+	t.Run("a stale retry beside a real backlog", func(t *testing.T) {
+		// s2 failed 2 days ago and the tick still names it: it waits, and
+		// its age (not the stale s1's) is the backlog's: still bad.
+		x := pipeFx(t)
+		x.local(index.LocalStatus{SessionsWaiting: 2, WaitingSessions: []string{"s2", "s3"}})
+		stale(x)
+		x.retained(ago(2*day), "conversation:s2@beta", "retry", 0)
+		tick(x, ago(10*time.Minute), "done")
+		ms := pipeOf(x, x.query(7))
+		flow := ms["pipeline.flow"]
+		if *flow.Num != 2 || *flow.Den != 3 || extraInt(t, flow, "waiting") != 1 || extraInt(t, flow, "backlog_oldest_ms") != (2*day).Milliseconds() {
+			t.Errorf("flow %v/%v extra %v, want 2/3, s2 waiting for 2 days", *flow.Num, *flow.Den, flow.Extra)
+		}
+		wantStatus(t, "pipeline.flow", flow, StatusBad)
+		wantStatus(t, "local.backlog", ms["local.backlog"], StatusBad)
+	})
+	t.Run("a retry during the last tick still waits", func(t *testing.T) {
+		// The tick counted its sessions before s2's retry (logged during the
+		// run, after the tick began): the count says nothing of it.
+		x := pipeFx(t)
+		x.local(index.LocalStatus{WaitingSessions: []string{}})
+		x.retained(ago(5*time.Minute), "conversation:s2", "retry", 0)
+		x.tel(ago(time.Minute), telemetry.Job{Name: "tick", Status: "done", MS: int((10 * time.Minute).Milliseconds())}, "", "")
+		flow := pipeOf(x, x.query(7))["pipeline.flow"]
+		if extraInt(t, flow, "waiting") != 1 || extraInt(t, flow, "backlog_oldest_ms") != (5*time.Minute).Milliseconds() {
+			t.Errorf("flow extra %v, want s2 waiting for 5 min", flow.Extra)
+		}
+	})
+	t.Run("without the list: a session waits, so nothing settles", func(t *testing.T) {
+		// A reach.json from an earlier version names no session: the count
+		// alone decides, and a session waits.
 		x := pipeFx(t)
 		x.local(index.LocalStatus{SessionsWaiting: 1})
 		stale(x)

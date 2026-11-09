@@ -430,11 +430,32 @@ func inWindow(bs []hindsight.LLMBucket, src llmSpan, since, until time.Time, loc
 // times bound nothing (the record's whole UTC days).
 type llmSpan struct{ From, To time.Time }
 
-// UTCDayIn says the UTC day starting at dayStart, read at readAt (nothing
-// after it), counts in [since, until) by the dashboard's rule (bucketIn):
-// `backsight stats` counts its extraction days the same way.
-func UTCDayIn(dayStart, readAt, since, until time.Time) bool {
-	return bucketIn(dayStart, day, llmSpan{To: readAt}, since, until)
+// LLMPeriodOf is the LLM-stats period the views read for the window
+// [since, until) at readAt (loadServer's): `backsight stats` asks the
+// server for the same one.
+func LLMPeriodOf(readAt, since, until time.Time) string {
+	return llmPeriod(viewSpan(readAt, Window{Since: since, Until: until}))
+}
+
+// ExtractionOver is the extraction tokens of an LLM-stats read of period,
+// made at readAt, over [since, until), by the views' rule (bucketIn), the
+// output holding the thoughts; and how many days of the window the read can
+// hold, counted as the report counts the window's (a part day is a day; the
+// server keeps 30, so a window reaching further back is cut), a minute's
+// leeway for the clock moving on since the window was built. `backsight stats` reports it, so the old report and the views give
+// the same figures on every window.
+func ExtractionOver(bs []hindsight.LLMBucket, period string, readAt, since, until time.Time) (input, cached, output int64, days int) {
+	src := llmSpan{From: readAt.Add(-periodLength(period)), To: readAt}
+	t, _, _ := inWindow(bs, src, since, until, time.UTC, nil)
+	end, start := until, since
+	if readAt.Before(end) {
+		end = readAt
+	}
+	if src.From.After(start) {
+		start = src.From
+	}
+	held := end.Sub(start)
+	return t.input, t.cached, t.output, ceilDays(max(0, held-time.Minute))
 }
 
 // bucketIn says a bucket [start, start+width) of the server's LLM stats (or

@@ -1249,7 +1249,7 @@ func reachingClient(t *testing.T, now, lastOK, failing time.Time) *fixture {
 	if !failing.IsZero() {
 		state.RecordReach(f.env.Dirs, false, failing)
 	}
-	state.RecordWaiting(f.env.Dirs, 2)
+	state.RecordWaiting(f.env.Dirs, []string{"s1", "s2"})
 	return f
 }
 

@@ -355,7 +355,7 @@ func TestTickWithWriteOffRefreshesWaiting(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
 	run(t, "jobs", "tick") // first tick: retain_since = 08:00
-	state.RecordWaiting(pathsOf(home), 7)
+	state.RecordWaiting(pathsOf(home), []string{"a", "b", "c", "d", "e", "f", "g"})
 	appendConfig(t, home, "[components]\nwrite = false")
 	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	writeTranscript(t, home, "s2", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))

@@ -59,7 +59,7 @@ func TestStatsWindowPeriodAndCost(t *testing.T) {
 	_ = os.MkdirAll(dir, 0o700)
 	line := `{"ts":"` + old.Format("2006-01-02T15:04:05.000Z") + `","event":"prompt","decision":"recall","plen":80,"ms":700,"session":"old"}` + "\n"
 	_ = os.WriteFile(filepath.Join(dir, "events-"+old.Format("2006-01")+".jsonl"), []byte(line), 0o600)
-	if _, out, _ := run(t, "stats", "3"); !strings.Contains(out, "0 typed") || llmPeriod != "30d" || !strings.Contains(out, "2000000 input") {
+	if _, out, _ := run(t, "stats", "3"); !strings.Contains(out, "0 typed") || llmPeriod != "7d" || !strings.Contains(out, "2000000 input") {
 		t.Errorf("3 days: period %q\n%s", llmPeriod, out)
 	}
 	_, out, _ := run(t, "stats", "7")
@@ -268,7 +268,7 @@ func TestStatsAbsoluteWindowExtraction(t *testing.T) {
 	if _, out, _ := run(t, "stats", "--since", day(60), "--until", day(50)); !strings.Contains(out, "none counted: the server keeps only the last 30 days") {
 		t.Errorf("a window older than the server's buckets:\n%s", out)
 	}
-	if _, out, _ := run(t, "stats", "--since", day(40), "--until", day(9)); !strings.Contains(out, "5000000 input") || !strings.Contains(out, "(last 20 days: the server keeps no more)") {
+	if _, out, _ := run(t, "stats", "--since", day(40), "--until", day(9)); !strings.Contains(out, "5000000 input") || !strings.Contains(out, "(last 21 days: the server keeps no more)") {
 		t.Errorf("a window cut by the server's 30 days:\n%s", out)
 	}
 }

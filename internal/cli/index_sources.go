@@ -53,7 +53,7 @@ func localStatusOf(d paths.Dirs) func() (index.LocalStatus, error) {
 	return func() (index.LocalStatus, error) {
 		var ls index.LocalStatus
 		r := state.LoadReach(d)
-		ls.ReachLastOK, ls.ReachFailingSince, ls.SessionsWaiting = r.LastOK, r.FailingSince, r.SessionsWaiting
+		ls.ReachLastOK, ls.ReachFailingSince, ls.SessionsWaiting, ls.WaitingSessions = r.LastOK, r.FailingSince, r.SessionsWaiting, r.WaitingSessions
 		b := state.LoadBreaker(d)
 		ls.BreakerFailures, ls.BreakerOpenUntil = b.Failures, b.OpenUntil
 

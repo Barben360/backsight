@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
@@ -19,6 +20,10 @@ type Reach struct {
 	FailingSince time.Time `json:"failing_since,omitzero"` // zero while the server answers
 	// SessionsWaiting: jobs tick's last count of sessions kept for retry.
 	SessionsWaiting int `json:"sessions_waiting"`
+	// WaitingSessions: the ids of those sessions (ids only, sorted); nil
+	// when the tick that wrote the file did not record them (an earlier
+	// version), an empty list when none waits.
+	WaitingSessions []string `json:"waiting_sessions"`
 }
 
 // reachRewrite: an answer rewrites the file at most once a minute (the
@@ -55,13 +60,17 @@ func RecordReach(d paths.Dirs, ok bool, at time.Time) {
 	saveReach(d, r)
 }
 
-// RecordWaiting records the number of sessions jobs tick kept for retry.
-func RecordWaiting(d paths.Dirs, n int) {
+// RecordWaiting records the sessions jobs tick kept for retry (their ids,
+// Flusher.UnsentSessions), and their number.
+func RecordWaiting(d paths.Dirs, sessions []string) {
+	if sessions == nil {
+		sessions = []string{}
+	}
 	r := LoadReach(d)
-	if r.SessionsWaiting == n {
+	if r.SessionsWaiting == len(sessions) && r.WaitingSessions != nil && slices.Equal(r.WaitingSessions, sessions) {
 		return
 	}
-	r.SessionsWaiting = n
+	r.SessionsWaiting, r.WaitingSessions = len(sessions), sessions
 	saveReach(d, r)
 }
 

@@ -30,16 +30,17 @@ func TestStatsExtractionCountsUTCDaysByTheirNoon(t *testing.T) {
 	}
 }
 
-// The days counted: exactly 7 in a 7-day window of local midnights (Paris,
-// 2026-11-02 to 2026-11-09), today counted up to the time of the read.
-func TestExtractionDaysOfAWindow(t *testing.T) {
-	readAt := time.Date(2026, 11, 9, 17, 11, 0, 0, time.UTC)
-	days := extractionDays(time.Date(2026, 11, 1, 23, 0, 0, 0, time.UTC), time.Date(2026, 11, 8, 23, 0, 0, 0, time.UTC), readAt)
-	if len(days) != 7 || days["2026-11-01"] || !days["2026-11-02"] || !days["2026-11-08"] {
-		t.Errorf("days %v, want 2026-11-02 to 2026-11-08", days)
-	}
-	days = extractionDays(time.Date(2026, 11, 2, 17, 11, 0, 0, time.UTC), readAt, readAt.Add(-time.Hour))
-	if !days["2026-11-09"] {
-		t.Errorf("days %v: today, read at 17:11, counts", days)
+// The old report reads the server as the dashboard's views do: the same
+// period for the same window (a rolling 3 or 7 days: 7d, cut by the server
+// at the window's start; 14: 30d), so the two give the same extraction
+// figures on every window.
+func TestStatsAsksTheViewsPeriod(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	for _, c := range []struct{ days, period string }{{"3", "7d"}, {"7", "7d"}, {"14", "30d"}} {
+		run(t, "stats", c.days)
+		if llmPeriod != c.period {
+			t.Errorf("stats %s asked %q, want %q (the views')", c.days, llmPeriod, c.period)
+		}
 	}
 }

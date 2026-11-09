@@ -327,58 +327,33 @@ func parseWhen(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%q is not a time (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD)", s)
 }
 
-// extractionOver reads Hindsight's LLM token use over the window, from its
-// daily buckets: the server answers 1d or 30d only (anything else silently
-// gives 7 days), so 30d is asked and the days outside [from, to] dropped.
-// A server that cannot be read leaves the rest of the report intact.
+// extractionOver reads Hindsight's LLM token use over the window as the
+// dashboard's views do: the same server period (metrics.LLMPeriodOf: it
+// counts back from now, 1, 7 or 30 days) and the same UTC days
+// (metrics.ExtractionOver), so the two give the same figures on every
+// window. A server that cannot be read leaves the rest of the report
+// intact.
 func extractionOver(cmd *cobra.Command, from, to time.Time) extraction {
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 10*time.Second)
+	ro, err := hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, 10*time.Second)
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	byDay, err := cl.LLMTokensByDay(cmd.Context(), cfg.Server.Bank, "30d")
+	readAt := now()
+	period := metrics.LLMPeriodOf(readAt, from, to)
+	bs, err := ro.LLMStats(cmd.Context(), period, "")
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	days := extractionDays(from, to, now())
-	x := extraction{Days: len(days)}
-	var thoughts int64
-	for day, t := range byDay {
-		if !days[day] {
-			continue
-		}
-		x.Input += t.Input
-		x.Cached += t.Cached
-		x.Output += t.Output
-		thoughts += t.Thoughts
-	}
-	x.Output += thoughts // billed as output
+	var x extraction
+	x.Input, x.Cached, x.Output, x.Days = metrics.ExtractionOver(bs, period, readAt, from, to)
 	if p := retain.PricesForLLM(cfg.LLM); p.Known() {
 		x.Cost, x.Currency = p.Cost(x.Input, x.Cached, x.Output, 0), p.Currency
 	}
 	return x
-}
-
-// extractionDays are the UTC days (YYYY-MM-DD) of [from, to) whose
-// extraction counts, by the dashboard's rule (metrics.UTCDayIn): a UTC day
-// counts when the middle of what it can hold (today: up to readAt) lies in
-// the window, so a window of local midnights counts exactly its days and a
-// UTC day mostly outside it is left out; and only within the server's 30
-// days, which count back from today, not from to.
-func extractionDays(from, to, readAt time.Time) map[string]bool {
-	const d = 24 * time.Hour
-	kept := readAt.UTC().Truncate(d).AddDate(0, 0, -29)
-	out := map[string]bool{}
-	for day := from.UTC().Truncate(d).Add(-d); day.Before(to); day = day.Add(d) {
-		if !day.Before(kept) && metrics.UTCDayIn(day, readAt, from, to) {
-			out[day.Format("2006-01-02")] = true
-		}
-	}
-	return out
 }
 
 // serverDays notes when the server's 30 days of buckets cut the window.

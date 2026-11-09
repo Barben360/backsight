@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,4 +71,25 @@ func TestHeldFlushLogsNoRetryForASessionAlreadySent(t *testing.T) {
 			t.Errorf("report %+v, want one retry, b-new's\n%s", env.Data, out)
 		}
 	})
+}
+
+// jobs tick names the sessions it counts as waiting (ids only), settled or
+// not, so the dashboard can tell a session that waits from one whose old
+// retry no later line superseded; none is an empty list, not unknown.
+func TestTickNamesTheSessionsThatWait(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // live retain begins
+	writeTranscript(t, home, "s-live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 9, 10, 0, 0, time.UTC)) // not settled yet
+	run(t, "jobs", "tick")
+	if r := state.LoadReach(pathsOf(home)); r.SessionsWaiting != 1 || !slices.Equal(r.WaitingSessions, []string{"s-live"}) {
+		t.Errorf("while being written: %d waiting, named %v, want 1, [s-live]", r.SessionsWaiting, r.WaitingSessions)
+	}
+	withClock(t, time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)) // settled: sent
+	run(t, "jobs", "tick")
+	if r := state.LoadReach(pathsOf(home)); r.SessionsWaiting != 0 || r.WaitingSessions == nil || len(r.WaitingSessions) != 0 {
+		t.Errorf("once sent: %d waiting, named %#v, want 0 and an empty list", r.SessionsWaiting, r.WaitingSessions)
+	}
 }
