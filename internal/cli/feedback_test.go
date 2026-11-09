@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -45,7 +47,7 @@ func feedbackJournal(t *testing.T, home string) string {
 			t.Fatal(err)
 		}
 	}
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerOptions(pathsOf(home), home), feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -511,7 +513,7 @@ func ptr(v float64) *float64 { return &v }
 func TestReplayIsReadOnly(t *testing.T) {
 	home := isolate(t)
 	dir := replayJournal(t, home)
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerOptions(pathsOf(home), home), feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
@@ -599,5 +601,52 @@ func TestARestoreAloneIsNotAMemory(t *testing.T) {
 	}
 	if res := compareReplays(nil, withRestore, withRestore, p, p, at, 3); res.Memories != 1 {
 		t.Errorf("replay counts %d memories", res.Memories)
+	}
+}
+
+// One tick builds ledger.db from the journal, settles into it, and
+// exports ledger.json, the two equal.
+func TestTickSettleBuildsTheLedgerDB(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	start := time.Now().UTC().Add(-3 * time.Hour)
+	j := feedback.NewJournal(d.FeedbackDir(), feedback.Common{Session: "s1"})
+	for _, e := range []feedback.Event{
+		{Kind: "turn", Turn: "p1", N: 1, TS: start},
+		{Kind: "shows", Turn: "p1", Path: "prompt", TS: start.Add(time.Minute), Items: []feedback.Item{{ID: logM1, Rank: 1}, {ID: logM2, Rank: 2}}},
+		{Kind: "credit", Turn: "p1", Verdict: "used", IDs: []string{logM1}, TS: start.Add(2 * time.Minute)},
+		{Kind: "stop", Turn: "p1", Outcome: "declared", StopCheck: "always", TS: start.Add(3 * time.Minute)},
+	} {
+		if err := j.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := tickOf(t); r.Feedback.Shows != 2 || r.Feedback.Credits != 1 || r.Feedback.Misses != 1 {
+		t.Errorf("the tick settled %+v, want 2 shows, 1 credit, 1 miss", r.Feedback)
+	}
+	r, err := ledgerdb.OpenReader(ledgerOptions(d, home), time.Second)
+	if err != nil {
+		t.Fatalf("no ledger.db after the tick: %v", err)
+	}
+	db, err := r.All()
+	_ = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := feedback.LoadLedger(d.FeedbackDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(d.FeedbackDir(), "ledger.json")); err != nil {
+		t.Fatalf("no ledger.json after the tick: %v", err)
+	}
+	if m := db.Memories[logM1]; m.Shown != 1 || m.Credits != 1 {
+		t.Errorf("ledger.db %s: %+v, want shown once and credited", logM1, m)
+	}
+	got, _ := json.Marshal(db.Memories)
+	want, _ := json.Marshal(exported.Memories)
+	if string(got) != string(want) {
+		t.Errorf("ledger.db %s\nledger.json %s", got, want)
 	}
 }

@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,12 +10,15 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
 )
 
 // feedbackDirs is a machine whose journal holds one shows event at last,
-// and whose ledger last settled at watermark (zero: no ledger).
+// and whose ledger last settled at watermark (zero: no ledger): a show
+// of a memory forgotten since settles then, so the settle line, the
+// ledger's watermark, is at watermark, and counts nothing.
 func feedbackDirs(t *testing.T, last, watermark time.Time) paths.Dirs {
 	t.Helper()
 	root := t.TempDir()
@@ -24,7 +28,15 @@ func feedbackDirs(t *testing.T, last, watermark time.Time) paths.Dirs {
 		t.Fatal(err)
 	}
 	if !watermark.IsZero() {
-		if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return watermark }); err != nil {
+		for _, e := range []feedback.Event{
+			{Kind: "shows", TS: watermark.Add(-3 * time.Hour), Path: "prompt", Items: []feedback.Item{{ID: "m0", Rank: 1}}},
+			{Kind: "forget", TS: watermark.Add(-2 * time.Hour), IDs: []string{"m0"}},
+		} {
+			if err := j.Append(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := ledgerdb.Settle(context.Background(), ledgerdb.Options{Dirs: d}, feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return watermark }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -234,7 +246,7 @@ func TestDoctorDoesNotCountARestoreAsAMemory(t *testing.T) {
 	if err := j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: usageNow.Add(-15 * time.Minute), IDs: []string{"never-shown"}, Outcome: "restored"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return usageNow.Add(-10 * time.Minute) }); err != nil {
+	if _, err := ledgerdb.Settle(context.Background(), ledgerdb.Options{Dirs: d}, feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return usageNow.Add(-10 * time.Minute) }); err != nil {
 		t.Fatal(err)
 	}
 	if l, _ := feedback.LoadLedger(d.FeedbackDir()); len(l.Memories) != 1 {

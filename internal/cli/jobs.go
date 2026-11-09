@@ -190,7 +190,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// After the maintenance check: it writes state.json, whose lock
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
-			res.Feedback = settleFeedback(d, cfg, tw) // local only: before the server start, which can wait
+			res.Feedback = settleFeedback(d, home, cfg, tw) // local only: before the server start, which can wait
 			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
 				tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSharedCombine))
 			}
