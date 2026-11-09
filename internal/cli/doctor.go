@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
@@ -110,6 +111,7 @@ func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	denv.Cwd, _ = os.Getwd()
 	runtimeProbes(&denv)
 	denv.MetricsIndex = func() (doctor.IndexFacts, error) { return indexFacts(context.Background(), d, home) }
+	denv.LedgerFacts = func() (ledgerdb.LedgerFacts, error) { return ledgerdb.Facts(ledgerOptions(d, home)) }
 	if doctorGOOS == "windows" {
 		denv.ShimCopies = func() []string { return shimCopies(filepath.Join(d.Data, "bin", plugin.ShimName("windows"))) }
 		denv.GitBash = &doctor.GitBashProbe{Getenv: os.Getenv, LookPath: exec.LookPath, Exists: func(p string) bool {

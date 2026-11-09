@@ -187,7 +187,16 @@ func TestFeedbackErrorsCarryAReasonOnly(t *testing.T) {
 		breakFeedbackDir(t, home)
 		recallAnswer = hits(0.9)
 		call(t, cs, "memory_search", map[string]any{"queries": []string{"billing database"}})
-		if got := reasonsOf(t, home); !slices.Equal(got, []string{telemetry.FeedbackReasonJournalWrite}) {
+		// The ledger under a regular file: on POSIX a path there is
+		// ENOTDIR, so neither ledger.db nor ledger.json can be read. On
+		// Windows it is not found (the repo's note on this:
+		// internal/server/native_guard_test.go:496), so ledger.db is
+		// missing and the missing ledger.json reads as an empty ledger.
+		want := []string{telemetry.FeedbackReasonLedgerUnreadable, telemetry.FeedbackReasonLedgerJSON, telemetry.FeedbackReasonJournalWrite}
+		if runtime.GOOS == "windows" {
+			want = []string{telemetry.FeedbackReasonLedgerMissing, telemetry.FeedbackReasonJournalWrite}
+		}
+		if got := reasonsOf(t, home); !slices.Equal(got, want) {
 			t.Errorf("reasons %v", got)
 		}
 	})

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb/ledgerdbtest"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/recall"
 )
@@ -198,10 +200,22 @@ func writeLedger(t *testing.T, home, content string) {
 	}
 }
 
-// creditedLedger: m2 used ten times just now, m1 hidden after a report.
+// creditedLedger is ledger.json's text for creditedEntries.
 func creditedLedger() string {
-	at := time.Now().UTC().Format(time.RFC3339Nano)
-	return `{"schema":1,"watermark":"` + at + `","memories":{"m2":{"shown":10,"credits":10,"credits_at":"` + at + `"},"m1":{"shown":1,"hidden":{"since":"` + at + `","verdict":"wrong"}}}}`
+	raw, err := json.Marshal(creditedEntries())
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// creditedEntries: m2 used ten times just now, m1 hidden after a report.
+func creditedEntries() feedback.Ledger {
+	at := time.Now().UTC()
+	return feedback.Ledger{Schema: feedback.LedgerSchema, Watermark: at, Memories: map[string]feedback.Entry{
+		"m2": {Shown: 10, Credits: 10, CreditsAt: at, LastCredited: at, LastShown: at},
+		"m1": {Shown: 1, Hidden: &feedback.Hidden{Since: at, Verdict: "wrong"}},
+	}}
 }
 
 // boostAnswer: m1 0.02 above m2, with m3 under them.
@@ -225,19 +239,23 @@ func searchHits(t *testing.T) string {
 }
 
 // The ledger reorders search hits and hides what was reported: m2, used
-// often, climbs over m1, hidden.
+// often, climbs over m1, hidden. It is read from ledger.db, with no
+// fallback to ledger.json.
 func TestSearchFollowsTheLedger(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	t.Setenv("BACKSIGHT_PROJECT", "billing")
 	recallAnswer = boostAnswer
-	writeLedger(t, home, creditedLedger())
+	ledgerdbtest.Seed(t, pathsOf(home), creditedEntries())
 	var hits []recall.Hit
 	if err := json.Unmarshal([]byte(searchHits(t)), &hits); err != nil {
 		t.Fatal(err)
 	}
 	if len(hits) != 2 || hits[0].ID != "m2" || hits[0].Boost <= 0 || hits[0].RankWithoutBoost != 1 || hits[1].ID != "m3" || hits[1].Boost != 0 || hits[1].RankWithoutBoost != 2 {
 		t.Errorf("hits %+v", hits)
+	}
+	if got := reasonsOf(t, home); len(got) != 0 {
+		t.Errorf("the ledger database was not read cleanly: feedback_error %v", got)
 	}
 }
 

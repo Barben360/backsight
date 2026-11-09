@@ -23,10 +23,20 @@ const (
 // table mirrors.
 const metaLedgerSHA = "ledger_sha256"
 
-// stamper is a LedgerReader that can stamp what it reads
-// (feedback.CurrentReader).
+// stamper is a LedgerSource that can stamp what it reads
+// (feedback.CurrentReader, the ledger database's reader).
 type stamper interface {
 	Stamp() (feedback.Stamp, error)
+}
+
+// stampedReader is a stamper whose read also stamps what it read, just
+// before reading it (the cli's chain: the ledger database, or ledger.json
+// when it falls back; stamped false: no stamp). The skip keeps that
+// stamp: one taken apart from the read could name another file than the
+// one read, and keep that read until the other file changes.
+type stampedReader interface {
+	stamper
+	StampedAll() (l feedback.Ledger, st feedback.Stamp, stamped bool, err error)
 }
 
 // stampSettle is how much older than a read's start the newest file of
@@ -60,7 +70,8 @@ type ledgerSkip struct {
 // good read, that stamp was settled (its newest file older than that
 // read's start by stampSettle), and the index still holds that read: its
 // SHA and no ledger_unreadable row (another process storing an older read
-// is healed as above). Anything else reads.
+// is healed as above). Anything else reads. The stamp kept for a
+// stampedReader is the one its read took.
 func (ix *Index) refreshLedger(ctx context.Context) error {
 	ix.skip.mu.Lock()
 	defer ix.skip.mu.Unlock()
@@ -77,7 +88,8 @@ func (ix *Index) refreshLedger(ctx context.Context) error {
 		}
 	}
 	ix.skip.ok = false
-	sum, good, err := ix.mirrorLedger(ctx)
+	l, st, stamped, rerr := ix.readLedger(st, stamped)
+	sum, good, err := ix.mirrorLedger(ctx, l, rerr)
 	if err != nil || !good {
 		return err
 	}
@@ -85,6 +97,17 @@ func (ix *Index) refreshLedger(ctx context.Context) error {
 		ix.skip.stamp, ix.skip.sha, ix.skip.ok = st, sum, true
 	}
 	return nil
+}
+
+// readLedger reads the ledger through Options.Ledger, with the stamp the
+// skip may keep: a stampedReader's own when the skip may apply, else st
+// (stamped: there is one), taken before the read.
+func (ix *Index) readLedger(st feedback.Stamp, stamped bool) (feedback.Ledger, feedback.Stamp, bool, error) {
+	if s, ok := ix.opts.Ledger.(stampedReader); ok && stamped {
+		return s.StampedAll()
+	}
+	l, err := ix.opts.Ledger.All()
+	return l, st, stamped, err
 }
 
 // ledgerStamp is the reader's stamp when the skip may apply: a local
@@ -112,11 +135,10 @@ func (ix *Index) mirroredLedger(ctx context.Context) (seen string, flagged bool,
 	return seen, flagged, err
 }
 
-// mirrorLedger reads the ledger and mirrors it (refreshLedger without the
-// skip): good when the read succeeded and the table now holds it, sum its
-// SHA.
-func (ix *Index) mirrorLedger(ctx context.Context) (sum string, good bool, err error) {
-	l, err := ix.opts.Ledger.All()
+// mirrorLedger mirrors l, the ledger read (err: its read failed), into
+// the ledger table (refreshLedger without the skip): good when the read
+// succeeded and the table now holds it, sum its SHA.
+func (ix *Index) mirrorLedger(ctx context.Context, l feedback.Ledger, err error) (sum string, good bool, _ error) {
 	var raw []byte
 	if err == nil {
 		raw, err = json.Marshal(l) // fails on a NaN: as unreadable

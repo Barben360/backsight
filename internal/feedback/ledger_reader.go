@@ -11,10 +11,21 @@ import (
 	"time"
 )
 
-// LedgerReader is how anything but the folding reads the ledger. Today:
-// CurrentReader, ledger.json plus the folded lines since its watermark,
-// without the ledger lock. Block 7 swaps the implementation, nothing else.
-type LedgerReader interface{ All() (Ledger, error) }
+// LedgerReader is how anything but the folding reads the ledger, the
+// lines journaled since its last fold applied: the ledger database, or
+// CurrentReader (ledger.json) when the database cannot be read.
+type LedgerReader interface {
+	// Get is the entries of ids, only those that have one.
+	Get(ids []string) (map[string]Entry, error)
+	// Hidden is every entry with Hidden set.
+	Hidden() (map[string]Entry, error)
+	// All is the whole ledger.
+	All() (Ledger, error)
+	// Any reports whether the ledger holds any entry at all.
+	Any() (bool, error)
+	// GetAny is Get and Any in one read: what recall asks at each search.
+	GetAny(ids []string) (map[string]Entry, bool, error)
+}
 
 // CurrentReader reads Dir's ledger as Current does: it never takes the
 // ledger lock, so a settle in progress never makes it wait.
@@ -22,6 +33,48 @@ type CurrentReader struct{ Dir string }
 
 // All is Current(r.Dir).
 func (r CurrentReader) All() (Ledger, error) { return Current(r.Dir) }
+
+// Get is the entries of Current(r.Dir) among ids.
+func (r CurrentReader) Get(ids []string) (map[string]Entry, error) {
+	m, _, err := r.GetAny(ids)
+	return m, err
+}
+
+// Hidden is the hidden entries of Current(r.Dir).
+func (r CurrentReader) Hidden() (map[string]Entry, error) {
+	l, err := Current(r.Dir)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]Entry{}
+	for id, e := range l.Memories {
+		if e.Hidden != nil {
+			out[id] = e
+		}
+	}
+	return out, nil
+}
+
+// Any reports whether Current(r.Dir) holds an entry.
+func (r CurrentReader) Any() (bool, error) {
+	l, err := Current(r.Dir)
+	return len(l.Memories) > 0, err
+}
+
+// GetAny is Get and Any over one read of Current(r.Dir).
+func (r CurrentReader) GetAny(ids []string) (map[string]Entry, bool, error) {
+	l, err := Current(r.Dir)
+	if err != nil {
+		return nil, false, err
+	}
+	out := map[string]Entry{}
+	for _, id := range ids {
+		if e, ok := l.Memories[id]; ok {
+			out[id] = e
+		}
+	}
+	return out, len(l.Memories) > 0, nil
+}
 
 // Stamp is what All reads, as the directory lists it: each file's name,
 // size and mtime, and the newest mtime. Two equal stamps mean All reads

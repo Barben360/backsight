@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
@@ -107,6 +108,9 @@ type Env struct {
 	// Switch is the last runtime switch, nil for none, and the other
 	// runtime's data kept since with its size ("" none); nil: not asked.
 	Switch func() (*state.RuntimeSwitch, string)
+	// LedgerFacts reads the feedback ledger's database, read-only (nil:
+	// ledgerdb.Facts under Dirs).
+	LedgerFacts func() (ledgerdb.LedgerFacts, error)
 	// MetricsIndex reads the local metrics index, read-only (nil: not
 	// asked). The cli reduces a read failure to its class.
 	MetricsIndex func() (IndexFacts, error)
@@ -267,7 +271,18 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkJobs(env.Dirs, now(), env.Linger))
 	feedbackOn := cfgErr != nil || cfg.Feedback.Enabled // no config.toml: the default, on
 	shareOn := cfgErr != nil || cfg.Feedback.ShareLedger
-	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn), checkFeedbackShared(env.Dirs, feedbackOn, shareOn, now()), checkMachinesShare(env.Dirs, feedbackOn, shareOn, now()))
+	ledgerFacts := env.LedgerFacts
+	if ledgerFacts == nil {
+		ledgerFacts = func() (ledgerdb.LedgerFacts, error) {
+			return ledgerdb.Facts(ledgerdb.Options{Dirs: env.Dirs, Home: env.Home, Getenv: env.Getenv})
+		}
+	}
+	var lf ledgerdb.LedgerFacts
+	var lerr error
+	if feedbackOn {
+		lf, lerr = ledgerFacts()
+	}
+	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn, lf, lerr, now()), checkFeedbackShared(env.Dirs, feedbackOn, shareOn, now()), checkMachinesShare(env.Dirs, feedbackOn, shareOn, now()))
 	if env.MetricsIndex != nil {
 		f, err := env.MetricsIndex()
 		add(checkMetricsIndex(f, err, f.LagSeconds > indexLagLimit && tickRecent(env.Dirs, now())))

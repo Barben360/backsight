@@ -677,7 +677,9 @@ func TestCITestCheckNeedsEveryLinuxTestJob(t *testing.T) {
 // with backup semantics, so a read passes a deny ACE and the tests of an
 // unreadable file fail (TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable).
 // The time budgets run apart, one package at a time: the slices skip
-// exactly the tests test-windows-budgets runs, make bench-index's.
+// make bench-index's tests, and test-windows-budgets runs those of the
+// index, metrics and dashboard packages (the ledger's two are not
+// measured on Windows yet).
 func TestCIRunsWindowsTestsInPowerShellAndItsBudgetsApart(t *testing.T) {
 	jobs := ciJobs(t)
 	steps := 0
@@ -724,9 +726,9 @@ func TestCIRunsWindowsTestsInPowerShellAndItsBudgetsApart(t *testing.T) {
 	if bench == nil {
 		t.Fatal("Makefile has no bench-index target")
 	}
-	names := regexp.MustCompile(`Test[A-Za-z]+Budgets`).FindAllString(string(bench[1]), -1)
-	if len(names) < 4 {
-		t.Fatalf("make bench-index names %v, want its four budget tests", names)
+	names := regexp.MustCompile(`Test[A-Za-z0-9]+`).FindAllString(string(bench[1]), -1)
+	if len(names) < 6 {
+		t.Fatalf("make bench-index names %v, want its six budget tests", names)
 	}
 	for _, n := range names {
 		if !re.MatchString(n) {

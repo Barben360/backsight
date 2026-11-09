@@ -10,6 +10,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // staleHidden: a memory hidden on this machine is listed once it stayed
@@ -67,7 +68,8 @@ func newMemoryStaleCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			l, err := feedback.Current(d.FeedbackDir())
+			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+			l, err := commandLedger(d, cfg, tw).All()
 			if err != nil {
 				return blocked(err)
 			}

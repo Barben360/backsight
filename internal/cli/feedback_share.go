@@ -79,16 +79,16 @@ var shareTickBudget = 10 * time.Second
 // not parse. A failure keeps the cache and the upload record as they
 // were; the caller never fails for it.
 func shareLedger(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg config.Config, machine string, now time.Time) (uploaded bool, machines, skipped int, err error) {
-	return shareLedgerListed(ctx, cl, &controlListing{}, d, cfg, machine, now)
+	return shareLedgerListed(ctx, cl, &controlListing{}, d, cfg, machine, now, tickLedger(d, cfg, nil).read)
 }
 
 // shareLedgerListed is shareLedger reading the control bank through the
 // tick's one listing l.
-func shareLedgerListed(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time) (uploaded bool, machines, skipped int, err error) {
+func shareLedgerListed(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time, ledger func() (feedback.Ledger, error)) (uploaded bool, machines, skipped int, err error) {
 	if !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger || machine == "" {
 		return false, 0, 0, nil
 	}
-	uploaded, uerr := uploadShared(ctx, cl, d, cfg, machine, now)
+	uploaded, uerr := uploadShared(ctx, cl, d, cfg, machine, now, ledger)
 	machines, skipped, rerr := refreshShared(ctx, cl, l, d, cfg.Server.Bank, machine, now, feedbackParams(cfg))
 	return uploaded, machines, skipped, errors.Join(uerr, rerr)
 }
@@ -98,8 +98,8 @@ func shareLedgerListed(ctx context.Context, cl *hindsight.Client, l *controlList
 // back), it was sent to another server or bank (shareTarget), its hidden
 // ids changed, its entries changed and the last send is an hour old, or
 // the last send is a week old.
-func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg config.Config, machine string, now time.Time) (bool, error) {
-	l, err := feedback.Current(d.FeedbackDir())
+func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg config.Config, machine string, now time.Time, ledger func() (feedback.Ledger, error)) (bool, error) {
+	l, err := ledger()
 	if err != nil {
 		return false, err
 	}

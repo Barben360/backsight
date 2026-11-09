@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Barben360/backsight/internal/sqlitedb"
 )
@@ -77,12 +78,17 @@ var probeVersion = fileVersion
 // changes nothing (0: no file). An idle WAL file opens immutable, so that
 // no -wal or -shm is created beside it.
 func fileVersion(ctx context.Context, path string) (int, error) {
+	return fileVersionWait(ctx, path, writerBusy)
+}
+
+// fileVersionWait is fileVersion waiting at most busy for a writer's lock.
+func fileVersionWait(ctx context.Context, path string, busy time.Duration) (int, error) {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	} else if err != nil {
 		return 0, err
 	}
-	db, err := sql.Open(driverName, sqlitedb.ProbeDSN(path, idleWAL(path), writerBusy))
+	db, err := sql.Open(driverName, sqlitedb.ProbeDSN(path, idleWAL(path), busy))
 	if err != nil {
 		return 0, err
 	}

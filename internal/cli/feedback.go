@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
@@ -23,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/sqlitedb"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // newFeedbackCmd is `feedback`: the journal of the memories shown to
@@ -48,15 +50,25 @@ func feedbackSetup() (string, feedback.Params, error) {
 // feedbackConfig is the feedback directory and this machine's
 // configuration, the defaults without config.toml.
 func feedbackConfig() (string, config.Config, error) {
-	d, home, err := machine()
+	d, cfg, err := feedbackMachine()
 	if err != nil {
 		return "", config.Config{}, err
 	}
+	return d.FeedbackDir(), cfg, nil
+}
+
+// feedbackMachine is this machine's directories and configuration, the
+// defaults without config.toml.
+func feedbackMachine() (paths.Dirs, config.Config, error) {
+	d, home, err := machine()
+	if err != nil {
+		return paths.Dirs{}, config.Config{}, err
+	}
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", config.Config{}, blocked(err)
+		return paths.Dirs{}, config.Config{}, blocked(err)
 	}
-	return d.FeedbackDir(), cfg, nil
+	return d, cfg, nil
 }
 
 // logEvent is one line of a timeline: a journal event narrowed to the
@@ -115,10 +127,11 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 				}
 				from = t
 			}
-			dir, p, err := feedbackSetup()
+			d, cfg, err := feedbackMachine()
 			if err != nil {
 				return err
 			}
+			dir, p := d.FeedbackDir(), feedbackParams(cfg)
 			events, skipped, err := feedback.Read(dir, from)
 			if err != nil {
 				return blocked(err)
@@ -135,10 +148,11 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 			}
 			res := logResult{ID: id, Session: sess, Since: from, Events: timeline(events, id, sess, from), Skipped: skipped}
 			if id != "" {
-				l, err := feedback.LoadLedger(dir)
+				tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+				got, err := commandLedger(d, cfg, tw).Get([]string{id})
 				if err != nil {
 					res.LedgerError = err.Error()
-				} else if entry, ok := l.Memories[id]; ok {
+				} else if entry, ok := got[id]; ok {
 					res.At = now().UTC()
 					entry = entry.DecayedTo(res.At, p)
 					res.Entry = &entry
@@ -455,16 +469,10 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 
 // rebuildCurrent is the ledger feedback rebuild compares with: ledger.db
 // with the journal lines since its last fold, or, when it cannot be read
-// (not built yet, say), ledger.json with them.
+// (not built yet, say), ledger.json with them (indexLedger: whatever
+// feedback's switch, its read error reported by the rebuild).
 func rebuildCurrent(o ledgerdb.Options) (feedback.Ledger, error) {
-	if r, err := ledgerdb.OpenReader(o, 5*time.Second); err == nil {
-		l, err := r.All()
-		_ = r.Close()
-		if err == nil {
-			return l, nil
-		}
-	}
-	return feedback.Current(o.Dirs.FeedbackDir())
+	return indexLedger(o.Dirs).All()
 }
 
 // planRebuild is what feedback rebuild would fold: a ledger database

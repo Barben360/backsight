@@ -2,7 +2,9 @@ package doctor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,11 +38,59 @@ func feedbackDirs(t *testing.T, last, watermark time.Time) paths.Dirs {
 				t.Fatal(err)
 			}
 		}
-		if _, err := ledgerdb.Settle(context.Background(), ledgerdb.Options{Dirs: d}, feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return watermark }); err != nil {
-			t.Fatal(err)
-		}
+		foldAt(t, d, watermark)
 	}
 	return d
+}
+
+// foldAt settles d's journal into its ledger database at clock time at
+// (the fold's time too).
+func foldAt(t *testing.T, d paths.Dirs, at time.Time) {
+	t.Helper()
+	clock := func() time.Time { return at }
+	if _, err := ledgerdb.Settle(context.Background(), ledgerdb.Options{Dirs: d, Now: clock}, feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, clock); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ledgerCheck is the feedback-ledger check of d at usageNow, its facts
+// read as doctor reads them.
+func ledgerCheck(t *testing.T, d paths.Dirs) Check {
+	t.Helper()
+	f, err := ledgerdb.Facts(ledgerdb.Options{Dirs: d})
+	return checkFeedbackLedger(d, true, f, err, usageNow)
+}
+
+// telemetryAt appends telemetry lines to d's month file, each at
+// usageNow minus its age.
+func telemetryAt(t *testing.T, d paths.Dirs, lines map[time.Duration][]string) {
+	t.Helper()
+	if err := os.MkdirAll(d.TelemetryDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-2026-10.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	for age, ls := range lines {
+		for _, l := range ls {
+			if _, err := fmt.Fprintf(f, `{"ts":%q,%s}`+"\n", usageNow.Add(-age).Format("2006-01-02T15:04:05.000Z"), l); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+const tickLine = `"event":"job","name":"tick","status":"done"`
+
+// fallbacks are n feedback_error lines of reason.
+func fallbacks(reason string, n int) []string {
+	var out []string
+	for range n {
+		out = append(out, `"event":"feedback_error","reason":"`+reason+`"`)
+	}
+	return out
 }
 
 func journalFile(t *testing.T, d paths.Dirs) string {
@@ -59,7 +109,7 @@ func TestDoctorFeedbackChecks(t *testing.T) {
 	if c := checkFeedbackJournal(healthy, true); c.Status != OK {
 		t.Errorf("healthy journal: %+v", c)
 	}
-	if c := checkFeedbackLedger(healthy, true); c.Status != OK {
+	if c := ledgerCheck(t, healthy); c.Status != OK {
 		t.Errorf("healthy ledger: %+v", c)
 	}
 
@@ -93,40 +143,17 @@ func TestDoctorFeedbackChecks(t *testing.T) {
 		}
 	}
 
-	// The ledger last settled more than 24 h before the newest event.
+	// The ledger last folded more than 24 h before the newest event.
 	stale := feedbackDirs(t, recent, usageNow.Add(-26*time.Hour))
-	if c := checkFeedbackLedger(stale, true); c.Status != Warn || !strings.Contains(c.Fix, "backsight jobs tick") {
-		t.Errorf("stale watermark: %+v", c)
+	if c := ledgerCheck(t, stale); c.Status != Warn || !strings.Contains(c.Fix, "backsight jobs tick") {
+		t.Errorf("stale fold: %+v", c)
 	}
-	if c := checkFeedbackLedger(feedbackDirs(t, recent, usageNow.Add(-23*time.Hour)), true); c.Status != OK {
+	if c := ledgerCheck(t, feedbackDirs(t, recent, usageNow.Add(-23*time.Hour))); c.Status != OK {
 		t.Errorf("23 h behind: %+v", c)
-	}
-	// Never settled, and the journal spans more than a day.
-	never := feedbackDirs(t, recent, time.Time{})
-	j := feedback.NewJournal(never.FeedbackDir(), feedback.Common{Session: "s0"})
-	_ = j.Append(feedback.Event{Kind: "turn", Turn: "p0", TS: recent.Add(-30 * time.Hour)})
-	if c := checkFeedbackLedger(never, true); c.Status != Warn {
-		t.Errorf("never settled: %+v", c)
-	}
-	if c := checkFeedbackLedger(feedbackDirs(t, recent, time.Time{}), true); c.Status != OK {
-		t.Errorf("never settled, one fresh event: %+v", c)
-	}
-
-	// A ledger of another schema: an error naming the rebuild.
-	unknown := feedbackDirs(t, recent, usageNow)
-	_ = os.WriteFile(filepath.Join(unknown.FeedbackDir(), "ledger.json"), []byte(`{"schema":9,"memories":{}}`), 0o600)
-	if c := checkFeedbackLedger(unknown, true); c.Status != Error || !strings.Contains(c.Fix, "backsight feedback rebuild") || !strings.Contains(c.Detail, "settles nothing") {
-		t.Errorf("unknown schema: %+v", c)
-	}
-	// One that does not parse: the next tick rebuilds it.
-	corrupt := feedbackDirs(t, recent, usageNow)
-	_ = os.WriteFile(filepath.Join(corrupt.FeedbackDir(), "ledger.json"), []byte(`{"schema":1,`), 0o600)
-	if c := checkFeedbackLedger(corrupt, true); c.Status != Error || !strings.Contains(c.Detail, "the next tick keeps it aside and rebuilds it") {
-		t.Errorf("corrupt: %+v", c)
 	}
 
 	// [feedback] enabled = false: both inform, whatever the files say.
-	for _, c := range []Check{checkFeedbackJournal(huge, false), checkFeedbackLedger(unknown, false)} {
+	for _, c := range []Check{checkFeedbackJournal(huge, false), checkFeedbackLedger(huge, false, ledgerdb.LedgerFacts{OpenError: "notadb"}, nil, usageNow)} {
 		if c.Status != Info || !strings.Contains(c.Summary, "enabled = false") {
 			t.Errorf("disabled: %+v", c)
 		}
@@ -137,7 +164,7 @@ func TestDoctorFeedbackChecks(t *testing.T) {
 	if c := checkFeedbackJournal(empty, true); c.Status != OK {
 		t.Errorf("no journal: %+v", c)
 	}
-	if c := checkFeedbackLedger(empty, true); c.Status != OK {
+	if c := ledgerCheck(t, empty); c.Status != OK {
 		t.Errorf("no journal, no ledger: %+v", c)
 	}
 }
@@ -252,13 +279,214 @@ func TestDoctorDoesNotCountARestoreAsAMemory(t *testing.T) {
 	if err := j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: usageNow.Add(-15 * time.Minute), IDs: []string{"never-shown"}, Outcome: "restored"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ledgerdb.Settle(context.Background(), ledgerdb.Options{Dirs: d}, feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return usageNow.Add(-10 * time.Minute) }); err != nil {
-		t.Fatal(err)
-	}
+	foldAt(t, d, usageNow.Add(-10*time.Minute))
 	if l, _ := feedback.LoadLedger(d.FeedbackDir()); len(l.Memories) != 1 {
 		t.Fatalf("ledger %+v", l.Memories)
 	}
-	if c := checkFeedbackLedger(d, true); c.Status != OK || !strings.HasPrefix(c.Summary, "0 memories,") {
+	if c := ledgerCheck(t, d); c.Status != OK || !strings.HasPrefix(c.Summary, "0 memories,") {
 		t.Errorf("%+v", c)
+	}
+}
+
+// The texts of the ledger.json check this one replaces: the tick no
+// longer keeps a file aside at each run, and a database that cannot be
+// read stops no settle.
+var oldLedgerDetails = []string{"the next tick keeps it aside and rebuilds it from the journal", "the tick settles nothing while it cannot be read"}
+
+func noOldDetail(t *testing.T, name string, c Check) {
+	t.Helper()
+	for _, old := range oldLedgerDetails {
+		if strings.Contains(c.Summary+c.Detail+c.Fix, old) {
+			t.Errorf("%s: %q in %+v", name, old, c)
+		}
+	}
+}
+
+// TestDoctorLedgerFacts: the feedback-ledger check reads the ledger
+// database's facts: built and folded lately is fine; missing is "not
+// built yet" until a recent tick could not build it, which names the
+// folder and why; a side file beside a newer database is named; a fold
+// more than a day behind the journal is the lag warning, an empty fold
+// is no lag.
+func TestDoctorLedgerFacts(t *testing.T) {
+	recent := usageNow.Add(-30 * time.Minute)
+	cases := []struct {
+		name  string
+		check func(t *testing.T) Check
+		want  Status
+		has   []string
+	}{
+		{"built and current", func(t *testing.T) Check {
+			return ledgerCheck(t, feedbackDirs(t, recent, usageNow.Add(-10*time.Minute)))
+		}, OK, []string{"memories, settled up to"}},
+		{"built, a journal of one fresh show: nothing settled yet", func(t *testing.T) Check {
+			d := feedbackDirs(t, usageNow.Add(-10*time.Minute), time.Time{})
+			foldAt(t, d, usageNow) // the show is within its turn: settles nothing, builds ledger.db
+			c := ledgerCheck(t, d)
+			if c.Summary != "nothing settled yet" {
+				t.Errorf("summary %q, want %q", c.Summary, "nothing settled yet")
+			}
+			return c
+		}, OK, nil},
+		{"built, no journal: nothing journaled yet", func(t *testing.T) Check {
+			d := paths.Dirs{State: filepath.Join(t.TempDir(), "state")}
+			foldAt(t, d, usageNow)
+			c := ledgerCheck(t, d)
+			if c.Summary != "nothing journaled yet" {
+				t.Errorf("summary %q, want %q", c.Summary, "nothing journaled yet")
+			}
+			return c
+		}, OK, nil},
+		{"missing, a journal, no tick", func(t *testing.T) Check {
+			return ledgerCheck(t, feedbackDirs(t, recent, time.Time{}))
+		}, OK, []string{"not built yet: it builds at the next jobs tick"}},
+		{"missing, a journal, no tick, the folder read-only", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, time.Time{})
+			return checkFeedbackLedger(d, true, ledgerdb.LedgerFacts{File: ledgerdb.FileName, Head: 1, OpenError: "readonly"}, nil, usageNow)
+		}, OK, []string{"not built yet"}},
+		{"missing, a tick in the last hour, the folder read-only", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, time.Time{})
+			telemetryAt(t, d, map[time.Duration][]string{10 * time.Minute: {tickLine}})
+			c := checkFeedbackLedger(d, true, ledgerdb.LedgerFacts{File: ledgerdb.FileName, Head: 1, OpenError: "readonly"}, nil, usageNow)
+			if !strings.Contains(c.Summary, d.FeedbackDir()) || !strings.Contains(c.Fix, d.FeedbackDir()) {
+				t.Errorf("%+v: the folder %s is not named", c, d.FeedbackDir())
+			}
+			return c
+		}, Warn, []string{"readonly", "writable"}},
+		{"built but held by another process, a tick lately", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			telemetryAt(t, d, map[time.Duration][]string{10 * time.Minute: {tickLine}})
+			c := checkFeedbackLedger(d, true, ledgerdb.LedgerFacts{File: ledgerdb.FileName, Head: 1, Busy: true}, nil, usageNow)
+			for _, not := range []string{"not built", "writable"} {
+				if strings.Contains(c.Summary+" "+c.Detail+" "+c.Fix, not) {
+					t.Errorf("%+v: says %q of a busy database", c, not)
+				}
+			}
+			return c
+		}, Warn, []string{"in use by another process", "doctor again"}},
+		{"a side file in use", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			db, err := sql.Open("sqlite", "file:"+filepath.Join(d.FeedbackDir(), ledgerdb.FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec("PRAGMA user_version = 2"); err != nil {
+				t.Fatal(err)
+			}
+			_ = db.Close()
+			foldAt(t, d, usageNow.Add(-5*time.Minute))
+			return ledgerCheck(t, d)
+		}, Warn, []string{ledgerdb.SideFileName(1)}},
+		{"a fold 25 h old, a tick lately", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-25*time.Hour))
+			telemetryAt(t, d, map[time.Duration][]string{10 * time.Minute: {tickLine}})
+			return ledgerCheck(t, d)
+		}, Warn, []string{"folded up to", "backsight jobs tick"}},
+		{"an empty fold 1 h ago, no show for a day", func(t *testing.T) Check {
+			d := feedbackDirs(t, usageNow.Add(-30*time.Hour), usageNow.Add(-29*time.Hour))
+			foldAt(t, d, usageNow.Add(-26*time.Hour)) // the last show settled: the watermark
+			foldAt(t, d, usageNow.Add(-time.Hour))    // nothing new
+			telemetryAt(t, d, map[time.Duration][]string{10 * time.Minute: {tickLine}})
+			return ledgerCheck(t, d)
+		}, OK, []string{"memories, settled up to"}},
+		{"a show 10 min ago, after an empty fold 1 h ago", func(t *testing.T) Check {
+			// The watermark is a day old; the fold is not behind.
+			d := feedbackDirs(t, usageNow.Add(-30*time.Hour), usageNow.Add(-29*time.Hour))
+			foldAt(t, d, usageNow.Add(-26*time.Hour))
+			foldAt(t, d, usageNow.Add(-time.Hour))
+			j := feedback.NewJournal(d.FeedbackDir(), feedback.Common{Session: "s2"})
+			if err := j.Append(feedback.Event{Kind: "shows", TS: usageNow.Add(-10 * time.Minute), Path: "prompt", Items: []feedback.Item{{ID: "m2", Rank: 1}}}); err != nil {
+				t.Fatal(err)
+			}
+			return ledgerCheck(t, d)
+		}, OK, []string{"memories, settled up to"}},
+		{"a corrupt database", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			if err := os.WriteFile(filepath.Join(d.FeedbackDir(), ledgerdb.FileName), []byte(strings.Repeat("not a database ", 100)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return ledgerCheck(t, d)
+		}, Warn, []string{"notadb", "backsight feedback rebuild"}},
+		{"an export behind at two ticks", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			f, err := ledgerdb.Facts(ledgerdb.Options{Dirs: d})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.ExportBehind = true
+			telemetryAt(t, d, map[time.Duration][]string{20 * time.Minute: fallbacks("ledger_export", 1), 5 * time.Minute: fallbacks("ledger_export", 1)})
+			return checkFeedbackLedger(d, true, f, nil, usageNow)
+		}, Warn, []string{"ledger.json"}},
+		{"an export behind, no failure logged", func(t *testing.T) Check {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			f, err := ledgerdb.Facts(ledgerdb.Options{Dirs: d})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.ExportBehind = true
+			return checkFeedbackLedger(d, true, f, nil, usageNow)
+		}, OK, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.check(t)
+			if got.ID != "feedback-ledger" || got.Status != c.want {
+				t.Errorf("%+v, want %s", got, c.want)
+			}
+			// a zero time is never shown
+			if all := got.Summary + " " + got.Detail + " " + got.Fix; strings.Contains(all, "0001-01-01") {
+				t.Errorf("%+v: a zero time", got)
+			}
+			for _, h := range c.has {
+				if !strings.Contains(got.Summary+" "+got.Detail+" "+got.Fix, h) {
+					t.Errorf("%+v: no %q", got, h)
+				}
+			}
+			noOldDetail(t, c.name, got)
+		})
+	}
+}
+
+// TestDoctorReportsRepeatedLedgerFallbacks: three reads or more in a day
+// that fell back past the database (or failed to fold or export it) are
+// a warning naming the most frequent reason and the rebuild; fewer, older
+// ones and ledger_missing (the missing line's) are not.
+func TestDoctorReportsRepeatedLedgerFallbacks(t *testing.T) {
+	recent := usageNow.Add(-30 * time.Minute)
+	for _, c := range []struct {
+		name  string
+		lines map[time.Duration][]string
+		want  Status
+		has   []string
+	}{
+		{"2 ledger_busy", map[time.Duration][]string{time.Hour: fallbacks("ledger_busy", 2)}, OK, nil},
+		{"3 ledger_busy", map[time.Duration][]string{time.Hour: fallbacks("ledger_busy", 3)}, Warn, []string{"mostly reads of a database in use", "backsight feedback rebuild"}},
+		{"3 ledger_fold", map[time.Duration][]string{time.Hour: fallbacks("ledger_fold", 3)}, Warn, []string{"mostly updates of the database"}},
+		{"3 older than 24 h", map[time.Duration][]string{25 * time.Hour: fallbacks("ledger_busy", 3)}, OK, nil},
+		{"10 ledger_missing", map[time.Duration][]string{time.Hour: fallbacks("ledger_missing", 10)}, OK, nil},
+		{"the most frequent named", map[time.Duration][]string{time.Hour: append(fallbacks("ledger_busy", 3), fallbacks("ledger_json", 4)...)}, Warn, []string{"mostly reads of ledger.json as well"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := feedbackDirs(t, recent, usageNow.Add(-10*time.Minute))
+			telemetryAt(t, d, c.lines)
+			got := ledgerCheck(t, d)
+			if got.Status != c.want {
+				t.Errorf("%+v, want %s", got, c.want)
+			}
+			for _, h := range c.has {
+				if !strings.Contains(got.Summary+" "+got.Fix, h) {
+					t.Errorf("%+v: no %q", got, h)
+				}
+			}
+			if strings.Contains(got.Summary, "ledger_") || strings.HasSuffix(got.Summary, "mostly ") {
+				t.Errorf("summary %q: a raw reason, or none", got.Summary)
+			}
+		})
+	}
+	// each reason counted has its words
+	for _, r := range ledgerFallbackReasons {
+		if ledgerFailureWords[r] == "" {
+			t.Errorf("no words for %s", r)
+		}
 	}
 }

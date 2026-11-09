@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -420,14 +421,59 @@ func TestSearchKindsOfRawFactsComeFromTheirOwnTags(t *testing.T) {
 }
 
 // adjust is an Engine.Adjust from fixed boosts and hidden ids.
-func adjust(boosts map[string]float64, hidden ...string) func(string) (float64, bool) {
-	return func(id string) (float64, bool) {
-		for _, h := range hidden {
-			if h == id {
-				return 0, true
+func adjust(boosts map[string]float64, hidden ...string) func([]string) map[string]Adjustment {
+	return func(ids []string) map[string]Adjustment {
+		out := map[string]Adjustment{}
+		for _, id := range ids {
+			if slices.Contains(hidden, id) {
+				out[id] = Adjustment{Hidden: true}
+			} else if b, ok := boosts[id]; ok {
+				out[id] = Adjustment{Boost: b}
 			}
 		}
-		return boosts[id], false
+		return out
+	}
+}
+
+// Adjust is asked once per search, with every merged hit's id: a hit two
+// scopes return is asked once, a hidden one is dropped, and the others
+// keep their rank without the boost.
+func TestAdjustIsCalledOnceWithEveryHit(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{
+		own: {{"a", "one", "billing", 0.9}, {"b", "two", "billing", 0.8}, {"c", "three", "billing", 0.7}},
+		"":  {{"c", "three", "billing", 0.7}, {"d", "four", "infra", 0.65}, {"e", "five", "infra", 0.6}},
+	}}
+	e := engine(t, f)
+	var asked [][]string
+	e.Adjust = func(ids []string) map[string]Adjustment {
+		asked = append(asked, slices.Clone(ids))
+		return map[string]Adjustment{"b": {Hidden: true}, "e": {Boost: 0.1}}
+	}
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})
+	if len(asked) != 1 || strings.Join(asked[0], ",") != "a,b,c,d,e" {
+		t.Fatalf("Adjust asked %q, want once with a,b,c,d,e", asked)
+	}
+	if hitIDs(res.Hits) != "a,c,e,d" {
+		t.Errorf("hits %s, want b dropped and e boosted over d", hitIDs(res.Hits))
+	}
+	for _, h := range res.Hits {
+		if h.RankWithoutBoost == 0 {
+			t.Errorf("%s has no rank without the boost: %+v", h.ID, h)
+		}
+	}
+}
+
+// An Adjust that answers nil learned nothing: the hits are as without
+// one, no rank without the boost.
+func TestAdjustAnsweringNilLeavesHitsAsBefore(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"a", "one", "billing", 0.6}, {"b", "two", "infra", 0.62}}}}
+	e := engine(t, f)
+	calls := 0
+	e.Adjust = func([]string) map[string]Adjustment { calls++; return nil }
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})
+	raw, _ := json.Marshal(res.Hits)
+	if calls != 1 || hitIDs(res.Hits) != "a,b" || strings.Contains(string(raw), "boost") {
+		t.Errorf("%d call(s), hits %s", calls, raw)
 	}
 }
 

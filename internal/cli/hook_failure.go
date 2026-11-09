@@ -134,7 +134,7 @@ func (h *hookEnv) toolFailure() []byte {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: failureBudget, Now: now, Boost: rc.ProjectBoost,
-		Adjust: ledgerAdjust(h.dirs, h.cfg, now())}
+		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Related: related,
 		MinReranker: failureMinScore, GlobalMinReranker: max(failureMinScore, rc.GlobalMinScore), Limit: 20})
 	failed := len(res.Scopes) > 0

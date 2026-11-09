@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -17,8 +18,10 @@ import (
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb/ledgerdbtest"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // proxyHindsight fronts the fake server on port; a request answer reports
@@ -546,39 +549,50 @@ func staleID(n int) string {
 	return strings.Repeat(d, 8) + "-0000-4000-8000-00000000000" + d
 }
 
-// writeStaleLedger writes a ledger whose watermark is now, with one memory
-// of each kind memory stale lists or leaves out, and journals a retire
-// after the watermark that only feedback.Current knows. It returns the
-// ledger file's bytes.
+// writeStaleLedger seeds a ledger database whose watermark is now, with one
+// memory of each kind memory stale lists or leaves out, and journals a
+// retire after the watermark that only the journal tail holds. It returns
+// the database file's bytes.
 func writeStaleLedger(t *testing.T, home string) []byte {
 	t.Helper()
 	dir := pathsOf(home).FeedbackDir()
 	now := time.Now().UTC()
 	day := 24 * time.Hour
 	l := feedback.Ledger{Schema: feedback.LedgerSchema, Watermark: now, Memories: map[string]feedback.Entry{
-		staleID(1): {Shown: 12, LastShown: now.Add(-3 * day)},                                                                              // never used
-		staleID(2): {Shown: 15, LastShown: now.Add(-1 * day)},                                                                              // never used, shown most
-		staleID(3): {Shown: 9, LastShown: now.Add(-2 * day)},                                                                               // shown too few times
-		staleID(4): {Shown: 20, LastShown: now.Add(-2 * day), Credits: 0.4, CreditsAt: now.Add(-9 * day), LastCredited: now.Add(-9 * day)}, // credited
+		staleID(1): {Shown: 12, LastShown: now.Add(-3 * day)},                                                                            // never used
+		staleID(2): {Shown: 15, LastShown: now.Add(-1 * day)},                                                                            // never used, shown most
+		staleID(3): {Shown: 9, LastShown: now.Add(-2 * day)},                                                                             // shown too few times
+		staleID(4): {Shown: 20, LastShown: now.Add(-2 * day), Credits: 1, CreditsAt: now.Add(-9 * day), LastCredited: now.Add(-9 * day)}, // credited
 		staleID(5): {Shown: 3, LastShown: now.Add(-20 * day), Hidden: &feedback.Hidden{Since: now.Add(-8 * day), Verdict: "wrong", Note: "n5"}},
 		staleID(6): {Shown: 30, LastShown: now.Add(-1 * day), Hidden: &feedback.Hidden{Since: now.Add(-2 * day), Verdict: "outdated"}}, // waits for a rewrite
 		staleID(7): {Shown: 11, LastShown: now.Add(-5 * day), Wrong: 1},                                                                // reported, not never used
 		staleID(8): {Shown: 2, LastShown: now.Add(-4 * day)},                                                                           // reported after the watermark
 		staleID(9): {Shown: 1, Wrong: 2, Hidden: &feedback.Hidden{Since: now.Add(-10 * day)}},                                          // hidden first
 	}}
-	raw, err := json.Marshal(l)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = os.MkdirAll(dir, 0o700)
-	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	ledgerdbtest.Seed(t, pathsOf(home), l)
 	j := feedback.NewJournal(dir, feedback.Common{Session: "s1"})
 	if err := j.Append(feedback.Event{Kind: feedback.KindRetire, TS: now.Add(time.Minute), IDs: []string{staleID(8)}, Verdict: "wrong", Outcome: "invalidated", Note: "n8"}); err != nil {
 		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(filepath.Join(dir, ledgerdb.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return raw
+}
+
+// walSize is the size of a -wal file, 0 when there is none: a reader
+// may leave an empty one (R11), a write fills it.
+func walSize(t *testing.T, path string) int64 {
+	t.Helper()
+	st, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Size()
 }
 
 type staleOut struct {
@@ -683,12 +697,21 @@ func TestMemoryStaleIsReadOnlyButJournals(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	before := writeStaleLedger(t, home)
 	dir := pathsOf(home).FeedbackDir()
+	wal := filepath.Join(dir, ledgerdb.FileName+"-wal")
+	walBefore := walSize(t, wal)
 	code, out, _ := run(t, "memory", "stale")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	if after, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); string(after) != string(before) {
-		t.Errorf("the ledger was written:\n%s\nwas\n%s", after, before)
+	if after, _ := os.ReadFile(filepath.Join(dir, ledgerdb.FileName)); !bytes.Equal(after, before) {
+		t.Errorf("ledger.db was written (%d bytes, was %d)", len(after), len(before))
+	}
+	// a write still in the -wal leaves the main file as it was
+	if got := walSize(t, wal); got != walBefore {
+		t.Errorf("ledger.db-wal holds %d bytes, held %d: written", got, walBefore)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ledger.json")); err == nil {
+		t.Error("memory stale wrote ledger.json")
 	}
 	stale := eventsOf(journalEvents(t, home), "stale")
 	want := strings.Join([]string{staleID(2), staleID(1), staleID(5), staleID(9), staleID(7), staleID(8)}, ",")
@@ -786,13 +809,13 @@ func TestRestoreOfAMemoryHiddenOnAnotherMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tw := telemetry.New(pathsOf(home).State, telemetry.Common{})
 	hiddenHereNow := func() bool {
-		adjust := ledgerAdjust(pathsOf(home), cfg, time.Now())
+		adjust := ledgerAdjust(pathsOf(home), cfg, time.Now(), tw)
 		if adjust == nil {
 			return false
 		}
-		_, hidden := adjust(uA)
-		return hidden
+		return adjust([]string{uA})[uA].Hidden
 	}
 	if !hiddenHereNow() {
 		t.Fatal("the other machine's hiding does not apply here")

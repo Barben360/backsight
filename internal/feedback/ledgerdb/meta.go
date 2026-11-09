@@ -58,6 +58,7 @@ func writeCursors(ctx context.Context, tx *sql.Tx, ends map[string]int64) error 
 type meta struct {
 	built           bool // a generation row: folded once
 	watermark       int64
+	foldedAt        int64 // folded_at_ns, read only (write takes it)
 	historyImported int64
 	params          string
 	importsCut      int64
@@ -100,6 +101,8 @@ func readMeta(ctx context.Context, q queryer) (meta, error) {
 		switch k {
 		case "watermark_ns":
 			err = n(&m.watermark)
+		case "folded_at_ns":
+			err = n(&m.foldedAt)
 		case "history_imported_ns":
 			err = n(&m.historyImported)
 		case "generation":

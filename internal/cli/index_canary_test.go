@@ -18,6 +18,8 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
@@ -31,6 +33,9 @@ var canaries = []string{
 	"CANARY-ENUM", "CANARY-UNKNOWN", "CANARY-CONFIG", "CANARY-MEMORY", "CANARY NOTE",
 	"CANARY-JOURNAL", "CANARY-SESSION", "CANARY-NOTE", "CANARY-STATE", "CANARY-TOML",
 	"CANARY-LEDGER",
+	// a folded retire's free text: its note and the project of the memory
+	// it retired
+	"CANARY RETIRE NOTE", "CANARY-RETIRE-PROJECT",
 	// what the server holds: a listed memory's fields, a document's text,
 	// the path of an imported document, an operation's error, a scanned
 	// memory, a doctor check's summary; and the config's strings
@@ -64,9 +69,20 @@ var serverCanaries = []string{
 	"CANARY-OPERROR", "CANARY-SCAN-TEXT", "CANARY-BRIEF-TEXT", "CANARY-BRIEF-CLEAN", briefFlagged, briefClean, noteDocument, noteDocumentID,
 }
 
+// canaryFiles are the bytes of the index file and its companions.
 func canaryFiles(t *testing.T, home string) []string {
 	t.Helper()
-	main := filepath.Join(pathsOf(home).IndexDir(), "metrics.db")
+	return dbFileBytes(t, filepath.Join(pathsOf(home).IndexDir(), "metrics.db"))
+}
+
+// ledgerFiles are the bytes of ledger.db and its companions.
+func ledgerFiles(t *testing.T, home string) []string {
+	t.Helper()
+	return dbFileBytes(t, filepath.Join(pathsOf(home).FeedbackDir(), "ledger.db"))
+}
+
+func dbFileBytes(t *testing.T, main string) []string {
+	t.Helper()
 	var out []string
 	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 		b, err := os.ReadFile(main + suffix)
@@ -86,6 +102,12 @@ func canaryFiles(t *testing.T, home string) []string {
 const (
 	ctlMemory  = "mem-ctl-91c2d4"
 	ctlProject = "proj-ctl-7f3a"
+	// the document id a hide's note is: a word of the ledger database,
+	// which keeps ids, numbers and the verdict word, never a text
+	ctlHideNote = "doc-ctl-e9d41c7a"
+	// a memory a folded retire counts: its row is in ledger.db, its
+	// line's texts are not
+	ctlRetired = "mem-retired-ctl-4c7e"
 )
 
 // noCanary fails when a canary is in the index files, or when a control
@@ -107,6 +129,25 @@ func noCanary(t *testing.T, step, home string, extra ...string) {
 	for _, want := range append([]string{ctlMemory, ctlProject}, extra...) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("%s: control %q not in the index file bytes", step, want)
+		}
+	}
+	// ledger.db, built from a journal that carries the same canaries,
+	// holds none of them, and holds the ids and the verdict word it keeps.
+	lfiles := ledgerFiles(t, home)
+	if len(lfiles) == 0 {
+		t.Errorf("%s: no ledger.db to scan", step)
+	}
+	for _, b := range lfiles {
+		for _, c := range canaries {
+			if strings.Contains(b, c) {
+				t.Errorf("%s: %q found in the ledger.db bytes", step, c)
+			}
+		}
+	}
+	ljoined := strings.Join(lfiles, "\x00")
+	for _, want := range []string{ctlMemory, ctlRetired, ctlHideNote, "wrong"} {
+		if !strings.Contains(ljoined, want) {
+			t.Errorf("%s: control %q not in the ledger.db bytes", step, want)
 		}
 	}
 }
@@ -139,7 +180,12 @@ func canaryState(t *testing.T) string {
 
 	jr := strings.Join([]string{
 		`{"schema":1,"seq":1,"ts":"` + ts + `","kind":"shows","session":"s1","turn":"t1","project":"` + ctlProject + `","path":"prompt","items":[{"id":"` + mem + `","rank":1,"text":"CANARY-MEMORY"},{"id":"mem-allowed-2","rank":2},{"id":"mem-allowed-3","rank":3}]}`,
-		`{"schema":1,"seq":2,"ts":"` + ts + `","kind":"hide","session":"s1","ids":["` + mem + `"],"verdict":"wrong","note":"CANARY NOTE"}`,
+		`{"schema":1,"seq":2,"ts":"` + ts + `","kind":"hide","session":"s1","ids":["` + mem + `"],"verdict":"wrong","note":"` + ctlHideNote + `"}`,
+		// a retire the ledger folds (it counts the memory wrong), its texts
+		// kept out of ledger.db
+		`{"schema":1,"seq":5,"ts":"` + ts + `","kind":"retire","session":"s1","project":"` + ctlProject + `","ids":["` + ctlRetired + `"],"verdict":"wrong","outcome":"invalidated","note":"CANARY RETIRE NOTE","memory_project":"CANARY-RETIRE-PROJECT"}`,
+		// a note's text on a line the ledger never folds
+		`{"schema":1,"seq":4,"ts":"` + ts + `","kind":"stale","session":"s1","ids":["mem-allowed-2"],"note":"CANARY NOTE"}`,
 		`{"schema":1,"seq":3,"ts":"` + ts + `","kind":"surprise","session":"s1","text":"CANARY-JOURNAL"}`,
 		``,
 	}, "\n")
@@ -149,6 +195,17 @@ func canaryState(t *testing.T) string {
 	}
 	ledger := `{"schema":1,"memories":{"` + mem + `":{"shown":1,"hidden":{"since":"` + ts + `","verdict":"wrong","note":"CANARY-LEDGER"}}}}`
 	if err := os.WriteFile(filepath.Join(d.FeedbackDir(), "ledger.json"), []byte(ledger), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// ledger.db, folded from that journal as the tick would
+	w, err := ledgerdb.OpenWriter(context.Background(), ledgerdb.Options{Dirs: d, Getenv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Fold(context.Background(), feedback.Params{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,6 +278,13 @@ func TestIndexHoldsNoCanary(t *testing.T) {
 	theCollectedTablesFilled(t, "after the collection", home)
 	configEventHoldsNoString(t, home)
 
+	// ledger.db folded afresh from the journal: the rebuild's file holds
+	// no canary either
+	if code, out, errOut := run(t, "feedback", "rebuild", "--json"); code != output.OK {
+		t.Fatalf("feedback rebuild: exit %d\n%s%s", code, out, errOut)
+	}
+	noCanary(t, "after the ledger rebuild", home, controls...)
+
 	if code, out, errOut := run(t, "stats", "index", "rebuild", "--yes"); code != output.OK {
 		t.Fatalf("rebuild: exit %d\n%s%s", code, out, errOut)
 	}
@@ -278,7 +342,7 @@ const (
 
 // fixtureIDs are every memory id of the fixture.
 // (and the ids of the listed memories and of the briefing pages, by prefix).
-var fixtureIDs = []string{ctlMemory, "mem-allowed-2", "mem-allowed-3", ctlScanned, ctlListed, "mem-import-ctl", "mem-note-ctl", "mem-obs-ctl", briefFlagged, briefClean}
+var fixtureIDs = []string{ctlMemory, ctlRetired, "mem-allowed-2", "mem-allowed-3", ctlScanned, ctlListed, "mem-import-ctl", "mem-note-ctl", "mem-obs-ctl", briefFlagged, briefClean}
 
 // canaryConfig writes config.toml: the fake server's address, backups and
 // the update source local, and a canary in every string setting that takes

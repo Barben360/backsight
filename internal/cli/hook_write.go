@@ -117,7 +117,7 @@ func (h *hookEnv) gate() []byte {
 	reason := instructions.GateReason
 	if q := questionText(h.in.ToolInput); q != "" {
 		eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: gateRecallBudget, Now: now,
-			Adjust: ledgerAdjust(h.dirs, h.cfg, now())}
+			Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 		res := eng.Search(h.ctx, recall.Query{Queries: []string{h.recallQuery(q)}, Current: h.project, MinReranker: h.cfg.Recall.MinScore,
 			GlobalMinReranker: h.cfg.Recall.GlobalMinScore, Limit: gateHits})
 		if len(res.Hits) > 0 {
