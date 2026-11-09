@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,7 +53,8 @@ type maintainResult struct {
 	// MetricsIndex: the pruning of the metrics index (maintainIndex).
 	MetricsIndex string `json:"metrics_index,omitempty"`
 	// FeedbackLedger: the side files of the feedback ledger removed
-	// (maintainLedger), "" when there were none.
+	// (maintainLedger) and the scratch folders of rebuild plans that died
+	// (sweepRebuildPlans), "" when there were none.
 	FeedbackLedger string `json:"feedback_ledger,omitempty"`
 	// MetricsRotated: the metrics month files removed past the months kept.
 	MetricsRotated []string `json:"metrics_rotated,omitempty"`
@@ -118,7 +120,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
 			res.MetricsRotated = metricsfile.Rotate(d.MetricsDir(), now(), metricsfile.KeepMonths)
 			res.MetricsIndex = maintainIndex(cmd.Context(), d, home)
-			res.FeedbackLedger = maintainLedger(cmd.Context(), d, home)
+			res.FeedbackLedger = joinNonEmpty(maintainLedger(cmd.Context(), d, home), sweepRebuildPlans(d, now()))
 			archive, noBackup := "", "backup.enabled is off, and the moves wait for a backup"
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
@@ -458,4 +460,47 @@ func maintainRename(ctx context.Context, d paths.Dirs) string {
 		return "failed: " + redacted(err, sec).Error()
 	}
 	return r.From + " → " + r.To
+}
+
+// rebuildPlanTTL: a feedback rebuild --plan scratch folder this old was
+// left by a plan that died (a plan takes seconds).
+const rebuildPlanTTL = 24 * time.Hour
+
+// sweepRebuildPlans removes the <state>/staging/rebuild-plan-* folders
+// older than rebuildPlanTTL at now (a plan that died left its copy of the
+// journal there), each entry through fsutil.RemoveRetry, and nothing else
+// of staging; "" when there were none.
+func sweepRebuildPlans(d paths.Dirs, now time.Time) string {
+	staging := filepath.Join(d.State, "staging")
+	ents, err := os.ReadDir(staging)
+	if err != nil {
+		return ""
+	}
+	var removed, failed []string
+	for _, e := range ents {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "rebuild-plan-") {
+			continue
+		}
+		if fi, err := e.Info(); err != nil || now.Sub(fi.ModTime()) < rebuildPlanTTL {
+			continue
+		}
+		if err := removeTree(filepath.Join(staging, e.Name())); err != nil {
+			failed = append(failed, e.Name())
+			continue
+		}
+		removed = append(removed, e.Name())
+	}
+	var out []string
+	if len(removed) > 0 {
+		out = append(out, "removed "+strings.Join(removed, ", "))
+	}
+	if len(failed) > 0 {
+		out = append(out, "could not remove "+strings.Join(failed, ", "))
+	}
+	return strings.Join(out, ", ")
+}
+
+// joinNonEmpty is the parts that are not empty, joined by ", ".
+func joinNonEmpty(parts ...string) string {
+	return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), ", ")
 }

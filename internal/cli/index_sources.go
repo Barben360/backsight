@@ -17,11 +17,12 @@ import (
 var indexRegistry = func() fs.FS { return index.Embedded }
 
 // indexOptions are the metrics index's options for every cli caller:
-// the ledger through its default reader, the local status from this PC's
-// state files, the other PCs' cache from metrics/machines.json while
-// sharing is on, progress to progress (nil: silent).
+// the ledger from ledger.db, else ledger.json (indexLedger), the local
+// status from this PC's state files, the other PCs' cache from
+// metrics/machines.json while sharing is on, progress to progress (nil:
+// silent).
 func indexOptions(d paths.Dirs, home string, progress io.Writer) index.Options {
-	return index.Options{Dirs: d, Home: home, Migrations: indexRegistry(), LocalStatus: localStatusOf(d), Progress: progress,
+	return index.Options{Dirs: d, Home: home, Migrations: indexRegistry(), Ledger: indexLedger(d), LocalStatus: localStatusOf(d), Progress: progress,
 		Machines: machinesOf(d, home), MachinesOff: func() bool { return !sharingOn(d, home) }}
 }
 

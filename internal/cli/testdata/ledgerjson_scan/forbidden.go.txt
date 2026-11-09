@@ -1,0 +1,28 @@
+package cli
+
+import (
+	fb "github.com/Barben360/backsight/internal/feedback"
+)
+
+// Each function reads ledger.json, or names it, as only the fallback may.
+func loadsTheLedger() { _, _ = fb.LoadLedger("d") }
+
+func current() { _, _ = fb.Current("d") }
+
+func rebuilds() { _, _ = fb.Rebuild("d") }
+
+func buildsAReader() { _ = fb.CurrentReader{Dir: "d"} }
+
+func namesTheFile() string { return "ledger.json" }
+
+var inAClosure = func() { _, _ = fb.LoadLedger("d") }
+
+type other struct{}
+
+func (other) indexLedger() { _ = &fb.CurrentReader{} }
+
+func (w *Writer) Export() { _, _ = fb.LoadLedger("d") }
+
+func ledgerReader() { _ = fb.CurrentReader{} }
+
+func bare() { _, _ = LoadLedger("d") }

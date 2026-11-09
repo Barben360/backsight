@@ -732,7 +732,7 @@ func TestHiddenChecksAreCapped(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	cl, _ := hindsight.New(srv.URL, "k", 5*time.Second)
-	if n := checkHidden(context.Background(), cl, "b", dir, tick); n != 0 || len(read) != 20 {
+	if n := checkHidden(context.Background(), cl, "b", feedback.CurrentReader{Dir: dir}, dir, tick); n != 0 || len(read) != 20 {
 		t.Fatalf("first tick: lifted %d, %d reads, want 0 and 20", n, len(read))
 	}
 	seen := map[string]bool{}
@@ -740,7 +740,7 @@ func TestHiddenChecksAreCapped(t *testing.T) {
 		seen[id] = true
 	}
 	read = nil
-	if n := checkHidden(context.Background(), cl, "b", dir, tick.Add(15*time.Minute)); n != 0 || len(read) != 20 {
+	if n := checkHidden(context.Background(), cl, "b", feedback.CurrentReader{Dir: dir}, dir, tick.Add(15*time.Minute)); n != 0 || len(read) != 20 {
 		t.Fatalf("next tick: lifted %d, %d reads, want 0 and 20", n, len(read))
 	}
 	for _, id := range read {
@@ -752,7 +752,7 @@ func TestHiddenChecksAreCapped(t *testing.T) {
 
 	// Each read takes 4 s on the clock: the third one ends past 10 s.
 	read, perRead = nil, 4*time.Second
-	if n := checkHidden(context.Background(), cl, "b", dir, tick); n != 0 || len(read) != 3 {
+	if n := checkHidden(context.Background(), cl, "b", feedback.CurrentReader{Dir: dir}, dir, tick); n != 0 || len(read) != 3 {
 		t.Errorf("out of time: lifted %d, %d reads, want 0 and 3", n, len(read))
 	}
 }

@@ -57,13 +57,19 @@ func feedbackJournal(t *testing.T, home string) string {
 	return dir
 }
 
-// filesUnder is every file under dir with its size and modification time.
+// filesUnder is every file under dir with its size and modification
+// time, the WAL companions a reader of ledger.db may create aside.
 func filesUnder(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	files := map[string]string{}
 	_ = filepath.WalkDir(dir, func(p string, de os.DirEntry, err error) error {
 		if err == nil && !de.IsDir() {
 			fi, _ := de.Info()
+			// A read-only reader of a WAL ledger.db may create its -shm and
+			// an empty -wal (SQLite's): no write. A write fills the -wal.
+			if base := filepath.Base(p); base == "ledger.db-shm" || base == "ledger.db-wal" && fi.Size() == 0 {
+				return nil
+			}
 			files[p] = fi.ModTime().String() + " " + itoa(int(fi.Size()))
 		}
 		return err

@@ -100,11 +100,24 @@ func ledgerReader(d paths.Dirs, cfg config.Config, inHook bool, tw *telemetry.Wr
 	return c
 }
 
+// commandLedger is the ledger a command shows: ledgerReader's for a
+// command, its fallbacks logged to tw; with feedback off, the same chain
+// read silently (nothing is journaled then, but what was counted is
+// still shown).
+func commandLedger(d paths.Dirs, cfg config.Config, tw *telemetry.Writer) feedback.LedgerReader {
+	if r := ledgerReader(d, cfg, false, tw); r != nil {
+		return r
+	}
+	cfg.Feedback.Enabled = true
+	return ledgerReader(d, cfg, false, nil)
+}
+
 // indexLedger is the ledger the metrics index mirrors, and the one
 // feedback rebuild compares with: ledgerReader's chain for a command,
 // whatever feedback's switch, without its telemetry (the index records
-// its read errors itself, the rebuild reports them), and with its Stamp,
-// so that the index reads it again only when it changed.
+// its read errors itself, the rebuild reports them), and with its Stamp
+// and StampedAll, so that the index reads it again only when the file it
+// read changed.
 func indexLedger(d paths.Dirs) index.LedgerSource {
 	return ledgerChain{o: ledgerdb.Options{Dirs: d}, busy: commandLedgerBusy, side: true,
 		fallback: feedback.CurrentReader{Dir: d.FeedbackDir()}}
@@ -151,6 +164,31 @@ func (c ledgerChain) Stamp() (feedback.Stamp, error) {
 		return c.fallback.Stamp()
 	}
 	return st, nil
+}
+
+// StampedAll is All with the stamp of the file it read, taken just
+// before it: the database's, or, when All fell back, ledger.json's
+// (stamped false when that stamp fails). A stamp taken apart could name
+// the database while All read ledger.json.
+func (c ledgerChain) StampedAll() (l feedback.Ledger, st feedback.Stamp, stamped bool, err error) {
+	err = c.read(func(r *ledgerdb.Reader) error {
+		var err error
+		if st, err = r.Stamp(); err != nil {
+			return err
+		}
+		l, err = r.All()
+		return err
+	})
+	if err == nil {
+		return l, st, true, nil
+	}
+	c.emit(ledgerReason(err))
+	st, serr := c.fallback.Stamp()
+	if l, err = c.fallback.All(); err != nil {
+		c.emit(telemetry.FeedbackReasonLedgerJSON)
+		return l, feedback.Stamp{}, false, err
+	}
+	return l, st, serr == nil, nil
 }
 
 // read runs fn on the database reader, opened and closed around it, its
@@ -280,9 +318,9 @@ func journalUser(e feedback.Event) {
 }
 
 // hiddenHere: id is hidden on this machine, by the ledger with what was
-// journaled since its last settle (local), or else by another machine's
-// hiding recall here follows (remote: sharedCounts). Both false when
-// feedback is off or the ledger cannot be read.
+// journaled since its last fold (local, ledgerReader), or else by
+// another machine's hiding recall here follows (remote: sharedCounts).
+// Both false when feedback is off or the ledger cannot be read.
 func hiddenHere(id string) (local, remote bool) {
 	cfg, _, err := loadServerConfig()
 	if err != nil || !cfg.Feedback.Enabled {
@@ -292,15 +330,16 @@ func hiddenHere(id string) (local, remote bool) {
 	if err != nil {
 		return false, false
 	}
-	l, err := feedback.Current(d.FeedbackDir())
+	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+	got, err := ledgerReader(d, cfg, false, tw).Get([]string{id})
 	if err != nil {
 		return false, false
 	}
-	if l.Memories[id].Hidden != nil {
+	if got[id].Hidden != nil {
 		return true, false
 	}
 	at := now()
-	return false, withShared(l.Memories[id], sharedCounts(d, cfg, at), id, feedbackParams(cfg), at).Hidden != nil
+	return false, withShared(got[id], sharedCounts(d, cfg, at), id, feedbackParams(cfg), at).Hidden != nil
 }
 
 // A tick reads at most hiddenChecks histories, within hiddenCheckTimeout.
@@ -309,17 +348,18 @@ const (
 	hiddenCheckTimeout = 10 * time.Second
 )
 
-// checkHidden lifts the hidings the server made moot: an observation with
-// a change in its history after it was hidden is journaled unhide
-// rewritten, one the server no longer holds (its history and the memory
-// itself both not found) unhide gone. Any other answer leaves the hiding
-// as it is. The hidings, longest hidden first, are read hiddenChecks at a
-// time from a place that moves on by hiddenChecks every tick period of
-// at (the tick's time, which stamps the events), so each is read within
+// checkHidden lifts the hidings the server made moot, the hidings read
+// through r and the lifts journaled in dir: an observation with a change
+// in its history after it was hidden is journaled unhide rewritten, one
+// the server no longer holds (its history and the memory itself both not
+// found) unhide gone. Any other answer leaves the hiding as it is. The
+// hidings, longest hidden first, are read hiddenChecks at a time from a
+// place that moves on by hiddenChecks every tick period of at (the
+// tick's time, which stamps the events), so each is read within
 // ceil(n/hiddenChecks) ticks. The loop stops once hiddenCheckTimeout has
 // passed on the clock. Best effort: it returns how many it lifted.
-func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, at time.Time) (lifted int) {
-	l, err := feedback.Current(dir)
+func checkHidden(ctx context.Context, cl *hindsight.Client, bank string, r feedback.LedgerReader, dir string, at time.Time) (lifted int) {
+	entries, err := r.Hidden()
 	if err != nil {
 		return 0
 	}
@@ -328,10 +368,8 @@ func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, at
 		since time.Time
 	}
 	var hidden []hiding
-	for id, m := range l.Memories {
-		if m.Hidden != nil {
-			hidden = append(hidden, hiding{id, m.Hidden.Since})
-		}
+	for id, m := range entries {
+		hidden = append(hidden, hiding{id, m.Hidden.Since})
 	}
 	if len(hidden) == 0 {
 		return 0

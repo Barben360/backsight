@@ -4,14 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/stats"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 const (
@@ -26,8 +31,11 @@ const feedbackOff = "feedback off ([feedback] enabled = false): nothing is journ
 
 // journalFiles is dir's journal month files, oldest first.
 func journalFiles(dir string) []string {
-	files, _ := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
-	slices.Sort(files) // journal-YYYY-MM sorts by month
+	names, _ := feedback.MonthFiles(dir) // journal-YYYY-MM sorts by month
+	files := make([]string, len(names))
+	for i, n := range names {
+		files[i] = filepath.Join(dir, n)
+	}
 	return files
 }
 
@@ -73,48 +81,123 @@ func checkFeedbackJournal(d paths.Dirs, enabled bool) Check {
 	return c
 }
 
-// checkFeedbackLedger: the ledger is of this binary's schema and settled
-// within a day of the newest journal event (the ticks settle).
-func checkFeedbackLedger(d paths.Dirs, enabled bool) Check {
+// ledgerFallbackWarn: this many fallbacks of the ledger's readers, or
+// failed folds and exports, in a day are worth a look.
+const ledgerFallbackWarn = 3
+
+// ledgerFallbackReasons are the feedback_error reasons doctor counts: a
+// reader that could not read ledger.db (ledger_missing aside: the
+// database not built yet, which the check says itself) or ledger.json
+// either, a tick that could not fold or export.
+var ledgerFallbackReasons = []string{telemetry.FeedbackReasonLedgerBusy, telemetry.FeedbackReasonLedgerUnreadable, telemetry.FeedbackReasonLedgerSchema,
+	telemetry.FeedbackReasonLedgerJSON, telemetry.FeedbackReasonLedgerExport, telemetry.FeedbackReasonLedgerFold}
+
+const (
+	ledgerTickFix    = "backsight jobs tick settles it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
+	ledgerRebuildFix = "backsight feedback rebuild recomputes it from the journal"
+)
+
+// checkFeedbackLedger judges the ledger database from f, its facts (err:
+// they could not be read): built (a missing one is fine until a recent
+// tick could not build it), the file of this binary's schema, folded
+// within a day of the newest journal event, ledger.json exported, and
+// its readers not falling back day after day (the telemetry of the last
+// 24 h). The first problem is the summary and fix; the others go in the
+// detail.
+func checkFeedbackLedger(d paths.Dirs, enabled bool, f ledgerdb.LedgerFacts, err error, now time.Time) Check {
 	c := Check{ID: "feedback-ledger", Status: OK}
 	if !enabled {
 		c.Status, c.Summary = Info, feedbackOff
 		return c
 	}
 	dir := d.FeedbackDir()
-	l, err := feedback.LoadLedger(dir)
-	if err != nil {
-		c.Status, c.Summary = Error, "ledger unreadable: "+err.Error()
-		c.Detail = "the tick settles nothing while it cannot be read (it is never guessed)"
-		if errors.Is(err, feedback.ErrCorruptLedger) {
-			c.Detail = "the next tick keeps it aside and rebuilds it from the journal; recall gives no boost until then"
+	type problem struct{ summary, detail, fix string }
+	var problems []problem
+	add := func(summary, detail, fix string) { problems = append(problems, problem{summary, detail, fix}) }
+	_, last, journaled := newestEvents(dir)
+	failures := ledgerFailures(d, now)
+	switch {
+	case err != nil:
+		add("cannot read the ledger database's state: "+err.Error(), "", ledgerRebuildFix)
+	case f.Newer:
+		add("a newer backsight migrated ledger.db: this one keeps its counts in "+f.File+" beside it", "recall reads ledger.json, which this backsight exports from "+f.File,
+			"run the newer backsight again (backsight update); jobs maintain then removes "+f.File)
+	}
+	if err == nil {
+		switch {
+		// A damaged file is one; a folder a tick could not build in, one
+		// once a tick tried.
+		case f.OpenError == "corrupt" || f.OpenError == "notadb":
+			add(fmt.Sprintf("%s in %s is damaged (%s)", f.File, dir, f.OpenError),
+				"the ticks fold nothing new into it until it is replaced; recall reads the last copy of the counts, ledger.json", ledgerRebuildFix)
+		case f.OpenError != "" && (f.Built || tickRecent(d, now)):
+			fix := "make " + dir + " and its files writable by this user, and check free space there"
+			add(fmt.Sprintf("%s cannot be written in %s (%s)", f.File, dir, f.OpenError),
+				"the ticks fold nothing new into it until it can; recall reads the last copy of the counts, ledger.json", fix)
+		case !f.Built && journaled:
+			c.Summary = "not built yet: it builds at the next jobs tick"
+			if f.UpdateInProgress {
+				c.Summary = "not built yet: it builds at the first jobs tick after the update in progress"
+			}
+		case f.Built && journaled && last.Sub(f.FoldedAt) > feedbackLagWarn:
+			add(fmt.Sprintf("folded up to %s UTC, %s before the newest journal event: the ticks are not folding", f.FoldedAt.UTC().Format("2006-01-02 15:04"),
+				last.Sub(f.FoldedAt).Round(time.Hour)), "", ledgerTickFix)
 		}
-		c.Fix = "backsight feedback rebuild recomputes it from the journal"
+		if f.Built && f.ExportBehind && failures[telemetry.FeedbackReasonLedgerExport] >= 2 {
+			add("ledger.json, the copy of the counts recall falls back to, was not written at the last ticks", "the database itself is up to date",
+				"backsight jobs tick writes it (its output says why if it cannot)")
+		}
+	}
+	if reason, n := mostFrequent(failures); n >= ledgerFallbackWarn {
+		add(fmt.Sprintf("the feedback ledger failed %d times in 24 h, mostly %s", n, reason),
+			"a read that fails falls back to ledger.json, then to no learned ranking; a fold or export that fails leaves the counts behind", ledgerRebuildFix)
+	}
+	if len(problems) > 0 {
+		p := problems[0]
+		c.Status, c.Summary, c.Detail, c.Fix = Warn, p.summary, p.detail, p.fix
+		for _, q := range problems[1:] {
+			c.Detail = strings.TrimPrefix(c.Detail+"; also: "+q.summary, "; ")
+		}
 		return c
 	}
-	first, last, ok := newestEvents(dir)
-	switch {
-	case !ok:
+	if c.Summary != "" {
+		return c
+	}
+	if !f.Built {
 		c.Summary = "nothing journaled yet"
 		return c
-	case l.Watermark.IsZero():
-		// Never settled: behind since the journal began.
-		if last.Sub(first) > feedbackLagWarn {
-			c.Status, c.Summary = Warn, "never settled, though the journal goes back to "+first.UTC().Format("2006-01-02 15:04")+" UTC"
-			c.Fix = "backsight jobs tick settles it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
-			return c
-		}
-		c.Summary = "not settled yet: the journal began less than a day ago"
-		return c
-	case last.Sub(l.Watermark) > feedbackLagWarn:
-		c.Status = Warn
-		c.Summary = fmt.Sprintf("settled up to %s UTC, %s before the newest journal event: the ticks are not settling", l.Watermark.UTC().Format("2006-01-02 15:04"),
-			last.Sub(l.Watermark).Round(time.Hour))
-		c.Fix = "backsight jobs tick settles it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
-		return c
 	}
-	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", l.Counted(), l.Watermark.UTC().Format("2006-01-02 15:04"))
+	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", f.Memories, f.Watermark.UTC().Format("2006-01-02 15:04"))
 	return c
+}
+
+// ledgerFailures counts the last 24 h's feedback_error events of
+// ledgerFallbackReasons by reason (none when the telemetry cannot be
+// read).
+func ledgerFailures(d paths.Dirs, now time.Time) map[string]int {
+	out := map[string]int{}
+	ev, err := stats.Load(d.TelemetryDir(), now.Add(-24*time.Hour), now.Add(time.Minute))
+	if err != nil {
+		return out
+	}
+	for _, e := range ev {
+		if e.Event == "feedback_error" && slices.Contains(ledgerFallbackReasons, e.Reason) {
+			out[e.Reason]++
+		}
+	}
+	return out
+}
+
+// mostFrequent is the reason counted most (the first by name of those
+// tied) and the total of every reason.
+func mostFrequent(counts map[string]int) (reason string, total int) {
+	for _, r := range slices.Sorted(maps.Keys(counts)) {
+		total += counts[r]
+		if counts[r] > counts[reason] {
+			reason = r
+		}
+	}
+	return reason, total
 }
 
 // newestEvents is the oldest and newest event time of the newest month

@@ -220,11 +220,11 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil || f.StartedOver() != nil {
 					return
 				}
-				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, d.FeedbackDir(), now())
+				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, ledgerReader(d, cfg, false, tw), d.FeedbackDir(), now())
 				sctx, cancel := context.WithTimeout(cmd.Context(), shareTickBudget)
 				defer cancel()
 				var err error
-				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now()); err != nil {
+				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedgerListed(sctx, f.Client, listing, d, cfg, f.MachineID, now(), tw); err != nil {
 					res.SharedError = err.Error()
 				}
 				publishFigures = true
@@ -244,7 +244,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 					res.BriefingTriggers = tickBriefingTriggers(cmd.Context(), d, cfg, f.Client, tw)
 				}
-				res.History = importInTick(cmd.Context(), d, home, cfg)
+				res.History = importInTick(cmd.Context(), d, home, cfg, tw)
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -328,7 +328,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			feedbackSteps() // after the sends: a slow server delays this look, never them
-			res.History = importInTick(cmd.Context(), d, home, cfg)
+			res.History = importInTick(cmd.Context(), d, home, cfg, tw)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -430,11 +430,11 @@ var importTickBudget = 60 * time.Second
 // keeps what it journaled, and the next tick goes on. Best effort: what
 // it did, "" when there is nothing to do (feedback off, done already, the
 // ledger unreadable) or another import is running.
-func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config) string {
+func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config, tw *telemetry.Writer) string {
 	if !cfg.Feedback.Enabled {
 		return ""
 	}
-	if l, err := feedback.Current(d.FeedbackDir()); err != nil || !l.HistoryImported.IsZero() {
+	if l, err := ledgerReader(d, cfg, false, tw).All(); err != nil || !l.HistoryImported.IsZero() {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, importTickBudget)
