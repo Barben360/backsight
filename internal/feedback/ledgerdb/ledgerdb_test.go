@@ -380,6 +380,56 @@ func TestReaderBusyIsErrBusy(t *testing.T) {
 	}
 }
 
+// TestReadWaitsOneBusyWindow: Read checks the file in the transaction
+// it reads in, so a writer that takes the file as the read starts costs
+// one busy wait: one transaction, ErrBusy. OpenReader's own check would
+// be a second transaction, and a second wait.
+func TestReadWaitsOneBusyWindow(t *testing.T) {
+	forceFS(t, sqlitedb.FSNetwork) // the rollback journal: a writer's lock keeps readers out
+	o := tempOpts(t)
+	seedRows(t, o, map[string]feedback.Entry{"m": {Shown: 1}}, nil)
+	txs := 0
+	setSeam(t, &beforeRead, func() { txs++ })
+	getAny := func(r *Reader) error {
+		got, has, err := r.GetAny([]string{"m"})
+		if err == nil && (!has || got["m"].Shown != 1) {
+			t.Errorf("GetAny: %+v, %v", got, has)
+		}
+		return err
+	}
+	if err := Read(o, 20*time.Millisecond, getAny); err != nil || txs != 1 {
+		t.Fatalf("Read: %v in %d transaction(s), want one", err, txs)
+	}
+
+	holder, err := sql.Open("sqlite", sqlitedb.DSN(mainPath(o), sqlitedb.Mode{}, time.Second, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Close() }()
+	ctx := context.Background()
+	conn, err := holder.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	txs = 0
+	setSeam(t, &beforeRead, func() { // the writer arrives as the transaction starts
+		if txs++; txs == 1 {
+			if _, err := conn.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	err = Read(o, 20*time.Millisecond, getAny)
+	onlyErr(t, "a writer arriving", err, ErrBusy)
+	if txs != 1 {
+		t.Errorf("%d transaction(s), each a busy wait: want one", txs)
+	}
+	if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReaderErrorsMapToFour(t *testing.T) {
 	t.Run("garbage", func(t *testing.T) {
 		o := tempOpts(t)

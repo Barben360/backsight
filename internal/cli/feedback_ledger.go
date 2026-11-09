@@ -145,43 +145,37 @@ func (c ledgerChain) GetAny(ids []string) (map[string]feedback.Entry, bool, erro
 
 // Stamp is the database reader's stamp, else the fallback's.
 func (c ledgerChain) Stamp() (feedback.Stamp, error) {
-	r, err := c.open()
+	var st feedback.Stamp
+	err := c.read(func(r *ledgerdb.Reader) (err error) { st, err = r.Stamp(); return err })
 	if err != nil {
 		return c.fallback.Stamp()
 	}
-	defer func() { _ = r.Close() }()
-	if st, err := r.Stamp(); err == nil {
-		return st, nil
-	}
-	return c.fallback.Stamp()
+	return st, nil
 }
 
-// open opens the database reader: ledger.db, or for a command the side
-// file beside a newer one.
-func (c ledgerChain) open() (*ledgerdb.Reader, error) {
-	r, err := ledgerdb.OpenReader(c.o, c.busy)
+// read runs fn on the database reader, opened and closed around it, its
+// file checked in fn's read transaction (one busy window): ledger.db, or
+// for a command the side file beside a newer one.
+func (c ledgerChain) read(fn func(*ledgerdb.Reader) error) error {
+	err := ledgerdb.Read(c.o, c.busy, fn)
 	if c.side && errors.Is(err, ledgerdb.ErrSchema) {
-		if sr, serr := ledgerdb.OpenSideReader(c.o, c.busy); serr == nil {
-			return sr, nil
+		if serr := ledgerdb.ReadSide(c.o, c.busy, fn); serr == nil {
+			return nil
 		}
 	}
-	return r, err
+	return err
 }
 
-// chainRead is read through c's database reader, opened and closed
-// around it; on its failure, through c's fallback, each failure logged.
+// chainRead is read through c's database reader; on its failure, through
+// c's fallback, each failure logged.
 func chainRead[T any](c ledgerChain, read func(feedback.LedgerReader) (T, error)) (T, error) {
-	r, err := c.open()
+	var v T
+	err := c.read(func(r *ledgerdb.Reader) (err error) { v, err = read(r); return err })
 	if err == nil {
-		var v T
-		v, err = read(r)
-		_ = r.Close()
-		if err == nil {
-			return v, nil
-		}
+		return v, nil
 	}
 	c.emit(ledgerReason(err))
-	v, err := read(c.fallback)
+	v, err = read(c.fallback)
 	if err != nil {
 		c.emit(telemetry.FeedbackReasonLedgerJSON)
 	}

@@ -187,8 +187,14 @@ func TestFeedbackErrorsCarryAReasonOnly(t *testing.T) {
 		breakFeedbackDir(t, home)
 		recallAnswer = hits(0.9)
 		call(t, cs, "memory_search", map[string]any{"queries": []string{"billing database"}})
-		// The ledger cannot be read either: neither ledger.db nor ledger.json.
-		want := []string{telemetry.FeedbackReasonLedgerUnreadable, telemetry.FeedbackReasonLedgerJSON, telemetry.FeedbackReasonJournalWrite}
+		// The ledger cannot be read either: neither ledger.db nor
+		// ledger.json. A path under a regular file is not found on
+		// Windows, not a directory elsewhere.
+		first := telemetry.FeedbackReasonLedgerUnreadable
+		if runtime.GOOS == "windows" {
+			first = telemetry.FeedbackReasonLedgerMissing
+		}
+		want := []string{first, telemetry.FeedbackReasonLedgerJSON, telemetry.FeedbackReasonJournalWrite}
 		if got := reasonsOf(t, home); !slices.Equal(got, want) {
 			t.Errorf("reasons %v", got)
 		}

@@ -36,18 +36,38 @@ type Reader struct {
 // journal-mode pragma (SQLite reads the mode from the file's header), no
 // folder detection and no WAL probe.
 func OpenReader(o Options, busy time.Duration) (*Reader, error) {
-	return openReader(o, false, busy)
+	return openReader(o, false, busy, true)
 }
 
-// OpenSideReader is OpenReader of the side file this binary's writers
-// use beside a ledger.db a newer binary migrated (ErrMissing when there
-// is none): for the commands that meet ErrSchema there, never the hooks,
-// which read ledger.json, exported from that side file.
-func OpenSideReader(o Options, busy time.Duration) (*Reader, error) {
-	return openReader(o, true, busy)
+// Read opens o's ledger.db as OpenReader does, runs fn on the reader and
+// closes it, without OpenReader's check of its own: each call of fn's
+// checks the file in the read transaction it reads in, so a call waits
+// for a writer's lock once at most (one busy window, never two). For a
+// hook's single read; its errors are OpenReader's and the reader's.
+func Read(o Options, busy time.Duration, fn func(*Reader) error) error {
+	return openAndRead(o, false, busy, fn)
 }
 
-func openReader(o Options, side bool, busy time.Duration) (*Reader, error) {
+// ReadSide is Read of the side file this binary's writers use beside a
+// ledger.db a newer binary migrated (ErrMissing when there is none): for
+// the commands that meet ErrSchema there, never the hooks, which read
+// ledger.json, exported from that side file.
+func ReadSide(o Options, busy time.Duration, fn func(*Reader) error) error {
+	return openAndRead(o, true, busy, fn)
+}
+
+func openAndRead(o Options, side bool, busy time.Duration, fn func(*Reader) error) error {
+	r, err := openReader(o, side, busy, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return fn(r)
+}
+
+// openReader opens o's ledger.db, or the side file of its head; check:
+// the file is checked in a transaction of its own (else at each read).
+func openReader(o Options, side bool, busy time.Duration, check bool) (*Reader, error) {
 	head, err := Head(o)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnreadable, err)
@@ -68,6 +88,9 @@ func openReader(o Options, side bool, busy time.Duration) (*Reader, error) {
 	}
 	db.SetMaxOpenConns(1)
 	r := &Reader{db: db, path: path, head: head}
+	if !check {
+		return r, nil
+	}
 	if err := r.read(func(*sql.Tx) error { return nil }); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -291,9 +314,13 @@ func (r *Reader) Stamp() (feedback.Stamp, error) {
 // dir is the folder of the reader's file, which holds the journal.
 func (r *Reader) dir() string { return filepath.Dir(r.path) }
 
+// beforeRead runs as each read transaction starts (a test seam).
+var beforeRead = func() {}
+
 // read runs fn in one read transaction, after checking the file is at
 // this binary's head and was folded once.
 func (r *Reader) read(fn func(tx *sql.Tx) error) error {
+	beforeRead()
 	ctx := context.Background()
 	tx, err := r.db.BeginTx(ctx, nil) // a deferred BEGIN: the snapshot starts at the first read
 	if err != nil {
