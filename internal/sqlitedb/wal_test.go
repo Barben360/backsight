@@ -117,11 +117,16 @@ func TestApplyOneWaitsThenSeesTheHolderCommitted(t *testing.T) {
 				err  error
 			}
 			got := make(chan result, 1)
-			go func() {
-				done, err := ApplyOne(ctx, w, m, 1, at, "v-waiter")
-				got <- result{done, err}
-			}()
-			time.Sleep(30 * time.Millisecond) // let ApplyOne reach the lock
+			start := func() {
+				go func() {
+					done, err := ApplyOne(ctx, w, m, 1, at, "v-waiter")
+					got <- result{done, err}
+				}()
+			}
+			if !tc.relocks {
+				start()
+				time.Sleep(30 * time.Millisecond) // let ApplyOne reach the lock
+			}
 			for _, q := range []string{
 				`CREATE TABLE IF NOT EXISTS schema_migrations(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at INTEGER NOT NULL, binary_version TEXT NOT NULL)`,
 				m.SQL,
@@ -142,6 +147,12 @@ func TestApplyOneWaitsThenSeesTheHolderCommitted(t *testing.T) {
 					t.Fatal(err)
 				}
 				again = tx
+				// ApplyOne starts only now, against a lock already taken
+				// again over the committed migration: its wait runs out
+				// for sure. Started before the commit, a slow runner could
+				// let its 100 ms run out while the holder had not committed
+				// yet (SQLITE_BUSY with the version still 0).
+				start()
 			}
 			r := <-got
 			if again != nil {
