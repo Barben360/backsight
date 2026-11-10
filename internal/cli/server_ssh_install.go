@@ -372,12 +372,10 @@ func sshInstallText(st termstyle.Style, r sshInstallResult) string {
 	if r.Connect != nil {
 		b.WriteString(connectText(st, *r.Connect))
 	} else if r.Declined {
-		b.WriteString("nothing changed\n")
+		b.WriteString(st.Paint(termstyle.Secondary, "nothing changed") + "\n")
 	}
 	if r.warned < len(r.Warnings) {
-		for _, w := range r.Warnings[r.warned:] {
-			fmt.Fprintf(&b, "warning  %s\n", w)
-		}
+		notesLines(&b, st, r.Warnings[r.warned:], nil)
 	}
 	if r.Connect == nil {
 		for _, n := range r.NextSteps {

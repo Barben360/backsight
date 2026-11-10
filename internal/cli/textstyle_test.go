@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
@@ -341,4 +342,61 @@ func TestJSONUnchangedWithForcedColor(t *testing.T) {
 			t.Errorf("%v: an escape in --json output", args)
 		}
 	}
+}
+
+// Each state of stats' Server line paints its own words.
+func TestReachTextColors(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		s    serverReach
+		want string
+	}{
+		{serverReach{LastOK: now.Add(-2 * time.Minute)}, "\x1b[32manswering\x1b[0m"},
+		{serverReach{FailingSince: now.Add(-time.Hour)}, "\x1b[33msilent since\x1b[0m"},
+		{serverReach{OtherServer: "b", JoinedID: "a", Host: "nas"}, "\x1b[31ma different server answers at\x1b[0m"},
+	} {
+		colored := reachText(basic, c.s, now)
+		if !strings.Contains(colored, c.want) {
+			t.Errorf("%q has no %q", colored, c.want)
+		}
+		stripsTo(t, "Server line", colored, reachText(noColor, c.s, now))
+	}
+}
+
+// The error prefix follows stderr's own level, not stdout's.
+func TestErrorPrefixFollowsItsOwnStream(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		terminal  func(out, errf *os.File) uintptr
+		wantColor bool
+	}{
+		{"stdout a terminal, stderr redirected", func(out, _ *os.File) uintptr { return out.Fd() }, false},
+		{"stderr a terminal, stdout redirected", func(_, errf *os.File) uintptr { return errf.Fd() }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cleanColorEnv(t)
+			out, errf := outFile(t), outFile(t)
+			fakeTerminal(t, c.terminal(out, errf))
+			if code, _ := executeContext(context.Background(), []string{"stats", "--until", "2026-01-01"}, out, errf); code != output.Usage {
+				t.Fatalf("exit %d", code)
+			}
+			got := fileText(t, errf)
+			if strings.Contains(got, "\x1b[") != c.wantColor || termstyle.Strip(got) != "backsight: --until needs --since\n" {
+				t.Fatalf("stderr %q, want color %v", got, c.wantColor)
+			}
+		})
+	}
+}
+
+// server install --ssh paints its own "nothing changed" and warnings like
+// the connect text it embeds.
+func TestSSHInstallTextColored(t *testing.T) {
+	r := sshInstallResult{Declined: true, Warnings: []string{"the host is slow"}}
+	colored := sshInstallText(basic, r)
+	for _, want := range []string{"\x1b[2mnothing changed\x1b[0m", "\x1b[33mwarning\x1b[0m  the host is slow"} {
+		if !strings.Contains(colored, want) {
+			t.Errorf("%q has no %q", colored, want)
+		}
+	}
+	stripsTo(t, "ssh install", colored, sshInstallText(noColor, r))
 }
