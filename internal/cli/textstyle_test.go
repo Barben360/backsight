@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -290,6 +291,54 @@ func TestBackfillProgressColored(t *testing.T) {
 	for _, want := range []string{"\x1b[32mdone\x1b[0m", "\x1b[33mwaiting\x1b[0m"} {
 		if !strings.Contains(colored.String(), want) {
 			t.Errorf("backfill progress lacks %q: %q", want, colored.String())
+		}
+	}
+}
+
+// tokenDoctor makes doctor report a check that quotes a connection token.
+func tokenDoctor(t *testing.T, tok string) {
+	t.Helper()
+	old := doctorRun
+	doctorRun = func(context.Context, doctor.Env) doctor.Report {
+		return doctor.Report{Checks: []doctor.Check{
+			{ID: "config", Status: doctor.OK, Summary: "read"},
+			{ID: "connect", Status: doctor.Error, Summary: "the token " + tok + " was refused", Fix: "backsight connect " + tok},
+		}, Errors: 1}
+	}
+	t.Cleanup(func() { doctorRun = old })
+}
+
+func TestStyledTokenIsMasked(t *testing.T) {
+	isolate(t)
+	tok := token.Prefix + "eyJrZXkiOiJzZWNyZXQifQ"
+	tokenDoctor(t, tok)
+	plain, colored := colorRun(t, "doctor")
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatalf("doctor is not colored: %q", colored)
+	}
+	if strings.Contains(colored, tok) || strings.Contains(plain, tok) {
+		t.Errorf("the token reached the output:\n%q", colored)
+	}
+	if !strings.Contains(colored, "\x1b[36mbacksight connect "+token.Prefix+"[redacted]\x1b[0m") {
+		t.Errorf("the painted fix is not masked whole: %q", colored)
+	}
+}
+
+func TestJSONUnchangedWithForcedColor(t *testing.T) {
+	isolate(t)
+	tokenDoctor(t, "none")
+	setBuild(t, "0.1.0-test", "abc1234")
+	for _, args := range [][]string{{"doctor", "--json"}, {"version", "--json"}, {"stats", "--until", "2026-01-01", "--json"}} {
+		cleanColorEnv(t)
+		_, plain, plainErr := run(t, args...)
+		forceColor(t)
+		_, colored, coloredErr := run(t, args...)
+		t.Setenv("BACKSIGHT_COLOR", "")
+		if colored != plain || coloredErr != plainErr {
+			t.Errorf("%v: --json moved with forced color:\n%q\n%q", args, colored, plain)
+		}
+		if strings.Contains(colored+coloredErr, "\x1b") {
+			t.Errorf("%v: an escape in --json output", args)
 		}
 	}
 }

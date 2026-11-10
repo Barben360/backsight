@@ -225,12 +225,9 @@ func reachOf(d paths.Dirs, home string, now time.Time) serverReach {
 	return s
 }
 
-// reachText is the Server line's text after its label.
-func reachText(s serverReach, now time.Time) string { return reachStyled(termstyle.Style{}, s, now) }
-
-// reachStyled is reachText with its state colored by st: answering ok,
-// silent warn, another server fail.
-func reachStyled(st termstyle.Style, s serverReach, now time.Time) string {
+// reachText is the Server line's text after its label, its state colored
+// by st: answering ok, silent warn, another server fail.
+func reachText(st termstyle.Style, s serverReach, now time.Time) string {
 	host := ""
 	if s.Host != "" {
 		host = s.Host + " "
@@ -410,7 +407,7 @@ func statsLines(st termstyle.Style, r statsResult) string {
 	} else {
 		fmt.Fprintf(&b, "Memory over the last %d day(s), %s (UTC)\n\n", r.Days, span)
 	}
-	fmt.Fprintf(&b, "Server       %s\n", reachStyled(st, r.Server, r.now))
+	fmt.Fprintf(&b, "Server       %s\n", reachText(st, r.Server, r.now))
 	if r.Runtime != "" {
 		fmt.Fprintf(&b, "Runtime      %s\n", runtimeText(r.Runtime, r.RuntimeSwitch))
 	}

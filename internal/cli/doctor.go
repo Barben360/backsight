@@ -402,7 +402,7 @@ func runDoctorSized(cmd *cobra.Command, d paths.Dirs, home string, sized bool) d
 	if sized {
 		denv.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(d, home, true) }
 	}
-	return doctor.Run(cmd.Context(), denv)
+	return doctorRun(cmd.Context(), denv)
 }
 
 // referenceServer asks the reference server's /health, then, for a
