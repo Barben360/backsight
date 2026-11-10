@@ -1,0 +1,2 @@
+{"tool":"memory_store","status":"completed","error":null}
+{"tool":"memory_credit","status":"failed","error":"memory session not ready: call memory_credit again"}

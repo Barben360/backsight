@@ -12,7 +12,7 @@ variant=${1:?variant: v2, v1 or dual}
 fx=/out/fixtures/memories/$variant
 mkdir -p "$fx" /tmp/prompts
 cd "$HOME/work"
-export TERM=xterm-256color
+
 
 {
   echo
@@ -28,36 +28,21 @@ export TERM=xterm-256color
   esac
 } >> "$CODEX_HOME/config.toml"
 
-screen() { tmux capture-pane -p -t t -S -200; }
-wait_for() {
-  local i
-  for ((i = 0; i < ${2:-60}; i++)); do
-    screen | grep -qF -- "$1" && return 0
-    sleep 0.5
-  done
-  echo "memories: timed out waiting for: $1" >&2
-  screen | grep -v '^\s*$' | tail -20 >&2
-  return 1
-}
+# shellcheck source=scripts/codex/lib.sh
+. /opt/harness/lib.sh
 session() { # session <n>: one interactive session with one scripted turn
   printf 'session %s: remember that the build uses make check <<fake [{"call":"exec_command","args":{"cmd":"echo build %s"}},{"say":"S%s-DONE"}]>>' "$1" "$1" "$1" > "/tmp/prompts/s$1"
-  tmux kill-server 2>/dev/null || true
-  tmux new-session -d -s t -x 220 -y 50 "codex --no-daemon; sleep 3600"
+  tui
   if wait_for "Hooks need review" 20 2>/dev/null; then
     tmux send-keys -t t Down Down # 3. continue without trusting: hooks play no part here
     sleep 0.3
     tmux send-keys -t t Enter
   fi
   wait_for "Ask Codex to do anything"
-  tmux load-buffer "/tmp/prompts/s$1"
-  tmux paste-buffer -t t
-  sleep 0.5
-  tmux send-keys -t t Enter
+  paste "/tmp/prompts/s$1"
   wait_for "• S$1-DONE"
   sleep 2
-  tmux send-keys -t t -l /exit
-  sleep 0.3
-  tmux send-keys -t t Enter
+  slash /exit
   sleep 3
 }
 

@@ -1,0 +1,11 @@
+.claude-plugin/marketplace.json
+plugins/backsight-hooks/.claude-plugin/plugin.json
+plugins/backsight-hooks/hooks/hooks.json
+plugins/backsight/.claude-plugin/plugin.json
+plugins/backsight/.mcp.json
+plugins/backsight/skills/doctor/SKILL.md
+plugins/backsight/skills/memory-retro/SKILL.md
+plugins/backsight/skills/memory/SKILL.md
+plugins/backsight/skills/pause/SKILL.md
+plugins/backsight/skills/remember/SKILL.md
+plugins/backsight/skills/update/SKILL.md

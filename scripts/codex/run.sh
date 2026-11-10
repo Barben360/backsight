@@ -12,8 +12,10 @@
 # the prepared container instead, e.g. HARNESS_CMD=bash for a shell. The
 # memory stack is Hindsight with its mock LLM, as scripts/sandbox.sh starts
 # it, on port 28800 + BACKSIGHT_CI_SLOT x 10 (scripts/ports.sh);
-# CODEX_PROJECT names its Compose project (default bs-codex; never
-# backsight). KEEP=1 leaves the stack and the work directory. NO_SERVER=1
+# CODEX_PROJECT names its Compose project (default bs-codex, bs-codex-s<n>
+# for a CI slot; never backsight). The Codex container sits on an internal
+# network with the server alone, so nothing it runs reaches the internet
+# (without a server: no network at all). KEEP=1 leaves the stack and the work directory. NO_SERVER=1
 # skips the stack: the hooks then run with the server unreachable.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,8 +25,10 @@ root=$(cd "$here/../.." && pwd)
 # shellcheck source=scripts/hf-cache.sh
 . "$root/scripts/hf-cache.sh"
 port=$(slot_port 28800 "${1:-}")
-project=${CODEX_PROJECT:-bs-codex}
+# One project (and container) per CI slot, so two slots run side by side.
+project=${CODEX_PROJECT:-bs-codex${BACKSIGHT_CI_SLOT:+-s$BACKSIGHT_CI_SLOT}}
 [ "$project" != backsight ] || { echo "CODEX_PROJECT=backsight would be the machine's own install" >&2; exit 2; }
+net=${project}-offline
 # The image is named after its Dockerfile: a changed one is rebuilt.
 image=${CODEX_IMAGE:-bs-codex-test:$(sha256sum "$here/Dockerfile" | cut -c1-12)}
 work=$(mktemp -d)
@@ -33,6 +37,8 @@ mkdir -p "$out" "$work/in" "$work/bin"
 export BACKSIGHT_HOME=$work/in/backsight
 cleanup() {
   if [ "${KEEP:-}" != 1 ]; then
+    docker network disconnect -f "$net" "${project}-hindsight-1" >/dev/null 2>&1 || true
+    docker network rm "$net" >/dev/null 2>&1 || true
     if [ -f "$BACKSIGHT_HOME/data/server/compose.yaml" ]; then
       docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" down -v >/dev/null 2>&1 || true
     fi
@@ -78,9 +84,13 @@ TOML
   curl -fsS "http://127.0.0.1:$port/health" >/dev/null
   hfc_save "$project"
   "$bin" bank apply >/dev/null
-  # The container joins the stack's network and reaches the server by its
-  # service name: the host's own ports stay out of its reach.
-  network=(--network "${project}_default" -e "BS_SERVER_URL=http://hindsight:8888")
+  # An internal network (no route out) holds the Codex container and the
+  # server, reached by its service name: the recording runs offline, and the
+  # host's own ports stay out of its reach. Hindsight keeps its Compose
+  # network too, which it needs to fetch its models at the first start.
+  docker network create --internal "$net" >/dev/null
+  docker network connect --alias hindsight "$net" "${project}-hindsight-1"
+  network=(--network "$net" -e "BS_SERVER_URL=http://hindsight:8888")
 fi
 
 tty=()
@@ -97,4 +107,5 @@ docker run --rm --name "${project}-codex" "${tty[@]}" "${network[@]}" \
   -v "$out:/out" \
   --user "$(id -u):$(id -g)" \
   -e HOME=/home/tester -e CODEX_HOME=/home/tester/.codex -e BACKSIGHT_HOME=/home/tester/backsight \
+  -e CODEXIFY="${CODEXIFY:-1}" \
   "$image" /opt/harness/prepare.sh "${cmd[@]}"

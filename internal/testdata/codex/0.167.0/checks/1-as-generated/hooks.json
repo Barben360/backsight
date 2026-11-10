@@ -1,0 +1,141 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_backsight_memory__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "post-tool-use"
+            ],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "pre-tool-use"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "session-end"
+            ],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "session-start"
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "session-start"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "stop"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "subagent-start"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "subagent-stop"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/tester/backsight/data/bin/current",
+            "args": [
+              "hook",
+              "user-prompt-submit"
+            ],
+            "timeout": 25
+          }
+        ]
+      }
+    ]
+  }
+}

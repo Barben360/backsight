@@ -1,0 +1,30 @@
+[
+  {
+    "name": "memory_credit",
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "memory_read",
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "memory_search",
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "memory_store",
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  }
+]
