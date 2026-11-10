@@ -533,31 +533,37 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 	}
 }
 
-// ask prompts one question at a terminal; Enter takes the default.
-func ask(e *env, q setup.Question) (string, error) {
+// askText is a question and its options as ask prints them; st bolds the
+// question and colors the recommendation and the caveats.
+func askText(st termstyle.Style, q setup.Question) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n%s\n", q.Prompt)
+	fmt.Fprintf(&b, "\n%s\n", st.Paint(termstyle.Label, q.Prompt))
 	for i, o := range q.Options {
-		fmt.Fprintf(&b, "  %d) %s — %s", i+1, o.Value, o.Label)
+		fmt.Fprintf(&b, "  %d) %s — %s", i+1, st.Paint(termstyle.Accent, o.Value), o.Label)
 		if o.Value == q.Recommended {
-			b.WriteString(" [recommended]")
+			b.WriteString(" " + st.Paint(termstyle.OK, "[recommended]"))
 		}
 		if o.Cost != "" {
-			b.WriteString(" · " + o.Cost)
+			b.WriteString(" · " + st.Paint(termstyle.Secondary, o.Cost))
 		}
 		if o.Caveat != "" {
-			b.WriteString("\n     ⚠ " + o.Caveat)
+			b.WriteString("\n     " + st.Paint(termstyle.Warn, "⚠ "+o.Caveat))
 		}
 		b.WriteString("\n")
 	}
 	if q.Free {
 		b.WriteString("  (or type a value)\n")
 	}
+	return b.String()
+}
+
+// ask prompts one question at a terminal; Enter takes the default.
+func ask(e *env, q setup.Question) (string, error) {
 	prompt := "choice"
 	if q.Default != "" {
 		prompt += " [" + q.Default + "]"
 	}
-	fmt.Fprint(e.stdout, b.String()+prompt+": ")
+	fmt.Fprint(e.stdout, askText(termstyle.StyleOf(e.stdout), q)+prompt+": ")
 	line, err := readLine()
 	if err != nil {
 		return "", &output.Error{Code: output.Blocked, Message: err.Error()}
@@ -1835,9 +1841,9 @@ func reuseHint(qs []setup.Question) string {
 
 func setupPlanText(st termstyle.Style, steps []setup.Step) string {
 	var b strings.Builder
-	b.WriteString("\nsetup will:\n")
+	b.WriteString("\n" + st.Paint(termstyle.Label, "setup will:") + "\n")
 	for _, s := range steps {
-		fmt.Fprintf(&b, "  %-9s %s\n", s.Name, s.Detail)
+		fmt.Fprintf(&b, "  %s %s\n", st.Cell(termstyle.Accent, s.Name, 9), s.Detail)
 	}
 	return b.String()
 }
@@ -1855,12 +1861,12 @@ func setupText(st termstyle.Style, r setupResult) string {
 		}
 		return b.String()
 	case r.Declined:
-		return "nothing changed\n"
+		return st.Paint(termstyle.Secondary, "nothing changed") + "\n"
 	case r.Plan:
 		for _, c := range r.Preflight {
-			fmt.Fprintf(&b, "%-6s %-11s %s\n", c.Status, c.ID, c.Summary)
+			fmt.Fprintf(&b, "%s %-11s %s\n", statusCell(st, c.Status, 6), c.ID, c.Summary)
 			if c.Status == setup.Fail {
-				fmt.Fprintf(&b, "%19sfix: %s\n", "", c.Fix)
+				fmt.Fprintf(&b, "%19sfix: %s\n", "", st.Paint(termstyle.Command, c.Fix))
 			}
 		}
 		b.WriteString(setupPlanText(st, r.Steps))
@@ -1869,11 +1875,11 @@ func setupText(st termstyle.Style, r setupResult) string {
 	}
 	for _, c := range r.Preflight {
 		if c.Status == setup.Fail {
-			fmt.Fprintf(&b, "fail   %-11s %s\n%19sfix: %s\n", c.ID, c.Summary, "", c.Fix)
+			fmt.Fprintf(&b, "%s   %-11s %s\n%19sfix: %s\n", st.Paint(termstyle.Fail, "fail"), c.ID, c.Summary, "", st.Paint(termstyle.Command, c.Fix))
 		}
 	}
 	if len(r.Steps) > 0 && r.TryFirst != "" {
-		b.WriteString("\nbacksight is set up.\n")
+		b.WriteString("\n" + st.Paint(termstyle.OK, "backsight is set up.") + "\n")
 		for _, n := range r.NextSteps {
 			b.WriteString("- " + n + "\n")
 		}

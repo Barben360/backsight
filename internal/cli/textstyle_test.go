@@ -10,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/token"
 )
@@ -178,5 +179,78 @@ func coloredGolden(t *testing.T, name string, normalize func(string) string, arg
 	isJSON := strings.Contains(name, "-json")
 	if hasEsc := strings.Contains(got, "\x1b["); hasEsc == isJSON {
 		t.Errorf("%s: colored output has escapes = %v", name, hasEsc)
+	}
+}
+
+// stripsTo checks colored strips to plain and is colored.
+func stripsTo(t *testing.T, what, colored, plain string) {
+	t.Helper()
+	if termstyle.Strip(colored) != plain {
+		t.Errorf("%s strips to\n%q\nwant\n%q", what, termstyle.Strip(colored), plain)
+	}
+	if !strings.Contains(colored, "\x1b[") {
+		t.Errorf("%s is not colored: %q", what, colored)
+	}
+}
+
+func TestSetupTextColored(t *testing.T) {
+	steps := []setup.Step{{Name: "config", Detail: "write config.toml"}, {Name: "a-long-step-name", Detail: "x"}}
+	plan := setupPlanText(basic, steps)
+	stripsTo(t, "setup plan", plan, setupPlanText(noColor, steps))
+	if !strings.Contains(plan, "\x1b[1msetup will:\x1b[0m") {
+		t.Errorf("the plan heading is not bold: %q", plan)
+	}
+	r := setupResult{Plan: true, Steps: steps, Preflight: []setup.Check{
+		{ID: "docker", Status: setup.OK, Summary: "running"},
+		{ID: "disk", Status: setup.Fail, Summary: "full", Fix: "free some space"},
+	}}
+	got := setupText(basic, r)
+	stripsTo(t, "setup --plan", got, setupText(noColor, r))
+	for _, want := range []string{"\x1b[32mok\x1b[0m", "\x1b[31mfail\x1b[0m", "\x1b[36mfree some space\x1b[0m"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("setup --plan lacks %q: %q", want, got)
+		}
+	}
+	done := setupResult{Steps: steps, TryFirst: "ask Claude", NextSteps: []string{"restart"},
+		Preflight: []setup.Check{{ID: "disk", Status: setup.Fail, Summary: "full", Fix: "free"}}}
+	stripsTo(t, "setup done", setupText(basic, done), setupText(noColor, done))
+}
+
+func TestQuestionTextColored(t *testing.T) {
+	q := setup.Question{ID: "runtime", Prompt: "Which runtime?", Default: "docker", Recommended: "docker",
+		Options: []setup.Option{{Value: "docker", Label: "containers", Cost: "2 GB"}, {Value: "native", Label: "no Docker", Caveat: "beta"}}, Free: true}
+	got := askText(basic, q)
+	stripsTo(t, "a setup question", got, askText(noColor, q))
+	for _, want := range []string{"\x1b[1mWhich runtime?\x1b[0m", "\x1b[32m[recommended]\x1b[0m", "\x1b[33m⚠ beta\x1b[0m"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the question lacks %q: %q", want, got)
+		}
+	}
+}
+
+func TestConnectTextColored(t *testing.T) {
+	r := connectResult{URL: "https://nas:8888", Bank: "b", ServerID: "srv1", HindsightVersion: "1.2.0", Plan: true,
+		Warnings: []string{"old server"}, Notes: []string{"fyi"}, Steps: []step{{Name: "config", Status: "planned", Detail: "point at nas"}}}
+	got := connectText(basic, r)
+	stripsTo(t, "connect --plan", got, connectText(noColor, r))
+	for _, want := range []string{"\x1b[33mwarning\x1b[0m", "\x1b[2mnote\x1b[0m", "\n\x1b[1mconnect will:\x1b[0m"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("connect --plan lacks %q: %q", want, got)
+		}
+	}
+	setupDone := setupResult{Steps: []setup.Step{{Name: "x"}}, TryFirst: "ask"}
+	r2 := connectResult{Steps: r.Steps, Setup: &setupDone, Warnings: []string{"w"}, Notes: []string{"n"}, NextSteps: []string{"restart"}}
+	stripsTo(t, "connect done", connectText(basic, r2), connectText(noColor, r2))
+}
+
+func TestUninstallTextColored(t *testing.T) {
+	r := uninstallResult{Steps: []undoAction{{Name: "hooks", Status: "done"}, {Name: "server", Status: "planned", Detail: "stop"}},
+		Kept: []string{"backups"}, Warnings: []string{"a lock"}, NextSteps: []string{"restart Claude Code"}}
+	got := uninstallText(basic, r)
+	stripsTo(t, "uninstall", got, uninstallText(noColor, r))
+	for _, want := range []string{"\x1b[32mdone\x1b[0m", "\x1b[33mplanned\x1b[0m", "\x1b[33mwarning:\x1b[0m"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("uninstall lacks %q: %q", want, got)
+		}
 	}
 }

@@ -1399,7 +1399,7 @@ func retiredRuns(d paths.Dirs, rec *setup.Record) int {
 func uninstallText(st termstyle.Style, r uninstallResult) string {
 	var b strings.Builder
 	for _, a := range r.Steps {
-		fmt.Fprintf(&b, "%-8s %s", a.Status, a.Name)
+		fmt.Fprintf(&b, "%s %s", statusCell(st, a.Status, 8), a.Name)
 		if a.Detail != "" {
 			b.WriteString(": " + a.Detail)
 		}
@@ -1408,21 +1408,21 @@ func uninstallText(st termstyle.Style, r uninstallResult) string {
 	if o := r.Retention; o != nil {
 		switch o.Action {
 		case "kept":
-			fmt.Fprintf(&b, "kept     transcript retention %s days (it was %s): --answer retention=restore puts it back\n", o.Current, showJSON(o.Before))
+			fmt.Fprintf(&b, "%s transcript retention %s days (it was %s): --answer retention=restore puts it back\n", statusCell(st, "kept", 8), o.Current, showJSON(o.Before))
 		case "restore", "restored":
-			fmt.Fprintf(&b, "%-8s transcript retention back to %s\n", map[bool]string{true: "planned", false: "done"}[r.Plan], showJSON(o.Before))
+			fmt.Fprintf(&b, "%s transcript retention back to %s\n", statusCell(st, map[bool]string{true: "planned", false: "done"}[r.Plan], 8), showJSON(o.Before))
 		case "changed_since":
-			fmt.Fprintf(&b, "kept     transcript retention %s days: changed since backsight set it\n", o.Current)
+			fmt.Fprintf(&b, "%s transcript retention %s days: changed since backsight set it\n", statusCell(st, "kept", 8), o.Current)
 		}
 	}
 	for _, k := range r.Kept {
-		b.WriteString("kept: " + k + "\n")
+		b.WriteString(st.Paint(termstyle.Secondary, "kept:") + " " + k + "\n")
 	}
 	for _, w := range r.Warnings {
-		b.WriteString("warning: " + w + "\n")
+		b.WriteString(st.Paint(termstyle.Warn, "warning:") + " " + w + "\n")
 	}
 	for _, n := range r.NextSteps {
-		b.WriteString("next: " + n + "\n")
+		b.WriteString(st.Paint(termstyle.Label, "next:") + " " + n + "\n")
 	}
 	return b.String()
 }

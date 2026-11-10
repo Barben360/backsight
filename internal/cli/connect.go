@@ -1318,22 +1318,17 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 
 func connectPlanText(st termstyle.Style, r connectResult) string {
 	var b strings.Builder
-	will := "\nconnect will:\n"
+	will := "connect will:"
 	if r.Situation == joinUndo {
-		fmt.Fprintf(&b, "this PC's own server at %s (bank %s)\n", r.URL, r.Bank)
-		will = "\nconnect --undo will:\n"
+		fmt.Fprintf(&b, "this PC's own server at %s (bank %s)\n", st.Paint(termstyle.Command, r.URL), r.Bank)
+		will = "connect --undo will:"
 	} else {
-		fmt.Fprintf(&b, "server %s at %s (bank %s, Hindsight %s)\n", r.ServerID, r.URL, r.Bank, r.HindsightVersion)
+		fmt.Fprintf(&b, "server %s at %s (bank %s, Hindsight %s)\n", st.Paint(termstyle.Secondary, r.ServerID), st.Paint(termstyle.Command, r.URL), r.Bank, r.HindsightVersion)
 	}
-	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
-	}
-	for _, n := range r.Notes {
-		fmt.Fprintf(&b, "note     %s\n", n)
-	}
-	b.WriteString(will)
+	notesLines(&b, st, r.Warnings, r.Notes)
+	b.WriteString("\n" + st.Paint(termstyle.Label, will) + "\n")
 	for _, s := range r.Steps {
-		fmt.Fprintf(&b, "  %-8s %s\n", s.Name, s.Detail)
+		fmt.Fprintf(&b, "  %s %s\n", st.Cell(termstyle.Accent, s.Name, 8), s.Detail)
 	}
 	return b.String()
 }
@@ -1343,7 +1338,7 @@ func connectText(st termstyle.Style, r connectResult) string {
 	case len(r.Steps) == 0:
 		return ""
 	case r.Declined:
-		return "nothing changed\n"
+		return st.Paint(termstyle.Secondary, "nothing changed") + "\n"
 	case r.Plan:
 		return connectPlanText(st, r)
 	case r.Situation == joinUndo: // the switch's steps are printed as they are done
@@ -1363,14 +1358,19 @@ func connectText(st termstyle.Style, r connectResult) string {
 	}
 	var b strings.Builder
 	b.WriteString(setupText(st, *r.Setup))
-	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
-	}
-	for _, n := range r.Notes {
-		fmt.Fprintf(&b, "note     %s\n", n)
-	}
+	notesLines(&b, st, r.Warnings, r.Notes)
 	for _, n := range r.NextSteps {
 		b.WriteString("- " + n + "\n")
 	}
 	return b.String()
+}
+
+// notesLines writes connect's warnings, then its notes, one a line.
+func notesLines(b *strings.Builder, st termstyle.Style, warnings, notes []string) {
+	for _, w := range warnings {
+		fmt.Fprintf(b, "%s  %s\n", st.Paint(termstyle.Warn, "warning"), w)
+	}
+	for _, n := range notes {
+		fmt.Fprintf(b, "%s     %s\n", st.Paint(termstyle.Secondary, "note"), n)
+	}
 }
