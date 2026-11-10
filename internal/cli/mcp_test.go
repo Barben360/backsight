@@ -427,6 +427,36 @@ func TestMCPSearchParameters(t *testing.T) {
 	}
 }
 
+// The floor picks the hits and the limit only caps a long answer: 20 by
+// default, each server call asked for 3000 tokens so one call can fill it.
+func TestMCPSearchReturnsEveryHitAboveTheFloorUpToTwenty(t *testing.T) {
+	cs := mcpSession(t)
+	var hits []string
+	for i := range 25 {
+		hits = append(hits, fmt.Sprintf(`{"id":"h%02d","text":"memory %02d","type":"observation","tags":["project:x"],"scores":{"reranker":%.2f}}`, i, i, 0.95-float64(i)*0.01))
+	}
+	hits = append(hits, `{"id":"weak","text":"memory weak","type":"observation","tags":["project:x"],"scores":{"reranker":0.3}}`)
+	recallAnswer = "[" + strings.Join(hits, ",") + "]"
+	recallMaxTokens = nil
+	out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "scope": "all"})
+	if n := strings.Count(out, "\n- #"); n != 20 || !strings.Contains(out, "memory 19") || strings.Contains(out, "memory 20") || strings.Contains(out, "memory weak") {
+		t.Errorf("want the 20 best hits above the floor, got %d:\n%s", n, out)
+	}
+	if len(recallMaxTokens) == 0 {
+		t.Fatal("no recall request")
+	}
+	for _, m := range recallMaxTokens {
+		if m != 3000 {
+			t.Errorf("memory_search asked max_tokens %v, want 3000 on every call", recallMaxTokens)
+			break
+		}
+	}
+	recallAnswer = "[" + strings.Join(hits[:12], ",") + "," + hits[25] + "]"
+	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "scope": "all"}); strings.Count(out, "\n- #") != 12 || strings.Contains(out, "memory weak") {
+		t.Errorf("12 hits above the floor must all show, the weak one not:\n%s", out)
+	}
+}
+
 func TestMCPToolEventsAreLogged(t *testing.T) {
 	cs := mcpSession(t)
 	recallAnswer = `[{"id":"b","text":"strong","type":"observation","tags":["project:x"],"scores":{"reranker":0.9}}]`

@@ -67,7 +67,7 @@ Colored so far: `doctor`, `version`, `update check`, `update apply`, `stats` and
 
 | Command | Does |
 |---|---|
-| `backsight search <query>...` | Searches the memory, up to 4 short keyword queries. `--all`, `--project <name>`, `--limit N`, `--min-score X`. |
+| `backsight search <query>...` | Searches the memory, up to 4 short keyword queries. `--all`, `--project <name>`, `--limit N` (20), `--min-score X` (0.4): every hit at the floor or above, at most the limit. |
 | `backsight read <id>` | Shows one memory with the facts it was built from. |
 | `backsight store --kind <kind> <text>` | Stores one durable fact in the current project. `--project <name>`; `--project transverse` for a user-wide rule (required in the home directory). |
 | `backsight forget <id>` | Retires a memory (reversible with `--restore`, which also undoes a retirement Claude reported); `--purge --yes` deletes it with its source facts and documents. Either way its counts of times shown and used are dropped at the next `jobs tick`. |
