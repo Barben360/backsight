@@ -23,9 +23,12 @@ func splashTerminal(t *testing.T, width int, err error) {
 	for k, v := range map[string]string{"BACKSIGHT_HOME": t.TempDir(), "BACKSIGHT_SPLASH": "", "LANG": "C.UTF-8", "LC_ALL": "", "LC_CTYPE": ""} {
 		t.Setenv(k, v)
 	}
-	old := termWidth
-	t.Cleanup(func() { termWidth = old })
+	old, oldUTF8 := termWidth, consoleUTF8
+	t.Cleanup(func() { termWidth, consoleUTF8 = old, oldUTF8 })
 	termWidth = func(uintptr) (int, error) { return width, err }
+	// The locale on Unix, the console code page on Windows: fixed here,
+	// each tested in internal/splash.
+	consoleUTF8 = func(func(string) string) bool { return true }
 }
 
 // runAt runs args with stdout on a file and returns stdout and the code.
@@ -183,7 +186,7 @@ func TestSplashPanicDropsOnlyTheSplash(t *testing.T) {
 
 func TestSplashASCIIOffUTF8(t *testing.T) {
 	splashTerminal(t, 80, nil)
-	t.Setenv("LANG", "C")
+	consoleUTF8 = func(func(string) string) bool { return false }
 	got, _, _ := runAt(t, "version")
 	head, _, _ := strings.Cut(termstyle.Strip(got), "\n\n")
 	if !strings.HasPrefix(head, "     .--'") {

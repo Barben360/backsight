@@ -26,6 +26,10 @@ var termWidth = func(fd uintptr) (int, error) {
 // buildPanel builds the splash's panel; tests replace it.
 var buildPanel = splash.Build
 
+// consoleUTF8 says whether the terminal takes UTF-8 (the locale on Unix,
+// the console code page on Windows); tests replace it.
+var consoleUTF8 = splash.UTF8
+
 // splashWidth is the width to draw the splash at, or 0 for none: stdout
 // is colored, a terminal itself (even --color=always prints no splash
 // into a pipe) at least splashMinWidth wide, and not opted out.
@@ -58,7 +62,7 @@ func (e *env) printSplash(raw, stdout io.Writer) {
 	if err != nil {
 		return
 	}
-	utf8 := splash.UTF8(os.Getenv)
+	utf8 := consoleUTF8(os.Getenv)
 	panel, kind := buildPanel(splash.Sources{Dirs: d, Now: now(), Version: buildinfo.Version, Hindsight: server.PinnedVersion(),
 		ASCII: !utf8, Mask: maskTokenText})
 	var b bytes.Buffer
