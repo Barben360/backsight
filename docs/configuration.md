@@ -191,7 +191,7 @@ At an interactive terminal, a backsight command starts with a splash: the logo b
 
 | Key | Default | Effect |
 |---|---|---|
-| `terminal.logo` | `"blocks"` | The splash's logo: `"blocks"` (half blocks) or `"braille"` (finer, needs a font with braille characters). Any other text draws `"blocks"`; a value that is not text is refused like any invalid key. A console that is not UTF-8 always gets the ASCII logo. |
+| `terminal.logo` | `"braille"` | The splash's logo: `"braille"` (fine dots, needs a font with braille characters, as most coding fonts have) or `"blocks"` (half blocks, for a font without them). Any other text draws `"braille"`; a value that is not text is refused like any invalid key. A console that is not UTF-8 always gets the ASCII logo. |
 
 These environment variables change the look too; [commands](commands.md#at-a-terminal) says which commands are colored:
 

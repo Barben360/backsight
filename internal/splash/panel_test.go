@@ -86,8 +86,8 @@ func TestPanelFromFixtures(t *testing.T) {
 	if got := texts(ls); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if kind != "blocks" {
-		t.Fatalf("logo kind %q, want blocks", kind)
+	if kind != "braille" {
+		t.Fatalf("logo kind %q, want braille (the default)", kind)
 	}
 	for _, c := range []struct {
 		label, word string
@@ -257,8 +257,8 @@ func TestPanelFreshMachineCreatesNothing(t *testing.T) {
 	if got := strings.Join(texts(ls), "\n"); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
-	if kind != "blocks" {
-		t.Fatalf("kind %q", kind)
+	if kind != "braille" {
+		t.Fatalf("kind %q, want braille (the default)", kind)
 	}
 	if r := roleOf(t, ls, "Setup", "backsight setup"); r != termstyle.Command {
 		t.Fatalf("the setup command painted %d", r)
@@ -325,18 +325,18 @@ func TestPanelReaderPanicDropsOnlyItsLine(t *testing.T) {
 
 func TestPanelLogoKindAndMask(t *testing.T) {
 	src := fixture(t)
-	write(t, src.Dirs.ConfigFile(), "schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"https://nas.example\"\n[terminal]\nlogo = \"braille\"\n")
+	write(t, src.Dirs.ConfigFile(), "schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"https://nas.example\"\n[terminal]\nlogo = \"blocks\"\n")
 	src.Mask = func(s string) string { return strings.ReplaceAll(s, "nas.example", "[masked]") }
 	ls, kind := Build(src)
-	if kind != "braille" {
-		t.Fatalf("kind %q, want braille", kind)
+	if kind != "blocks" {
+		t.Fatalf("kind %q, want blocks", kind)
 	}
 	if j := strings.Join(texts(ls), "\n"); strings.Contains(j, "nas.example") || !strings.Contains(j, "client of [masked]") {
 		t.Fatalf("mask not applied:\n%s", j)
 	}
 	write(t, src.Dirs.ConfigFile(), "schema_version = 1\n[terminal]\nlogo = 7\n")
 	ls, kind = Build(src)
-	if kind != "blocks" || line(ls, "Setup") != "Setup    host · docker" {
+	if kind != "braille" || line(ls, "Setup") != "Setup    host · docker" {
 		t.Fatalf("logo = 7: kind %q, Setup %q", kind, line(ls, "Setup"))
 	}
 }

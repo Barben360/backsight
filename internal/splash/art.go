@@ -11,8 +11,8 @@ import "strings"
 type ArtLine struct{ Text, Mask string }
 
 // The art approved in https://github.com/Barben360/backsight/issues/258:
-// blocks (A, the default), braille (B, `[terminal] logo = "braille"`),
-// ascii (D, for a console that is not UTF-8).
+// braille (B, the default since v0.1.36-m7), blocks (A, `[terminal] logo
+// = "blocks"`), ascii (D, for a console that is not UTF-8).
 var (
 	blocks = []ArtLine{
 		{"     ▄▄▀▀▀", "     ooooo"},
@@ -43,16 +43,16 @@ var (
 	}
 )
 
-// Logo is the art for the configured kind ("braille", else blocks), or
+// Logo is the art for the configured kind ("blocks", else braille), or
 // the ASCII one when the console is not UTF-8.
 func Logo(kind string, utf8 bool) []ArtLine {
 	switch {
 	case !utf8:
 		return ascii
-	case kind == "braille":
-		return braille
+	case kind == "blocks":
+		return blocks
 	}
-	return blocks
+	return braille
 }
 
 // localeUTF8: the locale that decides the character set (the first set
