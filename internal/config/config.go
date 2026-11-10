@@ -47,8 +47,8 @@ type Config struct {
 }
 
 // Terminal: how backsight looks at an interactive terminal (decision
-// 0084). Logo is the splash's art: "blocks" or "braille"; any other value
-// draws blocks, never an error (a cosmetic key must not stop a command).
+// 0084). Logo is the splash's art: "braille" or "blocks"; any other text draws
+// braille, never an error (a cosmetic key must not stop a command).
 type Terminal struct {
 	Logo string `toml:"logo" json:"logo"`
 }
@@ -327,7 +327,7 @@ func Default(d paths.Dirs, home string) Config {
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
 		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
 			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true},
-		Terminal: Terminal{Logo: "blocks"},
+		Terminal: Terminal{Logo: "braille"},
 	}
 }
 

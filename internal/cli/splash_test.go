@@ -39,7 +39,7 @@ func runAt(t *testing.T, args ...string) (string, int, *env) {
 	return fileText(t, out), code, e
 }
 
-const logoTop = "     ▄▄▀▀▀"
+const logoTop = "     ⢀⣴⠟" // the braille logo, the default
 
 // splashCount is how many splashes out holds (the logo's dot is drawn once
 // per splash).

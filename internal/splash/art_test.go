@@ -34,7 +34,7 @@ func TestLogoChoice(t *testing.T) {
 		utf8 bool
 		want string
 	}{
-		{"blocks", true, "blocks"}, {"", true, "blocks"}, {"nope", true, "blocks"},
+		{"blocks", true, "blocks"}, {"", true, "braille"}, {"nope", true, "braille"},
 		{"braille", true, "braille"}, {"braille", false, "ascii"}, {"blocks", false, "ascii"},
 	} {
 		got := Logo(c.kind, c.utf8)

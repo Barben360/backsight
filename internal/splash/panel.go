@@ -158,9 +158,9 @@ func merge(f, part *facts) {
 
 func logoKind(c *configFacts) string {
 	if c != nil {
-		if s, ok := c.Terminal.Logo.(string); ok && s == "braille" {
-			return "braille"
+		if s, ok := c.Terminal.Logo.(string); ok && s == "blocks" {
+			return "blocks"
 		}
 	}
-	return "blocks"
+	return "braille"
 }
