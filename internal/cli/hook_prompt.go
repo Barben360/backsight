@@ -331,6 +331,19 @@ func (h *hookEnv) userPrompt() []byte {
 			}
 		}
 	}
+	// Other projects the prompt names (#271): each once per session; the
+	// recall above searched them already (searchPrompt).
+	var named []string
+	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
+		named = idx.Named(prompt, append(h.namedSkip(), st.NamedProjects...))
+	}
+	if len(named) > 0 {
+		safe := make([]string, len(named))
+		for i, p := range named {
+			safe[i] = safeProject(p)
+		}
+		parts = append(parts, instructions.ProjectNamed(safe))
+	}
 	switch detector {
 	case "rule":
 		parts = append(parts, instructions.DetectorRule)
@@ -354,6 +367,11 @@ func (h *hookEnv) userPrompt() []byte {
 		s.SubagentDone = false
 		if nudged {
 			s.LastNudge = n
+		}
+		for _, p := range named {
+			if !slices.Contains(s.NamedProjects, p) {
+				s.NamedProjects = append(s.NamedProjects, p)
+			}
 		}
 		if banner != "" {
 			s.Unavailable = true
@@ -502,18 +520,26 @@ func boostChangedSet(hits, chosen []recall.Hit, rc config.Recall, skip func(reca
 	return false
 }
 
+// namedSkip: the projects a prompt naming them brings nothing new for:
+// this one, the transverse pool and the linked projects, all searched
+// anyway.
+func (h *hookEnv) namedSkip() []string {
+	return append(append([]string{h.project}, h.cfg.Projects.Transverse...), h.linked...)
+}
+
 // searchPrompt is the prompt path's query and recall (SPEC §10.2), shared
 // with `recall-prompt` so the replay gate measures exactly the hook.
 func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 	rc := h.cfg.Recall
 	q := h.recallQuery(prompt)
-	var related []string
+	var related, named []string
 	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
+		named = idx.Named(q, h.namedSkip()) // searched as if asked for: no floor for other projects
 	}
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
-	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
+	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Projects: named, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
 }
 
 var (

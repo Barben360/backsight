@@ -588,7 +588,7 @@ func pruneBriefings(ctx context.Context, bank, briefing string, cl *hindsight.Cl
 // refreshIndex rebuilds the entity index when it is older than a day; best
 // effort, the hooks only read it.
 func refreshIndex(ctx context.Context, d paths.Dirs, bank string, cl *hindsight.Client) string {
-	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil && now().Sub(idx.BuiltAt) < recall.IndexMaxAge {
+	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil && !idx.Stale(now()) {
 		return ""
 	}
 	idx, err := recall.BuildIndex(ctx, cl, bank, now())

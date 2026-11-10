@@ -54,7 +54,7 @@ var contextRules = []string{
 	searchTrigger, "BEFORE asking the user a factual question or a preference", "recommending an architecture, tool or convention", "starting a task or topic",
 	"writing a test or changing something shared", "the user refers to the past", "kip it for trivial edits", "a fact already found this session",
 	"1-4 short keyword queries", "one per angle", "topic + intent word", "never a kind word alone", "a copy of the user's sentence", "date or version",
-	"topic + pitfall / correction", "topic + decision", "topic + convention / correction", "related repositories", "Hits show their kinds",
+	"topic + pitfall / correction", "topic + decision", "topic + convention / correction", "exact names as listed at session start", "name it in `projects`", "Hits show their kinds",
 	"verify them against the code", "read it first, then search its content", "User-wide rules override conflicting project facts",
 	"auto (current project", "default 8", "relevance floor",
 	// what to store, and how

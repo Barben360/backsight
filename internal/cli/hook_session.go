@@ -46,6 +46,9 @@ const (
 	subagentItems     = 2
 	subagentChars     = 600
 	subagentItemChars = 100
+	// listedProjects: the other projects the session's start names at
+	// most; the rest are counted.
+	listedProjects = 12
 	// unreachableAfter: a server silent this long gets its banner line
 	// (doctor's server-reach check warns from the same age).
 	unreachableAfter = time.Hour
@@ -115,7 +118,11 @@ func (h *hookEnv) sessionStart() []byte {
 		return h.compactStart()
 	default: // resume, clear, fork: clear and fork start a new session id
 		h.writeEnvFile()
-		return contextOutput("SessionStart", h.texts().Guide, "")
+		guide := h.texts().Guide
+		if h.in.Source == "clear" { // its context starts empty; resume and fork keep theirs
+			guide = withLine(guide, h.projectsLine())
+		}
+		return contextOutput("SessionStart", guide, "")
 	}
 	h.writeEnvFile()
 	name := safeProject(h.project)
@@ -200,7 +207,7 @@ func (h *hookEnv) sessionStart() []byte {
 		// cross-session sticky muted them in sessions that never got the
 		// briefing (resume, clear, fork).
 	}
-	context := h.texts().Guide
+	context := withLine(h.texts().Guide, h.projectsLine())
 	if text != "" {
 		context += "\n\n" + text
 	}
@@ -426,12 +433,44 @@ func (h *hookEnv) compactStart() []byte {
 	// rest of the seen set may be recalled again.
 	h.updateSession(func(st *session.State) error {
 		st.Seen = keep
+		st.NamedProjects = nil // the compaction dropped those lines: a prompt may name them again
 		if changed {
 			st.BriefingPage, st.BriefingRefreshedAt = page, refreshed
 		}
 		return nil
 	})
-	return contextOutput("SessionStart", h.texts().Guide+strings.TrimRight(b.String(), "\n"), "")
+	return contextOutput("SessionStart", withLine(h.texts().Guide, h.projectsLine())+strings.TrimRight(b.String(), "\n"), "")
+}
+
+// projectsLine names the projects in memory (#271): this one, those
+// searched with it, and up to listedProjects others from the entity index
+// (Listed). Empty without an index, a project or any other project.
+func (h *hookEnv) projectsLine() string {
+	if h.project == "" {
+		return ""
+	}
+	idx, err := recall.LoadIndex(h.dirs.EntitiesFile())
+	if err != nil {
+		return ""
+	}
+	listed := idx.Listed(h.namedSkip(), now())
+	others := make([]string, 0, min(len(listed), listedProjects))
+	for _, p := range listed[:min(len(listed), listedProjects)] {
+		others = append(others, safeProject(p.Name))
+	}
+	linked := make([]string, len(h.linked))
+	for i, p := range h.linked {
+		linked[i] = safeProject(p)
+	}
+	return instructions.ProjectsLine(safeProject(h.project), linked, others, len(listed)-len(others))
+}
+
+// withLine is text, then line after a blank line when there is one.
+func withLine(text, line string) string {
+	if line == "" {
+		return text
+	}
+	return text + "\n\n" + line
 }
 
 // compactPage reads the project's page again, as the startup briefing

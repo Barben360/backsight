@@ -48,11 +48,14 @@ type State struct {
 	LastPromptAt time.Time `json:"last_prompt_at,omitzero"`
 	// BriefingPage: the mental-model briefing this session was given, for
 	// a compaction and for subagents (decision 0060).
-	BriefingPage  string `json:"briefing_page,omitempty"`
-	LastNudge     int    `json:"last_nudge"`           // prompt number of the last quiet-prompt nudge
-	Unavailable   bool   `json:"unavailable_notified"` // the visible failure was shown
-	LastAssistant string `json:"last_assistant"`       // the last reply, recorded at Stop
-	SubagentDone  bool   `json:"subagent_done"`        // a subagent finished since the last prompt
+	BriefingPage string `json:"briefing_page,omitempty"`
+	LastNudge    int    `json:"last_nudge"` // prompt number of the last quiet-prompt nudge
+	// NamedProjects: the other projects a prompt line already named this
+	// session (since the last compaction), each named once.
+	NamedProjects []string `json:"named_projects,omitempty"`
+	Unavailable   bool     `json:"unavailable_notified"` // the visible failure was shown
+	LastAssistant string   `json:"last_assistant"`       // the last reply, recorded at Stop
+	SubagentDone  bool     `json:"subagent_done"`        // a subagent finished since the last prompt
 	// BriefingRefreshedAt: the page's last_refreshed_at when BriefingPage
 	// was given; a compaction gives the page again only once it changed
 	// (decision 0083 C5).

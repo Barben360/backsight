@@ -23,6 +23,18 @@ import (
 type Index struct {
 	BuiltAt time.Time                 `json:"built_at"`
 	Names   map[string][]ProjectCount `json:"names"`
+	// Known are the bank's projects with their memory counts and last
+	// activity, so a hook can name them to the agent without a server call.
+	// An index written before it existed has none (Stale rebuilds it).
+	Known []ProjectInfo `json:"projects,omitempty"`
+}
+
+// ProjectInfo is one project of the bank: its memories and when the last
+// one was mentioned (zero when that read failed).
+type ProjectInfo struct {
+	Name     string    `json:"name"`
+	Memories int       `json:"memories"`
+	Last     time.Time `json:"last,omitzero"`
 }
 
 // ProjectCount is one project's mentions of a name.
@@ -53,6 +65,15 @@ const (
 	maxProjectsPerName = 8
 	minNameLen         = 4
 	entitiesPerProject = 200
+	// ListMinMemories: a project with fewer memories is a stray directory
+	// (a session once started in it), not one worth naming to the agent.
+	ListMinMemories = 10
+	// ListMaxIdle: a project quiet for longer is left out of the list
+	// (still matched when a prompt names it).
+	ListMaxIdle = 90 * 24 * time.Hour
+	// NamedMinLen: shorter project names are too likely to be ordinary
+	// words for a prompt naming one to mean that project.
+	NamedMinLen = 5
 )
 
 // BuildIndex reads every project's entities from the server.
@@ -73,11 +94,135 @@ func BuildIndex(ctx context.Context, c *hindsight.Client, bank string, now time.
 		if err != nil {
 			return idx, err
 		}
+		info := ProjectInfo{Name: project, Memories: t.Count}
+		if m, err := c.Recent(ctx, bank, t.Tag, "", 1); err == nil && len(m) > 0 {
+			info.Last = m[0].When().UTC() // a failed read leaves the activity unknown, not the index
+		}
+		idx.Known = append(idx.Known, info)
 		for _, e := range ents {
 			idx.Names[e.Name] = append(idx.Names[e.Name], ProjectCount{project, e.Mentions})
 		}
 	}
 	return idx, nil
+}
+
+// Stale: older than IndexMaxAge, or written before the index held the
+// projects (an index with names but no projects).
+func (idx Index) Stale(now time.Time) bool {
+	return now.Sub(idx.BuiltAt) >= IndexMaxAge || (len(idx.Names) > 0 && len(idx.Known) == 0)
+}
+
+// Listed are the projects worth naming to the agent: not in skip, at
+// least ListMinMemories memories, active within ListMaxIdle (or of unknown
+// activity), most recently active first.
+func (idx Index) Listed(skip []string, now time.Time) []ProjectInfo {
+	var out []ProjectInfo
+	for _, p := range idx.Known {
+		if p.Name == "" || contains(skip, p.Name) || p.Memories < ListMinMemories || (!p.Last.IsZero() && now.Sub(p.Last) > ListMaxIdle) {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Last.Equal(out[j].Last) {
+			return out[i].Last.After(out[j].Last)
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// Named are the projects not in skip whose name the text mentions as a
+// whole word (case ignored): names of NamedMinLen or more characters, of
+// projects with ListMinMemories memories or more, idle or not, in the
+// order of Known. Only the text's first maxMatchChars bytes are read.
+func (idx Index) Named(text string, skip []string) []string {
+	if len(text) > maxMatchChars {
+		text = text[:maxMatchChars]
+	}
+	lower := strings.ToLower(text)
+	var out []string
+	for _, p := range idx.Known {
+		if utf8.RuneCountInString(p.Name) < NamedMinLen || p.Memories < ListMinMemories || contains(skip, p.Name) || contains(out, p.Name) {
+			continue
+		}
+		if mentions(lower, strings.ToLower(p.Name)) {
+			out = append(out, p.Name)
+		}
+	}
+	return out
+}
+
+// Has: the index knows a project by this exact name. An index without
+// projects knows none, and says so with ok false.
+func (idx Index) Has(name string) (has, ok bool) {
+	if len(idx.Known) == 0 {
+		return false, false
+	}
+	for _, p := range idx.Known {
+		if p.Name == name {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// Closest are up to n known project names near name, nearest first: one
+// contains the other, or the case-insensitive edit distance is at most a
+// third of name's length (2 at least); ties in name order. A name far from
+// every project gets none.
+func (idx Index) Closest(name string, n int) []string {
+	type cand struct {
+		name string
+		d    int
+	}
+	lower := strings.ToLower(name)
+	var cs []cand
+	limit := max(2, utf8.RuneCountInString(name)/3)
+	for _, p := range idx.Known {
+		other := strings.ToLower(p.Name)
+		d := editDistance(lower, other)
+		if d > limit && !strings.Contains(other, lower) && !strings.Contains(lower, other) {
+			continue
+		}
+		cs = append(cs, cand{p.Name, d})
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].d != cs[j].d {
+			return cs[i].d < cs[j].d
+		}
+		return cs[i].name < cs[j].name
+	})
+	var out []string
+	for _, c := range cs {
+		if len(out) == n {
+			break
+		}
+		out = append(out, c.name)
+	}
+	return out
+}
+
+// editDistance is the Levenshtein distance between a and b, in runes.
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
 }
 
 // LoadIndex reads path; a missing file is an empty index.

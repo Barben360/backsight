@@ -38,7 +38,7 @@ import (
 // the loop on a settled open item rather than on any shipped work; v16 (0083 C7): each rule once
 // across the guide, the MCP instructions and the tool texts, the guide keeping only the conversation's
 // rules, shorter memory_store and memory_credit descriptions, the briefing asks for the process rules).
-const Version = "v16"
+const Version = "v17"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -131,6 +131,50 @@ func Nudge(terms []string) string {
 	return s + "."
 }
 
+// ProjectsLine names the projects in memory at a session's start (#271):
+// the current one, those searched with it, and the others, whose
+// memories a search reaches only by a strong match unless named; more
+// counts those left unnamed. Empty when there are no others.
+func ProjectsLine(current string, linked, others []string, more int) string {
+	if len(others) == 0 {
+		return ""
+	}
+	s := "Projects in memory: this one `" + current + "`"
+	if len(linked) > 0 {
+		s += ", searched with " + strings.Join(linked, ", ")
+	}
+	s += ". Others, reached only by a strong match unless named: " + strings.Join(others, ", ")
+	if more > 0 {
+		s += fmt.Sprintf(" (+%d more)", more)
+	}
+	return s + ". When the task involves one of them (shared code, infrastructure, a decision made there), pass its exact name in memory_search `projects`."
+}
+
+// ProjectNamed is the prompt line when the prompt names other projects in
+// memory (#271), once per project per session.
+func ProjectNamed(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = `"` + n + `"`
+	}
+	what := "project `" + names[0] + "`"
+	if len(names) > 1 {
+		what = "projects `" + strings.Join(names, "`, `") + "`"
+	}
+	return "Your prompt names " + what + ": a search reaches its memories only by a strong match unless named, so pass projects: [" +
+		strings.Join(quoted, ", ") + "] to memory_search."
+}
+
+// UnknownProjects ends a memory_search answer whose projects named one the
+// memory does not know: the search ran anyway, without it.
+func UnknownProjects(unknown, closest []string) string {
+	s := "No project named `" + strings.Join(unknown, "`, `") + "` in memory"
+	if len(closest) > 0 {
+		s += "; closest: " + strings.Join(closest, ", ")
+	}
+	return s + "."
+}
+
 // Detector lines (SPEC §9.3).
 const (
 	DetectorRule     = "If this is a durable decision, rule or correction, store it with `memory_store` (user-wide rules: project \"transverse\")."
@@ -216,6 +260,7 @@ const (
 		"Queries: one per angle, topic + intent word (\"docker compose subnet pitfall\"), never a kind word alone nor a copy of the user's sentence; " +
 		"add a date or version for a question about time. Before a risky or irreversible action search topic + pitfall / correction; before design work " +
 		"topic + decision; before asking a preference topic + convention / correction. " +
+		"The task involves another project (shared code, infrastructure, a decision made there): name it in `projects`. " +
 		"Hits show their kinds [pitfall, state]. Results are hints from past sessions: verify them against the code."
 	StoreDescription = "Store one durable fact per call (split a fact that covers two topics), exact identifiers; " +
 		"no code dumps, no secrets, no plans or hypotheses, no merges, releases or CI status (the conversation has them), " +
