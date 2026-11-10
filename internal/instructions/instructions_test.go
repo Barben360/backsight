@@ -27,7 +27,9 @@ func TestSizes(t *testing.T) {
 		{"nudge with terms", Nudge([]string{"PostgreSQL", "Grafana", "backfill", "observation scopes"}), 300},
 		{"gate reason", GateReason, 400},
 		{"subagent guide", SubagentGuide, 280},
-		{"search description", SearchDescription, 1000},
+		{"search description (#271: when to name another project)", SearchDescription, 1100},
+		{"projects line, twelve names", ProjectsLine("backsight", []string{"hindsight-stack", "hindsight-claude-spec"}, []string{"my-homelab", "infirlib", "ski-2027", "resume", "jobouchon", "hindsight-stack-old", "photo-sorter", "garage-door", "billing-api", "web-shop", "dotfiles", "notes-app"}, 3), 520},
+		{"project named line", ProjectNamed([]string{"my-homelab", "infirlib"}), 200},
 		{"store description (0083 C7: ≈ 40 % under v15's 1 496)", StoreDescription, 910},
 		{"credit description (0083 C7: ≈ 40 % under v14's 1 630)", CreditDescription, 980},
 		{"read description", ReadDescription, 300},
@@ -65,7 +67,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v16" {
+	if Version != "v17" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -502,6 +504,7 @@ var wordings = map[string]string{
 	"v14": "38d36fbc00507212af4d086fc7499522dcd948cba1894be8c6c9bc9d5f6ca8ff",
 	"v15": "1c8774365de706f728d5ffd77598677ea22f235b0b8654c6ded8b6c5540f69ec",
 	"v16": "7d9fc362643e3a5a571090cec52a9ea4d4f2e79853d878dea8f9cd1fa2735a05",
+	"v17": "ae3cdc1cacf8c2ab0ace8301af83ff728b9b6f3ff6e4c6c496fc49df2f4e0f50",
 }
 
 func wordingHash() string {
@@ -512,7 +515,8 @@ func wordingHash() string {
 		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), ConfirmedLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
 		SavedLine("p", "k"), UpdatedLine("p", "k", "i"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
 		HiddenLine("wrong", "p", "i", true), HiddenLine("outdated", "p", "i", false), NotRetiredLine("p", "i", "r", true), NotRetiredLine("p", "i", "r", false),
-		NothingLine, RetroLine, Pointer([]string{"#1", "https://example.com/2"})}
+		NothingLine, RetroLine, Pointer([]string{"#1", "https://example.com/2"}),
+		ProjectsLine("p", []string{"l"}, []string{"a", "b"}, 1), ProjectNamed([]string{"a"}), ProjectNamed([]string{"a", "b"}), UnknownProjects([]string{"x"}, []string{"a"})}
 	for _, feedback := range []bool{true, false} {
 		x := For(feedback)
 		texts = append(texts, x.Guide, x.ShortGuide, x.Reminder, x.RecallEnd, x.SearchEnd)

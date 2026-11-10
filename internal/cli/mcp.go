@@ -33,7 +33,7 @@ import (
 
 type searchArgs struct {
 	Queries  []string `json:"queries" jsonschema:"1-4 short keyword queries"`
-	Projects []string `json:"projects,omitempty" jsonschema:"other projects to search too: related repositories"`
+	Projects []string `json:"projects,omitempty" jsonschema:"other projects to search fully, exact names as listed at session start; unnamed, a project is reached only by a strong match"`
 	Scope    string   `json:"scope,omitempty" jsonschema:"auto (current project, transverse, related projects and the whole memory; default) or all (the whole memory only)"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"most memories returned (default 8)"`
 	MinScore *float64 `json:"min_score,omitempty" jsonschema:"relevance floor (default 0.4); lower it to widen"`
@@ -249,6 +249,8 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			text, failed := mcpSearchText(res, deps.cfg.Feedback.Enabled), len(res.Hits) == 0 && !scopesOK(res)
 			if failed {
 				text = "memory unavailable: " + scopeErrors(res)
+			} else if note := unknownProjectsNote(deps.dirs, a.Projects); note != "" {
+				text += note + "\n"
 			}
 			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res), Live: found,
 				QueriesN: len(a.Queries), QueryHits: res.QueryHits, ResultChars: utf8.RuneCountInString(text)})
@@ -645,6 +647,39 @@ func scopeErrors(r recall.Result) string {
 
 // mcpSearchText is searchText with the ask to declare what the agent uses
 // (to cite it, when memory_credit is not offered).
+// unknownProjectsNote: the line naming the projects asked for that the
+// entity index does not know, with the closest names; empty when all are
+// known, or when the index lists no projects (missing or older index): it
+// cannot tell then. The search itself ran with every name.
+func unknownProjectsNote(d paths.Dirs, projects []string) string {
+	if len(projects) == 0 {
+		return ""
+	}
+	idx, err := recall.LoadIndex(d.EntitiesFile())
+	if err != nil {
+		return ""
+	}
+	var unknown, closest []string
+	for _, p := range projects {
+		has, ok := idx.Has(p)
+		if !ok {
+			return ""
+		}
+		if !has && !slices.Contains(unknown, p) {
+			unknown = append(unknown, safeProject(p))
+			for _, c := range idx.Closest(p, 3) {
+				if !slices.Contains(closest, c) {
+					closest = append(closest, safeProject(c))
+				}
+			}
+		}
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+	return instructions.UnknownProjects(unknown, closest[:min(len(closest), 3)])
+}
+
 func mcpSearchText(r recall.Result, feedback bool) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
