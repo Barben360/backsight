@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -353,12 +354,34 @@ func newDoctorCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rep := runDoctorSized(cmd, d, home, e.json)
+			// At a terminal each check prints as soon as it is done (issue
+			// 270), so the splash and the first lines come at once rather
+			// than after the slowest probe; elsewhere the report is written
+			// whole at the end. The bytes are the same either way.
+			streamed := 0
+			var onCheck func(doctor.Check)
+			if !e.json && isTerminal(termstyle.Raw(e.stdout)) {
+				st := termstyle.StyleOf(e.stdout)
+				onCheck = func(c doctor.Check) {
+					_, _ = io.WriteString(e.stdout, maskTokenText(checkText(st, c)))
+					streamed++
+				}
+			}
+			rep := runDoctorSized(cmd, d, home, e.json, onCheck)
 			var failed error
 			if rep.Errors > 0 {
 				failed = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}}
 			}
-			return e.report("doctor", rep, func() string { return doctorText(termstyle.StyleOf(e.stdout), rep) }, failed)
+			return e.report("doctor", rep, func() string {
+				st := termstyle.StyleOf(e.stdout)
+				var b strings.Builder
+				// The checks not streamed yet: none when every one was.
+				for _, c := range rep.Checks[min(streamed, len(rep.Checks)):] {
+					b.WriteString(checkText(st, c))
+				}
+				b.WriteString(countsText(st, rep))
+				return b.String()
+			}, failed)
 		},
 	}
 }
@@ -369,16 +392,29 @@ var statusLabel = map[doctor.Status]string{doctor.OK: "ok", doctor.Info: "info",
 // and the counts that are not zero.
 func doctorText(st termstyle.Style, r doctor.Report) string {
 	var b strings.Builder
-	pad := strings.Repeat(" ", 19)
 	for _, c := range r.Checks {
-		fmt.Fprintf(&b, "%s %-11s %s\n", statusCell(st, statusLabel[c.Status], 6), c.ID, c.Summary)
-		if c.Detail != "" {
-			fmt.Fprintf(&b, "%s%s\n", pad, c.Detail)
-		}
-		if c.Fix != "" {
-			fmt.Fprintf(&b, "%sfix: %s\n", pad, st.Paint(termstyle.Command, c.Fix))
-		}
+		b.WriteString(checkText(st, c))
 	}
+	b.WriteString(countsText(st, r))
+	return b.String()
+}
+
+// checkText is one check's lines of the report.
+func checkText(st termstyle.Style, c doctor.Check) string {
+	var b strings.Builder
+	pad := strings.Repeat(" ", 19)
+	fmt.Fprintf(&b, "%s %-11s %s\n", statusCell(st, statusLabel[c.Status], 6), c.ID, c.Summary)
+	if c.Detail != "" {
+		fmt.Fprintf(&b, "%s%s\n", pad, c.Detail)
+	}
+	if c.Fix != "" {
+		fmt.Fprintf(&b, "%sfix: %s\n", pad, st.Paint(termstyle.Command, c.Fix))
+	}
+	return b.String()
+}
+
+// countsText is the report's last line, after a blank one.
+func countsText(st termstyle.Style, r doctor.Report) string {
 	errs, warns := fmt.Sprintf("%d error(s)", r.Errors), fmt.Sprintf("%d warning(s)", r.Warnings)
 	if r.Errors > 0 {
 		errs = st.Paint(termstyle.Fail, errs)
@@ -386,19 +422,20 @@ func doctorText(st termstyle.Style, r doctor.Report) string {
 	if r.Warnings > 0 {
 		warns = st.Paint(termstyle.Warn, warns)
 	}
-	fmt.Fprintf(&b, "\n%s, %s\n", errs, warns)
-	return b.String()
+	return fmt.Sprintf("\n%s, %s\n", errs, warns)
 }
 
 // runDoctor runs every check (doctor and the jobs maintain snapshot).
 func runDoctor(cmd *cobra.Command, d paths.Dirs, home string) doctor.Report {
-	return runDoctorSized(cmd, d, home, false)
+	return runDoctorSized(cmd, d, home, false, nil)
 }
 
 // runDoctorSized is runDoctor; sized also measures what a runtime switch
-// kept when the switch's own measure is older than a day (doctor --json).
-func runDoctorSized(cmd *cobra.Command, d paths.Dirs, home string, sized bool) doctor.Report {
+// kept when the switch's own measure is older than a day (doctor --json);
+// onCheck, when set, is told each check as soon as it is done.
+func runDoctorSized(cmd *cobra.Command, d paths.Dirs, home string, sized bool, onCheck func(doctor.Check)) doctor.Report {
 	denv := doctorEnv(d, home)
+	denv.OnCheck = onCheck
 	if sized {
 		denv.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(d, home, true) }
 	}
