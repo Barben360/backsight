@@ -259,10 +259,15 @@ func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	e := &env{}
 	root := newRoot(e)
-	plain := classForArgs(root, args) == lookPlain
+	class := classForArgs(root, args)
+	plain := class == lookPlain
 	var restores vtRestores
 	defer restores.run()
-	e.stdout, e.stderr = e.styled(stdout, plain, &restores), e.styled(stderr, plain, &restores)
+	out := e.styled(stdout, plain, &restores)
+	if class == lookFull {
+		out.BeforeFirstWrite(func(raw io.Writer) { e.printSplash(raw, stdout) })
+	}
+	e.stdout, e.stderr = out, e.styled(stderr, plain, &restores)
 	root.SetArgs(args)
 	root.SetOut(e.stdout)
 	root.SetErr(e.stderr)

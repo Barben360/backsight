@@ -82,3 +82,6 @@ prior_credits = 3.0
 prior_misses = 9.0
 share_ledger = true
 cross_project_retire = true
+
+[terminal]
+logo = "blocks"                  # the splash logo: "blocks" or "braille" (decision 0084)
