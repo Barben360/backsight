@@ -58,10 +58,18 @@ func (e *ingestEnv) checkRows(table, order string, want []map[string]any) {
 		e.t.Fatalf("%s: %d rows %v, want %d", table, len(got), got, len(want))
 	}
 	for i, g := range got {
-		if len(g) != len(want[i])+2 {
-			e.t.Errorf("%s row %d: columns %v, want %d named ones plus source_file and offset", table, i, g, len(want[i]))
+		// The client column is every row's, claude-code unless a case says.
+		exp := map[string]any{"client": "claude-code"}
+		for col, v := range want[i] {
+			exp[col] = v
 		}
-		for col, w := range want[i] {
+		if _, ok := g["client"]; !ok {
+			delete(exp, "client")
+		}
+		if len(g) != len(exp)+2 {
+			e.t.Errorf("%s row %d: columns %v, want %d named ones plus source_file and offset", table, i, g, len(exp))
+		}
+		for col, w := range exp {
 			if v, ok := g[col]; !ok || !sameValue(v, w) {
 				e.t.Errorf("%s row %d: %s = %#v, want %#v", table, i, col, v, w)
 			}
@@ -629,4 +637,43 @@ func TestJournalKeepsConfirmedApartFromUsed(t *testing.T) {
 		{"pos": 0, "ts": ms(jT0), "session": "s1", "turn": "t1", "agent": nil, "project": "proj", "memory_id": "m1", "verdict": "confirmed"},
 		{"pos": 0, "ts": ms(jT0), "session": "s1", "turn": "t1", "agent": nil, "project": "proj", "memory_id": "m2", "verdict": "other"},
 	})
+}
+
+// A journal line's client lands in every row of the line; a line without
+// one (written before the field) is claude-code.
+func TestJournalClientColumn(t *testing.T) {
+	e := newEnv(t)
+	e.appendJ(feedback.Event{TS: jT0, Kind: "shows", Turn: "t1", Path: "prompt", Client: "codex", Items: []feedback.Item{{ID: "m1", Rank: 1}, {ID: "m2", Rank: 2}}})
+	e.appendJ(feedback.Event{TS: jT0.Add(time.Second), Kind: "credit", Turn: "t1", IDs: []string{"m1"}, Verdict: "used", Client: "codex"})
+	e.appendJ(feedback.Event{TS: jT0.Add(2 * time.Second), Kind: "turn", Turn: "t2", Client: "codex"})
+	e.appendJ(feedback.Event{TS: jT0.Add(3 * time.Second), Kind: "turn", Turn: "t3"})
+	// A line written by a release before the field: no client key at all.
+	f, err := os.OpenFile(e.jpath("2026-10"), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"schema":1,"seq":99,"ts":"2026-10-30T12:00:05Z","kind":"turn","turn":"t4"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.ingest()
+	for _, table := range []string{"shows", "show_sets", "credits"} {
+		if e.count(table) == 0 {
+			t.Errorf("%s has no rows", table)
+		}
+		for _, r := range e.rowsOf(`SELECT client FROM ` + table) {
+			if r["client"] != "codex" {
+				t.Errorf("%s client %v, want codex", table, r["client"])
+			}
+		}
+	}
+	var got []string
+	for _, r := range e.rowsOf(`SELECT client FROM turns ORDER BY "offset"`) {
+		got = append(got, r["client"].(string))
+	}
+	if want := []string{"codex", "claude-code", "claude-code"}; !slices.Equal(got, want) {
+		t.Errorf("turns clients %v, want %v", got, want)
+	}
 }

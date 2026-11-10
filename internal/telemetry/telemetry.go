@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harnessid"
 )
 
 // Common fields carried by every event.
@@ -18,6 +19,9 @@ type Common struct {
 	Session       string
 	Project       string
 	BinaryVersion string
+	// Client is the coding tool the event comes from (harnessid ids), the
+	// `client` field; empty is Claude Code.
+	Client string
 }
 
 // Event is one telemetry record; its JSON fields are added to the common ones.
@@ -94,6 +98,7 @@ func (w *Writer) emit(e Event) error {
 	fields["session"] = w.common.Session
 	fields["project"] = w.common.Project
 	fields["binary_version"] = w.common.BinaryVersion
+	fields["client"] = harnessid.Or(w.common.Client)
 	line, err := json.Marshal(fields)
 	if err != nil {
 		return err

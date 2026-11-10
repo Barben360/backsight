@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Barben360/backsight/internal/harnessid"
 )
 
 // No free text reaches the index. Four guards stand between a line's
@@ -100,6 +102,17 @@ func shapeValue(s string) any {
 		return s
 	}
 	return other
+}
+
+// clientValue is a line's client: the shape guard (a tool this binary does
+// not know keeps its id, as it may be a later binary's), and claude-code
+// when the line has none, as every line written before the field came from
+// Claude Code.
+func clientValue(s string) any {
+	if s == "" {
+		return harnessid.ClaudeCode
+	}
+	return shapeValue(s)
 }
 
 func nameOK(s string) bool {

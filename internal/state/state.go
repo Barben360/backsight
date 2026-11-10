@@ -16,6 +16,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -383,8 +384,8 @@ func (s State) EpochOf(bank string) int {
 // Harness ids: the coding tools backsight wires, as the harness: tag of
 // their conversations names them.
 const (
-	HarnessClaudeCode = "claude-code"
-	HarnessCodex      = "codex"
+	HarnessClaudeCode = harnessid.ClaudeCode
+	HarnessCodex      = harnessid.Codex
 )
 
 // Client remembers, for one coding tool, its settings as they were before

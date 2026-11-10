@@ -1290,7 +1290,7 @@ func retireTelemetry(t *testing.T, home string) []string {
 			continue
 		}
 		for k := range e {
-			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "action", "ids_n"}, k) {
+			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "client", "action", "ids_n"}, k) {
 				t.Errorf("a retire event carries %q: %v", k, e)
 			}
 		}

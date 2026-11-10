@@ -39,52 +39,53 @@ var released = map[string]string{
 	"0003-machines":   "56ecc20ae3dc7e45e6d287313addffac6f277b8fe741019da27a000167f766ef",
 	"0004-telemetry":  "aaf75e2f8a157bcb6bbd81f2ffad7baa37049dba73b543277596a87b347f98c1",
 	"0005-waiting":    "a36ea344d07e8cc422223b4e6bb06664e4b0c43cfdc5ba22c4ad0aed987c8f7e",
+	"0006-client":     "228345391978a865f9dc58a143b7a9c8731c142f0bc4bacd6fd45bab7052981a",
 }
 
 // rowKey starts every row table: the line it came from.
 const rowKey = "source_file offset "
 
 var schemaTables = []struct{ name, cols string }{
-	{"tel_prompt", rowKey + "ts session project binary_version v n decision reason plen lang above injected ids_n top ms nudged hinted detector chars empty"},
-	{"tel_outcome", rowKey + "ts session project binary_version v n ids_n searched credited credit_source contradicted"},
-	{"tel_reply", rowKey + "ts session project binary_version v n credit searched"},
-	{"tel_briefing", rowKey + "ts session project binary_version v ids_n chars source"},
-	{"tel_briefing_outcome", rowKey + "ts session project binary_version v used_n"},
-	{"tel_tool", rowKey + "ts session project binary_version v name ms hits ok live queries_n queries_none_returned result_chars"},
-	{"tel_tool_use", rowKey + "ts session project binary_version v n name ids_n subagent"},
-	{"tel_credit", rowKey + "ts session project binary_version v verdict ids_n ok"},
-	{"tel_credit_check", rowKey + "ts session project binary_version v outcome shown flags after_block"},
-	{"tel_stop_block", rowKey + "ts session project binary_version v outcome paths shown subagent"},
-	{"tel_retire", rowKey + "ts session project binary_version v action ids_n"},
-	{"tel_feedback_settle", rowKey + "ts session project binary_version v shows credits misses unknown late"},
-	{"tel_feedback_error", rowKey + "ts session project binary_version v reason"},
-	{"tel_gate", rowKey + "ts session project binary_version v n decision reason"},
-	{"tel_retain", rowKey + "ts session project binary_version v document items status ms"},
-	{"tel_hook_failure", rowKey + "ts session project binary_version v hook kind ms"},
-	{"tel_job", rowKey + "ts session project binary_version v name status ms"},
-	{"tel_attribution", rowKey + "ts session project binary_version v turn subagent base applied path_rule source"},
-	{"tel_store", rowKey + "ts session project binary_version v result kind"},
-	{"tel_dashboard", rowKey + "ts session project binary_version v action ms pages"},
-	{"tel_config", rowKey + "ts session project binary_version v sha256"},
+	{"tel_prompt", rowKey + "ts session project binary_version v n decision reason plen lang above injected ids_n top ms nudged hinted detector chars empty client"},
+	{"tel_outcome", rowKey + "ts session project binary_version v n ids_n searched credited credit_source contradicted client"},
+	{"tel_reply", rowKey + "ts session project binary_version v n credit searched client"},
+	{"tel_briefing", rowKey + "ts session project binary_version v ids_n chars source client"},
+	{"tel_briefing_outcome", rowKey + "ts session project binary_version v used_n client"},
+	{"tel_tool", rowKey + "ts session project binary_version v name ms hits ok live queries_n queries_none_returned result_chars client"},
+	{"tel_tool_use", rowKey + "ts session project binary_version v n name ids_n subagent client"},
+	{"tel_credit", rowKey + "ts session project binary_version v verdict ids_n ok client"},
+	{"tel_credit_check", rowKey + "ts session project binary_version v outcome shown flags after_block client"},
+	{"tel_stop_block", rowKey + "ts session project binary_version v outcome paths shown subagent client"},
+	{"tel_retire", rowKey + "ts session project binary_version v action ids_n client"},
+	{"tel_feedback_settle", rowKey + "ts session project binary_version v shows credits misses unknown late client"},
+	{"tel_feedback_error", rowKey + "ts session project binary_version v reason client"},
+	{"tel_gate", rowKey + "ts session project binary_version v n decision reason client"},
+	{"tel_retain", rowKey + "ts session project binary_version v document items status ms client"},
+	{"tel_hook_failure", rowKey + "ts session project binary_version v hook kind ms client"},
+	{"tel_job", rowKey + "ts session project binary_version v name status ms client"},
+	{"tel_attribution", rowKey + "ts session project binary_version v turn subagent base applied path_rule source client"},
+	{"tel_store", rowKey + "ts session project binary_version v result kind client"},
+	{"tel_dashboard", rowKey + "ts session project binary_version v action ms pages client"},
+	{"tel_config", rowKey + "ts session project binary_version v sha256 client"},
 	{"tel_ids", rowKey + "ts kind pos memory_id"},
 	{"tel_prompt_scopes", rowKey + "ts scope ok ms raw"},
 	{"tel_config_values", rowKey + "ts key value"},
-	{"events", rowKey + "ts kind session project binary_version fields"},
-	{"turns", rowKey + "ts session turn agent project n machine binary_version"},
-	{"shows", rowKey + "pos ts session key turn agent path memory_id rank reranker boost rank_without_boost score_without_boost project"},
-	{"settles", rowKey + "pos key memory_id show_at outcome settle_ts"},
-	{"credits", rowKey + "pos ts session turn agent project memory_id verdict"},
-	{"stops", rowKey + "ts session turn agent outcome stop_check flags"},
-	{"retirements", rowKey + "pos ts session kind memory_id verdict outcome note_id"},
-	{"recalls", rowKey + "pos ts session turn agent path memory_id rank rank_without_boost reranker boost score_without_boost flags"},
-	{"imports", rowKey + "pos ts source key memory_id at outcome rank"},
-	{"journal_other", rowKey + "ts session kind"},
+	{"events", rowKey + "ts kind session project binary_version fields client"},
+	{"turns", rowKey + "ts session turn agent project n machine binary_version client"},
+	{"shows", rowKey + "pos ts session key turn agent path memory_id rank reranker boost rank_without_boost score_without_boost project client"},
+	{"settles", rowKey + "pos key memory_id show_at outcome settle_ts client"},
+	{"credits", rowKey + "pos ts session turn agent project memory_id verdict client"},
+	{"stops", rowKey + "ts session turn agent outcome stop_check flags client"},
+	{"retirements", rowKey + "pos ts session kind memory_id verdict outcome note_id client"},
+	{"recalls", rowKey + "pos ts session turn agent path memory_id rank rank_without_boost reranker boost score_without_boost flags client"},
+	{"imports", rowKey + "pos ts source key memory_id at outcome rank client"},
+	{"journal_other", rowKey + "ts session kind client"},
 	{"ledger", "memory_id shown credits credits_at misses misses_at last_shown last_credited wrong hidden_since unhidden_at imported_shown imported_credits"},
 	{"local_status", "id ingested_at notes_queued notes_oldest_at quarantined quarantine_oldest_at sessions_waiting reach_last_ok reach_failing_since breaker_failures breaker_open_until backup_created_at backup_verified_at backup_ok update_checked_at update_newer update_check_failed backfill_sessions backfill_paused waiting_sessions"},
 	{"cursors", "source_file kind size offset head_len head_sha256 ingested_at last_ts missing"},
 	{"ingest_errors", "source_file offset reason at"},
 	{"meta", "key value"},
-	{"show_sets", rowKey + "ts session turn agent path flags"},
+	{"show_sets", rowKey + "ts session turn agent path flags client"},
 	{"server_snapshots", rowKey + "ts day ok error world experience observation documents links observations ops_pending ops_processing ops_completed ops_failed ops_other consolidation_pending consolidation_failed last_consolidated_at"},
 	{"server_snapshot_projects", rowKey + "ts day project memories"},
 	{"server_days", rowKey + "ts bucket world experience observation"},
@@ -117,8 +118,8 @@ func TestReleasedMigrationsArePinned(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
 	defer mustClose(t, ix)
-	if ix.Schema() != 5 {
-		t.Fatalf("schema %d, want 5", ix.Schema())
+	if ix.Schema() != 6 {
+		t.Fatalf("schema %d, want 6", ix.Schema())
 	}
 	for _, tc := range schemaTables {
 		got := columnsOf(t, ix.sh.w, tc.name)
@@ -147,7 +148,7 @@ func TestSchemaColumns(t *testing.T) {
 // flag INTEGER, a score REAL.
 var (
 	columnTypes = map[string]string{
-		"source_file": "TEXT", "session": "TEXT", "project": "TEXT", "binary_version": "TEXT", "v": "TEXT",
+		"source_file": "TEXT", "session": "TEXT", "project": "TEXT", "binary_version": "TEXT", "v": "TEXT", "client": "TEXT",
 		"decision": "TEXT", "reason": "TEXT", "lang": "TEXT", "detector": "TEXT", "empty": "TEXT",
 		"credited": "TEXT", "credit_source": "TEXT", "credit": "TEXT", "source": "TEXT", "name": "TEXT",
 		"live": "TEXT", "verdict": "TEXT", "outcome": "TEXT", "flags": "TEXT", "action": "TEXT",
@@ -638,4 +639,44 @@ func TestSchemaFixture(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestClientMigrationKeepsRowsAsClaudeCode: an index built before the
+// client column (the schema-0005 fixture, a row in each table) keeps its
+// rows through migration 0006, each reading claude-code, and a second open
+// changes nothing.
+func TestClientMigrationKeepsRowsAsClaudeCode(t *testing.T) {
+	counts := fixtureCounts(t, fixturePath(5))
+	for _, tbl := range clientTables {
+		if counts[tbl] == 0 {
+			t.Fatalf("the 0005 fixture has no row in %s: the test would be vacuous", tbl)
+		}
+	}
+	d := tempDirs(t)
+	copyFile(t, fixturePath(5), mainFile(d))
+	for pass := 1; pass <= 2; pass++ {
+		ix := mustOpen(t, opts(t, d, nil))
+		if ix.Schema() < 6 {
+			t.Fatalf("pass %d: schema %d", pass, ix.Schema())
+		}
+		for _, tbl := range clientTables {
+			var n, cc int
+			if err := ix.sh.w.QueryRow(`SELECT count(*), count(CASE WHEN client = 'claude-code' THEN 1 END) FROM `+tbl).Scan(&n, &cc); err != nil {
+				t.Fatalf("%s: %v", tbl, err)
+			}
+			if n != counts[tbl] || cc != n {
+				t.Errorf("pass %d: %s has %d rows (was %d), %d claude-code", pass, tbl, n, counts[tbl], cc)
+			}
+		}
+		mustClose(t, ix)
+	}
+}
+
+// clientTables are the tables migration 0006 gave the client column.
+var clientTables = []string{
+	"tel_prompt", "tel_outcome", "tel_reply", "tel_briefing", "tel_briefing_outcome", "tel_tool", "tel_tool_use",
+	"tel_credit", "tel_credit_check", "tel_stop_block", "tel_retire", "tel_feedback_settle", "tel_feedback_error",
+	"tel_gate", "tel_retain", "tel_hook_failure", "tel_job", "tel_attribution", "tel_store", "tel_dashboard",
+	"tel_config", "events", "turns", "show_sets", "shows", "settles", "credits", "stops", "retirements",
+	"recalls", "imports", "journal_other",
 }

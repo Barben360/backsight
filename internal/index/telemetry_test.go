@@ -24,7 +24,7 @@ func withCommon(f map[string]any) map[string]any {
 
 // wantCommon is the common columns of a typed row.
 func wantCommon(w map[string]any) map[string]any {
-	m := map[string]any{"ts": ms0, "session": "s1", "project": "proj", "binary_version": "1.2.3", "v": "v10"}
+	m := map[string]any{"ts": ms0, "session": "s1", "project": "proj", "binary_version": "1.2.3", "v": "v10", "client": "claude-code"}
 	for k, v := range w {
 		m[k] = v
 	}
@@ -381,5 +381,40 @@ func TestIndexKeepsTheFeedbackReasons(t *testing.T) {
 	}
 	if closedValue("disk full", feedbackReasons) != "other" {
 		t.Error("a free-text reason is not other")
+	}
+}
+
+// A telemetry line's client lands in its row: absent is claude-code (a line
+// written before the field), a tool this binary does not know keeps its
+// id, and a value that is no id is other.
+func TestTelemetryClientColumn(t *testing.T) {
+	e := newEnv(t)
+	var content strings.Builder
+	for _, c := range []any{nil, "codex", "claude-code", "Not An Id!", "future-tool"} {
+		f := map[string]any{"name": "memory_search", "ok": true}
+		if c != nil {
+			f["client"] = c
+		}
+		content.WriteString(tline("tool", ts0, withCommon(f)))
+	}
+	content.WriteString(tline("custom_event", ts0, withCommon(map[string]any{"client": "codex"})))
+	content.WriteString(tline("custom_event", ts0, withCommon(nil)))
+	e.write("2026-10", content.String())
+	if st := e.ingest(); st.Errors != 0 || st.Lines != 7 {
+		t.Fatalf("stats %+v", st)
+	}
+	var got []string
+	for _, r := range e.rowsOf(`SELECT client FROM tel_tool ORDER BY "offset"`) {
+		got = append(got, r["client"].(string))
+	}
+	if want := []string{"claude-code", "codex", "claude-code", "other", "future-tool"}; !slices.Equal(got, want) {
+		t.Errorf("tel_tool clients %v, want %v", got, want)
+	}
+	got = nil
+	for _, r := range e.rowsOf(`SELECT client FROM events ORDER BY "offset"`) {
+		got = append(got, r["client"].(string))
+	}
+	if want := []string{"codex", "claude-code"}; !slices.Equal(got, want) {
+		t.Errorf("events clients %v, want %v", got, want)
 	}
 }

@@ -212,11 +212,30 @@ func TestConfigEventIsFlat(t *testing.T) {
 		switch v.(type) {
 		case float64:
 		case string:
-			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "sha256"}, k) {
+			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "client", "sha256"}, k) {
 				t.Errorf("string value under %s", k)
 			}
 		default:
 			t.Errorf("%s is %T, not flat", k, v)
 		}
+	}
+}
+
+// Every event carries the client: claude-code when the writer names none
+// (the only coding tool wired today), the writer's own otherwise, and an
+// event's field never overrides it.
+func TestClientFieldOnEveryEvent(t *testing.T) {
+	dir := t.TempDir()
+	w := New(dir, common)
+	w.now = fixedClock("2026-10-24T08:00:00Z")
+	w.Emit(Job{Name: "tick", Status: "ok"})
+	c := common
+	c.Client = "codex"
+	cw := New(dir, c)
+	cw.now = w.now
+	cw.Emit(Raw{Name: "custom", Fields: map[string]any{"client": "forged"}})
+	got := lines(t, w.currentFile())
+	if len(got) != 2 || got[0]["client"] != "claude-code" || got[1]["client"] != "codex" {
+		t.Errorf("clients %v, want claude-code then codex", got)
 	}
 }
