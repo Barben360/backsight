@@ -122,6 +122,10 @@ type Env struct {
 	ComposeOwner func(ctx context.Context) error
 	// GitBash reads what the git-bash check needs (Windows; nil: no check).
 	GitBash *GitBashProbe
+	// OnCheck is told each check as soon as Run records it, in the
+	// report's order (nil: not told): doctor prints them as they come at a
+	// terminal (issue 270).
+	OnCheck func(Check)
 	InstallProbes
 }
 
@@ -148,6 +152,9 @@ func Run(ctx context.Context, env Env) Report {
 			r.Errors++
 		case Warn:
 			r.Warnings++
+		}
+		if env.OnCheck != nil {
+			env.OnCheck(c)
 		}
 	}
 	cfg, cfgErr := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home)

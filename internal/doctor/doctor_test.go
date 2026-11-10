@@ -1546,3 +1546,27 @@ func TestComposeOwnerCheck(t *testing.T) {
 		}
 	}
 }
+
+// OnCheck hears every check the report holds, in its order, as Run
+// records it: doctor streams them at a terminal (issue 270).
+func TestOnCheckHearsEachCheckAsItIsRecorded(t *testing.T) {
+	f := newFixture(t)
+	var heard []Check
+	f.env.Docker = func(context.Context) (string, error) {
+		// The docker probe runs after the config check was recorded.
+		if len(heard) == 0 || heard[0].ID != "config" {
+			t.Errorf("config not heard before the docker probe: %+v", heard)
+		}
+		return "28.1.1", nil
+	}
+	f.env.OnCheck = func(c Check) { heard = append(heard, c) }
+	r := f.run()
+	if len(heard) != len(r.Checks) || len(heard) < 10 {
+		t.Fatalf("heard %d checks, the report has %d", len(heard), len(r.Checks))
+	}
+	for i := range heard {
+		if heard[i].ID != r.Checks[i].ID || heard[i].Status != r.Checks[i].Status || heard[i].Summary != r.Checks[i].Summary {
+			t.Errorf("check %d: heard %s, the report has %s", i, heard[i].ID, r.Checks[i].ID)
+		}
+	}
+}

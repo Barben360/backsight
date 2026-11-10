@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -722,5 +724,69 @@ func TestDoctorChecksGitBashOnWindows(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_GIT_BASH_PATH", filepath.Dir(bash))
 	if _, c := doctorChecks(t); c["git-bash"].Status != doctor.Warn || !strings.Contains(c["git-bash"].Fix, "restart Claude Code") {
 		t.Errorf("a directory named: %+v", c["git-bash"])
+	}
+}
+
+// doctorAt runs doctor with stdout on a file, at a terminal or not, and
+// returns stdout as the docker probe saw it (the config check is done by
+// then, the rest not), stdout at the end, and the exit code.
+func doctorAt(t *testing.T, terminal bool) (during, after string, code int) {
+	t.Helper()
+	if terminal {
+		splashTerminal(t, 80, nil)
+	} else {
+		cleanColorEnv(t)
+	}
+	isolate(t)
+	out := outFile(t)
+	inner := probes
+	probes = func(e *doctor.Env) {
+		inner(e)
+		e.Docker = func(context.Context) (string, error) {
+			during = fileText(t, out)
+			return "28.1.1", nil
+		}
+	}
+	code, _ = executeContext(context.Background(), []string{"doctor"}, out, io.Discard)
+	return during, fileText(t, out), code
+}
+
+// At a terminal the splash and each check print as soon as they are ready,
+// not after the slowest probe (issue 270), and the report is the same.
+func TestDoctorStreamsItsChecksAtATerminal(t *testing.T) {
+	during, after, code := doctorAt(t, true)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, after)
+	}
+	d := termstyle.Strip(during)
+	if splashCount(during) != 1 || !strings.Contains(d, "info   config") {
+		t.Fatalf("the splash and the config check are not out before the docker probe:\n%q", d)
+	}
+	if strings.Contains(d, "docker") || strings.Contains(d, "error(s)") {
+		t.Errorf("a check or the counts printed before they were done:\n%s", d)
+	}
+	a := termstyle.Strip(after)
+	if !strings.HasPrefix(a, d) {
+		t.Errorf("the streamed lines were not kept as they were:\n%s", a)
+	}
+	for _, want := range []string{"info   config", "docker", "WARN   retention", "0 error(s), 1 warning(s)"} {
+		if strings.Count(a, want) != 1 {
+			t.Errorf("%q printed %d times, want once:\n%s", want, strings.Count(a, want), a)
+		}
+	}
+	if splashCount(after) != 1 || !strings.HasSuffix(a, "\n\n0 error(s), 1 warning(s)\n") {
+		t.Errorf("not one splash, the checks, then the counts:\n%s", a)
+	}
+}
+
+// Into a file or a pipe nothing streams: the report is written whole at
+// the end, as before.
+func TestDoctorWritesItsReportAtTheEndOffATerminal(t *testing.T) {
+	during, after, code := doctorAt(t, false)
+	if code != output.OK || during != "" {
+		t.Fatalf("exit %d, %q written before the docker probe returned", code, during)
+	}
+	if !strings.Contains(after, "info   config") || !strings.Contains(after, "0 error(s), 1 warning(s)") || strings.Count(after, "info   config") != 1 {
+		t.Errorf("not the whole report:\n%s", after)
 	}
 }
