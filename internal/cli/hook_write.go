@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
@@ -71,9 +72,9 @@ func init() {
 
 // sessionEnd spawns the session's flush, doing as little as possible first:
 // the whole event has 1.5 s (C06). No project resolution, no client.
-func sessionEnd(_ context.Context, _ string, input []byte) ([]byte, error) {
-	var in hookInput
-	if json.Unmarshal(input, &in) != nil || !session.ValidID(in.SessionID) {
+func sessionEnd(ctx context.Context, event string, input []byte) ([]byte, error) {
+	in, err := harness.FromContext(ctx).DecodeHook(event, input)
+	if err != nil || !session.ValidID(in.SessionID) {
 		return nil, nil
 	}
 	cfg, _, err := loadServerConfig()
@@ -82,7 +83,7 @@ func sessionEnd(_ context.Context, _ string, input []byte) ([]byte, error) {
 	}
 	if err := spawnDetached("retain", "flush", "--session", in.SessionID); err != nil {
 		if d, derr := paths.Default(); derr == nil {
-			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version}).
+			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version, Client: harness.FromContext(ctx).ID()}).
 				Emit(telemetry.Raw{Name: "spawn_failed", Fields: map[string]any{"error": err.Error()}})
 		}
 	}
@@ -129,9 +130,7 @@ func (h *hookEnv) gate() []byte {
 			h.updateSession(func(s *session.State) error { s.KeepShownTexts(hitTexts(res.Hits)); return nil })
 		}
 	}
-	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
-		"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
-	return out
+	return h.adapter.EncodeHook(harness.HookOutput{Event: harness.EventPreToolUse, Deny: reason})
 }
 
 func questionText(raw json.RawMessage) string {
@@ -239,7 +238,7 @@ func (h *hookEnv) queueSubagentReport(lockDeadline time.Time) {
 		h.tw.Emit(attributionEvent(e))
 	}
 	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, proj, text, now())
-	n.Attribution = source
+	n.Attribution, n.HarnessTag = source, h.adapter.Tag()
 	ob := notesOutboxFor(h.dirs, h.cfg)
 	ob.LockDeadline = lockDeadline // a lock held past it refuses the note before the kill
 	if _, err := ob.Append(n); err != nil {
@@ -267,13 +266,13 @@ func parentEntrypoint(path string) string {
 // internal helper agents (UI and Remote Control summaries of tool calls)
 // also fire SubagentStop, with a one-line status and no transcript: over
 // 1 000 such documents in a day on the author's machine (decision 0071).
-func subagentRan(in hookInput) bool {
+func subagentRan(in harness.HookInput) bool {
 	return agentTranscriptPath(in) != ""
 }
 
 // agentTranscriptPath is the subagent's own transcript, "" when it has
 // none.
-func agentTranscriptPath(in hookInput) string {
+func agentTranscriptPath(in harness.HookInput) string {
 	p := in.AgentTranscriptPath
 	if p == "" && in.TranscriptPath != "" && session.ValidID(in.SessionID) && session.ValidID(in.AgentID) {
 		p = filepath.Join(strings.TrimSuffix(in.TranscriptPath, ".jsonl"), "subagents", "agent-"+in.AgentID+".jsonl")

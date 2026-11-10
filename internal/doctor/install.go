@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
@@ -180,11 +181,7 @@ func checkPendingRestore(env Env) Check {
 			last[l.Target] = l
 		}
 	}
-	profile := ""
-	if st.Client != nil {
-		profile = st.Client.Profile
-	}
-	planned, err := env.ConfigEdits(profile)
+	planned, err := env.ConfigEdits(st.ProfileOf(harness.ClaudeCode))
 	if err != nil {
 		c.Status, c.Summary, c.Detail = Warn, "cannot compare Claude Code's files with backsight's edits", err.Error()
 		c.Fix = "fix the file named in the detail by hand; backsight never overwrites a file it cannot parse"

@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -180,7 +180,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 	for _, prof := range append([]string(nil), rec.Undo.ClientProfiles...) {
 		detail := "plugin " + plugin.PluginID() + " and its marketplace removed"
 		if !f.plan {
-			restored, err := removePlugin(ctx, d, home, profileEnv(home, prof), "setup --undo")
+			restored, err := removePlugin(ctx, d, home, prof, "setup --undo")
 			if err != nil {
 				return fail("client "+prof, err)
 			}
@@ -191,8 +191,8 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				// Only when the state records this profile ("" is ~/.claude):
 				// another profile wired since keeps its plugin.
 				wired := filepath.Join(home, ".claude")
-				if s.Client != nil && s.Client.Profile != "" {
-					wired = filepath.Clean(s.Client.Profile)
+				if p := s.ProfileOf(harness.ClaudeCode); p != "" {
+					wired = filepath.Clean(p)
 				}
 				if wired == prof {
 					s.PluginVersion = ""
@@ -370,32 +370,11 @@ func done(plan bool) string { return map[bool]string{true: "planned", false: "do
 // profileEnv is the environment that points the claude CLI at profile:
 // none for the default ~/.claude (CLAUDE_CONFIG_DIR would move
 // .claude.json into it), and claudeEnviron drops the shell's.
-func profileEnv(home, profile string) []string {
-	if isDefaultProfile(home, profile) {
-		return nil
-	}
-	return []string{"CLAUDE_CONFIG_DIR=" + profile}
-}
+func profileEnv(home, profile string) []string { return claudeCode.ProfileEnv(home, profile) }
 
 // isDefaultProfile reports that profile ("" included) is ~/.claude, also
-// when named another way (a symlink; on Windows another case or an 8.3
-// name): the same directory when both exist, else the same cleaned path
-// (case-insensitively on Windows).
-func isDefaultProfile(home, profile string) bool {
-	def := filepath.Join(home, ".claude")
-	if profile == "" {
-		return true
-	}
-	a, errA := os.Stat(profile)
-	b, errB := os.Stat(def)
-	if errA == nil && errB == nil {
-		return os.SameFile(a, b)
-	}
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(filepath.Clean(profile), def)
-	}
-	return filepath.Clean(profile) == def
-}
+// when named another way (harness.Claude.IsDefaultProfile).
+func isDefaultProfile(home, profile string) bool { return claudeCode.IsDefaultProfile(home, profile) }
 
 // removePlugin uninstalls backsight's plugin and marketplace when present,
 // in the profile env names, and reports whether it had to put the default
@@ -406,12 +385,12 @@ func isDefaultProfile(home, profile string) bool {
 // and gone after is put back through the config editor (journal and
 // pre-image). Done on every OS: where Claude Code leaves the entry, there
 // is nothing to put back.
-func removePlugin(ctx context.Context, d paths.Dirs, home string, env []string, command string) (restored bool, err error) {
+func removePlugin(ctx context.Context, d paths.Dirs, home, profile, command string) (restored bool, err error) {
 	putBack := func() (bool, error) { return false, nil }
-	if env != nil {
+	if profileEnv(home, profile) != nil {
 		putBack = keepDefaultEnabled(d, home, command)
 	}
-	err = removePluginFrom(ctx, env)
+	err = claudeCode.Uninstall(ctx, harnessEnv(claudeCode, home, profile))
 	restored, perr := putBack()
 	return restored, errors.Join(err, perr)
 }
@@ -461,30 +440,6 @@ func keepDefaultEnabled(d paths.Dirs, home, command string) func() (bool, error)
 		}
 		return restored, nil
 	}
-}
-
-// removePluginFrom uninstalls backsight's plugin and marketplace from the
-// profile env names, when present.
-func removePluginFrom(ctx context.Context, env []string) error {
-	known, err := pluginIDs(ctx, env)
-	if err != nil {
-		return err
-	}
-	if known[plugin.PluginID()] {
-		if _, err := claudeRunner.Run(ctx, env, "plugin", "uninstall", plugin.PluginID(), "--scope", "user"); err != nil {
-			return err
-		}
-	}
-	path, err := marketplacePath(ctx, env)
-	if err != nil {
-		return err
-	}
-	if path != "" {
-		if _, err := claudeRunner.Run(ctx, env, "plugin", "marketplace", "remove", plugin.Marketplace); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // setupLock takes setup's lock; a stale one (its process gone) is broken

@@ -128,7 +128,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.reconfigure, "reconfigure", false, "at a terminal, ask every question again, the last run's answers as defaults")
 	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
-	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	cmd.Flags().StringVar(&f.configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
 	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without a coding tool (Claude Code or Codex) that only holds the memory for your other PCs (default both: this PC runs one)")
 	cmd.Flags().StringVar(&f.runtime, "runtime", "", "native: run the server from PyPI instead of Docker, under two systemd user units (Linux x86_64) or a scheduled task (Windows x86_64, where it is the default); this PC only; default docker elsewhere")
 	return cmd
@@ -1080,7 +1080,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		{"client", 20, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			// Undo removes the plugin only from a profile it was not in before.
-			if known, err := pluginIDs(ctx, profileEnv(s.home, s.loc.Dir)); err != nil || !known[plugin.PluginID()] {
+			if known, err := pluginIDs(ctx, s.home, s.loc.Dir); err != nil || !known[plugin.PluginID()] {
 				r.Undo.ClientProfiles = appendNew(r.Undo.ClientProfiles, filepath.Clean(s.loc.Dir))
 				s.persist(r)
 			}

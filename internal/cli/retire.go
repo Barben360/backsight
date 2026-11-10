@@ -16,7 +16,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/claudecode"
-	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/setup"
 )
@@ -484,7 +483,7 @@ func removeAdded(pre []byte) func([]byte) ([]byte, []claudecfg.Change, error) {
 	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
 		return claudecfg.RemoveWhere(doc, []string{"permissions", "allow"}, func(_ string, v any) bool {
 			s, _ := v.(string)
-			return slices.Contains(plugin.ToolNames, s) && !had[s]
+			return slices.Contains(claudeCode.ToolNames(), s) && !had[s]
 		})
 	}
 }

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -30,14 +30,14 @@ import (
 )
 
 // minClaude is the oldest Claude Code the plugin was verified on (E1).
-const minClaude = "2.1.309"
+const minClaude = harness.ClaudeMinVersion
 
 // claudeCLI runs the claude command; tests replace it.
 type claudeCLI interface {
 	Run(ctx context.Context, env []string, args ...string) ([]byte, error)
 }
 
-var errClaudeMissing = errors.New("the claude command was not found")
+var errClaudeMissing error = harness.MissingError{Command: "claude"}
 
 type execClaude struct{}
 
@@ -118,7 +118,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		return res, err
 	}
 	// The profile located from --config-dir or the shell, named to claude.
-	env := profileEnv(home, c.loc.Dir)
+	env := harnessEnv(claudeCode, home, c.loc.Dir)
 	add := func(name, status, detail string) { res.Steps = append(res.Steps, installStep{name, status, detail}) }
 	did := func(changed bool) string {
 		switch {
@@ -139,13 +139,12 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	before, _ := state.Load(c.dirs.StateFile())
 
 	// 1. A recent enough claude CLI (SPEC §5: missing or too old → exit 10).
-	v, err := claudeRunner.Run(ctx, env, "--version")
+	version, err := claudeCode.Detect(ctx, env)
 	if err != nil {
 		return res, needsClaude("the claude command is missing or failed: " + err.Error())
 	}
-	version := strings.Fields(string(v) + " ?")[0]
-	if !atLeast(version, minClaude) {
-		return res, needsClaude(fmt.Sprintf("Claude Code %s is older than %s, the oldest version backsight was verified on", version, minClaude))
+	if !atLeast(version, claudeCode.MinVersion()) {
+		return res, needsClaude(fmt.Sprintf("%s %s is older than %s, the oldest version backsight was verified on", claudeCode.Name(), version, claudeCode.MinVersion()))
 	}
 	add("claude", "done", version)
 
@@ -209,71 +208,17 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		pruneBinaries(c.dirs.Data, c.dirs.Bin, target, before.ShimTarget)
 	}
 
-	// 3. The plugin, generated whole in a local marketplace (E1).
-	mkt := filepath.Join(c.dirs.Data, "marketplace")
-	// The [recall] failure switch wires PostToolUseFailure or leaves it out.
-	wiring := plugin.WiringOf(c.cfg)
-	pversion := plugin.Version(buildinfo.Version, shim, wiring)
-	pluginChanged := true
-	if !plan {
-		if pluginChanged, err = plugin.Generate(mkt, shim, buildinfo.Version, wiring); err != nil {
-			return res, blocked(err)
-		}
+	// 3. The plugin, generated whole in a local marketplace (E1), and
+	// 4. marketplace and plugin registered with Claude Code (a marketplace
+	// registered at another path, a moved data directory, is re-added).
+	inst, err := claudeCode.Install(ctx, env, harness.Integration{Data: c.dirs.Data, Shim: shim, BinaryVersion: buildinfo.Version, Config: c.cfg}, plan)
+	for _, s := range inst.Steps {
+		add(s.Name, did(s.Changed), s.Detail)
 	}
-	add("plugin", did(pluginChanged), mkt+" (version "+pversion+")")
-
-	// 4. Marketplace and plugin registered with Claude Code; a marketplace
-	// registered at another path (moved data directory) is re-added.
-	failAfterWrites := func(err error) error { // the shim and plugin may already be rewritten
-		if plan {
-			return blocked(err)
-		}
-		return partialError(err)
-	}
-	known, err := pluginList(ctx, env)
 	if err != nil {
-		return res, failAfterWrites(err)
+		return res, installError(err, plan)
 	}
-	marketPath, err := marketplacePath(ctx, env)
-	if err != nil {
-		return res, failAfterWrites(err)
-	}
-	// A marketplace at another path that still exists is another install's:
-	// two installs cannot share a profile (the plugin id is backsight's).
-	// A path that is gone is this install's data directory, moved.
-	if marketPath != "" && marketPath != "?" && marketPath != mkt {
-		if _, err := os.Stat(filepath.Join(marketPath, ".claude-plugin")); err == nil {
-			return res, &output.Error{Code: output.Blocked, Message: "this Claude Code profile (" + c.loc.Dir + ") is wired to another backsight install, whose marketplace is " +
-				marketPath + ": give this install its own profile (CLAUDE_CONFIG_DIR or --config-dir), or uninstall the other one first"}
-		}
-	}
-	var steps [][]string
-	switch {
-	case marketPath == "":
-		steps = append(steps, []string{"plugin", "marketplace", "add", mkt})
-	case marketPath != mkt:
-		steps = append(steps, []string{"plugin", "marketplace", "remove", plugin.Marketplace}, []string{"plugin", "marketplace", "add", mkt})
-	default:
-		steps = append(steps, []string{"plugin", "marketplace", "update", plugin.Marketplace})
-	}
-	if enabled, installed := known[plugin.PluginID()]; installed {
-		steps = append(steps, []string{"plugin", "update", plugin.PluginID()})
-		if !enabled {
-			// Disabled in Claude Code (/plugin, or by hand): doctor's
-			// client check sends here, and an update does not enable it.
-			steps = append(steps, []string{"plugin", "enable", plugin.PluginID(), "--scope", "user"})
-		}
-	} else {
-		steps = append(steps, []string{"plugin", "install", plugin.PluginID(), "--scope", "user"})
-	}
-	for _, args := range steps {
-		if !plan {
-			if _, err := claudeRunner.Run(ctx, env, args...); err != nil {
-				return res, partialError(err)
-			}
-		}
-		add("claude", did(true), strings.Join(args, " "))
-	}
+	pversion := inst.Version
 
 	// 5. The one settings change: allow the four memory tools (SPEC §5).
 	edit := claudecfg.Edit{Target: c.loc.Settings, Apply: permissionRule}
@@ -339,71 +284,41 @@ func schedulerStep(ctx context.Context, plan bool, add func(name, status, detail
 	}
 }
 
-// marketplacePath is where Claude Code reads backsight's marketplace from,
-// "" when it is not registered.
-func marketplacePath(ctx context.Context, env []string) (string, error) {
-	raw, err := claudeRunner.Run(ctx, env, "plugin", "marketplace", "list", "--json")
-	if err != nil {
-		return "", err
+// installError maps a harness install failure to its exit code: nothing
+// written yet is blocked (20); after backsight's own files, also blocked
+// for a plan, else partial (40, rerunning resumes); a profile wired to
+// another install needs the user to choose (20, its text says how).
+func installError(err error, plan bool) error {
+	var ie *harness.InstallError
+	if !errors.As(err, &ie) {
+		return blocked(err)
 	}
-	var items []struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return "", fmt.Errorf("claude plugin marketplace list: unexpected output: %w", err)
-	}
-	for _, m := range items {
-		if m.Name == plugin.Marketplace {
-			if m.Path == "" {
-				return "?", nil // registered, path unknown: re-add to be sure
-			}
-			return m.Path, nil
+	switch ie.Stage {
+	case harness.Conflict:
+		return &output.Error{Code: output.Blocked, Message: ie.Error()}
+	case harness.Generated:
+		if plan {
+			return blocked(ie.Err)
 		}
+		return partialError(ie.Err)
+	case harness.Registering:
+		return partialError(ie.Err)
 	}
-	return "", nil
+	return blocked(ie.Err)
 }
 
 func needsClaude(msg string) error {
+	t := claudeCode.Texts()
 	return &output.Error{Code: output.NeedsUser, Message: msg, Actions: []output.Action{
-		{Kind: "install", Cmd: "npm install -g @anthropic-ai/claude-code", Why: "backsight wires itself into Claude Code through its plugin commands (or `claude update` for an old version)"},
-		{Kind: "run_as_user", Cmd: "backsight client install", Why: "then wire Claude Code again"},
+		{Kind: "install", Cmd: t.InstallCmd, Why: t.InstallWhy},
+		{Kind: "run_as_user", Cmd: "backsight client install", Why: "then wire " + claudeCode.Name() + " again"},
 	}, Resume: "backsight client install"}
 }
 
-// pluginIDs is the set of plugin ids `claude plugin list` reports.
-func pluginIDs(ctx context.Context, env []string) (map[string]bool, error) {
-	list, err := pluginList(ctx, env)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]bool{}
-	for id := range list {
-		out[id] = true
-	}
-	return out, nil
-}
-
-// pluginList maps the profile's installed plugins to whether Claude Code
-// has them enabled (an entry without "enabled" counts as enabled).
-func pluginList(ctx context.Context, env []string) (map[string]bool, error) {
-	args := []string{"plugin", "list", "--json"}
-	raw, err := claudeRunner.Run(ctx, env, args...)
-	if err != nil {
-		return nil, err
-	}
-	var items []map[string]any
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("claude %s: unexpected output: %w", strings.Join(args, " "), err)
-	}
-	out := map[string]bool{}
-	for _, it := range items {
-		if v, ok := it["id"].(string); ok {
-			enabled, set := it["enabled"].(bool)
-			out[v] = enabled || !set
-		}
-	}
-	return out, nil
+// pluginIDs is the set of plugin ids `claude plugin list` reports in
+// profile.
+func pluginIDs(ctx context.Context, home, profile string) (map[string]bool, error) {
+	return claudeCode.PluginIDs(ctx, harnessEnv(claudeCode, home, profile))
 }
 
 // shimTarget is where this binary is installed: <data>/bin/<version>-<hash>/,

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
@@ -114,6 +115,9 @@ func TestMain(m *testing.M) {
 	// 800 ms child deadline. The children inherit this (issue #281).
 	if _, goraceSet = os.LookupEnv("GORACE"); !goraceSet {
 		_ = os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
+	if os.Getenv(fakeToolEnv) == "1" { // a second harness, as its test registered it (harness_test.go)
+		harness.Register(fakeTool{})
 	}
 	if os.Getenv("BACKSIGHT_TEST_HOOK_CHILD") == "1" { // the supervisor's child (hook_test.go)
 		args := os.Args[1:]

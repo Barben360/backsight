@@ -133,7 +133,7 @@ func newConnectCmd(e *env) *cobra.Command {
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "consent=yes to go ahead without a terminal; setup's answers (id=value, repeatable)")
 	cmd.Flags().StringVar(&f.answersFile, "answers-file", "", "answers as a JSON object or id=value lines (no secrets)")
 	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: exit 10 when the consent or another answer is missing")
-	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	cmd.Flags().StringVar(&f.configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
 	return cmd
 }
 

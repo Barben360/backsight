@@ -169,8 +169,8 @@ func files(shim, version string, w Wiring) (map[string][]byte, error) {
 		}},
 	}
 	out := map[string][]byte{}
-	for _, sk := range instructions.Skills(skillShim(targetOS, shim)) {
-		out["plugins/"+Name+"/skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
+	for p, raw := range SkillFiles(shim) {
+		out["plugins/"+Name+"/"+p] = raw
 	}
 	for p, d := range docs {
 		raw, err := json.MarshalIndent(d, "", "  ")
@@ -180,6 +180,27 @@ func files(shim, version string, w Wiring) (map[string][]byte, error) {
 		out[p] = append(raw, '\n')
 	}
 	return out, nil
+}
+
+// SkillFiles are backsight's skills for shim, by path relative to the
+// plugin's root (skills/<name>/SKILL.md).
+func SkillFiles(shim string) map[string][]byte {
+	out := map[string][]byte{}
+	for _, sk := range instructions.Skills(skillShim(targetOS, shim)) {
+		out["skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
+	}
+	return out
+}
+
+// EventName is Claude Code's name of backsight's hook event arg (the
+// argument of `backsight hook`), "" for an event the plugin never wires.
+func EventName(arg string) string {
+	for _, e := range events {
+		if e.arg == arg {
+			return e.name
+		}
+	}
+	return ""
 }
 
 // skillShim is the shim as the skills' commands name it: on Windows with

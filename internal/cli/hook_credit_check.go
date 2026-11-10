@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"encoding/json"
 	"slices"
 	"strconv"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -79,8 +79,11 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 		}
 		reason += "\n- " + safeProject(shortID(id)) + " " + text
 	}
-	out, _ := json.Marshal(map[string]string{"decision": "block", "reason": reason + "\n" + instructions.StopCheckAsk})
-	return out
+	event := harness.EventStop
+	if agent != "" {
+		event = harness.EventSubagentStop
+	}
+	return h.adapter.EncodeHook(harness.HookOutput{Event: event, Block: reason + "\n" + instructions.StopCheckAsk})
 }
 
 // journalStop records the check's outcome, best effort, and its telemetry.

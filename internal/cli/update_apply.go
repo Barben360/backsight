@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/migrate"
 	"github.com/Barben360/backsight/internal/output"
@@ -635,8 +636,8 @@ type applyRun struct {
 
 func newApplyRun(d paths.Dirs, cfg config.Config, st state.State, shim, previous, target string, res *updateApplyResult, add func(name, status, detail string)) *applyRun {
 	clientArgs := []string{"client", "install"}
-	if st.Client != nil && st.Client.Profile != "" {
-		clientArgs = append(clientArgs, "--config-dir", st.Client.Profile)
+	if p := st.ProfileOf(harness.ClaudeCode); p != "" {
+		clientArgs = append(clientArgs, "--config-dir", p)
 	}
 	wayBack := previous + " " + strings.Join(clientArgs, " ")
 	return &applyRun{d: d, cfg: cfg, shim: shim, target: target, clientArgs: clientArgs, clientWired: st.PluginVersion != "", res: res, add: add,
