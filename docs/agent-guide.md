@@ -10,6 +10,7 @@ Follow these steps in order. Everything goes through `backsight` commands with `
 
 - **Secrets never pass through you.** Never put a key in a command line, an answer or a file. When a key is needed, ask the user to run `backsight secret set <name>` in a terminal of their own, outside this session (the value is read without echo), or to pipe it from their password manager (`pass show <entry> | backsight secret set <name>`). Not with `!` in Claude Code: it runs the command without a terminal, so there is no prompt and nothing is saved. Never suggest `--from-env` or `echo` inside the session: the key would land in the transcript, which backsight sends to the memory server.
 - **The user decides.** Show each question with its options, costs and caveats, say which is recommended, and wait for the answer. Never answer `consent` yourself.
+- **Text and `--json` are unchanged for you.** At a person's terminal backsight adds color and a splash; in your shell (`CLAUDECODE` is set) and into any pipe it prints plain text and the same `--json` envelope as always.
 - **Read the exit code and the JSON envelope** `{schema_version, command, ok, data | error}`:
 
 | Exit | Meaning | What you do |

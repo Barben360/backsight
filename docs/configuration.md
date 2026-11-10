@@ -193,6 +193,19 @@ At an interactive terminal, a backsight command starts with a splash: the logo b
 |---|---|---|
 | `terminal.logo` | `"blocks"` | The splash's logo: `"blocks"` (half blocks) or `"braille"` (finer, needs a font with braille characters). Any other text draws `"blocks"`; a value that is not text is refused like any invalid key. A console that is not UTF-8 always gets the ASCII logo. |
 
+These environment variables change the look too; [commands](commands.md#at-a-terminal) says which commands are colored:
+
+| Variable | Effect |
+|---|---|
+| `BACKSIGHT_COLOR` | `always`, `never` or `auto` (the default): as `--color`, for every command. The flag wins over it. |
+| `BACKSIGHT_SPLASH` | `0`: no splash; color stays. As `--no-splash`. |
+| `NO_COLOR` | Set and not empty: no color ([no-color.org](https://no-color.org)), unless `--color=always` or `BACKSIGHT_COLOR=always`. |
+| `CLAUDECODE` | Set by Claude Code in its shell: no color and no splash, so Claude reads plain text. Only `--color=always` overrides it. |
+| `TERM` | `dumb`: no color under `auto`. |
+| `COLORTERM`, `WT_SESSION` | `truecolor`/`24bit`, or Windows Terminal: full colors; else 256 colors when `TERM` contains `256color`, else 16. |
+
+`FORCE_COLOR` and `CLICOLOR_FORCE` are ignored: set in a shell profile, they would reach the commands Claude runs, which inherit that environment.
+
 ## Examples
 
 Quieter recall: fewer, closer memories.
