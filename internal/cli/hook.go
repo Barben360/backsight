@@ -84,7 +84,7 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if failure != nil {
 		in, _ := adapter.DecodeHook(event, input)
 		if d, err := paths.Default(); err == nil {
-			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version}).
+			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version, Client: adapter.ID()}).
 				Emit(telemetry.HookFailure{Hook: event, Kind: failure.Kind, MS: failure.MS})
 		}
 		return 0

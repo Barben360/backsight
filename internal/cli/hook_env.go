@@ -103,8 +103,8 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// Hooks of one session can run in parallel: a short bounded retry
 	// instead of losing their updates (0054 amendment).
 	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir(), Retry: 100 * time.Millisecond}
-	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version})
-	h.journal = feedback.NewJournal(h.dirs.FeedbackDir(), feedback.Common{Session: h.in.SessionID, Project: h.project, Binary: buildinfo.Version, V: instructions.Version})
+	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version, Client: h.adapter.ID()})
+	h.journal = feedback.NewJournal(h.dirs.FeedbackDir(), feedback.Common{Session: h.in.SessionID, Project: h.project, Binary: buildinfo.Version, V: instructions.Version, Client: h.adapter.ID()})
 	// One deadline for every call of a hook: the supervisor's own is the
 	// hard stop, this one lets the handler finish with what it has.
 	h.client, err = hindsight.New(h.cfg.Server.URL, h.sec.APIKey, 30*time.Second)

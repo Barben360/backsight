@@ -3,7 +3,7 @@ package retain
 import (
 	"io"
 
-	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -30,12 +30,12 @@ type Identity interface {
 }
 
 // claudeCode is the harness of a flusher, a segment or a note that names
-// none: Claude Code's, as everything was before harnesses had ids. Its id
+// none: Claude Code's (harnessid.ClaudeCode), as everything was before harnesses had ids. Its id
 // and tag are harness.Default()'s (a cli test holds them equal).
 type claudeCode struct{}
 
-func (claudeCode) ID() string                      { return state.HarnessClaudeCode }
-func (claudeCode) Tag() string                     { return "harness:" + state.HarnessClaudeCode }
+func (claudeCode) ID() string                      { return harnessid.ClaudeCode }
+func (claudeCode) Tag() string                     { return "harness:" + harnessid.ClaudeCode }
 func (claudeCode) SessionOf(path string) string    { return transcript.SessionOf(path) }
 func (claudeCode) Size(path string) (int64, error) { return transcript.Size(path) }
 func (claudeCode) Open(path string, from int64) (io.ReadCloser, error) {

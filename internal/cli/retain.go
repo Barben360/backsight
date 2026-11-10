@@ -120,7 +120,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 	if f.Hold == "" {
 		f.Hold = extractionHold(d, f.Bank)
 	}
-	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version, Client: flusherHarness(f).ID()})
 	var out []retain.Result
 	for _, file := range files {
 		start := time.Now()
@@ -142,7 +142,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		}
 		reportUnconfirmed(d.State, cmd.ErrOrStderr(), r)
 		if len(r.Turns) > 0 {
-			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
+			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version, Client: flusherHarness(f).ID()})
 			for _, t := range r.Turns {
 				sw.Emit(attributionEvent(t))
 			}
@@ -172,6 +172,15 @@ func harnessConversations(home string, claude []string) []harnessFiles {
 		}
 	}
 	return out
+}
+
+// flusherHarness is the harness whose conversations f reads (Claude
+// Code's when it names none).
+func flusherHarness(f *retain.Flusher) retain.Identity {
+	if f.Harness == nil {
+		return retain.DefaultHarness()
+	}
+	return f.Harness
 }
 
 // flushHarnesses is flushAll over each harness's conversations, read with

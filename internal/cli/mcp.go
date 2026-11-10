@@ -753,6 +753,16 @@ func storeReply(res storeResult, err error, hits []recall.Hit, min float64) stri
 	return b.String()
 }
 
+// newMCPDeps is the memory server of harness adapter, whose environment
+// getenv names the session it was started for: its telemetry names the
+// harness too.
+func newMCPDeps(adapter harness.Adapter, getenv func(string) string, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, eng *recall.Engine, generation int) mcpDeps {
+	current := currentProject(home, cfg)
+	tw := telemetry.New(d.State, telemetry.Common{V: instructions.Version, Project: current, BinaryVersion: buildinfo.Version, Client: adapter.ID()})
+	return mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, generation: generation,
+		sessionID: adapter.MCPCallSession(nil, getenv), adapter: adapter, getenv: getenv}
+}
+
 // newMCPCmd is `backsight mcp [--harness <id>]`. The harness whose
 // integration starts the server names itself with --harness, as its hooks
 // do (`backsight hook --harness <id>`); Claude Code's plugin names none,
@@ -783,12 +793,11 @@ func newMCPCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			current := currentProject(home, cfg)
-			tw := telemetry.New(d.State, telemetry.Common{V: instructions.Version, Project: current, BinaryVersion: buildinfo.Version})
 			ppid := os.Getppid()
 			pstart, _ := session.ProcessStart(ppid)
-			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation,
-				sessionID: adapter.MCPCallSession(nil, os.Getenv), adapter: adapter, getenv: os.Getenv})
+			deps := newMCPDeps(adapter, os.Getenv, d, home, cfg, sec, eng, generation)
+			deps.parentPID, deps.parentStart = ppid, pstart
+			s := newMCPServer(deps)
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}

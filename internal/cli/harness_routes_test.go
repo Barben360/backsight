@@ -14,9 +14,9 @@ import (
 
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
-	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // fakeToolHook runs event's handler for the fake tool with its own input.
@@ -54,6 +54,23 @@ func TestDenialsAndBlocksAreTheHarnesssAnswers(t *testing.T) {
 	if block.Event != harness.EventStop || !strings.HasPrefix(block.Block, instructions.StopCheckHeader) || !strings.Contains(block.Block, stopIDA[:8]) {
 		t.Errorf("stop answered %s", raw)
 	}
+	// The check's journal line names the harness.
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "*.jsonl"))
+	stops := 0
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.Contains(l, `"kind":"stop"`) {
+				stops++
+				if !strings.Contains(l, `"client":"fake-tool"`) {
+					t.Errorf("stop journaled as %s", l)
+				}
+			}
+		}
+	}
+	if stops == 0 {
+		t.Errorf("no stop journaled in %v", files)
+	}
 }
 
 // A failed call of one of backsight's own tools is told by the harness's
@@ -88,8 +105,7 @@ func fakeMCP(t *testing.T, home string) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}),
-		adapter: fakeTool{}, getenv: func(string) string { return "" }})
+	srv := newMCPServer(newMCPDeps(fakeTool{}, func(string) string { return "" }, d, home, cfg, sec, eng, 0))
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(t.Context(), st, nil); err != nil {
 		t.Fatal(err)
@@ -157,5 +173,26 @@ func TestMemoryToolsTakeEachCallsSessionFromTheHarness(t *testing.T) {
 	}
 	if out, isErr := callAs(t, cs, "", "memory_credit", map[string]any{"verdict": "none"}); !isErr {
 		t.Errorf("credit without any session paired: %q", out)
+	}
+}
+
+// The memory server's telemetry names the harness that started it; a
+// harness backsight does not know starts none.
+func TestMemoryServerTelemetryNamesItsHarness(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	cs := fakeMCP(t, home)
+	callAs(t, cs, "fk1", "memory_search", map[string]any{"queries": []string{"postgres"}})
+	var tool struct{ Event, Name, Client string }
+	for _, l := range strings.Split(telemetryText(t, home), "\n") {
+		if strings.Contains(l, `"name":"memory_search"`) {
+			_ = json.Unmarshal([]byte(l), &tool)
+		}
+	}
+	if tool.Name != "memory_search" || tool.Client != "fake-tool" {
+		t.Errorf("tool telemetry %+v", tool)
+	}
+	if code, out, errOut := run(t, "mcp", "--harness", "nope"); code != output.Usage || !strings.Contains(out+errOut, "--harness") {
+		t.Errorf("unknown harness: exit %d\n%s%s", code, out, errOut)
 	}
 }

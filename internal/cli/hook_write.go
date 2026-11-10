@@ -83,7 +83,7 @@ func sessionEnd(ctx context.Context, event string, input []byte) ([]byte, error)
 	}
 	if err := spawnDetached("retain", "flush", "--session", in.SessionID); err != nil {
 		if d, derr := paths.Default(); derr == nil {
-			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version}).
+			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version, Client: harness.FromContext(ctx).ID()}).
 				Emit(telemetry.Raw{Name: "spawn_failed", Fields: map[string]any{"error": err.Error()}})
 		}
 	}

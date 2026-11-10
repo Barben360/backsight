@@ -257,6 +257,18 @@ func TestASecondHarnessConversationsAreSentWithItsTag(t *testing.T) {
 	if cur, ok, err := retain.LoadCursor(pathsOf(home).CursorsDir(), sid); err != nil || !ok || cur.Offset != int64(len(line)) {
 		t.Errorf("cursor under the session %+v %v %v, want offset %d", cur, ok, err, len(line))
 	}
+	// Each session's retain telemetry names its own harness.
+	clients := map[string]bool{}
+	for _, l := range strings.Split(telemetryText(t, home), "\n") {
+		if strings.Contains(l, `"event":"retain"`) && strings.Contains(l, `"status":"ok"`) {
+			var ev struct{ Document, Client string }
+			_ = json.Unmarshal([]byte(l), &ev)
+			clients[ev.Document+" "+ev.Client] = true
+		}
+	}
+	if !clients["conversation:"+sid+" fake-tool"] || !clients["conversation:live claude-code"] {
+		t.Errorf("retain telemetry by client: %v", clients)
+	}
 	byTag := map[string]string{}
 	for i, tags := range retainedTags {
 		for _, tag := range strings.Split(tags, ",") {
@@ -294,6 +306,10 @@ func TestHandlersRunForTheirContextsHarness(t *testing.T) {
 	notes, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
 	if !strings.Contains(string(notes), `"document_id":"subagent:fk1:agent-7"`) || !strings.Contains(string(notes), `"harness_tag":"harness:fake-tool"`) {
 		t.Errorf("outbox:\n%.600s", notes)
+	}
+	// Its telemetry names the harness it came from.
+	if tel := telemetryText(t, home); !strings.Contains(tel, `"client":"fake-tool"`) || strings.Contains(tel, `"client":"claude-code"`) {
+		t.Errorf("telemetry clients:\n%s", tel)
 	}
 
 	var got []string
