@@ -1,0 +1,14 @@
+{
+  "session_id": "01a1c72c-3ffc-7513-80aa-9e82304aa8df",
+  "turn_id": "01a1c72c-50c1-7f93-82fa-0618b3d1cb26",
+  "agent_id": "01a1c72c-50b8-7813-8fca-969520de895f",
+  "agent_type": "default",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-35-32-01a1c72c-50b8-7813-8fca-969520de895f.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PreToolUse",
+  "model": "fake-model",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "mcp__probe__readonly",
+  "tool_input": {},
+  "tool_use_id": "call_fake_5_0"
+}

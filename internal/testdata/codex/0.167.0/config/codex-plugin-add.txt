@@ -1,0 +1,2 @@
+Added plugin `backsight` from marketplace `backsight`.
+Installed plugin root: /home/tester/.codex/plugins/cache/backsight/backsight/0.0.0-dev+7cabb9088085.codex

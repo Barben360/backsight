@@ -1,0 +1,14 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-ad42-7012-b779-9d8f40f6affd",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PreToolUse",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "tool_name": "spawn_agent",
+  "tool_input": {
+    "message": "sub task <<fake [{\"call\":\"memory_search\",\"args\":{\"queries\":[\"subagent check\"]}},{\"call\":\"exec_command\",\"args\":{\"cmd\":\"env | sort > /out/fixtures-env-subagent-shell.txt; echo ok\"}},{\"say\":\"SUB-DONE\"}]>>"
+  },
+  "tool_use_id": "call_fake_18_0"
+}

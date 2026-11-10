@@ -1,0 +1,16 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-a51a-7ae0-b12f-b52948e012b2",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PreToolUse",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "tool_name": "mcp__memory__memory_search",
+  "tool_input": {
+    "queries": [
+      "codex spike"
+    ]
+  },
+  "tool_use_id": "call_fake_6_0"
+}

@@ -1,0 +1,7 @@
+{
+  "hookSpecificOutput": {
+    "additionalContext": "Memory: an issue, PR or link in the prompt: read it first, then search its content. Answer in the user's language. Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal.\n\nMemory is empty: it fills from this session (first facts a few minutes after the session ends or goes idle for 30 min).",
+    "hookEventName": "SessionStart"
+  },
+  "systemMessage": "👋 Memory is on: this session is stored on http://hindsight:8888 and processed by mock; `/backsight:pause` stops it for this session, `/backsight:pause project` for this project.\n🧠 \u001b[1;38;2;201;80;122mbacksight\u001b[0m · 🗂️ work\n⚠️ Claude Code wiring drifted (shim points to /home/tester/backsight/data/bin/current, not /home/tester/backsight/data/bin/dev-d2e6ebcfa794/backsight) · run `backsight client install`"
+}

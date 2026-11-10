@@ -1,0 +1,102 @@
+[
+  {
+    "meta": {
+      "callId": "call_fake_6_0",
+      "io.modelcontextprotocol/clientCapabilities": {
+        "elicitation": {
+          "form": {},
+          "url": {}
+        },
+        "experimental": {
+          "codex/auth-change": {}
+        },
+        "extensions": {
+          "codex/connection-lease": {}
+        }
+      },
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "codex-mcp-client",
+        "title": "Codex",
+        "version": "0.167.0"
+      },
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "itemId": "fc_01a1c72c-5d4a-76b2-abe1-23aa0168e4a0",
+      "progressToken": 1,
+      "sessionId": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+      "threadId": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+      "windowId": "01a1c72c-5442-7f52-968f-e3e1dbac783c:0",
+      "x-codex-turn-metadata": {
+        "auto_review_enabled": false,
+        "codex_version": "0.167.0",
+        "model": "fake-model",
+        "node_repl_auto_review_required": false,
+        "node_repl_disabled": false,
+        "sandbox": "none",
+        "sandbox_mode": "danger-full-access",
+        "session_id": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+        "thread_id": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+        "thread_source": "user",
+        "turn_id": "01a1c72c-546d-7402-8b3d-aaf41a085d6d",
+        "turn_started_at_unix_ms": 1794342933615,
+        "turn_trigger": "exec",
+        "workspaces": {
+          "/home/tester/work": {
+            "has_changes": true
+          }
+        }
+      }
+    },
+    "session": ""
+  },
+  {
+    "meta": {
+      "callId": "call_fake_5_0",
+      "io.modelcontextprotocol/clientCapabilities": {
+        "elicitation": {
+          "form": {},
+          "url": {}
+        },
+        "experimental": {
+          "codex/auth-change": {}
+        },
+        "extensions": {
+          "codex/connection-lease": {}
+        }
+      },
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "codex-mcp-client",
+        "title": "Codex",
+        "version": "0.167.0"
+      },
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "itemId": "fc_01a1c72c-5e4f-7b22-9f65-b25cf436555d",
+      "progressToken": 3,
+      "sessionId": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+      "threadId": "01a1c72c-5d9e-7fa2-b7a4-8e0361fc44fb",
+      "windowId": "01a1c72c-5d9e-7fa2-b7a4-8e0361fc44fb:0",
+      "x-codex-turn-metadata": {
+        "auto_review_enabled": false,
+        "codex_version": "0.167.0",
+        "model": "fake-model",
+        "node_repl_auto_review_required": false,
+        "node_repl_disabled": false,
+        "parent_thread_id": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+        "sandbox": "none",
+        "sandbox_mode": "danger-full-access",
+        "session_id": "01a1c72c-5442-7f52-968f-e3e1dbac783c",
+        "subagent_kind": "thread_spawn",
+        "thread_id": "01a1c72c-5d9e-7fa2-b7a4-8e0361fc44fb",
+        "thread_source": "subagent",
+        "turn_id": "01a1c72c-5da8-7283-a58e-a874d14a4e8e",
+        "turn_started_at_unix_ms": 1794342935978,
+        "turn_trigger": "exec",
+        "workspaces": {
+          "/home/tester/work": {
+            "has_changes": true
+          }
+        }
+      }
+    },
+    "session": ""
+  }
+]

@@ -1,0 +1,16 @@
+  >_ OpenAI Codex (v0.167.0)
+     ~/work
+  Hooks
+  Lifecycle hooks from config and enabled plugins.
+  ⚠ 23 hooks need review before they can run.
+  Event                 Installed   Active      Review      Description
+› PreToolUse            2           0           2           Before a tool executes
+  PermissionRequest     1           0           1           When permission is requested
+  PostToolUse           2           0           2           After a tool executes
+  PreCompact            1           0           1           Before context compaction
+  PostCompact           1           0           1           After context compaction
+  SessionStart          3           0           3           When a new session starts
+  SessionEnd            2           0           2           Right before a session ends
+  UserPromptSubmit      2           0           2           When the user submits a prompt
+↓
+  t trust all · enter review · esc close

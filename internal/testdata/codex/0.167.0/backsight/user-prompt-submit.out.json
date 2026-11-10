@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "additionalContext": "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, call `memory_search` first (an issue, PR or link in it: read it first, then search its content). When memories were shown to you this turn, call `memory_credit` once you know what you used, before your final message: the ids that informed it (it returns the line to print), or `verdict: none`.",
+    "hookEventName": "UserPromptSubmit"
+  }
+}

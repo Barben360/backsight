@@ -1,0 +1,15 @@
+model = "fake-model"
+model_provider = "fake"
+sandbox_mode = "danger-full-access"
+
+[model_providers.fake]
+name = "fake"
+base_url = "http://127.0.0.1:18080/v1"
+wire_api = "responses"
+
+[projects."/home/tester/work"]
+trust_level = "trusted"
+
+[mcp_servers.probe]
+command = "/opt/bs-build/probemcp"
+args = ["-log", "/out/probemcp"]

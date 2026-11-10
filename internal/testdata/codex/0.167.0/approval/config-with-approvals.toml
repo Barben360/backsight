@@ -1,0 +1,114 @@
+model = "fake-model"
+model_provider = "fake"
+sandbox_mode = "danger-full-access"
+
+[model_providers.fake]
+name = "fake"
+base_url = "http://127.0.0.1:18080/v1"
+wire_api = "responses"
+
+[projects."/home/tester/work"]
+trust_level = "trusted"
+
+[mcp_servers.probe]
+command = "/opt/bs-build/probemcp"
+args = ["-log", "/out/probemcp"]
+
+[marketplaces.backsight]
+source_type = "local"
+source = "/home/tester/backsight/data/marketplace"
+
+[plugins."backsight@backsight"]
+enabled = true
+
+[tui]
+screen_reader_detection_done = true
+
+[tui.model_availability_nux]
+"gpt-6.1-sol" = 2
+
+[hooks.state]
+
+[hooks.state."/home/tester/.codex/hooks.json:pre_model_request:0:0"]
+trusted_hash = "sha256:185654eeaac01e4276eb416d5068bd92a0f111358f088252a15442dbdaf6b523"
+
+[hooks.state."/home/tester/.codex/hooks.json:post_model_request:0:0"]
+trusted_hash = "sha256:11a736f6e6b8306220526693a9cb7211aa635c1ca756d7ed26934e777527e1a6"
+
+[hooks.state."/home/tester/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:b39b5f69fa49a9aafbeda041fd524e1158783dc6e1f15397b3bb34044767517f"
+
+[hooks.state."/home/tester/.codex/hooks.json:permission_request:0:0"]
+trusted_hash = "sha256:5665e2289001cfe750409526ee3ecbbdd7bc94c76ee10612472da47f05038a48"
+
+[hooks.state."/home/tester/.codex/hooks.json:post_tool_use:0:0"]
+trusted_hash = "sha256:17ad9d3c61f5507787096120b7820d5b8c2d321b82585584628469bbb88e47c6"
+
+[hooks.state."/home/tester/.codex/hooks.json:pre_compact:0:0"]
+trusted_hash = "sha256:6aa018263166c99919e52c8ed1c0c98fc6c798a974048b9f666b906fa00afc75"
+
+[hooks.state."/home/tester/.codex/hooks.json:post_compact:0:0"]
+trusted_hash = "sha256:2340c895328bd73e89ae870c1bbba42bca6b00a7434357ed9c2d60d40c291f9f"
+
+[hooks.state."/home/tester/.codex/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:c9850f916206b1034f9fd8831e04d1c6aa051b7d6461edcb849fdeaaf64205a8"
+
+[hooks.state."/home/tester/.codex/hooks.json:session_end:0:0"]
+trusted_hash = "sha256:caf3197cead8ef70d839161f01719d3a6658d0c3abfe9bb5868ccaf2d462985e"
+
+[hooks.state."/home/tester/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:e09952834318ff288108ceaf776dfaccd7f9066e3af126ddd94bd95e65241e87"
+
+[hooks.state."/home/tester/.codex/hooks.json:subagent_start:0:0"]
+trusted_hash = "sha256:294cd8add53174913e11c24e18b257f0820effce1ee1c72bc30e812b76afe610"
+
+[hooks.state."/home/tester/.codex/hooks.json:subagent_stop:0:0"]
+trusted_hash = "sha256:f31f8e6620f72ac27740629a571e5747584d7f089fe58fd3e41ed4698a2e9509"
+
+[hooks.state."/home/tester/.codex/hooks.json:stop:0:0"]
+trusted_hash = "sha256:f89cf052111ba515c27b2760f6af222464da01c96670f58d2eb4585303f58f06"
+
+[hooks.state."/home/tester/.codex/hooks.json:interrupt:0:0"]
+trusted_hash = "sha256:9ec2e0fe1507f89677835ccf0bbfd483f8a0424bd10bd9d29b107d8350acee0d"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:430306ac9e78af8eabb2ebff7ac7f87779469c47f46f0ec8786901854f34a43b"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:post_tool_use:0:0"]
+trusted_hash = "sha256:aa38c6b436d5a43868fcd524caf4374d7649f3629245ab4a3e229aa58ba6d52c"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:9dfea7c5152ca062876c1bcfe7440df167a2672a4e2fd28fddb63d122f6d3111"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:session_start:1:0"]
+trusted_hash = "sha256:3f54e36202dc9c38e9ec71e7844ea2189fdfa1af89164bef63ea693535e9a5a9"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:session_end:0:0"]
+trusted_hash = "sha256:0a52fd06c23e281d7a8e6b2d3638d4f644811cc69dfc1102105d7c52b1350ca5"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:422432b7e25ba604f7475537fd747a528a47797203051c9f077dab9aa25cc783"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:subagent_start:0:0"]
+trusted_hash = "sha256:ef15d21da397a65ed375465f76a23cd408f48d750b0bd11704c613272dff2858"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:subagent_stop:0:0"]
+trusted_hash = "sha256:1b9df654f0451eda5d6f921e8acbbd77ef4b92ddc13a5a13fed122cdef373ab9"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[hooks.state."backsight@backsight:hooks/hooks.json:stop:0:0"]
+trusted_hash = "sha256:270919f2294f12b8a49883ca17de7e721278f65fbacccca28fb78a076fbaeea8"
+trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
+
+[plugins."backsight@backsight".mcp_servers.memory.tools.memory_store]
+approval_mode = "approve"
+
+[mcp_servers.probe.tools.plain]
+approval_mode = "approve"

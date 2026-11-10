@@ -1,0 +1,8 @@
+# memories_v2: every file, with its size in bytes (.git listed, not copied)
+.codex-baseline/.git/codex-baseline.lock 0
+extensions/ad_hoc/instructions.md 733
+memory_summary.md 95
+rollout_summaries/2026-11-10T21-05-22-NFaA-fake_slug.md 256
+rollout_summaries/2026-11-10T21-05-31-3lru-fake_slug.md 256
+rollout_summaries/2026-11-10T21-05-40-fhUb-fake_slug.md 256
+.git/ (a git repository: 1 commit(s))

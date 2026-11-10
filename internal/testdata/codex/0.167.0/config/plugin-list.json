@@ -1,0 +1,23 @@
+{
+  "installed": [
+    {
+      "pluginId": "backsight@backsight",
+      "name": "backsight",
+      "marketplaceName": "backsight",
+      "version": "0.0.0-dev+7cabb9088085.codex",
+      "installed": true,
+      "enabled": true,
+      "source": {
+        "source": "local",
+        "path": "/home/tester/backsight/data/marketplace/plugins/backsight"
+      },
+      "marketplaceSource": {
+        "sourceType": "local",
+        "source": "/home/tester/backsight/data/marketplace"
+      },
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_INSTALL"
+    }
+  ],
+  "available": []
+}

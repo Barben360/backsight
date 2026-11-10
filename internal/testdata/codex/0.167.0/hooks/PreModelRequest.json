@@ -1,0 +1,8 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-a51a-7ae0-b12f-b52948e012b2",
+  "cwd": "/home/tester/work",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl",
+  "model": "fake-model",
+  "hook_event_name": "PreModelRequest"
+}

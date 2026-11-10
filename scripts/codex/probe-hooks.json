@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh SessionStart", "timeout": 10}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh UserPromptSubmit", "timeout": 10}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PreToolUse", "timeout": 10}]}],
+    "PermissionRequest": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PermissionRequest", "timeout": 10}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PostToolUse", "timeout": 10}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PreCompact", "timeout": 10}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PostCompact", "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh Stop", "timeout": 10}]}],
+    "SubagentStart": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh SubagentStart", "timeout": 10}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh SubagentStop", "timeout": 10}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh SessionEnd", "timeout": 3}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh Interrupt", "timeout": 3}]}],
+    "PreModelRequest": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PreModelRequest", "timeout": 10}]}],
+    "PostModelRequest": [{"hooks": [{"type": "command", "command": "/opt/harness/probe.sh PostModelRequest", "timeout": 10}]}]
+  }
+}

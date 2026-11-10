@@ -1,0 +1,5 @@
+{"server":"probe","tool":"readonly","status":"completed","error":null}
+{"server":"probe","tool":"closed","status":"completed","error":null}
+{"server":"probe","tool":"plain","status":"failed","error":"MCP tool call requires approval, but approval policy is never"}
+{"server":"probe","tool":"destructive","status":"failed","error":"MCP tool call requires approval, but approval policy is never"}
+{"server":"memory","tool":"memory_store","status":"failed","error":"MCP tool call requires approval, but approval policy is never"}
