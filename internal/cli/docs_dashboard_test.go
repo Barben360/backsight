@@ -68,7 +68,7 @@ func TestDashboardGuideSections(t *testing.T) {
 func TestTroubleshootingDashboardErrorPages(t *testing.T) {
 	requireInSection(t, "../../docs/troubleshooting.md", "The dashboard shows an error page",
 		"`misdirected request` (421)", "`this page opens only from its own links or the address bar` (403)",
-		"webmail", "\"This dashboard needs a fresh link\" (401)", "opened `localhost:<port>`",
+		"webmail", "\"This link has expired.\" (401)", "opened `localhost:<port>`",
 		"`only GET and HEAD` (405)", "`the memory text shows only in a page you open",
 		"backsight dashboard link", "already running", "replaced on its own",
 		"process id was reused", "delete `dashboard/dashboard.json` in the state directory (`backsight paths` shows it)")

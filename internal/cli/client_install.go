@@ -275,7 +275,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		add("claude", did(true), strings.Join(args, " "))
 	}
 
-	// 5. The one settings change: allow the three memory tools (SPEC §5).
+	// 5. The one settings change: allow the four memory tools (SPEC §5).
 	edit := claudecfg.Edit{Target: c.loc.Settings, Apply: permissionRule}
 	if plan {
 		fr, err := claudecfg.Plan([]claudecfg.Edit{edit})

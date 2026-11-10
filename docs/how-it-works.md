@@ -28,7 +28,7 @@ Hooks never block Claude Code. When the server is down or slow, recall is skippe
 
 When you send a prompt, the prompt hook decides whether to recall:
 
-- **The first prompt** of a session recalls from 25 characters.
+- **The first prompt** of a session (and each later one until a recall happened) recalls from 25 characters.
 - **Later prompts** recall when they are at least 60 characters long and either 3 prompts passed since the last recall or the topic changed (few words in common with the last recalled prompt).
 - **Never** past 6,000 characters of memory text in one session, nor for prompts Claude Code writes itself (task notifications, command output).
 - **Not for a prompt that only points at something**: a link or an issue reference (`#12`, `owner/repo#12`) with fewer than 3 other meaningful words, such as "Fix https://github.com/owner/repo/issues/12". Its text says little about the topic, so instead of searching it, the hook asks Claude to read what it points at first and then search memory with that content. Such a prompt does not count as a recall: the next prompt recalls as if it had not been sent.
@@ -48,7 +48,7 @@ The prompt hook may also add one short line:
 - after 3 prompts without a memory search, when your prompt names things the memory knows about, a nudge that names them;
 - a **save prompt** (below).
 
-Every threshold above is a `recall.*` key in [configuration.md](configuration.md#recall-what-reaches-claudes-context).
+Every threshold above but the first prompt's 25 characters, the topic-change test and the rule for a prompt that only points at something is a `recall.*` key in [configuration.md](configuration.md#recall-what-reaches-claudes-context).
 
 ## The save detector
 
@@ -85,7 +85,7 @@ The point: many questions Claude would ask you ("which server?", "what did we de
 
 ## Subagents
 
-- **When a subagent starts**, it gets a short memory guide (search before asking or guessing, and how its final report should read: findings with their cause, decisions with their reason, what was delivered where) and the top of the briefing (at most 600 characters), except the types in `hooks.subagent_skip` (by default `Explore`, `statusline-setup` and `claude-code-guide`).
+- **When a subagent starts**, it gets a short memory guide (search before asking or guessing, and how its final report should read: findings with their cause, decisions with their reason, what was delivered where) and the top of the briefing, the whole text at most 600 characters, except the types in `hooks.subagent_skip` (by default `Explore`, `statusline-setup` and `claude-code-guide`).
 - **When it finishes**, its final report is redacted, cut at 4,000 characters and sent like a note, unless the session is paused or the project excluded, or the report is short: under `hooks.subagent_report_min_chars` characters (400 by default) with no URL (`github.com/...` without a scheme counts), no issue or pull request reference (`#123`, `owner/repo#123`, `PR 205`, `GH-7`) and no commit hash. Short status reports ("Reading x.go", "Waiting for CI") made most subagent reports, each cost an extraction, and the memories drawn only from them were almost never used. The check at the end of the subagent's turn runs either way. A short report already queued (by an older backsight, or given another try by `retain retry-quarantine`) is dropped when the queue is sent, under the same rule.
 - **Reports stored before that rule** are deleted by `jobs maintain`, once: every `subagent:` document of the bank whose text fails the same rule goes as with `forget --purge` (its facts, the observations drawn from them, which the server then consolidates again from their other sources, and the document), including reports that gave no fact. A document with facts whose text the server returns empty is left. Each document is read again just before it goes: one whose text changed meanwhile is left. Unlike `forget --purge`, it writes no [tombstone](glossary.md#tombstone): a subagent resumed later reports again under the same document, and that report is kept. It runs after the daily backup, which still holds them; it waits for the next day when that backup failed, when the server does not answer, or while a backup, a restore or a purge holds the maintenance lock. Changing `hooks.subagent_report_min_chars` runs it again with the new value, and so does a restore of the server (which brings the deleted reports back). On several PCs any of them may run it: a second run finds nothing left. This is the only memory backsight deletes without a command from you.
 
@@ -119,11 +119,11 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 | What | Size |
 |---|---|
 | The memory guide, each session start | about 250 characters |
-| The briefing, each session start | up to about 1,600 characters |
+| The briefing, at a new session (after a compaction only if rewritten) | up to about 1,600 characters |
 | The memory tools' descriptions and instructions | about 4,300 characters |
 | Memories on prompts, whole session | up to 6,000 characters (`recall.session_budget_chars`) |
 | The line asking Claude to report what it used, under each recall | about 200 characters |
-| Reminder, nudge, save prompt | 100 to 350 characters each, when they fire |
+| Reminder, nudge, save prompt | 100 to 400 characters each, when they fire |
 
 At about 4 characters per token, a full session costs at most 3,000 to 4,000 tokens of context. `backsight stats` shows what the prompt hook actually added per session.
 
@@ -139,7 +139,7 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | `PreToolUse` (`AskUserQuestion`) | Claude asks you a question | The question gate. | 10 s |
 | `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge; records the memories a search or a read showed, and the ones Claude credited with `memory_credit`. | 2 s |
 | `PostToolUseFailure` (`Bash`, file and web tools, MCP tools) | A tool call fails | Wired only with `recall.failure_pitfalls = true` (then `backsight client install`), so by default a failed tool call starts no backsight process. Searches the memory for the failure (tool, command and error text, secrets redacted) and adds up to 2 memories scoring at least 0.8, once per kind of error in a session. Does nothing when the session is paused, the project excluded or the session budget spent. | 10 s |
-| `SubagentStart` | A subagent starts | Its short memory guide. | 5 s |
+| `SubagentStart` | A subagent starts | Its short memory guide and the top of the briefing, except the types in `hooks.subagent_skip`. No network. | 5 s |
 | `SubagentStop` | A subagent finishes | Queues its report, unless it is a short status report ([subagents](#subagents)); when the subagent was shown memories, the same check as `Stop`, for the subagent. | 5 s |
 | `Stop` | Claude's reply ends | Notes the end of the reply, for the save detector. When the turn showed memories and Claude has not reported which ones it used with `memory_credit`, asks it once, listing them by short id: Claude goes on, reports, and adds the citation line if it used any (`feedback.stop_check`, see [configuration](configuration.md#feedback-which-memories-claude-used)). Never in a paused or headless session, after a message Claude Code sent itself, or when the record cannot be read. No network. | 5 s |
 | `SessionEnd` | The session ends | Starts sending it, in the background. | 1 s |

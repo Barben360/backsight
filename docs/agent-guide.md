@@ -1,6 +1,6 @@
 # Installing backsight for a user: guide for coding agents
 
-backsight gives Claude Code a long-term memory: one Go binary that runs a memory server in Docker on the user's machine and wires it into Claude Code. You are a coding agent (Claude Code or another) asked to install it. This page is all you need: do not browse the repository.
+backsight gives Claude Code a long-term memory: one Go binary that runs a memory server on the user's machine (in Docker, or natively without it: the default on Windows) and wires it into Claude Code. You are a coding agent (Claude Code or another) asked to install it. This page is all you need: do not browse the repository.
 
 Quick start: if `backsight version` fails, install the binary with `curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh` (on Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"`); then run `backsight setup --questions --json` and go on at step 2. Ask the user before every choice.
 

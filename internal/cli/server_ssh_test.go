@@ -76,8 +76,10 @@ func TestStageReleaseVerifiesTheHostsArchive(t *testing.T) {
 	}
 	for _, v := range []string{"dev", "0.1.7-3-gabc1234", "0.1.7-dirty"} {
 		if _, _, err := stageRelease(ctx, release.Dir{Path: src}, v, "arm64", t.TempDir()); output.CodeOf(err) != output.Blocked ||
-			!strings.Contains(err.Error(), "server install --print-commands") || !strings.Contains(err.Error(), v) || strings.Contains(err.Error(), "--source") {
-			t.Errorf("development build %s: %v (exit %d), want exit 20 naming --print-commands, not --source", v, err, output.CodeOf(err))
+			!strings.Contains(err.Error(), "run a released backsight") || !strings.Contains(err.Error(), v) ||
+			strings.Contains(err.Error(), "--print-commands") || strings.Contains(err.Error(), "--source") {
+			// --print-commands refuses a development build too: naming it would be a dead end.
+			t.Errorf("development build %s: %v (exit %d), want exit 20 asking for a released backsight, naming neither --print-commands nor --source", v, err, output.CodeOf(err))
 		}
 	}
 }

@@ -50,13 +50,21 @@ Finding the memories that match a prompt or a question and bringing them into Cl
 
 The short page Claude gets at session start about the current project: open items, recent work, rules in force. The server writes it from the project's memories.
 
+## Credit, confident miss
+
+How a memory shown to Claude counts once its turn is over: a **credit** when Claude reported using it, a **confident miss** when it was shown near the top and Claude, reporting on that turn, did not use it, **unknown** when Claude never reported. Recall ranks memories by these counts ([how-it-works.md](how-it-works.md#which-memories-helped)).
+
+## Save prompt
+
+The line the prompt hook adds when your prompt looks like a rule, a correction or an approval, asking Claude to store it with `memory_store` if it is durable.
+
 ## Retain
 
 Sending text to the server so it becomes memory: Hindsight's word, and backsight's command group (`backsight retain flush`, `backsight retain backfill`). These docs mostly say **send**.
 
 ## Settle
 
-A session settles when it ends, or once its last turn is 30 minutes old: it is then sent. A session you resume later sends its new turns the same way.
+A session settles when it ends, or once its last turn is 30 minutes old (the turns of a session still open, once they are 2 hours old): it is then sent. New turns of a session already sent wait for 30,000 characters or 6 hours since its last send (`retain.*` in [configuration.md](configuration.md)), unless the session ends.
 
 ## Backfill
 

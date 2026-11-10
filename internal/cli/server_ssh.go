@@ -161,7 +161,7 @@ func probeHost(ctx context.Context, target string) (hostFacts, error) {
 func findRelease(ctx context.Context, src release.Source, version, goarch string) (rel release.Release, archive string, err error) {
 	if v, err := release.Parse(version); err != nil || v.Dev() {
 		return rel, "", &output.Error{Code: output.Blocked,
-			Message: fmt.Sprintf("this backsight is a development build (%s): no release matches it; run a released backsight, or backsight server install --print-commands", version)}
+			Message: fmt.Sprintf("this backsight is a development build (%s): no release matches it; run a released backsight", version)}
 	}
 	rels, err := src.Releases(ctx)
 	if err != nil {

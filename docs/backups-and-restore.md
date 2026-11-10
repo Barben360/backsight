@@ -11,14 +11,14 @@ With backups on (setup's default), the daily job makes one backup and keeps **7 
 Each backup prunes the older ones. An archive stays when any of these holds:
 
 - it is **less than 24 hours old**, whatever the retention says;
-- it is the newest of one of the last `keep_daily` days;
-- it is the newest of one of the last `keep_weekly` ISO weeks.
+- it is the newest of one of the `keep_daily` most recent days (UTC) that have a backup;
+- it is the newest of one of the `keep_weekly` most recent ISO weeks (UTC) that have one.
 
 The 24-hour rule covers a second backup the same day: one you made by hand before a `forget`, and the safety archives of a restore or a server upgrade. The next backup does not delete them; they follow the daily and weekly slots once they are a day old.
 
-Only archives backsight wrote (with their `.json` sidecar) are pruned. Other files in the folder, and archives copied in from elsewhere, are never touched.
+Only archives backsight wrote (with their `.json` sidecar) are pruned. Other files in the folder, and archives copied in without their `.json` sidecar, are never touched.
 
-Each archive is a dump of the server's database with a manifest (backsight version, the runtime the server ran on and its Hindsight version, server image, embedding models, bank), backsight's config, the server's Compose override (Docker only) and secrets. It is always encrypted.
+Each archive is a dump of the server's database with a manifest (backsight version, the runtime the server ran on and its Hindsight version, server image, embedding models, bank), backsight's config and state, the bank's settings, the server's Compose override (Docker only) and secrets. It is always encrypted.
 
 The archives are yours to copy anywhere: another disk, a NAS, a cloud drive. `backsight doctor` warns when the last backup this machine can decrypt is more than 2 days old.
 
@@ -67,8 +67,8 @@ Restore replaces the local server's memory with the archive's. In order, it:
 1. takes the maintenance lock, so no other backsight command or job changes the server meanwhile;
 2. makes a **safety backup** of the server as it is now;
 3. marks a restore in progress: every client holds its sends;
-4. stops the server, replaces its database, and starts it on a temporary key only restore knows;
-5. checks health, row counts and a recall;
+4. stops the server, replaces its database and compares its row counts with the archive's;
+5. starts it on a temporary key only restore knows, and checks health and a recall;
 6. writes back the **purge tombstones** it read before the stop (the server's and this machine's): the archive's `<bank>-control` bank lacks the purges made since;
 7. writes a new **restore epoch**, in your bank and in every other memory bank of the server (see below);
 8. waits, as long as it takes and printing what it waits for, until the restored banks with purges have no queued retain left (one would recreate a purged document), the restore still in progress and the server on its temporary key; then purges again, as `forget --purge` does, every purged document the archive brought back (a document a tombstone names): its facts' observations, the document, and the briefing page of each project it touched;
@@ -78,8 +78,6 @@ Restore replaces the local server's memory with the archive's. In order, it:
 After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts, with the final reports of their subagents (rebuilt from `<session>/subagents/agent-<id>.jsonl` by the same rules as when the subagent stopped: not with `components.write` off, not from an opted-out directory or a headless session, never one a purge deleted). The same reconcile purges again any purged document the server still holds: one a late queued retain recreated, or one another machine purged while the restore ran. Facts stored with `memory_store` after the backup was made cannot be recovered that way. What `forget --purge` deleted is never sent again (see [privacy](privacy.md#removing-what-was-stored)), even when the archive predates the purge.
 
 `restore --plan` says how many tombstones restore checks (every one), and names the purges made after the archive was taken, which the archive may hold. Their turns are not sent again from your transcripts either.
-
-**Note for purges made with backsight before this release**: until now, the turns a session wrote after one of its documents was purged were appended to the purged document's id, which Hindsight recreated. Restore, and the reconcile after it, purge that id again, those later turns with it. From this release on, they go to a new document (`conversation:<session>#2`), which a purge again leaves alone. Nothing to migrate. Such a session waits for its first segment on the new document, then is quarantined after 24 hours; `backsight retain retry-quarantine` then sends those turns again, to the new document.
 
 ### Other banks on the server
 

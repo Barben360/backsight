@@ -88,7 +88,7 @@ func (c clientEnv) ownedEdits() (edits []claudecfg.Edit, notes []string, err err
 	return edits, notes, nil
 }
 
-// permissionRule allows the three memory tools (SPEC §5).
+// permissionRule allows the four memory tools (SPEC §5).
 func permissionRule(doc []byte) ([]byte, []claudecfg.Change, error) {
 	var changes []claudecfg.Change
 	for _, tool := range plugin.ToolNames {
