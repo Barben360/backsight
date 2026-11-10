@@ -107,7 +107,6 @@ func TestPanelFromFixtures(t *testing.T) {
 }
 
 func TestPanelBadFileDropsOnlyItsLine(t *testing.T) {
-	big := strings.Repeat(" ", 64<<10) + "{}"
 	for _, c := range []struct {
 		name, file string
 		body       *string // nil: removed
@@ -115,14 +114,14 @@ func TestPanelBadFileDropsOnlyItsLine(t *testing.T) {
 	}{
 		{"reach missing", "state/reach.json", nil, []string{"Server", "Queue"}},
 		{"reach corrupt", "state/reach.json", ptr("{"), []string{"Server", "Queue"}},
-		{"reach oversized", "state/reach.json", &big, []string{"Server", "Queue"}},
+		{"reach oversized", "state/reach.json", ptr(strings.Repeat(" ", reachCap) + "{}"), []string{"Server", "Queue"}},
 		{"snapshot missing", "state/doctor-snapshot.json", nil, []string{"Checks"}},
 		{"snapshot corrupt", "state/doctor-snapshot.json", ptr("not json"), []string{"Checks"}},
-		{"snapshot oversized", "state/doctor-snapshot.json", ptr(strings.Repeat(" ", 1<<20) + "{}"), []string{"Checks"}},
+		{"snapshot oversized", "state/doctor-snapshot.json", ptr(strings.Repeat(" ", snapshotCap) + "{}"), []string{"Checks"}},
 		{"state corrupt", "state/state.json", ptr("["), []string{"Update"}},
-		{"state oversized", "state/state.json", &big, []string{"Update"}},
+		{"state oversized", "state/state.json", ptr(strings.Repeat(" ", stateCap) + "{}"), []string{"Update"}},
 		{"config corrupt", "config/config.toml", ptr("[server"), []string{"Setup"}},
-		{"config oversized", "config/config.toml", ptr("#" + strings.Repeat("x", 64<<10) + "\n"), []string{"Setup"}},
+		{"config oversized", "config/config.toml", ptr("#" + strings.Repeat("x", fileCap) + "\n"), []string{"Setup"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			src := fixture(t)
@@ -356,5 +355,35 @@ func TestPanelASCII(t *testing.T) {
 	}
 	if got := line(ls, "Update"); got != "Update   0.1.35-m7 available - backsight update apply" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// state.json keeps every tombstone and reach.json every waiting session:
+// both grow past 64 KiB on a real install, and their lines must stay.
+func TestPanelLargeStateAndReachKeepTheirLines(t *testing.T) {
+	src := fixture(t)
+	tomb := `"` + strings.Repeat("t", 200<<10) + `"`
+	write(t, src.Dirs.StateFile(), `{"tombstones":[`+tomb+`],"update_check":{"latest":"0.1.35-m7"}}`)
+	ids := make([]string, 3000)
+	for i := range ids {
+		ids[i] = `"0f8c2d4e-1111-2222-3333-444455556666"`
+	}
+	write(t, filepath.Join(src.Dirs.State, "reach.json"), `{"last_ok":"2026-11-10T11:58:00Z","sessions_waiting":3000,"waiting_sessions":[`+strings.Join(ids, ",")+`]}`)
+	ls, _ := Build(src)
+	for _, label := range []string{"Update", "Server", "Queue"} {
+		if line(ls, label) == "" {
+			t.Errorf("%s dropped with a large file", label)
+		}
+	}
+}
+
+// A mismatch recorded while a client is shown only in mode remote, like
+// stats' Server line: a host that left the client role keeps none.
+func TestPanelMismatchOnlyOnAClient(t *testing.T) {
+	src := fixture(t)
+	write(t, src.Dirs.StateFile(), `{"remote_server":{"id":"a","mismatch":"b"}}`)
+	ls, _ := Build(src)
+	if got := line(ls, "Server"); got != "Server   answering · last answer 2m ago" {
+		t.Fatalf("a local host shows %q", got)
 	}
 }

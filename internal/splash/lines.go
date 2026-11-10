@@ -98,7 +98,7 @@ func (b builder) server(f *facts) Line {
 		lead = []Seg{b.plain(host + " ")}
 	}
 	switch {
-	case f.state != nil && f.state.RemoteServer != nil && f.state.RemoteServer.Mismatch != "":
+	case f.config != nil && f.config.Server.Mode == "remote" && f.state != nil && f.state.RemoteServer != nil && f.state.RemoteServer.Mismatch != "":
 		return labelled("Server", Seg{Role: termstyle.Fail, Text: "another server answers at " + cmp.Or(host, "the joined address")})
 	case !r.FailingSince.IsZero():
 		since := now.Sub(r.FailingSince)

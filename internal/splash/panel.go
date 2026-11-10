@@ -91,9 +91,9 @@ func Build(src Sources) ([]Line, string) {
 				f.config = &c
 			}
 		},
-		func(f *facts) { decodeJSON(read, filepath.Join(d.State, "reach.json"), fileCap, &f.reach) },
+		func(f *facts) { decodeJSON(read, filepath.Join(d.State, "reach.json"), reachCap, &f.reach) },
 		func(f *facts) { decodeJSON(read, state.BreakerPath(d), fileCap, &f.breaker) },
-		func(f *facts) { decodeJSON(read, d.StateFile(), fileCap, &f.state) },
+		func(f *facts) { decodeJSON(read, d.StateFile(), stateCap, &f.state) },
 		func(f *facts) {
 			decodeJSON(read, filepath.Join(d.State, "doctor-snapshot.json"), snapshotCap, &f.snapshot)
 		},

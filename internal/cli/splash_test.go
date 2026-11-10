@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/splash"
 	"github.com/Barben360/backsight/internal/termstyle"
+	"github.com/Barben360/backsight/internal/token"
 )
 
 // splashTerminal is an interactive UTF-8 terminal width columns wide (a
@@ -126,14 +128,44 @@ func TestNoSplashIntoAPipeEvenWithColorAlways(t *testing.T) {
 	}
 }
 
+// The splash state lives in the stdout writer: an env copied before any
+// stdout byte (server ssh install builds one) and the original print one
+// splash between them.
 func TestSplashOnceForACopiedEnv(t *testing.T) {
 	splashTerminal(t, 80, nil)
 	out := outFile(t)
-	_, e := executeContext(context.Background(), []string{"version"}, out, io.Discard)
+	// A runtime failure: nothing on stdout yet, so no splash so far.
+	if code, _ := executeContext(context.Background(), []string{"server", "status"}, out, io.Discard); code != 10 {
+		t.Fatalf("exit %d", code)
+	}
+	_, e := executeContext(context.Background(), []string{"server", "status"}, out, io.Discard)
 	copied := *e
-	_, _ = io.WriteString(copied.stdout, "more output\n")
-	if got := fileText(t, out); splashCount(got) != 1 || !strings.HasSuffix(got, "more output\n") {
+	_, _ = io.WriteString(copied.stdout, "from the copy\n")
+	_, _ = io.WriteString(e.stdout, "from the original\n")
+	if got := fileText(t, out); splashCount(got) != 1 || !strings.HasSuffix(got, "from the copy\nfrom the original\n") {
 		t.Fatalf("%d splashes:\n%s", splashCount(got), got)
+	}
+}
+
+// A connection token in a panel value is masked like any text output.
+func TestSplashMasksATokenInThePanel(t *testing.T) {
+	splashTerminal(t, 120, nil)
+	home := os.Getenv("BACKSIGHT_HOME")
+	d, err := paths.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := token.Prefix + "abcdefghij"
+	if err := os.MkdirAll(d.Config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"https://" + host + ":8888\"\n"
+	if err := os.WriteFile(d.ConfigFile(), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := runAt(t, "version")
+	if splashCount(got) != 1 || strings.Contains(got, "abcdefghij") || !strings.Contains(termstyle.Strip(got), "client of ") {
+		t.Fatalf("home %s: the token shows or no Setup line:\n%s", home, termstyle.Strip(got))
 	}
 }
 

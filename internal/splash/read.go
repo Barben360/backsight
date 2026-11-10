@@ -12,6 +12,10 @@ import (
 const (
 	fileCap     = 64 << 10
 	snapshotCap = 1 << 20
+	// state.json keeps every tombstone and reach.json every waiting
+	// session's id: both pass 64 KiB on a real install.
+	stateCap    = 4 << 20
+	reachCap    = 1 << 20
 	outboxMax   = 1000
 	outboxBytes = 8 << 20
 )
