@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/release"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // githubAPI is where the GitHub release source reads; tests point it at a
@@ -73,7 +74,7 @@ func newUpdateCmd(e *env) *cobra.Command {
 			if source == "" { // a one-off --source does not feed the banner
 				recordUpdateCheck(d, res, err)
 			}
-			return e.report("update check", res, func() string { return updateCheckText(res, err) }, err)
+			return e.report("update check", res, func() string { return updateCheckText(termstyle.StyleOf(e.stdout), res, err) }, err)
 		},
 	}
 	check.Flags().StringVar(&source, "source", "", "read releases from this local release directory instead of the configured source")
@@ -109,7 +110,7 @@ func newChangelogCmd(e *env) *cobra.Command {
 				if len(res.Versions) == 0 {
 					return "no release notes" + map[bool]string{true: " after " + since, false: ""}[since != ""] + " on " + res.Source + "\n"
 				}
-				return notesText(res.Versions)
+				return notesText(termstyle.StyleOf(e.stdout), res.Versions)
 			})
 		},
 	}
@@ -216,29 +217,31 @@ func updateBanner(uc *state.UpdateCheck, running string) string {
 	return instructions.UpdateLine(running, uc.Latest, newer)
 }
 
-func updateCheckText(res updateCheckResult, err error) string {
+func updateCheckText(st termstyle.Style, res updateCheckResult, err error) string {
+	brand := st.Paint(termstyle.Brand, "backsight")
 	switch {
 	case err != nil:
 		return ""
 	case !res.UpdateAvailable:
-		return fmt.Sprintf("backsight %s is up to date (%s)\n", res.Installed, res.Source)
+		return fmt.Sprintf("%s %s is %s (%s)\n", brand, res.Installed, st.Paint(termstyle.OK, "up to date"), res.Source)
 	}
-	return fmt.Sprintf("backsight %s: %d newer release(s) on %s\n\n", res.Installed, len(res.Versions), res.Source) + notesText(res.Versions)
+	return fmt.Sprintf("%s %s: %s on %s\n\n", brand, res.Installed, st.Paint(termstyle.Accent, fmt.Sprintf("%d newer release(s)", len(res.Versions))), res.Source) + notesText(st, res.Versions)
 }
 
-// notesText prints each release's header and its notes, indented.
-func notesText(vs []versionEntry) string {
+// notesText prints each release's header and its notes, indented; st
+// colors the headers only (the notes are the release's own text).
+func notesText(st termstyle.Style, vs []versionEntry) string {
 	var b strings.Builder
 	for i, v := range vs {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(v.Version)
+		b.WriteString(st.Paint(termstyle.Accent, v.Version))
 		if !v.PublishedAt.IsZero() {
-			b.WriteString(" · " + v.PublishedAt.Format("2006-01-02"))
+			b.WriteString(" · " + st.Paint(termstyle.Secondary, v.PublishedAt.Format("2006-01-02")))
 		}
 		if v.Prerelease {
-			b.WriteString(" · pre-release")
+			b.WriteString(" · " + st.Paint(termstyle.Warn, "pre-release"))
 		}
 		b.WriteString("\n")
 		for _, line := range strings.Split(strings.TrimSpace(v.Notes), "\n") {

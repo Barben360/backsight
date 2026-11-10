@@ -50,6 +50,7 @@ func viewGolden(t *testing.T, name string, args ...string) {
 		t.Fatalf("exit %d: %s %s", code, out, errOut)
 	}
 	cliGolden(t, name, []byte(goldenPort.ReplaceAllString(out, "127.0.0.1:PORT")))
+	coloredGolden(t, name, func(s string) string { return goldenPort.ReplaceAllString(s, "127.0.0.1:PORT") }, args...)
 }
 
 // Every view, as text and as JSON, on the fixed fixture (frozen clock,
@@ -190,7 +191,7 @@ func TestStatsViewsGoldenEdgeCases(t *testing.T) {
 		"jobs.last_run": {Value: ptr(645_800), Status: metrics.StatusOK}, // the last tick 10 min 45.8 s ago
 	}
 	r.Tables.OutcomeMix = []metrics.OutcomeDay{{Day: "2026-10-01", Used: 1, Partial: true}, {Day: "2026-10-02", Used: 4}}
-	cliGolden(t, "stats-view-edge-cases.golden", []byte(viewText(r, false)))
+	cliGolden(t, "stats-view-edge-cases.golden", []byte(viewText(noColor, r, false)))
 }
 
 func TestFormatValue(t *testing.T) {
@@ -258,7 +259,7 @@ func TestViewTextLines(t *testing.T) {
 	i64 := func(v int64) *int64 { return &v }
 	hit := metrics.Metric{Value: ptr(12.0 / 33), Num: i64(12), Den: i64(33), Status: metrics.StatusOK, CI: &[2]float64{0.22, 0.53}, Delta: ptr(0.0636)}
 	t.Run("a judged rate", func(t *testing.T) {
-		text := viewText(result("overview", "recall.hit_rate", hit), false)
+		text := viewText(noColor, result("overview", "recall.hit_rate", hit), false)
 		re := regexp.MustCompile(`^Prompts that got memory +36 % \(22–53 %\) +\(n=33, ok, \+6 pts vs previous\)$`)
 		if l := lineOf(t, text, "Prompts that got memory"); !re.MatchString(l) {
 			t.Errorf("line %q", l)
@@ -273,7 +274,7 @@ func TestViewTextLines(t *testing.T) {
 	})
 	t.Run("too few says how many more", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(0.8), Num: i64(4), Den: i64(5), Status: metrics.StatusTooFew, CI: &[2]float64{0.4, 0.96}}
-		l := lineOf(t, viewText(result("overview", "recall.hit_rate", m), false), "Prompts that got memory")
+		l := lineOf(t, viewText(noColor, result("overview", "recall.hit_rate", m), false), "Prompts that got memory")
 		if !strings.Contains(l, "4 of 5") || !strings.Contains(l, "n=5, too few, 15 more needed") || strings.Contains(l, "80 %") {
 			t.Errorf("line %q", l)
 		}
@@ -285,61 +286,61 @@ func TestViewTextLines(t *testing.T) {
 		}{{metrics.StatusWatch, "watch — close to the line"}, {metrics.StatusOK, "ok — close to the line"}} {
 			m := hit
 			m.Status, m.Borderline = c.st, true
-			if l := lineOf(t, viewText(result("overview", "recall.hit_rate", m), false), "Prompts that got memory"); !strings.Contains(l, "n=33, "+c.want+",") {
+			if l := lineOf(t, viewText(noColor, result("overview", "recall.hit_rate", m), false), "Prompts that got memory"); !strings.Contains(l, "n=33, "+c.want+",") {
 				t.Errorf("%s: line %q", c.st, l)
 			}
 		}
 	})
 	t.Run("no data gives its reason", func(t *testing.T) {
 		m := metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonServerDown}
-		l := lineOf(t, viewText(result("bank", "bank.size", m), false), "Memories")
+		l := lineOf(t, viewText(noColor, result("bank", "bank.size", m), false), "Memories")
 		if !strings.Contains(l, "no data: memory server not answering") || strings.Contains(l, "0") {
 			t.Errorf("line %q", l)
 		}
 	})
 	t.Run("a snapshot has no history", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(41), Status: metrics.StatusOK, Tags: []string{"snapshot"}}
-		l := lineOf(t, viewText(result("bank", "bank.size", m), false), "Memories")
+		l := lineOf(t, viewText(noColor, result("bank", "bank.size", m), false), "Memories")
 		if !strings.Contains(l, "no history") || strings.Contains(l, "no change") {
 			t.Errorf("line %q", l)
 		}
 	})
 	t.Run("a zero change against a window is no change", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(0), Status: metrics.StatusOK, Delta: ptr(0)}
-		if l := lineOf(t, viewText(result("pipeline", "hooks.failures", m), false), "Steps that crashed"); !strings.Contains(l, "no change vs previous") {
+		if l := lineOf(t, viewText(noColor, result("pipeline", "hooks.failures", m), false), "Steps that crashed"); !strings.Contains(l, "no change vs previous") {
 			t.Errorf("line %q", l)
 		}
 	})
 	t.Run("judged on 28 days", func(t *testing.T) {
 		m := hit
 		m.Tags = []string{"judged_28d"}
-		if l := lineOf(t, viewText(result("overview", "used.turn_rate", m), false), "Turns where Claude used memory"); !strings.Contains(l, "judged on the last 28 days") || !strings.Contains(l, "vs previous 28 days") {
+		if l := lineOf(t, viewText(noColor, result("overview", "used.turn_rate", m), false), "Turns where Claude used memory"); !strings.Contains(l, "judged on the last 28 days") || !strings.Contains(l, "vs previous 28 days") {
 			t.Errorf("line %q", l)
 		}
 	})
 	t.Run("unreliable", func(t *testing.T) {
 		m := hit
 		m.Tags = []string{"unreliable"}
-		if l := lineOf(t, viewText(result("overview", "used.turn_rate", m), false), "Turns where Claude used memory"); !strings.Contains(l, ", unreliable,") {
+		if l := lineOf(t, viewText(noColor, result("overview", "used.turn_rate", m), false), "Turns where Claude used memory"); !strings.Contains(l, ", unreliable,") {
 			t.Errorf("line %q", l)
 		}
 	})
 	t.Run("a capped failure count is a lower bound", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(0), Status: metrics.StatusWatch, Extra: map[string]any{
 			"pending": int64(0), "processing": int64(0), "failed": int64(500), "failed_total": int64(731), "failed_capped": true}}
-		text := viewText(result("pipeline", "server.queue", m), false)
+		text := viewText(noColor, result("pipeline", "server.queue", m), false)
 		if !strings.Contains(text, "failed in the last 7 days 500+ (a lower bound") {
 			t.Errorf("text:\n%s", text)
 		}
 		m.Extra["failed_capped"] = false
-		if text := viewText(result("pipeline", "server.queue", m), false); strings.Contains(text, "500+") {
+		if text := viewText(noColor, result("pipeline", "server.queue", m), false); strings.Contains(text, "500+") {
 			t.Errorf("an exact count shown as a bound:\n%s", text)
 		}
 	})
 	t.Run("a partial cost says operations could not be read", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(0.4), Tags: []string{"partial"}, Status: metrics.StatusOK,
 			Extra: map[string]any{"currency": "USD", "failed_operations": int64(2)}}
-		text := viewText(result("cost", "extraction.cost", m), false)
+		text := viewText(noColor, result("cost", "extraction.cost", m), false)
 		if !strings.Contains(text, "0.40 USD") || !strings.Contains(text, "2 server tasks could not be read, so this is a lower bound") {
 			t.Errorf("text:\n%s", text)
 		}
@@ -347,7 +348,7 @@ func TestViewTextLines(t *testing.T) {
 	t.Run("partial days are not dips", func(t *testing.T) {
 		r := result("quality", "recall.hit_rate", hit)
 		r.Tables.OutcomeMix = []metrics.OutcomeDay{{Day: "2026-10-01", Used: 1, Partial: true}, {Day: "2026-10-02", Used: 4}}
-		text := viewText(r, false)
+		text := viewText(noColor, r, false)
 		if !strings.Contains(lineOf(t, text, "2026-10-01"), "partial day") || strings.Contains(lineOf(t, text, "2026-10-02"), "partial") {
 			t.Errorf("text:\n%s", text)
 		}
@@ -355,10 +356,10 @@ func TestViewTextLines(t *testing.T) {
 	t.Run("developer metrics only with --dev", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(0.9), Den: i64(40), Status: metrics.StatusOK}
 		r := result("quality", "used.rubber_stamp", m)
-		if text := viewText(r, false); strings.Contains(text, "Turns where every memory was marked used") {
+		if text := viewText(noColor, r, false); strings.Contains(text, "Turns where every memory was marked used") {
 			t.Errorf("developer metric without --dev:\n%s", text)
 		}
-		if text := viewText(r, true); !strings.Contains(text, "Turns where every memory was marked used") {
+		if text := viewText(noColor, r, true); !strings.Contains(text, "Turns where every memory was marked used") {
 			t.Errorf("developer metric missing with --dev:\n%s", text)
 		}
 	})
@@ -371,7 +372,7 @@ func TestViewTextLines(t *testing.T) {
 		}}
 		r.Attention = []metrics.Item{{Text: "Health check bank failed.", Command: "backsight doctor"}, {Text: "Two."}}
 		r.AttentionMore = 3
-		text := viewText(r, false)
+		text := viewText(noColor, r, false)
 		for _, want := range []string{
 			"Found    ok\n", "Right    can't judge — Can't judge yet: Claude said what it used on only 64 % of turns.\n",
 			"Flowing  attention — Health check bank failed.\n", "1. Health check bank failed.\n   Run: backsight doctor\n", "2. Two.\n", "3 more: backsight stats system",
@@ -392,14 +393,14 @@ func TestViewTextLines(t *testing.T) {
 				{Metric: "used.turn_rate", Severity: metrics.SeverityInfo, Text: "Judged on the last 28 days: too few turns in 7."}}},
 		}}
 		want := "Right    attention — 10 memories reported wrong or out of date in the last 28 days. Judged on the last 28 days: too few turns in 7.\n"
-		if text := viewText(r, false); !strings.Contains(text, want) {
+		if text := viewText(noColor, r, false); !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	})
 	t.Run("ids and projects are cut", func(t *testing.T) {
 		r := result("sessions", "recall.hit_rate", hit)
 		r.Tables.Sessions = []metrics.SessionRow{{ID: "abcdefghijklmnop", Project: strings.Repeat("p", 30), Start: r.Window.Since}}
-		text := viewText(r, false)
+		text := viewText(noColor, r, false)
 		if !strings.Contains(text, "abcdefgh ") || strings.Contains(text, "abcdefghi") || !strings.Contains(text, strings.Repeat("p", 23)+"…") || strings.Contains(text, strings.Repeat("p", 24)) {
 			t.Errorf("text:\n%s", text)
 		}
@@ -409,7 +410,7 @@ func TestViewTextLines(t *testing.T) {
 		r.Scope.Project = "evil\x1b[31mred\x07"
 		r.Tables.Sessions = []metrics.SessionRow{{ID: "\x1b[2Jabcdefgh", Project: "p\x1b[31m\u009b1", Start: r.Window.Since}}
 		r.Text = &metrics.MemoryText{ID: "m1", Text: "line one\n\x1b[31mline\ttwo\x1b[0m"}
-		text := viewText(r, false)
+		text := viewText(noColor, r, false)
 		if strings.ContainsAny(text, "\x1b\x07\u009b") {
 			t.Errorf("control characters printed:\n%q", text)
 		}
@@ -422,14 +423,14 @@ func TestViewTextLines(t *testing.T) {
 	t.Run("a memory's text the server did not give says why", func(t *testing.T) {
 		r := result("memories", "recall.hit_rate", hit)
 		r.Text = &metrics.MemoryText{ID: "m1", Reason: metrics.ReasonServerDown}
-		if text := viewText(r, false); !strings.Contains(text, "Memory m1: its text is not available (memory server not answering).") {
+		if text := viewText(noColor, r, false); !strings.Contains(text, "Memory m1: its text is not available (memory server not answering).") {
 			t.Errorf("text:\n%s", text)
 		}
 	})
 	t.Run("the server notice", func(t *testing.T) {
 		r := result("bank", "bank.size", metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonServerDown})
 		r.Server = &metrics.ServerState{OK: false, Error: "unreachable"}
-		if text := viewText(r, false); !strings.Contains(text, "Memory server: unreachable. The numbers that come from it are missing.") {
+		if text := viewText(noColor, r, false); !strings.Contains(text, "Memory server: unreachable. The numbers that come from it are missing.") {
 			t.Errorf("text:\n%s", text)
 		}
 	})
@@ -779,7 +780,7 @@ func TestStatsBlockTextShapes(t *testing.T) {
 		},
 		SettingsDiffer: []metrics.SettingDiff{{Key: "recall.min_score", A: f(0.5), B: f(0.6), ChangedAt: &goldenNow}},
 	}
-	out := viewText(r, false)
+	out := viewText(noColor, r, false)
 	wantLines(t, "comparison", out,
 		"Comparison of v0.1.16-m7 and v0.1.17-m7 on Turns where Claude used memory",
 		"matched difference +11 pts (+2 to +20), differs",
@@ -792,13 +793,13 @@ func TestStatsBlockTextShapes(t *testing.T) {
 	)
 	// the unmatched line appears only when it disagrees
 	r.Tables.Compare.RawDisagrees = false
-	if strings.Contains(viewText(r, false), "unmatched") {
+	if strings.Contains(viewText(noColor, r, false), "unmatched") {
 		t.Errorf("an unmatched line without a disagreement")
 	}
 	r.Tables.Compare.Reading = "no_clear_difference"
 	r.Tables.Compare.CI = &[2]float64{-0.02, 0.2}
 	r.Tables.Compare.SettingsDiffer, r.Tables.Compare.SettingsUnknown = nil, true
-	wantLines(t, "no clear difference", viewText(r, false),
+	wantLines(t, "no clear difference", viewText(noColor, r, false),
 		"matched difference +11 pts (−2 to +20), no clear difference",
 		"Settings of a version are not known: nothing was recorded before its first turn.")
 
@@ -811,7 +812,7 @@ func TestStatsBlockTextShapes(t *testing.T) {
 		{Week: "2026-09-14", Complete: &[]bool{true}[0]},
 	}})
 	y.Metrics["memory.yield"] = metrics.Metric{Value: f(0.3), Num: i(12), Den: i(40), Status: metrics.StatusOK, Extra: y.Metrics["memory.yield"].Extra, Series: y.Metrics["memory.yield"].Series}
-	wantLines(t, "yield", viewText(y, false),
+	wantLines(t, "yield", viewText(noColor, y, false),
 		"week of 2026-09-21: 12 of 40 (30 %, 18 to 45 %), 52,000 tokens, 4,333 tokens per useful memory",
 		"week of 2026-09-28: 3 of 15, too few for a share",
 		"week of 2026-10-05: not complete yet",
@@ -827,7 +828,7 @@ func TestStatsBlockTextShapes(t *testing.T) {
 		"hops": []metrics.Hop{{Name: "last_to_sent", P50: ms(0.5), N: 31}, {Name: "sent_to_extracted", P50: ms(7), P95: ms(95), N: 120},
 			{Name: "extracted_to_recalled", P50: ms(60 * 30), P95: ms(60 * 24 * 3), N: 20}, {Name: "whole_way", P50: ms(125), N: 20}},
 	}})
-	wantLines(t, "time to recall", viewText(ttr, false),
+	wantLines(t, "time to recall", viewText(noColor, ttr, false),
 		"session ended 40 → sent 31 → turned into memories 28 → shown again 20",
 		"not sent 9, never turned into memories 2, still on the server 1, not shown again 8, sent before this was recorded 3",
 		"last turn to sent: typical under 1 min (31 sessions)",
@@ -838,7 +839,7 @@ func TestStatsBlockTextShapes(t *testing.T) {
 
 	s := result("system", "secrets.suspects", metrics.Metric{Value: f(2), Status: metrics.StatusWatch, Tags: []string{"old_scan"},
 		Extra: map[string]any{"age_days": int64(45), "pages": int64(3)}})
-	wantLines(t, "old scan", viewText(s, false), "Possible secrets in memory 2 (watch, the last scan is more than 30 days old)")
+	wantLines(t, "old scan", viewText(noColor, s, false), "Possible secrets in memory 2 (watch, the last scan is more than 30 days old)")
 
 	// where a memory came from, in each state
 	for state, want := range map[string]string{
@@ -853,7 +854,7 @@ func TestStatsBlockTextShapes(t *testing.T) {
 		if state != metrics.OriginOtherPC {
 			o.Created = nil
 		}
-		wantLines(t, "origin "+state, viewText(m, false), want)
+		wantLines(t, "origin "+state, viewText(noColor, m, false), want)
 	}
 }
 
@@ -995,7 +996,7 @@ func TestViewTextMergedLines(t *testing.T) {
 	t.Run("speed is a range", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(2000), Den: i64(1468), Status: metrics.StatusOK, Tags: []string{"approximate"},
 			Extra: map[string]any{"range_ms": &[2]*int64{i64(1000), i64(2000)}, "p50_range_ms": &[2]*int64{i64(250), i64(500)}, "p50": 420.0, "p95": 1900.0}}
-		text := viewText(result("cost", "recall.latency", m), false)
+		text := viewText(noColor, result("cost", "recall.latency", m), false)
 		wantLines(t, "speed", text, "Time memory adds to a prompt 1.0–2.0 s (approximate, n=1,468, ok)",
 			"all PCs: typical 250–500 ms", "this PC alone: typical 420 ms, slowest 1 in 20 1.9 s")
 	})
@@ -1007,7 +1008,7 @@ func TestViewTextMergedLines(t *testing.T) {
 		}{{0, i64(50), "0–50 ms"}, {500, i64(1000), "500 ms–1.0 s"}, {2500, i64(5000), "2.5–5.0 s"}, {5000, nil, "over 5.0 s"}} {
 			m := metrics.Metric{Value: ptr(5000), Den: i64(200), Status: metrics.StatusBad, Tags: []string{"approximate"},
 				Extra: map[string]any{"range_ms": &[2]*int64{i64(c.lo), c.hi}}}
-			if l := lineOf(t, viewText(result("cost", "recall.latency", m), false), "Time memory adds to a prompt"); !strings.Contains(l, " "+c.want+" ") {
+			if l := lineOf(t, viewText(noColor, result("cost", "recall.latency", m), false), "Time memory adds to a prompt"); !strings.Contains(l, " "+c.want+" ") {
 				t.Errorf("%s: line %q", c.want, l)
 			}
 		}
@@ -1015,14 +1016,14 @@ func TestViewTextMergedLines(t *testing.T) {
 	t.Run("context is an average", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(2300), Num: i64(715300), Den: i64(311), Status: metrics.StatusOK, Tags: []string{"status_this_pc", "average"},
 			Extra: map[string]any{"p50": 2000.0, "p95": 5000.0, "average": 2300.0}}
-		text := viewText(result("cost", "context.per_session", m), false)
+		text := viewText(noColor, result("cost", "context.per_session", m), false)
 		wantLines(t, "context", text, "Context added per session 2,300 chars on average (n=311 sessions, status on this PC: ok)",
 			"this PC alone: typical 2,000 chars, high 5,000 chars")
 	})
 	t.Run("context average shows although this PC's status is too few", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(20308), Num: i64(9768347), Den: i64(481), Status: metrics.StatusTooFew, Tags: []string{"status_this_pc", "average"},
 			Extra: map[string]any{"average": 20308.0}}
-		wantLines(t, "context", viewText(result("cost", "context.per_session", m), false),
+		wantLines(t, "context", viewText(noColor, result("cost", "context.per_session", m), false),
 			"Context added per session 20.3 k chars on average (n=481 sessions, status on this PC: too few)")
 	})
 	t.Run("the figures that stay this PC's say so beside merged ones", func(t *testing.T) {
@@ -1032,18 +1033,18 @@ func TestViewTextMergedLines(t *testing.T) {
 			def, _ := metrics.DefOf(id)
 			label := labelOf(def)
 			r.Scope.Machines, r.Scope.PCs = "all", &metrics.PCs{Sharing: true, Count: 3}
-			if l := lineOf(t, viewText(r, false), label); !strings.Contains(l, "(n=80, this PC, ok)") {
+			if l := lineOf(t, viewText(noColor, r, false), label); !strings.Contains(l, "(n=80, this PC, ok)") {
 				t.Errorf("%s: line %q does not say this PC", id, l)
 			}
 			r.Scope.Machines, r.Scope.PCs = "this", nil
-			if l := lineOf(t, viewText(r, false), label); strings.Contains(l, "this PC") {
+			if l := lineOf(t, viewText(noColor, r, false), label); strings.Contains(l, "this PC") {
 				t.Errorf("%s with this PC alone: %q", id, l)
 			}
 		}
 	})
 	t.Run("this PC alone keeps its lines", func(t *testing.T) {
 		m := metrics.Metric{Value: ptr(2300), Den: i64(311), Status: metrics.StatusOK, Extra: map[string]any{"p50": 2000.0, "p95": 5000.0}}
-		text := viewText(result("cost", "context.per_session", m), false)
+		text := viewText(noColor, result("cost", "context.per_session", m), false)
 		wantLines(t, "context", text, "Context added per session 2,300 chars (n=311, ok)", "typical 2,000 chars, high 5,000 chars")
 	})
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -146,7 +147,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 			if err != nil {
 				return viewError(err)
 			}
-			return e.emit("stats "+view, res, func() string { return viewText(res, f.dev) })
+			return e.emit("stats "+view, res, func() string { return viewText(termstyle.StyleOf(e.stdout), res, f.dev) })
 		},
 	}
 	switch view {

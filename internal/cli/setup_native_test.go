@@ -304,11 +304,11 @@ func TestNativeServerInstallRunsNativeCheckWithTheUsersHome(t *testing.T) {
 
 // Without a UI, the summary says so instead of naming one.
 func TestNativeInstallSummaryHasNoUI(t *testing.T) {
-	docker := installSummary(installResult{URL: "http://127.0.0.1:8888", UI: "http://127.0.0.1:9999", Version: "1.1.0"})
+	docker := installSummary(noColor, installResult{URL: "http://127.0.0.1:8888", UI: "http://127.0.0.1:9999", Version: "1.1.0"})
 	if !strings.Contains(docker, "(UI http://127.0.0.1:9999)") {
 		t.Errorf("docker summary %q", docker)
 	}
-	native := installSummary(installResult{URL: "http://127.0.0.1:8888", Version: "1.1.0", native: true})
+	native := installSummary(noColor, installResult{URL: "http://127.0.0.1:8888", Version: "1.1.0", native: true})
 	if want := "Hindsight 1.1.0 healthy at http://127.0.0.1:8888 (no web UI on the native runtime)\n"; !strings.HasSuffix(native, want) || strings.Contains(native, "(UI ") {
 		t.Errorf("native summary %q, want %q", native, want)
 	}

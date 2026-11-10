@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 type versionInfo struct {
@@ -54,7 +55,10 @@ func newVersionCmd(e *env) *cobra.Command {
 				v.SuperviseProto = supervise.Proto
 			}
 			return e.emit("version", v, func() string {
-				s := fmt.Sprintf("backsight %s (%s, %s) %s %s/%s\nHindsight %s\nThird-party licenses: backsight version --licenses\n", v.Version, v.Commit, v.Date, v.Go, v.OS, v.Arch, v.HindsightImage)
+				st := termstyle.StyleOf(e.stdout)
+				s := fmt.Sprintf("%s %s (%s, %s) %s %s/%s\n%s %s\nThird-party licenses: %s\n", st.Paint(termstyle.Brand, "backsight"), v.Version,
+					st.Paint(termstyle.Secondary, v.Commit), st.Paint(termstyle.Secondary, v.Date), v.Go, v.OS, v.Arch,
+					st.Paint(termstyle.Label, "Hindsight"), v.HindsightImage, st.Paint(termstyle.Command, "backsight version --licenses"))
 				for _, k := range v.SigningKeys {
 					if k.Role == "test" {
 						s += "test build: trusts the test signing key " + k.ID + "\n"

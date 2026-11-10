@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // Pacing seams (decision 0051); tests shorten them.
@@ -292,11 +293,12 @@ func (e *env) backfillProgress(ev backfillEvent) {
 		fmt.Fprintln(e.stderr, string(b))
 		return
 	}
+	st := termstyle.StyleOf(e.stderr)
 	if ev.Step == "session" {
-		fmt.Fprintf(e.stderr, "%d/%d  %s  %s  spent %.4f %s (%d tokens)\n", ev.Done, ev.Total, ev.Status, ev.Session, ev.Spent, ev.Currency, ev.Tokens)
+		fmt.Fprintf(e.stderr, "%d/%d  %s  %s  spent %.4f %s (%d tokens)\n", ev.Done, ev.Total, statusWord(st, ev.Status), ev.Session, ev.Spent, ev.Currency, ev.Tokens)
 		return
 	}
-	fmt.Fprintf(e.stderr, "%d/%d  waiting  %s\n", ev.Done, ev.Total, ev.Detail)
+	fmt.Fprintf(e.stderr, "%d/%d  %s  %s\n", ev.Done, ev.Total, statusWord(st, "waiting"), ev.Detail)
 }
 
 // runBackfill sends the queued sessions, one at a time, measuring the

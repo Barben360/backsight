@@ -29,6 +29,7 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/target"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // Seams replaced by tests.
@@ -224,8 +225,9 @@ type installResult struct {
 // noUI is how a native install's summaries name the UI it has not.
 const noUI = "no web UI on the native runtime"
 
-func stepLine(s step) string {
-	line := fmt.Sprintf("%-8s %s", s.Status, s.Name)
+// stepLine is one streamed step; st colors its status word.
+func stepLine(st termstyle.Style, s step) string {
+	line := statusCell(st, s.Status, 8) + " " + s.Name
 	if s.Detail != "" {
 		line += ": " + s.Detail
 	}
@@ -233,10 +235,10 @@ func stepLine(s step) string {
 }
 
 // installSummary is what text mode prints after the streamed steps.
-func installSummary(r installResult) string {
+func installSummary(st termstyle.Style, r installResult) string {
 	var b strings.Builder
 	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
+		fmt.Fprintf(&b, "%s  %s\n", st.Paint(termstyle.Warn, "warning"), w)
 	}
 	ui := "UI " + r.UI
 	if r.native {
@@ -357,7 +359,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				if len(res.Steps) == 0 {
 					return err
 				}
-				return e.report("server install", res, func() string { return sshInstallText(res) }, err)
+				return e.report("server install", res, func() string { return sshInstallText(termstyle.StyleOf(e.stdout), res) }, err)
 			}
 			for _, fl := range sshFlags {
 				if cmd.Flags().Changed(fl) {
@@ -374,7 +376,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				st := step{name, status, detail}
 				res.Steps = append(res.Steps, st)
 				if !e.json {
-					fmt.Fprint(e.stdout, stepLine(st))
+					fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), st))
 				}
 			}
 
@@ -445,7 +447,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				for _, s := range []string{"render", "pull", "start", "health", "bank", "server-id", "provider"} {
 					add(s, "planned", "")
 				}
-				return e.emit("server install", res, func() string { return installSummary(res) })
+				return e.emit("server install", res, func() string { return installSummary(termstyle.StyleOf(e.stdout), res) })
 			}
 
 			// One install, render or start at a time.
@@ -577,7 +579,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			if !res.native {
 				res.UI = uiURL(cfg)
 			}
-			return e.emit("server install", res, func() string { return installSummary(res) })
+			return e.emit("server install", res, func() string { return installSummary(termstyle.StyleOf(e.stdout), res) })
 		},
 	}
 	cmd.Flags().IntVar(&f.apiPort, "api-port", 8888, "API port published on the host")
