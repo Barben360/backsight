@@ -32,6 +32,7 @@ import (
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/shellword"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 type uninstallFlags struct {
@@ -77,7 +78,7 @@ func newUninstallCmd(e *env) *cobra.Command {
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			res, err := runUninstall(cmd.Context(), e, f)
-			return e.report("uninstall", res, func() string { return uninstallText(res) }, err)
+			return e.report("uninstall", res, func() string { return uninstallText(termstyle.StyleOf(e.stdout), res) }, err)
 		},
 	}
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list what would be removed and kept, changing nothing")
@@ -1395,7 +1396,7 @@ func retiredRuns(d paths.Dirs, rec *setup.Record) int {
 	return n
 }
 
-func uninstallText(r uninstallResult) string {
+func uninstallText(st termstyle.Style, r uninstallResult) string {
 	var b strings.Builder
 	for _, a := range r.Steps {
 		fmt.Fprintf(&b, "%-8s %s", a.Status, a.Name)

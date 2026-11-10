@@ -92,8 +92,9 @@ func TestTerminalIsTheWritersDescriptor(t *testing.T) {
 		t.Errorf("stderr level %v, want None", got)
 	}
 	_, plain, _ := run(t, "version")
-	if got := fileText(t, f); got != plain {
-		t.Errorf("output changed at a terminal:\n%q\nwant\n%q", got, plain)
+	// At the terminal the text is colored (phase 3), and only colored.
+	if got := fileText(t, f); got == plain || termstyle.Strip(got) != plain {
+		t.Errorf("at a terminal, got:\n%q\nwant the colored form of\n%q", got, plain)
 	}
 }
 

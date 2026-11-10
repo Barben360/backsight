@@ -37,6 +37,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 const setupResume = "backsight setup --resume"
@@ -115,7 +116,7 @@ func newSetupCmd(e *env) *cobra.Command {
 				return &output.Error{Code: output.Usage, Message: "--force goes with --undo"}
 			}
 			res, err := runSetup(cmd.Context(), e, f)
-			return e.report("setup", res, func() string { return setupText(res) }, err)
+			return e.report("setup", res, func() string { return setupText(termstyle.StyleOf(e.stdout), res) }, err)
 		},
 	}
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: id=value (repeatable)")
@@ -366,7 +367,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		return res, ne
 	}
 	if interactive && res.Answers["consent"] == "" {
-		fmt.Fprint(e.stdout, setupPlanText(s.planSteps(res.Answers)))
+		fmt.Fprint(e.stdout, setupPlanText(termstyle.StyleOf(e.stdout), s.planSteps(res.Answers)))
 		fmt.Fprint(e.stdout, reuseHint(qs))
 		if !confirm(e, "Go ahead with this plan? [y/N] ") {
 			res.Answers["consent"] = "no"
@@ -1542,7 +1543,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 			}
 			// Once: the step line says what failed and how to fix it, then
 			// how to go on.
-			fmt.Fprint(s.e.stdout, stepLine(step2line(rec.Steps[len(rec.Steps)-1])))
+			fmt.Fprint(s.e.stdout, stepLine(termstyle.StyleOf(s.e.stdout), step2line(rec.Steps[len(rec.Steps)-1])))
 			var oe *output.Error
 			if errors.As(failure, &oe) && oe.Resume != "" {
 				fmt.Fprintf(s.e.stdout, "then run: %s\n", oe.Resume)
@@ -1554,7 +1555,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		rec.Set(step)
 		s.saveRecord(rec)
 		if !s.e.json {
-			fmt.Fprint(s.e.stdout, stepLine(step2line(step)))
+			fmt.Fprint(s.e.stdout, stepLine(termstyle.StyleOf(s.e.stdout), step2line(step)))
 		}
 	}
 	s.progress("summary", 100, 0, "")
@@ -1832,7 +1833,7 @@ func reuseHint(qs []setup.Question) string {
 	return "\nanswers from your last run: " + strings.Join(ids, ", ") + "\nto change them: backsight setup --reconfigure (asks again), or --answer id=value\n"
 }
 
-func setupPlanText(steps []setup.Step) string {
+func setupPlanText(st termstyle.Style, steps []setup.Step) string {
 	var b strings.Builder
 	b.WriteString("\nsetup will:\n")
 	for _, s := range steps {
@@ -1841,7 +1842,7 @@ func setupPlanText(steps []setup.Step) string {
 	return b.String()
 }
 
-func setupText(r setupResult) string {
+func setupText(st termstyle.Style, r setupResult) string {
 	var b strings.Builder
 	switch {
 	case r.listing:
@@ -1862,7 +1863,7 @@ func setupText(r setupResult) string {
 				fmt.Fprintf(&b, "%19sfix: %s\n", "", c.Fix)
 			}
 		}
-		b.WriteString(setupPlanText(r.Steps))
+		b.WriteString(setupPlanText(st, r.Steps))
 		b.WriteString(reuseHint(r.Questions))
 		return b.String()
 	}

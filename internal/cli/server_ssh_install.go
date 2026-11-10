@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/release"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
+	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/token"
 )
 
@@ -361,15 +362,15 @@ type sshInstallResult struct {
 
 // sshInstallText is what text mode prints at the end: the steps not yet
 // printed, then connect's own summary, the warnings and what to do next.
-func sshInstallText(r sshInstallResult) string {
+func sshInstallText(st termstyle.Style, r sshInstallResult) string {
 	var b strings.Builder
 	if r.shown < len(r.Steps) {
 		for _, s := range r.Steps[r.shown:] {
-			b.WriteString(stepLine(s))
+			b.WriteString(stepLine(st, s))
 		}
 	}
 	if r.Connect != nil {
-		b.WriteString(connectText(*r.Connect))
+		b.WriteString(connectText(st, *r.Connect))
 	} else if r.Declined {
 		b.WriteString("nothing changed\n")
 	}
@@ -675,7 +676,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	}
 	switch consent := answers["consent"]; {
 	case consent == "" && interactive:
-		fmt.Fprint(e.stdout, sshInstallText(res))
+		fmt.Fprint(e.stdout, sshInstallText(termstyle.StyleOf(e.stdout), res))
 		res.shown, res.warned = len(res.Steps), len(res.Warnings)
 		if askAck && !acked() {
 			return res, nil
@@ -733,7 +734,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 			return
 		}
 		for ; res.shown < len(res.Steps) && res.Steps[res.shown].Status != "planned"; res.shown++ {
-			fmt.Fprint(e.stdout, stepLine(res.Steps[res.shown]))
+			fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), res.Steps[res.shown]))
 		}
 	}
 	progress := func(name, status, detail string) {

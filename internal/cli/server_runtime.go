@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // server runtime switch moves an install's memory between the docker and
@@ -374,7 +375,7 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 		}
 		fmt.Fprintln(e.stdout)
 		for _, s := range plan {
-			fmt.Fprint(e.stdout, stepLine(step{s[0], "planned", s[1]}))
+			fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), step{s[0], "planned", s[1]}))
 		}
 		if !confirm(e, question) {
 			res.Declined = true
