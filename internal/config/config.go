@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -30,7 +31,7 @@ const SchemaVersion = 1
 type Config struct {
 	SchemaVersion int        `toml:"schema_version" json:"schema_version"`
 	Server        Server     `toml:"server" json:"server"`
-	Client        Client     `toml:"client" json:"client"`
+	Clients       Clients    `toml:"clients" json:"clients"`
 	Projects      Projects   `toml:"projects" json:"projects"`
 	Privacy       Privacy    `toml:"privacy" json:"privacy"`
 	Components    Components `toml:"components" json:"components"`
@@ -44,6 +45,10 @@ type Config struct {
 	Update        Update     `toml:"update" json:"update"`
 	Feedback      Feedback   `toml:"feedback" json:"feedback"`
 	Terminal      Terminal   `toml:"terminal" json:"terminal"`
+
+	// legacyClient: Clients.ClaudeCode.RetentionDays was read from the
+	// [client] table of an older file, so errors name that key.
+	legacyClient bool
 }
 
 // Terminal: how backsight looks at an interactive terminal (decision
@@ -57,8 +62,9 @@ type Server struct {
 	URL  string `toml:"url" json:"url"`
 	Bank string `toml:"bank" json:"bank"`
 	Mode string `toml:"mode" json:"mode"`
-	// Role: "both" (this PC runs Claude Code and, in local mode, the server)
-	// or "server" (a host that only serves the memory; no Claude Code).
+	// Role: "both" (this PC runs a coding tool, Claude Code or Codex, and,
+	// in local mode, the server) or "server" (a host that only serves the
+	// memory; no coding tool).
 	Role       string `toml:"role" json:"role"`
 	UIPort     int    `toml:"ui_port" json:"ui_port"`
 	ComposeDir string `toml:"compose_dir" json:"compose_dir"`
@@ -90,12 +96,61 @@ const (
 	RoleServer = "server"
 )
 
-// ServerOnly reports a host that only serves the memory (no Claude Code).
+// ServerOnly reports a host that only serves the memory (no coding tool).
 func (c Config) ServerOnly() bool { return c.Server.Role == RoleServer }
 
-// Client is what backsight keeps in Claude Code's own settings (0052).
-type Client struct {
+// Clients: one table per coding tool (harness) backsight wires, for what
+// it keeps in that tool's own settings (issue 277). Claude Code's table
+// was [client] before: Parse still reads that name, and the client
+// migration 0100-clients-table moves it.
+type Clients struct {
+	ClaudeCode ClaudeCodeClient `toml:"claude_code" json:"claude_code"`
+	// Codex has no key yet: an empty [clients.codex] table parses.
+	Codex CodexClient `toml:"codex" json:"codex"`
+}
+
+// ClaudeCodeClient is what backsight keeps in Claude Code's own settings
+// (0052).
+type ClaudeCodeClient struct {
 	RetentionDays int `toml:"retention_days" json:"retention_days"` // cleanupPeriodDays floor; 0 = not managed
+}
+
+// CodexClient is what backsight keeps in Codex's own settings: nothing
+// yet.
+type CodexClient struct{}
+
+// Key paths of Claude Code's retention floor: where it lives, and where a
+// file written before the per-tool tables keeps it.
+const (
+	RetentionKey       = "clients.claude_code.retention_days"
+	LegacyRetentionKey = "client.retention_days"
+)
+
+// legacyClient is the [client] table of a file written before the
+// per-tool tables: Claude Code's, read as [clients.claude_code].
+type legacyClient struct {
+	RetentionDays *int `toml:"retention_days"`
+}
+
+// fileConfig is config.toml as decoded: Config and the older [client].
+type fileConfig struct {
+	Config
+	Client *legacyClient `toml:"client"`
+}
+
+// retentionKey names Claude Code's retention floor as this file sets it.
+func (c Config) retentionKey() string {
+	if c.legacyClient {
+		return LegacyRetentionKey
+	}
+	return RetentionKey
+}
+
+// SameValues reports whether a and b hold the same settings, whichever
+// table name each read Claude Code's from.
+func SameValues(a, b Config) bool {
+	a.legacyClient, b.legacyClient = false, false
+	return reflect.DeepEqual(a, b)
 }
 
 type Projects struct {
@@ -343,10 +398,12 @@ func Load(path string, d paths.Dirs, home string) (Config, error) {
 
 // Parse is Load on bytes already read; path names them in errors.
 func Parse(raw []byte, path string, d paths.Dirs, home string) (Config, error) {
-	cfg := Default(d, home)
+	fc := fileConfig{Config: Default(d, home)}
 	dec := toml.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	err := dec.Decode(&fc)
+	cfg := fc.Config
+	if err != nil {
 		var strict *toml.StrictMissingError
 		if errors.As(err, &strict) {
 			var keys []string
@@ -366,6 +423,24 @@ func Parse(raw []byte, path string, d paths.Dirs, home string) (Config, error) {
 			return cfg, fmt.Errorf("%s:%d:%d: %s%s", path, row, col, key, de.Error())
 		}
 		return cfg, fmt.Errorf("%s: %w", path, err)
+	}
+	if fc.Client != nil && fc.Client.RetentionDays != nil {
+		legacy := *fc.Client.RetentionDays
+		var probe struct {
+			Clients struct {
+				ClaudeCode struct {
+					RetentionDays *int `toml:"retention_days"`
+				} `toml:"claude_code"`
+			} `toml:"clients"`
+		}
+		_ = toml.Unmarshal(raw, &probe) // decoded strictly above
+		switch cur := probe.Clients.ClaudeCode.RetentionDays; {
+		case cur == nil:
+			cfg.Clients.ClaudeCode.RetentionDays, cfg.legacyClient = legacy, true
+		case *cur != legacy:
+			return cfg, fmt.Errorf("%s: %s = %d and %s = %d disagree: keep %s only ([client] is its older name)",
+				path, LegacyRetentionKey, legacy, RetentionKey, *cur, RetentionKey)
+		}
 	}
 	if cfg.SchemaVersion < 1 {
 		return cfg, fmt.Errorf("%s: schema_version must be ≥ 1, got %d", path, cfg.SchemaVersion)
@@ -526,7 +601,7 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	if d, err := time.ParseDuration(c.Retain.AppendMaxWait); err != nil || d < 0 {
 		bad("retain.append_max_wait", "%q is not a duration ≥ 0, such as \"6h\" or \"90m\"", c.Retain.AppendMaxWait)
 	}
-	atLeast("client.retention_days", c.Client.RetentionDays, 0)
+	atLeast(c.retentionKey(), c.Clients.ClaudeCode.RetentionDays, 0)
 	atLeast("backup.keep_daily", c.Backup.KeepDaily, 1) // 0 would prune the backup just written
 	atLeast("backup.keep_weekly", c.Backup.KeepWeekly, 0)
 	// A relative directory would follow whatever directory a command runs

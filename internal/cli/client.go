@@ -74,7 +74,7 @@ func (c clientEnv) ownedEdits() (edits []claudecfg.Edit, notes []string, err err
 	if st, err := state.Load(c.dirs.StateFile()); err == nil && st.PluginVersion != "" {
 		edits = append(edits, claudecfg.Edit{Target: c.loc.Settings, Apply: permissionRule})
 	}
-	if days := c.cfg.Client.RetentionDays; days > 0 {
+	if days := c.cfg.Clients.ClaudeCode.RetentionDays; days > 0 {
 		ret, err := claudecode.ReadRetention(c.loc, c.managed)
 		if err != nil {
 			return nil, nil, &output.Error{Code: output.Blocked, Message: err.Error() + ": fix the file by hand first, backsight never overwrites it"}

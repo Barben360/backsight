@@ -421,7 +421,7 @@ func orDefault(v, def string) string {
 
 // configKey names the config.toml key behind an answer.
 var configKey = map[string]string{"provider": "llm.provider", "model": "llm.model", "base_url": "llm.base_url",
-	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role", "runtime": "server.runtime"}
+	"retention": config.RetentionKey, "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role", "runtime": "server.runtime"}
 
 // configAnswers are the answers an existing config already gives.
 func configAnswers(c *config.Config) map[string]string {
@@ -433,8 +433,8 @@ func configAnswers(c *config.Config) map[string]string {
 	if c.LLM.Provider != "deepseek" && c.LLM.Provider != "claude-code" {
 		out["base_url"] = c.LLM.BaseURL
 	}
-	if c.Client.RetentionDays > 0 { // 0: not managed yet, still a question
-		out["retention"] = strconv.Itoa(c.Client.RetentionDays)
+	if c.Clients.ClaudeCode.RetentionDays > 0 { // 0: not managed yet, still a question
+		out["retention"] = strconv.Itoa(c.Clients.ClaudeCode.RetentionDays)
 	}
 	out["backups"] = map[bool]string{true: "on", false: "off"}[c.Backup.Enabled]
 	if p, err := c.APIPort(); err == nil {
