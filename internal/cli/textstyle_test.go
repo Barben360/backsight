@@ -254,3 +254,42 @@ func TestUninstallTextColored(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorPrefixRed(t *testing.T) {
+	_, _ = colorRun(t, "stats", "--until", "2026-01-01") // strips to the plain run on both streams
+	forceColor(t)
+	var out, errb bytes.Buffer
+	if code := Execute([]string{"stats", "--until", "2026-01-01"}, &out, &errb); code != output.Usage {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if want := "\x1b[31mbacksight:\x1b[0m --until needs --since\n"; errb.String() != want {
+		t.Errorf("stderr = %q, want %q", errb.String(), want)
+	}
+}
+
+func TestPlainCommandErrorPrefixStaysPlain(t *testing.T) {
+	forceColor(t)
+	var out, errb bytes.Buffer
+	if code := Execute([]string{"secret", "set"}, &out, &errb); code != output.Usage {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.HasPrefix(errb.String(), "backsight: ") || strings.Contains(out.String()+errb.String(), "\x1b") {
+		t.Errorf("a plain command's error is colored: %q", errb.String())
+	}
+}
+
+func TestBackfillProgressColored(t *testing.T) {
+	var colored, plain bytes.Buffer
+	ce := &env{stderr: termstyle.NewWriter(&colored, func() termstyle.Level { return termstyle.Basic })}
+	pe := &env{stderr: &plain}
+	for _, ev := range []backfillEvent{{Step: "session", Status: "done", Done: 1, Total: 2, Session: "s1"}, {Step: "wait", Done: 1, Total: 2, Detail: "the server"}} {
+		ce.backfillProgress(ev)
+		pe.backfillProgress(ev)
+	}
+	stripsTo(t, "backfill progress", colored.String(), plain.String())
+	for _, want := range []string{"\x1b[32mdone\x1b[0m", "\x1b[33mwaiting\x1b[0m"} {
+		if !strings.Contains(colored.String(), want) {
+			t.Errorf("backfill progress lacks %q: %q", want, colored.String())
+		}
+	}
+}

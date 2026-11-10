@@ -76,7 +76,7 @@ func (e *env) report(command string, data any, text func() string, cmdErr error)
 		}
 		var shown shownError
 		if cmdErr != nil && !errors.As(cmdErr, &shown) { // the reason, which the text may not carry
-			_, _ = fmt.Fprintf(e.stderr, "backsight: %v\n", cmdErr)
+			_, _ = io.WriteString(e.stderr, errorLine(e.stderr, cmdErr))
 		}
 	}
 	if cmdErr != nil {
@@ -306,7 +306,7 @@ func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	if e.json {
 		_ = output.WriteJSON(e.stdout, strings.TrimPrefix(cmd.CommandPath(), "backsight "), nil, err)
 	} else {
-		_, _ = fmt.Fprintf(e.stderr, "backsight: %v\n", err)
+		_, _ = io.WriteString(e.stderr, errorLine(e.stderr, err))
 	}
 	return code, e
 }

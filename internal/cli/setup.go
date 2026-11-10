@@ -1567,7 +1567,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	s.progress("summary", 100, 0, "")
 	rec.Finished = true
 	if err := rec.Save(s.dirs.SetupFile()); err != nil {
-		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+		_, _ = io.WriteString(s.e.stderr, errorLine(s.e.stderr, "setup.json not saved: "+err.Error()))
 	}
 	res.Steps = rec.Steps
 	res.RestartRequired = restart
@@ -1658,13 +1658,13 @@ func stepFailure(name string, err error, changed bool) error {
 // before the step that acts on it.
 func (s *setupEnv) persist(r *setup.Record) {
 	if err := r.Save(s.dirs.SetupFile()); err != nil {
-		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+		_, _ = io.WriteString(s.e.stderr, errorLine(s.e.stderr, "setup.json not saved: "+err.Error()))
 	}
 }
 
 func (s *setupEnv) saveRecord(r *setup.Record) {
 	if err := r.Save(s.dirs.SetupFile()); err != nil {
-		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+		_, _ = io.WriteString(s.e.stderr, errorLine(s.e.stderr, "setup.json not saved: "+err.Error()))
 	}
 	last := r.Steps[len(r.Steps)-1]
 	line, _ := json.Marshal(map[string]any{"ts": now().UTC().Format(time.RFC3339Nano), "command": "setup", "step": last.Name, "status": last.Status, "run": r.Run})

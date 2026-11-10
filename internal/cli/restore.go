@@ -1432,7 +1432,7 @@ func resumePurge(ctx context.Context, e *env, cfg config.Config, sec config.Secr
 			fmt.Fprintln(e.stderr, string(b))
 			return
 		}
-		fmt.Fprintln(e.stderr, "waiting  "+detail)
+		fmt.Fprintln(e.stderr, statusWord(termstyle.StyleOf(e.stderr), "waiting")+"  "+detail)
 	}
 	_, tcl, err := startOnTemporaryKey(ctx, cfg, sec, rt)
 	if err != nil {

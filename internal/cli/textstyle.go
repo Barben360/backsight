@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"fmt"
+	"io"
+
 	"github.com/Barben360/backsight/internal/termstyle"
 )
 
@@ -32,4 +35,13 @@ func statusCell(st termstyle.Style, word string, width int) string {
 		return termstyle.Style{}.Cell(r, word, width)
 	}
 	return st.Cell(r, word, width)
+}
+
+// statusWord is word painted by its role, unpadded.
+func statusWord(st termstyle.Style, word string) string { return statusCell(st, word, 0) }
+
+// errorLine is the "backsight: <error>" line of stream w, its prefix red
+// when w's color is on.
+func errorLine(w io.Writer, err any) string {
+	return termstyle.StyleOf(w).Paint(termstyle.Fail, "backsight:") + " " + fmt.Sprint(err) + "\n"
 }
