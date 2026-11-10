@@ -9,21 +9,27 @@ import (
 var (
 	mu       sync.RWMutex
 	adapters = []Adapter{Claude{}}
+	// known are the adapters ByID finds that are not on yet: a command
+	// line naming one (`hook --harness <id>`, `mcp --harness <id>`)
+	// reaches it, but nothing iterates it (All) and nothing defaults to
+	// it. A harness moves from here to adapters once its blocks land
+	// (Codex's doc says when).
+	known = []Adapter{Codex{}}
 )
 
-// All are the registered adapters, Claude Code's first, then in the
-// order they were registered.
+// All are the adapters that are on, Claude Code's first, then in the
+// order they were registered: those whose conversations backsight reads.
 func All() []Adapter {
 	mu.RLock()
 	defer mu.RUnlock()
 	return slices.Clone(adapters)
 }
 
-// ByID is the adapter registered under id.
+// ByID is the adapter registered under id, one not on yet included.
 func ByID(id string) (Adapter, bool) {
 	mu.RLock()
 	defer mu.RUnlock()
-	for _, a := range adapters {
+	for _, a := range slices.Concat(adapters, known) {
 		if a.ID() == id {
 			return a, true
 		}
@@ -61,7 +67,7 @@ func TagOf(id string) string {
 func Register(a Adapter) (unregister func()) {
 	mu.Lock()
 	defer mu.Unlock()
-	for _, b := range adapters {
+	for _, b := range slices.Concat(adapters, known) {
 		if b.ID() == a.ID() {
 			panic("harness: " + a.ID() + " registered twice")
 		}
