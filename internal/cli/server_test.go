@@ -327,6 +327,7 @@ var (
 	recallSourceFacts  string
 	recallAskedSources int
 	recallQueries      []string
+	recallMaxTokens    []int // the max_tokens of each recall request
 	// recallByQuery answers the recalls of the queries it names, in place
 	// of recallAnswer.
 	recallByQuery      map[string]string
@@ -409,7 +410,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recallFailTag = ""
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	memoryStatus, memoryHistory = map[string]int{}, map[string]string{}
-	recallQueries, recallSourceFacts, recallAskedSources, recallByQuery = nil, "", 0, nil
+	recallQueries, recallSourceFacts, recallAskedSources, recallByQuery, recallMaxTokens = nil, "", 0, nil, nil
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
@@ -572,9 +573,10 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/recall"):
 			var body struct {
-				Query   string         `json:"query"`
-				Tags    []string       `json:"tags"`
-				Include map[string]any `json:"include"`
+				Query     string         `json:"query"`
+				Tags      []string       `json:"tags"`
+				Include   map[string]any `json:"include"`
+				MaxTokens int            `json:"max_tokens"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if _, ok := body.Include["source_facts"]; ok {
@@ -582,6 +584,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			recallTags = append(recallTags, strings.Join(body.Tags, ","))
 			recallQueries = append(recallQueries, body.Query)
+			recallMaxTokens = append(recallMaxTokens, body.MaxTokens)
 			if recallFailTag != "" && slices.Contains(body.Tags, recallFailTag) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
