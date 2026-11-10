@@ -1,0 +1,1 @@
+  Command   /home/tester/backsight/data/bin/current

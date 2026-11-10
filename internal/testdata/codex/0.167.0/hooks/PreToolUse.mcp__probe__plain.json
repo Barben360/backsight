@@ -1,0 +1,12 @@
+{
+  "session_id": "01a1c72c-0aa8-76d2-89c5-735c786aba2f",
+  "turn_id": "01a1c72c-0adc-7e91-baa7-0bf753dc2eb2",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-35-14-01a1c72c-0aa8-76d2-89c5-735c786aba2f.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PreToolUse",
+  "model": "fake-model",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "mcp__probe__plain",
+  "tool_input": {},
+  "tool_use_id": "call_fake_10_2"
+}

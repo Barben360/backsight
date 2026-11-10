@@ -71,7 +71,7 @@ func TestScratchPortsAreBelowTheEphemeralRangeAndApart(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: POSIX script")
 	call := regexp.MustCompile(`slot_port (\d+) "\$\{1:-\}"`)
 	owner := map[int]string{}
-	for _, script := range []string{"sandbox.sh", "fresh-install.sh", "restore-proof.sh", "agent-install.sh", "reattribute-proof.sh", "purge-guard-proof.sh", "m6-chain.sh", "native-chain.sh"} {
+	for _, script := range []string{"sandbox.sh", "fresh-install.sh", "restore-proof.sh", "agent-install.sh", "reattribute-proof.sh", "purge-guard-proof.sh", "m6-chain.sh", "native-chain.sh", "codex/run.sh"} {
 		src, err := os.ReadFile(script)
 		if err != nil {
 			t.Fatal(err)

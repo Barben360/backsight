@@ -1,0 +1,18 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-ae14-7df1-8691-7e05982428c2",
+  "agent_id": "01a1c72b-ae08-75b3-a4db-8a06f93c0c83",
+  "agent_type": "default",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-51-01a1c72b-ae08-75b3-a4db-8a06f93c0c83.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PreToolUse",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "tool_name": "mcp__memory__memory_search",
+  "tool_input": {
+    "queries": [
+      "subagent check"
+    ]
+  },
+  "tool_use_id": "call_fake_5_0"
+}

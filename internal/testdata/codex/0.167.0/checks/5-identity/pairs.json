@@ -1,0 +1,34 @@
+[
+  {
+    "case": "identity forked",
+    "callId": "call_fake_21_0",
+    "meta_sessionId": "01a1c77e-2c47-7fa2-a65e-21473c782c8e",
+    "meta_threadId": "01a1c77e-2c47-7fa2-a65e-21473c782c8e",
+    "hook_session_id": "01a1c77e-2c47-7fa2-a65e-21473c782c8e",
+    "equal": true
+  },
+  {
+    "case": "identity resumed",
+    "callId": "call_fake_14_0",
+    "meta_sessionId": "01a1c77d-b596-7b31-aedc-28e84b00d2e7",
+    "meta_threadId": "01a1c77d-b596-7b31-aedc-28e84b00d2e7",
+    "hook_session_id": "01a1c77d-b596-7b31-aedc-28e84b00d2e7",
+    "equal": true
+  },
+  {
+    "case": "identity after clear",
+    "callId": "call_fake_6_0",
+    "meta_sessionId": "01a1c77d-ed02-7273-b91a-d1dd0d2964b6",
+    "meta_threadId": "01a1c77d-ed02-7273-b91a-d1dd0d2964b6",
+    "hook_session_id": "01a1c77d-ed02-7273-b91a-d1dd0d2964b6",
+    "equal": true
+  },
+  {
+    "case": "identity first",
+    "callId": "call_fake_6_0",
+    "meta_sessionId": "01a1c77d-b596-7b31-aedc-28e84b00d2e7",
+    "meta_threadId": "01a1c77d-b596-7b31-aedc-28e84b00d2e7",
+    "hook_session_id": "01a1c77d-b596-7b31-aedc-28e84b00d2e7",
+    "equal": true
+  }
+]

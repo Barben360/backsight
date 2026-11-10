@@ -1,0 +1,3 @@
+hooks.state tables left for backsight: 18
+plugins/cache/backsight left: plugins/cache/backsight 
+.hook-trust files: 2

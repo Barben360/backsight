@@ -1,0 +1,2 @@
+Added marketplace `backsight` from /home/tester/backsight/data/marketplace.
+Installed marketplace root: /home/tester/backsight/data/marketplace

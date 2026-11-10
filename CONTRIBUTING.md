@@ -59,6 +59,10 @@ HOME=/tmp/bs-dev/home BACKSIGHT_HOME=/tmp/bs-dev/backsight ./bin/backsight docto
 
 Scripts that start a server (`scripts/sandbox.sh`, `scripts/fresh-install.sh` and the other proofs) take their Compose project and ports from `scripts/ports.sh`, below 32768 and away from the default ports 8888 and 9999. They use Hindsight's mock LLM, so they cost nothing, and remove their stack afterwards. Never give a scratch stack the Compose project name `backsight`: that is the real install's.
 
+## The Codex harness
+
+`scripts/codex/run.sh` runs a real Codex CLI (a pinned, checksum-verified release) against this tree inside a container, with a deterministic fake model and a scratch memory server: no model account, no cost, and nothing on your own `~/.codex` or backsight install, since `CODEX_HOME` and `BACKSIGHT_HOME` live in the container. By default it records what Codex produces (hook payloads, backsight's hook answers, MCP traffic, model requests, rollouts) as the fixtures in `internal/testdata/codex/<version>/`; `HARNESS_CMD=bash` gives a shell in the prepared container instead. Its README (`scripts/codex/README.md`) lists the pieces. Record again after a Codex upgrade and compare.
+
 ## The M6 VM bench
 
 `scripts/vm-bench.sh` proves on two libvirt VMs what several PCs sharing one memory need (decision 0073, block 4): `server install --ssh` to a fresh host, two clients on one server, a session never stored twice, a laptop offline, key rotation, restore and purge seen by both clients, and the prompt hook's latency at 0, 20 and 80 ms. It runs only by hand, when a change touches what clients share; never on CI, from a timer or a hook (it refuses when `CI` or `GITHUB_ACTIONS` is set). CI re-runs the dedup and rotation checks on every pull request that changes more than documentation with `scripts/m6-chain.sh` instead, client homes on the runner.

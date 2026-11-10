@@ -1,0 +1,20 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-ae14-7df1-8691-7e05982428c2",
+  "cwd": "/home/tester/work",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-51-01a1c72b-ae08-75b3-a4db-8a06f93c0c83.jsonl",
+  "model": "fake-model",
+  "agent_id": "01a1c72b-ae08-75b3-a4db-8a06f93c0c83",
+  "agent_type": "default",
+  "hook_event_name": "PostModelRequest",
+  "status": "completed",
+  "error": null,
+  "token_usage": {
+    "input_tokens": 12616,
+    "cached_input_tokens": 0,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 1,
+    "reasoning_output_tokens": 0,
+    "total_tokens": 12617
+  }
+}

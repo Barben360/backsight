@@ -1,0 +1,20 @@
+{
+  "session_id": "01a1c72c-1383-7292-a5ab-08e1117dbc2b",
+  "turn_id": "01a1c72c-13a1-7752-87e0-0d2f8de69c37",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-35-17-01a1c72c-1383-7292-a5ab-08e1117dbc2b.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PostToolUse",
+  "model": "fake-model",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "mcp__probe__destructive",
+  "tool_input": {},
+  "tool_response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "ok destructive"
+      }
+    ]
+  },
+  "tool_use_id": "call_fake_12_3"
+}

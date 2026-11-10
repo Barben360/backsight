@@ -1,0 +1,9 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-b537-7ec3-bd5a-2187a548c8e7",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PreCompact",
+  "model": "fake-model",
+  "trigger": "manual"
+}
