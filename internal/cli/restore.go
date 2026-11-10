@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // epochTimeout bounds each call of the epoch write: a synchronous retain
@@ -93,7 +94,7 @@ func newRestoreCmd(e *env) *cobra.Command {
 				st := step{name, status, detail}
 				res.Steps = append(res.Steps, st)
 				if !e.json {
-					fmt.Fprint(e.stdout, stepLine(st))
+					fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), st))
 					return
 				}
 				// Progress lines on stderr, as setup streams them (decision 0064).
@@ -1431,7 +1432,7 @@ func resumePurge(ctx context.Context, e *env, cfg config.Config, sec config.Secr
 			fmt.Fprintln(e.stderr, string(b))
 			return
 		}
-		fmt.Fprintln(e.stderr, "waiting  "+detail)
+		fmt.Fprintln(e.stderr, statusWord(termstyle.StyleOf(e.stderr), "waiting")+"  "+detail)
 	}
 	_, tcl, err := startOnTemporaryKey(ctx, cfg, sec, rt)
 	if err != nil {

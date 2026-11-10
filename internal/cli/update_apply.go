@@ -38,6 +38,7 @@ import (
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // update apply (SPEC §11.7, decision 0067 block 2) is driven by the
@@ -250,7 +251,7 @@ func newUpdateApplyCmd(e *env) *cobra.Command {
 			res := updateApplyResult{Installed: buildinfo.Version, Plan: fl.plan, Steps: []step{}, Migrations: []string{}}
 			err := runUpdateApply(cmd.Context(), &res, fl, streamStep(e, "update apply", &res.Steps))
 			res.MS = int(time.Since(start).Milliseconds())
-			return e.report("update apply", res, func() string { return updateApplyText(res) }, err)
+			return e.report("update apply", res, func() string { return updateApplyText(termstyle.StyleOf(e.stdout), res) }, err)
 		},
 	}
 	cmd.Flags().BoolVar(&fl.plan, "plan", false, "download and verify into a temporary directory, list the steps, change nothing")
@@ -267,7 +268,7 @@ func streamStep(e *env, command string, steps *[]step) func(name, status, detail
 		st := step{name, status, detail}
 		*steps = append(*steps, st)
 		if !e.json {
-			fmt.Fprint(e.stdout, stepLine(st))
+			fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), st))
 			return
 		}
 		b, _ := json.Marshal(map[string]any{"event": "progress", "command": command, "step": name, "status": status, "detail": detail})
@@ -1696,13 +1697,13 @@ func (r *updateRollback) serverBack(ctx context.Context) error {
 	return err
 }
 
-func updateApplyText(r updateApplyResult) string {
+func updateApplyText(st termstyle.Style, r updateApplyResult) string {
 	var b strings.Builder
 	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
+		fmt.Fprintf(&b, "%s  %s\n", st.Paint(termstyle.Warn, "warning"), w)
 	}
 	if r.Plan && r.Target != "" {
-		fmt.Fprintf(&b, "\nplan only: nothing was changed (%s would replace %s)\n", r.Target, r.Installed)
+		fmt.Fprintf(&b, "\n%s: nothing was changed (%s would replace %s)\n", st.Paint(termstyle.Accent, "plan only"), st.Paint(termstyle.Accent, r.Target), r.Installed)
 	}
 	return b.String()
 }

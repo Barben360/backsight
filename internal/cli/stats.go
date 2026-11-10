@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/stats"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // extraction is the server's LLM use over the period (Hindsight's traces).
@@ -191,7 +192,7 @@ func newStatsCmd(e *env) *cobra.Command {
 			if parity {
 				res.Parity = stats.Parity(res.Report)
 			}
-			return e.emit("stats", res, func() string { return statsText(res) })
+			return e.emit("stats", res, func() string { return statsText(termstyle.StyleOf(e.stdout), res) })
 		},
 	}
 	addViewFlags(cmd, &f)
@@ -224,8 +225,9 @@ func reachOf(d paths.Dirs, home string, now time.Time) serverReach {
 	return s
 }
 
-// reachText is the Server line's text after its label.
-func reachText(s serverReach, now time.Time) string {
+// reachText is the Server line's text after its label, its state colored
+// by st: answering ok, silent warn, another server fail.
+func reachText(st termstyle.Style, s serverReach, now time.Time) string {
 	host := ""
 	if s.Host != "" {
 		host = s.Host + " "
@@ -237,17 +239,17 @@ func reachText(s serverReach, now time.Time) string {
 		if !s.HeldSince.IsZero() {
 			since = fmt.Sprintf(" since %s (%s)", s.HeldSince.Format(time.RFC3339), recall.Age(now.Sub(s.HeldSince)))
 		}
-		return fmt.Sprintf("a different server answers at %s (server %s, joined %s)%s: writes held; %s queued, %s not sent yet", at, s.OtherServer, s.JoinedID, since,
+		return fmt.Sprintf("%s %s (server %s, joined %s)%s: writes held; %s queued, %s not sent yet", st.Paint(termstyle.Fail, "a different server answers at"), at, s.OtherServer, s.JoinedID, since,
 			plural(s.NotesQueued, "note"), plural(s.SessionsWaiting, "session"))
 	case !s.FailingSince.IsZero():
 		recallState := "recall on"
 		if !s.BreakerOpenUntil.IsZero() {
 			recallState = "recall paused until " + s.BreakerOpenUntil.Format(time.RFC3339)
 		}
-		return fmt.Sprintf("%ssilent since %s (%s): %s; %s queued, %s not sent yet", host, s.FailingSince.Format(time.RFC3339),
+		return fmt.Sprintf("%s%s %s (%s): %s; %s queued, %s not sent yet", host, st.Paint(termstyle.Warn, "silent since"), s.FailingSince.Format(time.RFC3339),
 			recall.Age(now.Sub(s.FailingSince)), recallState, plural(s.NotesQueued, "note"), plural(s.SessionsWaiting, "session"))
 	case !s.LastOK.IsZero():
-		return fmt.Sprintf("%sanswering (last answer %s ago)", host, recall.Age(now.Sub(s.LastOK)))
+		return fmt.Sprintf("%s%s (last answer %s ago)", host, st.Paint(termstyle.OK, "answering"), recall.Age(now.Sub(s.LastOK)))
 	}
 	return host + "not recorded yet"
 }
@@ -390,7 +392,13 @@ func counts(m map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
-func statsText(r statsResult) string {
+// statsText is the legacy report; st bolds its label column (the opt-in
+// rule) and colors the server's state.
+func statsText(st termstyle.Style, r statsResult) string {
+	return st.Labels(statsLines(st, r))
+}
+
+func statsLines(st termstyle.Style, r statsResult) string {
 	var b strings.Builder
 	p := r.Prompts
 	span := r.From.UTC().Format("2006-01-02 15:04") + " → " + r.To.UTC().Format("2006-01-02 15:04")
@@ -399,7 +407,7 @@ func statsText(r statsResult) string {
 	} else {
 		fmt.Fprintf(&b, "Memory over the last %d day(s), %s (UTC)\n\n", r.Days, span)
 	}
-	fmt.Fprintf(&b, "Server       %s\n", reachText(r.Server, r.now))
+	fmt.Fprintf(&b, "Server       %s\n", reachText(st, r.Server, r.now))
 	if r.Runtime != "" {
 		fmt.Fprintf(&b, "Runtime      %s\n", runtimeText(r.Runtime, r.RuntimeSwitch))
 	}
@@ -450,9 +458,9 @@ func statsText(r statsResult) string {
 		}
 		fmt.Fprintf(&b, "Across projects  %d %s retired by a session of another project: %s; backsight forget --restore <id> undoes one\n", n, what, strings.Join(parts, ", "))
 	}
-	st := f.Settled
+	settled := f.Settled
 	fmt.Fprintf(&b, "Ledger       settled %d live shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; imported %d shows of earlier history (%d credits); honesty flags: %s",
-		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, f.Imported.Shows, f.Imported.Credits, counts(f.Flags))
+		settled.Shows, settled.Credits, settled.Misses, pct(settled.Misses, settled.Shows-settled.Credits), settled.Unknown, f.Late, f.Imported.Shows, f.Imported.Credits, counts(f.Flags))
 	switch {
 	case f.SharedMachines == 1:
 		b.WriteString("; shared with 1 other machine")

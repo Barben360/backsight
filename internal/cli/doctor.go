@@ -31,6 +31,7 @@ import (
 	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 // probes sets the machine probes; tests replace it.
@@ -357,26 +358,35 @@ func newDoctorCmd(e *env) *cobra.Command {
 			if rep.Errors > 0 {
 				failed = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}}
 			}
-			return e.report("doctor", rep, func() string { return doctorText(rep) }, failed)
+			return e.report("doctor", rep, func() string { return doctorText(termstyle.StyleOf(e.stdout), rep) }, failed)
 		},
 	}
 }
 
 var statusLabel = map[doctor.Status]string{doctor.OK: "ok", doctor.Info: "info", doctor.Warn: "WARN", doctor.Error: "ERROR"}
 
-func doctorText(r doctor.Report) string {
+// doctorText is doctor's report; st colors the status words, the fixes
+// and the counts that are not zero.
+func doctorText(st termstyle.Style, r doctor.Report) string {
 	var b strings.Builder
 	pad := strings.Repeat(" ", 19)
 	for _, c := range r.Checks {
-		fmt.Fprintf(&b, "%-6s %-11s %s\n", statusLabel[c.Status], c.ID, c.Summary)
+		fmt.Fprintf(&b, "%s %-11s %s\n", statusCell(st, statusLabel[c.Status], 6), c.ID, c.Summary)
 		if c.Detail != "" {
 			fmt.Fprintf(&b, "%s%s\n", pad, c.Detail)
 		}
 		if c.Fix != "" {
-			fmt.Fprintf(&b, "%sfix: %s\n", pad, c.Fix)
+			fmt.Fprintf(&b, "%sfix: %s\n", pad, st.Paint(termstyle.Command, c.Fix))
 		}
 	}
-	fmt.Fprintf(&b, "\n%d error(s), %d warning(s)\n", r.Errors, r.Warnings)
+	errs, warns := fmt.Sprintf("%d error(s)", r.Errors), fmt.Sprintf("%d warning(s)", r.Warnings)
+	if r.Errors > 0 {
+		errs = st.Paint(termstyle.Fail, errs)
+	}
+	if r.Warnings > 0 {
+		warns = st.Paint(termstyle.Warn, warns)
+	}
+	fmt.Fprintf(&b, "\n%s, %s\n", errs, warns)
 	return b.String()
 }
 
@@ -392,7 +402,7 @@ func runDoctorSized(cmd *cobra.Command, d paths.Dirs, home string, sized bool) d
 	if sized {
 		denv.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(d, home, true) }
 	}
-	return doctor.Run(cmd.Context(), denv)
+	return doctorRun(cmd.Context(), denv)
 }
 
 // referenceServer asks the reference server's /health, then, for a

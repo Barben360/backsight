@@ -30,6 +30,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/token"
 )
 
@@ -116,13 +117,13 @@ func newConnectCmd(e *env) *cobra.Command {
 				if res.URL == "" {
 					return err
 				}
-				return e.report("connect", res, func() string { return connectText(res) }, err)
+				return e.report("connect", res, func() string { return connectText(termstyle.StyleOf(e.stdout), res) }, err)
 			}
 			res, err := runConnect(cmd.Context(), e, f)
 			if res.URL == "" { // refused before the token was read: nothing to show
 				return err
 			}
-			return e.report("connect", res, func() string { return connectText(res) }, err)
+			return e.report("connect", res, func() string { return connectText(termstyle.StyleOf(e.stdout), res) }, err)
 		},
 	}
 	cmd.Flags().StringVar(&f.token, "token", "", "- reads the connection token from stdin (a hidden prompt at a terminal); never the token itself")
@@ -547,7 +548,7 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 	for i := range res.Steps[:3] {
 		res.Steps[i].Status = "done"
 		if !e.json { // before the server's start, which takes a while
-			fmt.Fprint(e.stdout, stepLine(res.Steps[i]))
+			fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), res.Steps[i]))
 		}
 	}
 	res.NextSteps = append(res.NextSteps, openSessionStep)
@@ -855,7 +856,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	interactive := !e.json && !f.nonInteractive && stdinIsTerminal() && stdoutIsTerminal()
 	switch consent := answers["consent"]; {
 	case consent == "" && interactive:
-		fmt.Fprint(e.stdout, connectPlanText(res))
+		fmt.Fprint(e.stdout, connectPlanText(termstyle.StyleOf(e.stdout), res))
 		if askAck {
 			fmt.Fprintf(e.stdout, "\n%s\n", ack.Prompt)
 			if !confirm(e, "Accept? [y/N] ") {
@@ -922,7 +923,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	if !e.json {
 		for _, s := range res.Steps {
 			if s.Status == "done" {
-				fmt.Fprint(e.stdout, stepLine(s))
+				fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), s))
 			}
 		}
 	}
@@ -1315,41 +1316,36 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 	return nil
 }
 
-func connectPlanText(r connectResult) string {
+func connectPlanText(st termstyle.Style, r connectResult) string {
 	var b strings.Builder
-	will := "\nconnect will:\n"
+	will := "connect will:"
 	if r.Situation == joinUndo {
-		fmt.Fprintf(&b, "this PC's own server at %s (bank %s)\n", r.URL, r.Bank)
-		will = "\nconnect --undo will:\n"
+		fmt.Fprintf(&b, "this PC's own server at %s (bank %s)\n", st.Paint(termstyle.Command, r.URL), r.Bank)
+		will = "connect --undo will:"
 	} else {
-		fmt.Fprintf(&b, "server %s at %s (bank %s, Hindsight %s)\n", r.ServerID, r.URL, r.Bank, r.HindsightVersion)
+		fmt.Fprintf(&b, "server %s at %s (bank %s, Hindsight %s)\n", st.Paint(termstyle.Secondary, r.ServerID), st.Paint(termstyle.Command, r.URL), r.Bank, r.HindsightVersion)
 	}
-	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
-	}
-	for _, n := range r.Notes {
-		fmt.Fprintf(&b, "note     %s\n", n)
-	}
-	b.WriteString(will)
+	notesLines(&b, st, r.Warnings, r.Notes)
+	b.WriteString("\n" + st.Paint(termstyle.Label, will) + "\n")
 	for _, s := range r.Steps {
-		fmt.Fprintf(&b, "  %-8s %s\n", s.Name, s.Detail)
+		fmt.Fprintf(&b, "  %s %s\n", st.Cell(termstyle.Accent, s.Name, 8), s.Detail)
 	}
 	return b.String()
 }
 
-func connectText(r connectResult) string {
+func connectText(st termstyle.Style, r connectResult) string {
 	switch {
 	case len(r.Steps) == 0:
 		return ""
 	case r.Declined:
-		return "nothing changed\n"
+		return st.Paint(termstyle.Secondary, "nothing changed") + "\n"
 	case r.Plan:
-		return connectPlanText(r)
+		return connectPlanText(st, r)
 	case r.Situation == joinUndo: // the switch's steps are printed as they are done
 		var b strings.Builder
 		for _, s := range r.Steps {
 			if s.Name == "server" && s.Status != "planned" {
-				b.WriteString(stepLine(s))
+				b.WriteString(stepLine(st, s))
 			}
 		}
 		for _, n := range r.NextSteps {
@@ -1358,18 +1354,23 @@ func connectText(r connectResult) string {
 		return b.String()
 	}
 	if r.Setup == nil { // stopped before setup: what it would have done
-		return connectPlanText(r)
+		return connectPlanText(st, r)
 	}
 	var b strings.Builder
-	b.WriteString(setupText(*r.Setup))
-	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
-	}
-	for _, n := range r.Notes {
-		fmt.Fprintf(&b, "note     %s\n", n)
-	}
+	b.WriteString(setupText(st, *r.Setup))
+	notesLines(&b, st, r.Warnings, r.Notes)
 	for _, n := range r.NextSteps {
 		b.WriteString("- " + n + "\n")
 	}
 	return b.String()
+}
+
+// notesLines writes connect's warnings, then its notes, one a line.
+func notesLines(b *strings.Builder, st termstyle.Style, warnings, notes []string) {
+	for _, w := range warnings {
+		fmt.Fprintf(b, "%s  %s\n", st.Paint(termstyle.Warn, "warning"), w)
+	}
+	for _, n := range notes {
+		fmt.Fprintf(b, "%s     %s\n", st.Paint(termstyle.Secondary, "note"), n)
+	}
 }

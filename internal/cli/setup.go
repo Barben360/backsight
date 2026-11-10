@@ -37,6 +37,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/termstyle"
 )
 
 const setupResume = "backsight setup --resume"
@@ -115,7 +116,7 @@ func newSetupCmd(e *env) *cobra.Command {
 				return &output.Error{Code: output.Usage, Message: "--force goes with --undo"}
 			}
 			res, err := runSetup(cmd.Context(), e, f)
-			return e.report("setup", res, func() string { return setupText(res) }, err)
+			return e.report("setup", res, func() string { return setupText(termstyle.StyleOf(e.stdout), res) }, err)
 		},
 	}
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: id=value (repeatable)")
@@ -366,7 +367,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		return res, ne
 	}
 	if interactive && res.Answers["consent"] == "" {
-		fmt.Fprint(e.stdout, setupPlanText(s.planSteps(res.Answers)))
+		fmt.Fprint(e.stdout, setupPlanText(termstyle.StyleOf(e.stdout), s.planSteps(res.Answers)))
 		fmt.Fprint(e.stdout, reuseHint(qs))
 		if !confirm(e, "Go ahead with this plan? [y/N] ") {
 			res.Answers["consent"] = "no"
@@ -532,31 +533,37 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 	}
 }
 
-// ask prompts one question at a terminal; Enter takes the default.
-func ask(e *env, q setup.Question) (string, error) {
+// askText is a question and its options as ask prints them; st bolds the
+// question and colors the recommendation and the caveats.
+func askText(st termstyle.Style, q setup.Question) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n%s\n", q.Prompt)
+	fmt.Fprintf(&b, "\n%s\n", st.Paint(termstyle.Label, q.Prompt))
 	for i, o := range q.Options {
-		fmt.Fprintf(&b, "  %d) %s — %s", i+1, o.Value, o.Label)
+		fmt.Fprintf(&b, "  %d) %s — %s", i+1, st.Paint(termstyle.Accent, o.Value), o.Label)
 		if o.Value == q.Recommended {
-			b.WriteString(" [recommended]")
+			b.WriteString(" " + st.Paint(termstyle.OK, "[recommended]"))
 		}
 		if o.Cost != "" {
-			b.WriteString(" · " + o.Cost)
+			b.WriteString(" · " + st.Paint(termstyle.Secondary, o.Cost))
 		}
 		if o.Caveat != "" {
-			b.WriteString("\n     ⚠ " + o.Caveat)
+			b.WriteString("\n     " + st.Paint(termstyle.Warn, "⚠ "+o.Caveat))
 		}
 		b.WriteString("\n")
 	}
 	if q.Free {
 		b.WriteString("  (or type a value)\n")
 	}
+	return b.String()
+}
+
+// ask prompts one question at a terminal; Enter takes the default.
+func ask(e *env, q setup.Question) (string, error) {
 	prompt := "choice"
 	if q.Default != "" {
 		prompt += " [" + q.Default + "]"
 	}
-	fmt.Fprint(e.stdout, b.String()+prompt+": ")
+	fmt.Fprint(e.stdout, askText(termstyle.StyleOf(e.stdout), q)+prompt+": ")
 	line, err := readLine()
 	if err != nil {
 		return "", &output.Error{Code: output.Blocked, Message: err.Error()}
@@ -1542,7 +1549,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 			}
 			// Once: the step line says what failed and how to fix it, then
 			// how to go on.
-			fmt.Fprint(s.e.stdout, stepLine(step2line(rec.Steps[len(rec.Steps)-1])))
+			fmt.Fprint(s.e.stdout, stepLine(termstyle.StyleOf(s.e.stdout), step2line(rec.Steps[len(rec.Steps)-1])))
 			var oe *output.Error
 			if errors.As(failure, &oe) && oe.Resume != "" {
 				fmt.Fprintf(s.e.stdout, "then run: %s\n", oe.Resume)
@@ -1554,13 +1561,13 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		rec.Set(step)
 		s.saveRecord(rec)
 		if !s.e.json {
-			fmt.Fprint(s.e.stdout, stepLine(step2line(step)))
+			fmt.Fprint(s.e.stdout, stepLine(termstyle.StyleOf(s.e.stdout), step2line(step)))
 		}
 	}
 	s.progress("summary", 100, 0, "")
 	rec.Finished = true
 	if err := rec.Save(s.dirs.SetupFile()); err != nil {
-		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+		_, _ = io.WriteString(s.e.stderr, errorLine(s.e.stderr, "setup.json not saved: "+err.Error()))
 	}
 	res.Steps = rec.Steps
 	res.RestartRequired = restart
@@ -1651,13 +1658,13 @@ func stepFailure(name string, err error, changed bool) error {
 // before the step that acts on it.
 func (s *setupEnv) persist(r *setup.Record) {
 	if err := r.Save(s.dirs.SetupFile()); err != nil {
-		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+		_, _ = io.WriteString(s.e.stderr, errorLine(s.e.stderr, "setup.json not saved: "+err.Error()))
 	}
 }
 
 func (s *setupEnv) saveRecord(r *setup.Record) {
 	if err := r.Save(s.dirs.SetupFile()); err != nil {
-		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+		_, _ = io.WriteString(s.e.stderr, errorLine(s.e.stderr, "setup.json not saved: "+err.Error()))
 	}
 	last := r.Steps[len(r.Steps)-1]
 	line, _ := json.Marshal(map[string]any{"ts": now().UTC().Format(time.RFC3339Nano), "command": "setup", "step": last.Name, "status": last.Status, "run": r.Run})
@@ -1832,16 +1839,16 @@ func reuseHint(qs []setup.Question) string {
 	return "\nanswers from your last run: " + strings.Join(ids, ", ") + "\nto change them: backsight setup --reconfigure (asks again), or --answer id=value\n"
 }
 
-func setupPlanText(steps []setup.Step) string {
+func setupPlanText(st termstyle.Style, steps []setup.Step) string {
 	var b strings.Builder
-	b.WriteString("\nsetup will:\n")
+	b.WriteString("\n" + st.Paint(termstyle.Label, "setup will:") + "\n")
 	for _, s := range steps {
-		fmt.Fprintf(&b, "  %-9s %s\n", s.Name, s.Detail)
+		fmt.Fprintf(&b, "  %s %s\n", st.Cell(termstyle.Accent, s.Name, 9), s.Detail)
 	}
 	return b.String()
 }
 
-func setupText(r setupResult) string {
+func setupText(st termstyle.Style, r setupResult) string {
 	var b strings.Builder
 	switch {
 	case r.listing:
@@ -1854,25 +1861,25 @@ func setupText(r setupResult) string {
 		}
 		return b.String()
 	case r.Declined:
-		return "nothing changed\n"
+		return st.Paint(termstyle.Secondary, "nothing changed") + "\n"
 	case r.Plan:
 		for _, c := range r.Preflight {
-			fmt.Fprintf(&b, "%-6s %-11s %s\n", c.Status, c.ID, c.Summary)
+			fmt.Fprintf(&b, "%s %-11s %s\n", statusCell(st, c.Status, 6), c.ID, c.Summary)
 			if c.Status == setup.Fail {
-				fmt.Fprintf(&b, "%19sfix: %s\n", "", c.Fix)
+				fmt.Fprintf(&b, "%19sfix: %s\n", "", st.Paint(termstyle.Command, c.Fix))
 			}
 		}
-		b.WriteString(setupPlanText(r.Steps))
+		b.WriteString(setupPlanText(st, r.Steps))
 		b.WriteString(reuseHint(r.Questions))
 		return b.String()
 	}
 	for _, c := range r.Preflight {
 		if c.Status == setup.Fail {
-			fmt.Fprintf(&b, "fail   %-11s %s\n%19sfix: %s\n", c.ID, c.Summary, "", c.Fix)
+			fmt.Fprintf(&b, "%s   %-11s %s\n%19sfix: %s\n", st.Paint(termstyle.Fail, "fail"), c.ID, c.Summary, "", st.Paint(termstyle.Command, c.Fix))
 		}
 	}
 	if len(r.Steps) > 0 && r.TryFirst != "" {
-		b.WriteString("\nbacksight is set up.\n")
+		b.WriteString("\n" + st.Paint(termstyle.OK, "backsight is set up.") + "\n")
 		for _, n := range r.NextSteps {
 			b.WriteString("- " + n + "\n")
 		}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -54,7 +55,10 @@ var (
 )
 
 // viewText is the text of a view's result; dev adds the developer metrics.
-func viewText(r metrics.Result, dev bool) string {
+// st colors the heading, the verdict, the family headings, each metric's
+// status, the items needing attention and the footer; the tables stay
+// plain (their columns are aligned by tabwriter, which counts escapes).
+func viewText(st termstyle.Style, r metrics.Result, dev bool) string {
 	var b strings.Builder
 	loc := r.Window.Loc
 	if loc == nil {
@@ -64,7 +68,7 @@ func viewText(r metrics.Result, dev bool) string {
 	if q == "" {
 		q = r.View
 	}
-	fmt.Fprintf(&b, "%s (%s → %s, %s)\n", q, r.Window.Since.In(loc).Format("2006-01-02 15:04"), r.Window.Until.In(loc).Format("2006-01-02 15:04"), r.Window.TZ)
+	fmt.Fprintf(&b, "%s (%s → %s, %s)\n", st.Paint(termstyle.Label, q), r.Window.Since.In(loc).Format("2006-01-02 15:04"), r.Window.Until.In(loc).Format("2006-01-02 15:04"), r.Window.TZ)
 	if r.Scope.Project != "" {
 		fmt.Fprintf(&b, "Project: %s\n", clipText(r.Scope.Project))
 	}
@@ -73,20 +77,20 @@ func viewText(r metrics.Result, dev bool) string {
 		if why == "" {
 			why = "not answering"
 		}
-		fmt.Fprintf(&b, "Memory server: %s. The numbers that come from it are missing.", why)
+		fmt.Fprintf(&b, "%s The numbers that come from it are missing.", st.Paint(termstyle.Fail, "Memory server: "+why+"."))
 		if s.LastOK != nil {
 			fmt.Fprintf(&b, " Last answer %s.", s.LastOK.In(loc).Format("2006-01-02 15:04"))
 		}
 		b.WriteByte('\n')
 	}
 	if v := r.Verdict; v != nil {
-		b.WriteString("\nVerdict (last " + strconv.Itoa(v.WindowDays) + " days)\n")
+		b.WriteString("\n" + st.Paint(termstyle.Label, "Verdict (last "+strconv.Itoa(v.WindowDays)+" days)") + "\n")
 		for _, a := range axisNames {
 			ax, ok := v.Axes[a.Key]
 			if !ok {
 				continue
 			}
-			line := fmt.Sprintf("%-8s %s", a.Name, axisStateWords[ax.State])
+			line := st.Cell(termstyle.Label, a.Name, 8) + " " + st.Paint(axisRole(ax.State), axisStateWords[ax.State])
 			if len(ax.Reasons) > 0 {
 				line += " — " + ax.Reasons[0].Text
 			}
@@ -100,27 +104,27 @@ func viewText(r metrics.Result, dev bool) string {
 	if s := r.Summary; s != nil {
 		b.WriteString("\n" + summaryText(*s, r.Window.Days) + "\n")
 	}
-	metricsText(&b, r, dev)
+	metricsText(&b, st, r, dev)
 	if len(r.Attention) > 0 {
-		b.WriteString("\nNeeds attention\n")
+		b.WriteString("\n" + st.Paint(termstyle.Warn, "Needs attention") + "\n")
 		for i, it := range r.Attention {
 			fmt.Fprintf(&b, "%d. %s\n", i+1, it.Text)
 			if it.Command != "" {
-				fmt.Fprintf(&b, "   Run: %s\n", it.Command)
+				fmt.Fprintf(&b, "   Run: %s\n", st.Paint(termstyle.Command, it.Command))
 			}
 		}
 		if r.AttentionMore > 0 {
-			fmt.Fprintf(&b, "%d more: backsight stats system\n", r.AttentionMore)
+			fmt.Fprintf(&b, "%d more: %s\n", r.AttentionMore, st.Paint(termstyle.Command, "backsight stats system"))
 		}
 	}
 	if len(r.Info) > 0 {
-		b.WriteString("\nWorth a look\n")
+		b.WriteString("\n" + st.Paint(termstyle.Label, "Worth a look") + "\n")
 		for _, it := range r.Info {
 			label := it.Metric
 			if d, ok := metrics.DefOf(it.Metric); ok {
 				label = d.Label
 			}
-			fmt.Fprintf(&b, "%s: %s  (%s)\n", label, grouped(it.Count), it.Command)
+			fmt.Fprintf(&b, "%s: %s  (%s)\n", label, grouped(it.Count), st.Paint(termstyle.Command, it.Command))
 		}
 	}
 	tablesText(&b, r, loc)
@@ -133,8 +137,32 @@ func viewText(r metrics.Result, dev bool) string {
 	} else if t != nil {
 		fmt.Fprintf(&b, "\nMemory %s, as read from the server\n%s\n", idText(t.ID), plainText(t.Text, "\n\t"))
 	}
-	b.WriteString("\n" + footer(r) + "\n")
+	b.WriteString("\n" + st.Paint(termstyle.Secondary, footer(r)) + "\n")
 	return b.String()
+}
+
+// axisRole is the color of a verdict axis's state.
+func axisRole(s metrics.AxisState) termstyle.Role {
+	switch s {
+	case metrics.AxisOK:
+		return termstyle.OK
+	case metrics.AxisAttention:
+		return termstyle.Warn
+	}
+	return termstyle.Secondary
+}
+
+// metricRole is the color of a metric's status.
+func metricRole(s metrics.Status) termstyle.Role {
+	switch s {
+	case metrics.StatusOK:
+		return termstyle.OK
+	case metrics.StatusWatch:
+		return termstyle.Warn
+	case metrics.StatusBad:
+		return termstyle.Fail
+	}
+	return termstyle.Secondary
 }
 
 // footer names the scope of the numbers. With all PCs it counts them, says
@@ -177,7 +205,7 @@ func summaryText(s metrics.Summary, days int) string {
 }
 
 // metricsText prints the metrics by family, in the catalog's order.
-func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
+func metricsText(b *strings.Builder, st termstyle.Style, r metrics.Result, dev bool) {
 	for _, fh := range familyHeadings {
 		var lines []string
 		for _, d := range metrics.Catalog {
@@ -185,7 +213,7 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 			if !ok || headingOf(d) != fh.Family || (d.Dev && !dev) {
 				continue
 			}
-			lines = append(lines, metricLine(d, m, r.Scope.ServerOK, staysThisPC(r.Scope, d)))
+			lines = append(lines, metricLine(st, d, m, r.Scope.ServerOK, staysThisPC(r.Scope, d)))
 			if m.Status == metrics.StatusNoData {
 				continue
 			}
@@ -201,7 +229,7 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 			}
 		}
 		if len(lines) > 0 {
-			b.WriteString("\n" + fh.Heading + "\n" + strings.Join(lines, "\n") + "\n")
+			b.WriteString("\n" + st.Paint(termstyle.Label, fh.Heading) + "\n" + strings.Join(lines, "\n") + "\n")
 		}
 	}
 }
@@ -210,7 +238,7 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 const handful = 10
 
 // metricLine is `label  value  (n=…, status, delta vs previous)`.
-func metricLine(d metrics.Def, m metrics.Metric, serverUp, thisPC bool) string {
+func metricLine(st termstyle.Style, d metrics.Def, m metrics.Metric, serverUp, thisPC bool) string {
 	value := formatValue(d, m)
 	if m.Status == metrics.StatusNoData {
 		value = "—"
@@ -256,7 +284,7 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp, thisPC bool) string {
 	if slices.Contains(m.Tags, "status_this_pc") {
 		status = "status on this PC: " + status // the other PCs send no figure the status could use
 	}
-	parts = append(parts, status)
+	parts = append(parts, st.Paint(metricRole(m.Status), status))
 	if slices.Contains(m.Tags, "unreliable") {
 		parts = append(parts, "unreliable")
 	}
