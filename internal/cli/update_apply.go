@@ -636,7 +636,7 @@ type applyRun struct {
 
 func newApplyRun(d paths.Dirs, cfg config.Config, st state.State, shim, previous, target string, res *updateApplyResult, add func(name, status, detail string)) *applyRun {
 	clientArgs := []string{"client", "install"}
-	if p := recordedProfile(st, harness.ClaudeCode); p != "" {
+	if p := st.ProfileOf(harness.ClaudeCode); p != "" {
 		clientArgs = append(clientArgs, "--config-dir", p)
 	}
 	wayBack := previous + " " + strings.Join(clientArgs, " ")

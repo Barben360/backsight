@@ -77,16 +77,14 @@ func TestOfAndTagOfOldRecords(t *testing.T) {
 	}
 }
 
-func TestRecordedProfile(t *testing.T) {
-	st := state.State{}
-	if p := RecordedProfile(st, ClaudeCode); p != "" {
-		t.Errorf("none recorded: %q", p)
-	}
-	st.Client = &state.Client{Profile: "/dev/profile"}
-	if p := RecordedProfile(st, ClaudeCode); p != "/dev/profile" {
+// The adapter's id is the key the state records Claude Code's profile
+// under (an older state's client entry included).
+func TestClaudesIDReadsItsRecordedProfile(t *testing.T) {
+	st := state.State{Client: &state.Client{Profile: "/dev/profile"}}
+	if p := st.ProfileOf(Claude{}.ID()); p != "/dev/profile" {
 		t.Errorf("%q", p)
 	}
-	if p := RecordedProfile(st, "other-tool"); p != "" {
+	if p := st.ProfileOf(other{}.ID()); p != "" {
 		t.Errorf("Claude Code's profile given to another harness: %q", p)
 	}
 }

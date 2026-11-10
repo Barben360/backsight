@@ -3,6 +3,7 @@ package retain
 import (
 	"io"
 
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -27,8 +28,8 @@ type Identity interface {
 // and tag are harness.Default()'s (a cli test holds them equal).
 type claudeCode struct{}
 
-func (claudeCode) ID() string  { return "claude-code" }
-func (claudeCode) Tag() string { return "harness:claude-code" }
+func (claudeCode) ID() string  { return state.HarnessClaudeCode }
+func (claudeCode) Tag() string { return "harness:" + state.HarnessClaudeCode }
 func (claudeCode) ReadConversation(r io.Reader, from int64) ([]transcript.Record, transcript.Stats, error) {
 	return transcript.Read(r, from)
 }

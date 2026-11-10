@@ -615,7 +615,7 @@ func wiredProfiles(home string, st state.State, rec *setup.Record) []string {
 	}
 	if st.PluginVersion != "" {
 		p := filepath.Join(home, ".claude")
-		if rp := recordedProfile(st, harness.ClaudeCode); rp != "" {
+		if rp := st.ProfileOf(harness.ClaudeCode); rp != "" {
 			p = rp
 		}
 		addOne(p)
@@ -645,7 +645,7 @@ func retentionOfferFor(home string, st state.State, rec *setup.Record, cfg confi
 		return nil
 	}
 	prof := filepath.Join(home, ".claude")
-	if p := recordedProfile(st, harness.ClaudeCode); p != "" {
+	if p := st.ProfileOf(harness.ClaudeCode); p != "" {
 		prof = p
 	}
 	settings := claudecode.Locate(home, profileGetenv(home, prof)).Settings

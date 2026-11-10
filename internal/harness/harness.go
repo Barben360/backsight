@@ -26,12 +26,20 @@ import (
 	"io"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
-// ClaudeCode is Claude Code's harness id: the value of its harness: tag,
-// and the client of records that name none (statistics, older files).
-const ClaudeCode = "claude-code"
+// Harness ids: the value of each harness's harness: tag, the key of its
+// config and state entries, and (ClaudeCode) the client of records that
+// name none (statistics, older files). They are the state's: the state
+// keys per-harness entries by them and cannot import this package (its
+// adapters import instructions, whose tests import the state's users).
+// Codex has no adapter yet.
+const (
+	ClaudeCode = state.HarnessClaudeCode
+	Codex      = state.HarnessCodex
+)
 
 // Adapter is one harness. Its methods are grouped in small interfaces, so
 // code that needs one concern (a hook decoder, a conversation reader)

@@ -191,7 +191,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				// Only when the state records this profile ("" is ~/.claude):
 				// another profile wired since keeps its plugin.
 				wired := filepath.Join(home, ".claude")
-				if p := recordedProfile(*s, harness.ClaudeCode); p != "" {
+				if p := s.ProfileOf(harness.ClaudeCode); p != "" {
 					wired = filepath.Clean(p)
 				}
 				if wired == prof {

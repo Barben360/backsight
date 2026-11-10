@@ -1229,7 +1229,7 @@ func checkClient(env Env, loc claudecode.Location, cfg *config.Config) Check {
 	// install lives in its own profile).
 	claude := harness.Claude{}
 	hen := harness.Env{Home: env.Home, Profile: env.Getenv(claude.ProfileVar())}
-	profile, fix := harness.RecordedProfile(st, claude.ID()), "backsight client install"
+	profile, fix := st.ProfileOf(claude.ID()), "backsight client install"
 	if profile != "" {
 		fix += " --config-dir " + profile
 		hen.Profile = profile

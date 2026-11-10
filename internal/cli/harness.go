@@ -29,9 +29,6 @@ func harnessEnv(a harness.Adapter, home, profile string) harness.Env {
 	return harness.Env{Home: home, Profile: profile, Run: toolRunner(a.ID())}
 }
 
-// recordedProfile is harness.RecordedProfile.
-func recordedProfile(st state.State, id string) string { return harness.RecordedProfile(st, id) }
-
 // wiredProfile is the profile of a that backsight is wired to: the shell's
 // (a hook runs with the session's, the user's own shell names it) when
 // set, else the one client install recorded, else a's default. A
@@ -45,7 +42,7 @@ func wiredProfile(a harness.Adapter) string {
 	}
 	if d, _, err := machine(); err == nil {
 		if st, err := state.Load(d.StateFile()); err == nil {
-			return recordedProfile(st, a.ID())
+			return st.ProfileOf(a.ID())
 		}
 	}
 	return ""

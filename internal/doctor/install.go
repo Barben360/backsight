@@ -181,7 +181,7 @@ func checkPendingRestore(env Env) Check {
 			last[l.Target] = l
 		}
 	}
-	planned, err := env.ConfigEdits(harness.RecordedProfile(st, harness.ClaudeCode))
+	planned, err := env.ConfigEdits(st.ProfileOf(harness.ClaudeCode))
 	if err != nil {
 		c.Status, c.Summary, c.Detail = Warn, "cannot compare Claude Code's files with backsight's edits", err.Error()
 		c.Fix = "fix the file named in the detail by hand; backsight never overwrites a file it cannot parse"
