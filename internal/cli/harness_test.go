@@ -143,6 +143,10 @@ func jsonPathOf(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }
 // started without an id is Claude Code's.
 func TestHookChildHarnessFromItsParent(t *testing.T) {
 	home := hookHome(t)
+	// runHookChild marks this process a hook child from now on: later
+	// in-process handlers would count their budget from this test.
+	old := hookChildStart
+	t.Cleanup(func() { hookChildStart = old })
 	in := `{"session_id":"cc3","source":"startup","cwd":"` + jsonPathOf(filepath.Join(home, "billing")) + `"}`
 	t.Setenv(hookHarnessEnv, "gone")
 	var out bytes.Buffer
