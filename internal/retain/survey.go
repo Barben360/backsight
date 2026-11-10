@@ -191,12 +191,12 @@ func (f *Flusher) Waiting(files []string) []Waiter {
 // (Waiting skips it the same way). A transcript with no cursor, or one that
 // cannot be read, is not caught up.
 func (f *Flusher) CaughtUp(file string) bool {
-	fi, err := os.Stat(file)
+	size, err := f.harness().Size(file)
 	if err != nil {
 		return false
 	}
-	cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), strings.TrimSuffix(filepath.Base(file), ".jsonl"))
-	return err == nil && ok && !cur.Quarantined && cur.Offset >= fi.Size()
+	cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), f.harness().SessionOf(file))
+	return err == nil && ok && !cur.Quarantined && cur.Offset >= size
 }
 
 // Unsent counts the sessions Waiting lists that a send can still move:

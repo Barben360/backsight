@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -45,13 +47,22 @@ func (fakeTool) Locate(env harness.Env) harness.Location {
 // DecodeHook reads the fake tool's own event shape.
 func (fakeTool) DecodeHook(_ string, raw []byte) (harness.HookInput, error) {
 	var in struct {
-		Conversation, Folder, Said, Agent, AgentLog, Report string
+		Conversation, Folder, Said, Agent, AgentLog, Report, Tool, Failure string
+		ToolArgs                                                           json.RawMessage
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return harness.HookInput{}, err
 	}
 	return harness.HookInput{SessionID: in.Conversation, Cwd: in.Folder, Prompt: in.Said,
-		AgentID: in.Agent, AgentTranscriptPath: in.AgentLog, LastAssistantMessage: in.Report}, nil
+		AgentID: in.Agent, AgentTranscriptPath: in.AgentLog, LastAssistantMessage: in.Report,
+		ToolName: in.Tool, ToolInput: in.ToolArgs, Error: in.Failure}, nil
+}
+
+// MCPCallSession is the call's own _meta.sessionId: one server may serve
+// several sessions.
+func (fakeTool) MCPCallSession(meta map[string]any, _ func(string) string) string {
+	s, _ := meta["sessionId"].(string)
+	return s
 }
 
 // EncodeHook answers in the fake tool's own shape.
@@ -63,10 +74,62 @@ func (fakeTool) EncodeHook(o harness.HookOutput) []byte {
 	return raw
 }
 
+// The fake store keeps each conversation gzipped, named
+// rollout-<time>-<session uuid>.fz: neither its name nor its bytes are
+// Claude Code's.
 func (f fakeTool) Conversations(env harness.Env) []string {
-	files, _ := filepath.Glob(filepath.Join(f.Locate(env).Conversations, "*.jsonl"))
+	files, _ := filepath.Glob(filepath.Join(f.Locate(env).Conversations, "rollout-*.fz"))
 	slices.Sort(files)
 	return files
+}
+
+// SessionOf is the uuid ending the file name.
+func (fakeTool) SessionOf(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".fz")
+	if !strings.HasPrefix(name, "rollout-") || len(name) < 36 {
+		return ""
+	}
+	return name[len(name)-36:]
+}
+
+// unzip is the content stream of a fake conversation.
+func unzip(path string) ([]byte, error) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = fh.Close() }()
+	zr, err := gzip.NewReader(fh)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(zr)
+}
+
+func (fakeTool) Size(path string) (int64, error) {
+	raw, err := unzip(path)
+	return int64(len(raw)), err
+}
+
+func (fakeTool) Open(path string, from int64) (io.ReadCloser, error) {
+	raw, err := unzip(path)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(raw[min(from, int64(len(raw))):])), nil
+}
+
+// writeFakeConversation writes lines, gzipped, as the fake store does.
+func writeFakeConversation(t *testing.T, path, lines string) {
+	t.Helper()
+	var b bytes.Buffer
+	zw := gzip.NewWriter(&b)
+	_, _ = zw.Write([]byte(lines))
+	_ = zw.Close()
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	if err := os.WriteFile(path, b.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // ReadConversation reads lines role|uuid|time|cwd|text.
@@ -109,6 +172,9 @@ func TestASecondHarnessGetsItsHooksDecodedAndAnswered(t *testing.T) {
 	home := hookHome(t)
 	withFakeTool(t)
 	childFromTestBinary(t, "")
+	// The harness's pid is known: a record by session id is written only
+	// where the adapter says the pid may not pair.
+	t.Setenv(claudePIDEnv, "31337")
 	billing := filepath.Join(home, "billing")
 	in, _ := json.Marshal(map[string]string{"conversation": "fk1", "folder": billing})
 	code, out := runHookCmd(t, string(in), "--harness", "fake-tool", "session-start")
@@ -118,7 +184,8 @@ func TestASecondHarnessGetsItsHooksDecodedAndAnswered(t *testing.T) {
 	if code != 0 || json.Unmarshal([]byte(out), &fake) != nil || fake.Fake.Event != harness.EventSessionStart || !strings.HasPrefix(fake.Fake.Context, instructions.Guide) {
 		t.Fatalf("exit %d, printed %q", code, out)
 	}
-	// Decoded with the fake's field names: its session and directory.
+	// Decoded with the fake's field names: its session and directory, kept
+	// by session id because the fake pairs by session.
 	if l, ok := session.ReadLiveSession(pathsOf(home).SessionsDir(), "fk1"); !ok || l.Project != "billing" || l.Cwd != billing {
 		t.Errorf("live record %+v %v", l, ok)
 	}
@@ -127,6 +194,13 @@ func TestASecondHarnessGetsItsHooksDecodedAndAnswered(t *testing.T) {
 	var claude hookOut
 	if code != 0 || json.Unmarshal([]byte(out), &claude) != nil || claude.Specific.Event != "SessionStart" || !strings.HasPrefix(claude.Specific.Context, instructions.Guide) {
 		t.Errorf("Claude Code's hook: exit %d, printed %q", code, out)
+	}
+	// Claude Code pairs by pid but on Windows: no record by session id.
+	if _, ok := session.ReadLiveSession(pathsOf(home).SessionsDir(), "cc1"); ok != (runtime.GOOS == "windows") {
+		t.Errorf("Claude Code's session record by id: %v on %s", ok, runtime.GOOS)
+	}
+	if _, ok := session.ReadLive(pathsOf(home).SessionsDir(), 31337); !ok {
+		t.Error("no record under the harness's pid")
 	}
 
 	if code, out := runHookCmd(t, `{"session_id":"cc2","source":"startup"}`, "--harness", "nope", "session-start"); code != 0 || out != "" {
@@ -161,7 +235,9 @@ func TestHookChildHarnessFromItsParent(t *testing.T) {
 
 // A second adapter's conversations are discovered in its own store, read
 // with its own parser and sent with its own tag, in the same flush as
-// Claude Code's, whose sessions keep theirs.
+// Claude Code's, whose sessions keep theirs. The store's files are
+// compressed and named after more than the session: the session comes
+// from the adapter, and cursors count in the decompressed stream.
 func TestASecondHarnessConversationsAreSentWithItsTag(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
@@ -170,15 +246,16 @@ func TestASecondHarnessConversationsAreSentWithItsTag(t *testing.T) {
 	withFakeTool(t)
 	at := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
 	writeTranscript(t, home, "live", at)
-	fk := filepath.Join(home, ".fake-tool", "sessions", "fk1.jsonl")
-	_ = os.MkdirAll(filepath.Dir(fk), 0o700)
+	const sid = "0193f0aa-1111-4222-8333-444455556666"
+	fk := filepath.Join(home, ".fake-tool", "sessions", "rollout-2026-10-24T09-00-00-"+sid+".fz")
 	line := "user|fk1-u1|" + at.Format(time.RFC3339) + "|" + filepath.Join(home, "billing") + "|The fake tool keeps billing on PostgreSQL 17.\n"
-	if err := os.WriteFile(fk, []byte(line), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeConversation(t, fk, line)
 	code, out, errOut := run(t, "retain", "flush")
-	if code != output.OK || !strings.Contains(out, "live (billing") || !strings.Contains(out, "fk1 (billing") {
+	if code != output.OK || !strings.Contains(out, "live (billing") || !strings.Contains(out, sid+" (billing") {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	if cur, ok, err := retain.LoadCursor(pathsOf(home).CursorsDir(), sid); err != nil || !ok || cur.Offset != int64(len(line)) {
+		t.Errorf("cursor under the session %+v %v %v, want offset %d", cur, ok, err, len(line))
 	}
 	byTag := map[string]string{}
 	for i, tags := range retainedTags {
@@ -191,11 +268,13 @@ func TestASecondHarnessConversationsAreSentWithItsTag(t *testing.T) {
 	if !strings.Contains(byTag["harness:fake-tool"], "PostgreSQL 17") || !strings.Contains(byTag["harness:claude-code"], "PostgreSQL 16") || len(byTag) != 2 {
 		t.Errorf("sent by tag: %q", byTag)
 	}
-	// One session of the second harness, named.
+	// One session of the second harness, named by its id: only what was
+	// appended goes out.
 	before := len(retainedTags)
-	_ = os.WriteFile(fk, []byte(line+"assistant|fk1-a1|"+at.Add(time.Minute).Format(time.RFC3339)+"|"+filepath.Join(home, "billing")+"|Noted.\n"), 0o600)
-	if code, out, _ := run(t, "retain", "flush", "--session", "fk1"); code != output.OK || len(retainedTags) != before+1 || !strings.Contains(retainedTags[before], "harness:fake-tool") {
-		t.Errorf("exit %d\n%s\n%v", code, out, retainedTags[before:])
+	writeFakeConversation(t, fk, line+"assistant|fk1-a1|"+at.Add(time.Minute).Format(time.RFC3339)+"|"+filepath.Join(home, "billing")+"|Noted.\n")
+	if code, out, _ := run(t, "retain", "flush", "--session", sid); code != output.OK || len(retainedTags) != before+1 || !strings.Contains(retainedTags[before], "harness:fake-tool") ||
+		!strings.Contains(retainedContents[before], "Noted.") || strings.Contains(retainedContents[before], "PostgreSQL 17") {
+		t.Errorf("exit %d\n%s\n%v %q", code, out, retainedTags[before:], retainedContents[before:])
 	}
 }
 

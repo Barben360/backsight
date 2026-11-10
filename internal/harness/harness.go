@@ -222,9 +222,14 @@ type Hooks interface {
 	DecodeHook(event string, raw []byte) (HookInput, error)
 	// EncodeHook is the answer the tool reads; nil prints nothing.
 	EncodeHook(out HookOutput) []byte
-	// MCPSessionID is the session id the tool hands the memory server it
-	// starts, read with getenv; "" when it hands none.
-	MCPSessionID(getenv func(string) string) string
+	// MCPCallSession is the session a memory tool call belongs to, from
+	// the call's _meta (meta, nil when the call has none) and the memory
+	// server's environment (getenv, nil when none); "" when neither names
+	// one. It is asked on every call, never once per server: a harness may
+	// give each call its session (and share one server between several),
+	// another hands its server one at start. The session is the one its
+	// hooks name (HookInput.SessionID), the key of the record they keep.
+	MCPCallSession(meta map[string]any, getenv func(string) string) string
 	// PairsBySession says hooks also record their session under its id,
 	// because the tool's process tree may not pair the memory server with
 	// the hooks by process id on goos.
@@ -283,11 +288,27 @@ type HookOutput struct {
 }
 
 // Conversations finds and parses the conversations a harness stores.
+//
+// A conversation is a file, and its content stream is what the
+// conversation reads as: the file's bytes, or what they decompress to
+// when the harness stores it compressed (an archived conversation). Every
+// offset backsight keeps (a cursor, a record's Start and End, what a read
+// consumed) is an offset into that stream, never into the file; the
+// adapter does any decompression in Open and Size. Cursors, locks and the
+// quarantine are keyed by SessionOf, never by the file name.
 type Conversations interface {
 	// Conversations lists the conversation files of env's profile, sorted.
 	Conversations(env Env) []string
+	// SessionOf is the session id of the conversation at path, "" when the
+	// path is not one of this harness's conversations.
+	SessionOf(path string) string
+	// Size is the length of path's content stream.
+	Size(path string) (int64, error)
+	// Open is path's content stream from offset from on; the caller closes
+	// it.
+	Open(path string, from int64) (io.ReadCloser, error)
 	// ReadConversation normalises the complete records of r, which starts
-	// at byte offset from of a conversation file (transcript.Read's
+	// at offset from of a conversation's content stream (transcript.Read's
 	// contract: records, what was consumed, the unknown lines).
 	ReadConversation(r io.Reader, from int64) ([]transcript.Record, transcript.Stats, error)
 }

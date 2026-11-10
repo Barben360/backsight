@@ -134,7 +134,8 @@ func BaseDocumentID(id string) string {
 // item of document doc (DocumentID); segment 1 creates the document, later
 // ones append (decision 0050). sid is the transcript file's session id,
 // used whatever the records say (a resumed or forked file keeps one
-// identity).
+// identity). The item is Claude Code's (its harness: tag and id): a
+// caller sending another harness's conversation uses BuildSegmentOf.
 func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
 	return BuildSegmentOf(claudeCode{}, bank, sid, doc, recs, segment, project, machineID, version)
 }
@@ -359,16 +360,21 @@ const fingerprintMax = 4096
 // transcript: appends after the consumed part keep it, a rewritten file
 // does not.
 func Fingerprint(path string, consumed int64) (string, error) {
-	f, err := os.Open(path)
+	return fingerprintOf(claudeCode{}, path, consumed)
+}
+
+// fingerprintOf is Fingerprint over the content stream h opens for path.
+func fingerprintOf(h Harness, path string, consumed int64) (string, error) {
+	f, err := h.Open(path, 0)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.CopyN(h, f, min(consumed, fingerprintMax)); err != nil && !errors.Is(err, io.EOF) {
+	sum := sha256.New()
+	if _, err := io.CopyN(sum, f, min(consumed, fingerprintMax)); err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 // SentIndex holds 8-byte hashes of every record uuid sent from this

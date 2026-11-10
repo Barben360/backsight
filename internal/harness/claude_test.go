@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -164,6 +165,49 @@ func TestClaudeConversations(t *testing.T) {
 	}
 	if got := (Claude{}).Conversations(Env{Home: home, Profile: filepath.Join(home, "other")}); len(got) != 0 {
 		t.Errorf("another profile's conversations: %v", got)
+	}
+}
+
+// A transcript is its own content stream, named after its session.
+func TestClaudeTranscriptStream(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "8f1c2d.jsonl")
+	_ = os.WriteFile(p, []byte("0123456789"), 0o600)
+	c := Claude{}
+	if s := c.SessionOf(p); s != "8f1c2d" {
+		t.Errorf("session %q", s)
+	}
+	if n, err := c.Size(p); err != nil || n != 10 {
+		t.Errorf("size %d %v", n, err)
+	}
+	r, err := c.Open(p, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(r)
+	_ = r.Close()
+	if string(raw) != "456789" {
+		t.Errorf("from 4: %q", raw)
+	}
+	if _, err := c.Open(filepath.Join(t.TempDir(), "gone.jsonl"), 0); err == nil {
+		t.Error("a missing transcript opened")
+	}
+}
+
+// Claude Code names a server's session once, in its environment: every
+// call is that session's, whatever its _meta says.
+func TestClaudeMCPCallSession(t *testing.T) {
+	env := func(k string) string {
+		if k == "CLAUDE_CODE_SESSION_ID" {
+			return "s-env"
+		}
+		return ""
+	}
+	c := Claude{}
+	if s := c.MCPCallSession(map[string]any{"sessionId": "s-meta"}, env); s != "s-env" {
+		t.Errorf("with _meta: %q", s)
+	}
+	if s := c.MCPCallSession(nil, nil); s != "" {
+		t.Errorf("no environment: %q", s)
 	}
 }
 

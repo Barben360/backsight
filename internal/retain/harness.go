@@ -9,11 +9,17 @@ import (
 
 // Harness is what retain needs of the harness (the coding tool) whose
 // conversations and notes it sends: its id, the harness: tag its memories
-// carry, and its conversation parser. A harness.Adapter is one; the
+// carry, and its conversation store (harness.Conversations' contract:
+// offsets are into a conversation's content stream, which Open and Size
+// decompress when the harness stores it compressed; cursors, locks and
+// the quarantine are keyed by SessionOf). A harness.Adapter is one; the
 // caller hands it over, since retain cannot import the adapters (they
 // import instructions, whose tests import retain).
 type Harness interface {
 	Identity
+	SessionOf(path string) string
+	Size(path string) (int64, error)
+	Open(path string, from int64) (io.ReadCloser, error)
 	ReadConversation(r io.Reader, from int64) ([]transcript.Record, transcript.Stats, error)
 }
 
@@ -28,8 +34,13 @@ type Identity interface {
 // and tag are harness.Default()'s (a cli test holds them equal).
 type claudeCode struct{}
 
-func (claudeCode) ID() string  { return state.HarnessClaudeCode }
-func (claudeCode) Tag() string { return "harness:" + state.HarnessClaudeCode }
+func (claudeCode) ID() string                      { return state.HarnessClaudeCode }
+func (claudeCode) Tag() string                     { return "harness:" + state.HarnessClaudeCode }
+func (claudeCode) SessionOf(path string) string    { return transcript.SessionOf(path) }
+func (claudeCode) Size(path string) (int64, error) { return transcript.Size(path) }
+func (claudeCode) Open(path string, from int64) (io.ReadCloser, error) {
+	return transcript.Open(path, from)
+}
 func (claudeCode) ReadConversation(r io.Reader, from int64) ([]transcript.Record, transcript.Stats, error) {
 	return transcript.Read(r, from)
 }

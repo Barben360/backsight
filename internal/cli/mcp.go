@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -201,10 +202,34 @@ type mcpDeps struct {
 	parentPID   int       // the Claude Code process that started this server
 	parentStart time.Time // when it started; zero when the system cannot tell
 	generation  int       // the sends generation, read before cfg (sendsGeneration)
-	// sessionID is the session Claude Code started this server for
-	// (CLAUDE_CODE_SESSION_ID), the fallback key when no record is
-	// under parentPID; "" when not given.
+	// sessionID is the session the harness started this server for
+	// (Claude Code's CLAUDE_CODE_SESSION_ID), the fallback key when no
+	// record is under parentPID; "" when not given. A call that names its
+	// own session replaces it for that call (forCall).
 	sessionID string
+	// adapter is the harness that started this server (nil: Claude
+	// Code's); getenv the server's environment, which the adapter reads
+	// for each call's session (nil: none).
+	adapter harness.Adapter
+	getenv  func(string) string
+}
+
+// forCall is d for one tool call: the session the harness names for it
+// (its _meta, or the server's environment) replaces the server's, so a
+// server shared by several sessions files each call under its own.
+func (d mcpDeps) forCall(req *mcp.CallToolRequest) mcpDeps {
+	a := d.adapter
+	if a == nil {
+		a = harness.Default()
+	}
+	var meta map[string]any
+	if req != nil && req.Params != nil {
+		meta = req.Params.GetMeta()
+	}
+	if s := a.MCPCallSession(meta, d.getenv); s != "" {
+		d.sessionID = s
+	}
+	return d
 }
 
 func textResult(s string) *mcp.CallToolResult {
@@ -222,7 +247,8 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.For(deps.cfg.Feedback.Enabled).ShortGuide})
 	key := &mcpKey{dirs: deps.dirs, home: deps.home, cfg: deps.cfg, generation: deps.generation, sec: deps.sec, engine: deps.engine}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
-		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
+		func(ctx context.Context, req *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
+			deps := deps.forCall(req) // this call's session
 			start := time.Now()
 			if !deps.cfg.Components.Read {
 				return errorResult("components.read is off in config.toml: search with the other integration"), nil, nil
@@ -262,7 +288,8 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			return textResult(text), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
-		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
+		func(ctx context.Context, req *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
+			deps := deps.forCall(req) // this call's session
 			start := time.Now()
 			if !deps.cfg.Components.Read {
 				return errorResult("components.read is off in config.toml"), nil, nil
@@ -298,7 +325,8 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			return textResult(text), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_store", Description: instructions.StoreDescription},
-		func(ctx context.Context, _ *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
+		func(ctx context.Context, req *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
+			deps := deps.forCall(req) // this call's session
 			start := time.Now()
 			// Refusals first: nothing leaves the machine for a refused note.
 			live, found := deps.live()
@@ -347,7 +375,8 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 		})
 	if deps.cfg.Feedback.Enabled {
 		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
-			func(ctx context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, req *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
+				deps := deps.forCall(req) // this call's session
 				verdict := a.Verdict
 				if verdict == "" {
 					verdict = "used"
@@ -724,13 +753,23 @@ func storeReply(res storeResult, err error, hits []recall.Hit, min float64) stri
 	return b.String()
 }
 
+// newMCPCmd is `backsight mcp [--harness <id>]`. The harness whose
+// integration starts the server names itself with --harness, as its hooks
+// do (`backsight hook --harness <id>`); Claude Code's plugin names none,
+// which is Claude Code's. The adapter then names each call's session
+// (harness.Hooks.MCPCallSession).
 func newMCPCmd() *cobra.Command {
-	return setLook(&cobra.Command{
+	var harnessID string
+	cmd := setLook(&cobra.Command{
 		Use:    "mcp",
 		Short:  "Serve the memory tools to Claude Code over stdio (started by the plugin)",
 		Args:   usageArgs(cobra.NoArgs),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			adapter, ok := harness.ByID(harnessID)
+			if !ok {
+				return &output.Error{Code: output.Usage, Message: "--harness: no coding tool " + strconv.Quote(harnessID)}
+			}
 			d, home, err := machine()
 			if err != nil {
 				return err
@@ -749,7 +788,7 @@ func newMCPCmd() *cobra.Command {
 			ppid := os.Getppid()
 			pstart, _ := session.ProcessStart(ppid)
 			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation,
-				sessionID: harness.Default().MCPSessionID(os.Getenv)})
+				sessionID: adapter.MCPCallSession(nil, os.Getenv), adapter: adapter, getenv: os.Getenv})
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}
@@ -757,4 +796,7 @@ func newMCPCmd() *cobra.Command {
 			return nil
 		},
 	}, lookPlain)
+	cmd.Flags().StringVar(&harnessID, "harness", harness.ClaudeCode, "the coding tool that started this server")
+	_ = cmd.Flags().MarkHidden("harness")
+	return cmd
 }

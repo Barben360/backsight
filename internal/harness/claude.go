@@ -361,9 +361,13 @@ func (Claude) EncodeHook(o HookOutput) []byte {
 	return raw
 }
 
-// MCPSessionID is CLAUDE_CODE_SESSION_ID, which Claude Code gives the MCP
-// servers it starts.
-func (Claude) MCPSessionID(getenv func(string) string) string {
+// MCPCallSession is CLAUDE_CODE_SESSION_ID, which Claude Code gives the
+// MCP servers it starts, one per session: the same for every call, whose
+// _meta it ignores.
+func (Claude) MCPCallSession(_ map[string]any, getenv func(string) string) string {
+	if getenv == nil {
+		return ""
+	}
 	return getenv("CLAUDE_CODE_SESSION_ID")
 }
 
@@ -377,6 +381,18 @@ func (c Claude) Conversations(env Env) []string {
 	files, _ := filepath.Glob(filepath.Join(c.Locate(env).Conversations, "*", "*.jsonl"))
 	sort.Strings(files)
 	return files
+}
+
+// SessionOf is the transcript's file name without .jsonl: Claude Code
+// names a session's transcript after its id.
+func (Claude) SessionOf(path string) string { return transcript.SessionOf(path) }
+
+// Size is the transcript file's size: Claude Code never compresses one.
+func (Claude) Size(path string) (int64, error) { return transcript.Size(path) }
+
+// Open is the transcript file from byte from on.
+func (Claude) Open(path string, from int64) (io.ReadCloser, error) {
+	return transcript.Open(path, from)
 }
 
 func (Claude) ReadConversation(r io.Reader, from int64) ([]transcript.Record, transcript.Stats, error) {

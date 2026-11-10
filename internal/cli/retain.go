@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -361,7 +360,7 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 				for i, g := range groups {
 					var match []string
 					for _, file := range g.files {
-						if strings.TrimSuffix(filepath.Base(file), ".jsonl") == session {
+						if g.adapter.SessionOf(file) == session {
 							match = append(match, file)
 						}
 					}
