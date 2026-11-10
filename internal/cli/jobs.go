@@ -271,7 +271,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if f.Hold == "" {
 				f.Hold = res.Extraction
 			}
-			rep, failed := reportFlush(flushAll(cmd, f, files, retain.Options{}, d))
+			rep, failed := reportFlush(flushHarnesses(cmd, f, harnessConversations(home, files), retain.Options{}, d))
 			res.Sessions = rep.Counts
 			// Every unsent session, from the transcripts: a flush that stops
 			// at the first failure (server down, a hold) counts one.

@@ -167,7 +167,7 @@ func syntheticInput(h plugin.Hook, sid, dir string) []byte {
 	case "PreToolUse":
 		in["tool_name"], in["tool_input"] = "AskUserQuestion", map[string]any{"questions": []any{}}
 	case "PostToolUse":
-		in["tool_name"], in["tool_input"], in["tool_response"] = plugin.ToolNames[0], map[string]any{"query": "verify"}, map[string]any{}
+		in["tool_name"], in["tool_input"], in["tool_response"] = claudeCode.ToolNames()[0], map[string]any{"query": "verify"}, map[string]any{}
 	case "PostToolUseFailure":
 		in["tool_name"], in["tool_input"], in["error"] = "Bash", map[string]any{"command": "backsight verify"}, "Exit code 1\nverify"
 	case "SubagentStart", "SubagentStop":
@@ -247,7 +247,7 @@ func verifyMCP(ctx context.Context, shim string, env []string, dir string, feedb
 	for _, t := range list.Tools {
 		got = append(got, t.Name)
 	}
-	for _, want := range plugin.ToolNames {
+	for _, want := range claudeCode.ToolNames() {
 		short := want[strings.LastIndex(want, "__")+2:]
 		if !slices.Contains(got, short) && (feedbackOn || short != "memory_credit") {
 			c.Status, c.Summary = "fail", fmt.Sprintf("tool %s missing (server lists %v)", short, got)

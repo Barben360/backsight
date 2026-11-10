@@ -123,7 +123,7 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 			project, source = f.Attribution.ReportProject(e), e.Source
 		}
 		n := NewSubagentNote(f.Bank, sid, agent, agentTypeOf(p), project, text, reply.At)
-		n.Attribution = source
+		n.Attribution, n.HarnessTag = source, f.harness().Tag()
 		if _, err := ob.Append(n); err != nil {
 			return queued, err
 		}

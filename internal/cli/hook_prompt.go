@@ -12,6 +12,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
@@ -397,7 +398,7 @@ func (h *hookEnv) userPrompt() []byte {
 	}
 	ev.MS = int(time.Since(start).Milliseconds())
 	h.tw.Emit(ev)
-	return contextOutput("UserPromptSubmit", text, banner)
+	return h.answer(harness.EventUserPromptSubmit, text, banner)
 }
 
 // age renders " (4d ago)", or nothing for an unknown date.

@@ -110,6 +110,10 @@ type Flusher struct {
 	// applied one, and decides rebuilt reports' projects as SubagentStop
 	// does (decision 0072); a zero Dir records nothing.
 	Attribution Attributor
+	// Harness is the harness whose conversations FlushFile reads: its
+	// parser reads them and its tag marks what is sent. nil: Claude
+	// Code's.
+	Harness Harness
 	// replaceReads counts the documents this run read to confirm a
 	// replacing part (maxReplaceReads); queue is the bank's queue as this
 	// run first read it (checkReplaces). A Flusher is one run.
@@ -240,7 +244,7 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 		_ = fh.Close()
 		return fail(Retry, err.Error())
 	}
-	recs, st, err := transcript.Read(fh, from)
+	recs, st, err := f.harness().ReadConversation(fh, from)
 	_ = fh.Close()
 	if err != nil {
 		return fail(Retry, err.Error())
@@ -714,7 +718,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 // segment builds segment segNo of project's document doc from run, its
 // operation id salted by the cursor's generation.
 func (f *Flusher) segment(cur Cursor, sid, doc string, run []transcript.Record, segNo int, project string) Segment {
-	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
+	seg := BuildSegmentOf(f.harness(), f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
 	if cur.Generation > 0 {
 		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
 	}
@@ -996,4 +1000,12 @@ func errSummary(err error) string {
 		return fmt.Sprintf("%s %s: HTTP %d (%s)", apiErr.Method, apiErr.Path, apiErr.Status, apiErr.Kind)
 	}
 	return err.Error()
+}
+
+// harness is the adapter of the conversations this flusher reads.
+func (f *Flusher) harness() Harness {
+	if f.Harness == nil {
+		return claudeCode{}
+	}
+	return f.Harness
 }

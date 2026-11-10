@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
@@ -748,7 +749,7 @@ func newMCPCmd() *cobra.Command {
 			ppid := os.Getppid()
 			pstart, _ := session.ProcessStart(ppid)
 			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation,
-				sessionID: os.Getenv("CLAUDE_CODE_SESSION_ID")})
+				sessionID: harness.Default().MCPSessionID(os.Getenv)})
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}

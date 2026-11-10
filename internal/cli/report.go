@@ -436,14 +436,14 @@ func reportVersions(ctx context.Context, d paths.Dirs, home string) report.Versi
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, err := claudeRunner.Run(ctx, nil, "--version")
+	version, err := claudeCode.Detect(ctx, harnessEnv(claudeCode, home, ""))
 	switch {
 	case errors.Is(err, errClaudeMissing):
 		v.ClaudeCode = "not found"
-	case err != nil:
+	case err != nil, version == "?": // "?": it printed nothing
 		v.ClaudeCode = "unknown"
 	default:
-		v.ClaudeCode = strings.Fields(string(out) + " unknown")[0]
+		v.ClaudeCode = version
 	}
 	return v
 }

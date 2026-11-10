@@ -12,11 +12,10 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
-	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
-	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
@@ -122,7 +121,7 @@ func (h *hookEnv) sessionStart() []byte {
 		if h.in.Source == "clear" { // its context starts empty; resume and fork keep theirs
 			guide = withLine(guide, h.projectsLine())
 		}
-		return contextOutput("SessionStart", guide, "")
+		return h.answer(harness.EventSessionStart, guide, "")
 	}
 	h.writeEnvFile()
 	name := safeProject(h.project)
@@ -156,8 +155,10 @@ func (h *hookEnv) sessionStart() []byte {
 		}
 	}
 	if st, err := state.Load(h.dirs.StateFile()); err == nil {
-		settings := claudecode.Locate(h.home, os.Getenv).Settings
-		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version, plugin.WiringOf(h.cfg)); len(drift) > 0 {
+		// The session's own profile: the harness runs its hooks with it.
+		env := harness.Env{Home: h.home, Profile: os.Getenv(h.adapter.ProfileVar())}
+		rec := harness.Recorded{Version: st.PluginVersion, ShimTarget: st.ShimTarget, Data: h.dirs.Data, BinaryVersion: buildinfo.Version}
+		if drift := h.adapter.Drift(env, rec, &h.cfg); len(drift) > 0 {
 			banner += "\n" + instructions.DriftLine(drift[0])
 		}
 		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
@@ -211,7 +212,7 @@ func (h *hookEnv) sessionStart() []byte {
 	if text != "" {
 		context += "\n\n" + text
 	}
-	return contextOutput("SessionStart", context, banner)
+	return h.answer(harness.EventSessionStart, context, banner)
 }
 
 // briefing: the project's most recently updated observations, else its
@@ -439,7 +440,7 @@ func (h *hookEnv) compactStart() []byte {
 		}
 		return nil
 	})
-	return contextOutput("SessionStart", withLine(h.texts().Guide, h.projectsLine())+strings.TrimRight(b.String(), "\n"), "")
+	return h.answer(harness.EventSessionStart, withLine(h.texts().Guide, h.projectsLine())+strings.TrimRight(b.String(), "\n"), "")
 }
 
 // projectsLine names the projects in memory (#271): this one, those
@@ -521,5 +522,5 @@ func (h *hookEnv) subagentStart() []byte {
 		}
 		h.journalShows("briefing", itemsFromInjections(shown))
 	}
-	return contextOutput("SubagentStart", text, "")
+	return h.answer(harness.EventSubagentStart, text, "")
 }

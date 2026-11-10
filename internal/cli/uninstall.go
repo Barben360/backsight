@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/output"
@@ -395,8 +396,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	}
 	for _, prof := range profiles {
 		name := "client " + prof
-		env := profileEnv(home, prof)
-		there, err := pluginPresent(ctx, env)
+		there, err := claudeCode.Installed(ctx, harnessEnv(claudeCode, home, prof))
 		switch {
 		case errors.Is(err, errClaudeMissing):
 			add(undoAction{Name: name, Status: "skipped", Detail: "the claude command was not found"})
@@ -410,7 +410,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}
 		detail := "plugin " + plugin.PluginID() + " and its marketplace removed"
 		if !f.plan {
-			restored, err := removePlugin(ctx, d, home, env, "uninstall")
+			restored, err := removePlugin(ctx, d, home, prof, "uninstall")
 			if err != nil {
 				return fail(name, err)
 			}
@@ -615,8 +615,8 @@ func wiredProfiles(home string, st state.State, rec *setup.Record) []string {
 	}
 	if st.PluginVersion != "" {
 		p := filepath.Join(home, ".claude")
-		if st.Client != nil && st.Client.Profile != "" {
-			p = st.Client.Profile
+		if rp := recordedProfile(st, harness.ClaudeCode); rp != "" {
+			p = rp
 		}
 		addOne(p)
 	}
@@ -645,8 +645,8 @@ func retentionOfferFor(home string, st state.State, rec *setup.Record, cfg confi
 		return nil
 	}
 	prof := filepath.Join(home, ".claude")
-	if st.Client.Profile != "" {
-		prof = st.Client.Profile
+	if p := recordedProfile(st, harness.ClaudeCode); p != "" {
+		prof = p
 	}
 	settings := claudecode.Locate(home, profileGetenv(home, prof)).Settings
 	raw, err := os.ReadFile(settings)
@@ -696,7 +696,7 @@ func removeRules(doc []byte) ([]byte, []claudecfg.Change, error) {
 	}
 	return claudecfg.RemoveWhere(doc, []string{"permissions", "allow"}, func(_ string, v any) bool {
 		s, _ := v.(string)
-		return slices.Contains(plugin.ToolNames, s)
+		return slices.Contains(claudeCode.ToolNames(), s)
 	})
 }
 
@@ -707,20 +707,6 @@ func hasChanges(fr []claudecfg.FileResult) bool {
 		}
 	}
 	return false
-}
-
-// pluginPresent reports whether backsight's plugin or marketplace is
-// registered with the profile env points at (read only).
-func pluginPresent(ctx context.Context, env []string) (bool, error) {
-	known, err := pluginIDs(ctx, env)
-	if err != nil {
-		return false, err
-	}
-	path, err := marketplacePath(ctx, env)
-	if err != nil {
-		return false, err
-	}
-	return known[plugin.PluginID()] || path != "", nil
 }
 
 // uninstallScheduler removes the jobs entries through jobs uninstall,

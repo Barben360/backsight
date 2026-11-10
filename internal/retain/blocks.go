@@ -136,6 +136,12 @@ func BaseDocumentID(id string) string {
 // used whatever the records say (a resumed or forked file keeps one
 // identity).
 func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
+	return BuildSegmentOf(claudeCode{}, bank, sid, doc, recs, segment, project, machineID, version)
+}
+
+// BuildSegmentOf is BuildSegment for the conversation of harness h, whose
+// tag and id the item carries.
+func BuildSegmentOf(h Identity, bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
 	var lines []string
 	if segment == 1 {
 		lines = append(lines, encodeLine(line{Role: "system", Content: "REF-ID: " + doc}))
@@ -150,11 +156,11 @@ func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, 
 	ts := first.Timestamp
 	item := hindsight.RetainItem{
 		Content: content, Context: "coding agent session", DocumentID: doc, Strategy: "conversation",
-		Tags:              []string{"project:" + project, "source:chat", "harness:claude-code"},
+		Tags:              []string{"project:" + project, "source:chat", h.Tag()},
 		ObservationScopes: [][]string{{"project:" + project}},
 		Timestamp:         &ts,
 		Metadata: map[string]string{"session_id": sid, "last_uuid": last.UUID, "records": strconv.Itoa(len(recs)),
-			"segment": strconv.Itoa(segment), "machine_id": machineID, "binary_version": version, "source": "chat", "harness": "claude-code",
+			"segment": strconv.Itoa(segment), "machine_id": machineID, "binary_version": version, "source": "chat", "harness": h.ID(),
 			// project marks the per-project layout: a conversation:<sid>
 			// without it holds every project's records (legacy, resync)
 			"project": project},
