@@ -205,7 +205,7 @@ A reranker on the host must listen on an address the server's container reaches 
 ## Check it works
 
 1. `docker compose ps`, in the server's directory, shows `reranker` healthy and `hindsight` running.
-2. The server's log names the provider: `docker compose logs hindsight | grep Reranker` shows `provider=tei` or `provider=cohere`.
+2. The server's log names the provider: `docker compose logs hindsight | grep Reranker` shows `provider=tei` or `provider=cohere`. `backsight doctor`'s `gpu` check says the same: `your own reranker (provider tei, in compose.override.yaml)`, or `cohere`.
 3. `backsight search "something you know is in memory"` answers with the same memories as before, faster. Run it a few times: the first call after a start warms the GPU.
 4. The GPU shows the work: `nvidia-smi` lists the service's process; on AMD and Intel, the service's memory appears in the GPU tools of your desktop, or with `radeontop` / `intel_gpu_top`.
 5. Over the next days, doctor's `latency` check and the dashboard's recall times say whether recall got faster.

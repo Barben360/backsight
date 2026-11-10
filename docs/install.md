@@ -4,7 +4,7 @@ How to install backsight and set it up for Claude Code. The short path is in the
 
 ## Requirements
 
-- **Linux**, amd64 (the arm64 binary is built but not tested), or **Windows 11**, x86_64, without administrator rights: see [backsight on Windows](windows.md) for its own requirements and install, which need no Docker. The macOS binaries are built but not tested yet.
+- **Linux**, amd64 (the arm64 binary is built but not tested), or **Windows 11**, x86_64, without administrator rights: see [backsight on Windows](windows.md) for its own requirements and install, which need no Docker. The macOS arm64 binary is built but not tested yet.
 - On Linux, **Docker**, usable by your user without `sudo`, with **Docker Compose v2** (the `docker compose` plugin, not the old `docker-compose`):
   - install Docker Engine: [docs.docker.com/engine/install](https://docs.docker.com/engine/install/) (on Debian and Ubuntu, the distribution's `docker.io` package with its Compose v2 package works too);
   - let your user run it: `sudo usermod -aG docker $USER`, then log out and back in ([Linux post-install steps](https://docs.docker.com/engine/install/linux-postinstall/)). Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) avoids that and works too;
@@ -86,7 +86,9 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 |---|---|---|
 | `provider`: the LLM that extracts memories | `deepseek`, `anthropic`, `openai`, `ollama`, `claude-code` | `deepseek` |
 | `model` | depends on the provider | the provider's preset |
-| `retention`: how long Claude Code keeps transcripts | `3650` days, or `keep` (leave Claude Code's setting) | `3650` |
+| `base_url`, only with `anthropic`, `openai` or `ollama`: the provider's API address | a URL, or empty for the provider's own | the provider's own (`http://host.docker.internal:11434` with `ollama`) |
+| `ack_subscription`, only with `claude-code`: accept the subscription's terms | `yes` | none, you must answer |
+| `retention`: how long Claude Code keeps transcripts | a number of days (`3650` offered), or `keep` (leave Claude Code's setting) | `3650` |
 | `backups`: daily encrypted backups | `on`, `off` | `on` |
 | `reference`, only when another Hindsight integration is wired: unwire it | `retire`, `keep` | `retire` |
 | `backfill`, only when Claude Code keeps past sessions: import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |

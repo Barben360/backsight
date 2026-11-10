@@ -41,6 +41,7 @@ The first `make check` downloads the modules and builds the race runtime: count 
 | `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`), the slices balanced by the tests' recorded times |
 | `make test-durations [RUN=<id>]` | records those times (`scripts/testshard/durations.txt`) from the times each `test-race` slice of a CI run uploads (main's latest successful run by default; needs `gh`), refused if a slice is missing or a test failed; a test added since counts 0.05 s, so re-record when CI's slices drift apart |
 | `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag, and vets them with it for Linux and Windows |
+| `make bench-index` | runs the time budgets (the metrics index, the views, the dashboard's pages, the ledger lookup, the hook's 20 ms wait) without the race detector, as CI's `bench` job does |
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |
 | `make leaks` | scans the Git history for secrets |
@@ -81,6 +82,8 @@ Before every commit, `make check` must pass. It runs, and stops at the first fai
 
 - `gofmt -l .` (it must list nothing) and `go vet ./...`;
 - `make lint`, `make test` and `make test-hooks`;
+- `make bench-index` (the time budgets, without the race detector);
+- `scripts/third-party-licenses.sh --check` (the embedded licenses file is current);
 - `make cross`;
 - `gitleaks dir . --no-banner --redact`, when gitleaks is installed.
 

@@ -29,7 +29,7 @@ Release binaries are built for four targets. Linux amd64 is tested, and Windows 
 | Linux amd64 | yes | **tested**: Ubuntu 24.04 (CI, on every change, the fresh-install chain included) and CachyOS (rolling, Arch-based) |
 | Linux arm64 | yes | built, not tested |
 | macOS arm64 (Apple silicon) | yes | built, not tested |
-| Windows amd64 | yes | **tested in CI**: Windows 11 x86_64 targeted, without admin rights ([Windows](windows.md)); GitHub's `windows-latest` runners run the unit tests and a full native install, store, backup, restore and uninstall on every change. and v0.1.21-m7 was run on a Windows 11 PC by a standard user (install, setup, Claude Code sessions, restart, kills, jobs, a client of a Linux server) |
+| Windows amd64 | yes | **tested in CI**: Windows 11 x86_64 targeted, without admin rights ([Windows](windows.md)); GitHub's `windows-latest` runners run the unit tests and a full native install, store, backup, restore and uninstall on every change to more than documentation; v0.1.21-m7 was also run on a Windows 11 PC by a standard user (install, setup, Claude Code sessions, restart, kills, jobs, a client of a Linux server) |
 
 Other targets (macOS on Intel, Windows on arm64, 32-bit) have no release binary.
 

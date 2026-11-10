@@ -9,7 +9,7 @@ How to remove backsight, and what stays afterwards.
 | Claude Code wiring (plugin, permission rule) | removed | removed |
 | Scheduler entries | removed | removed |
 | An old Hindsight integration setup unwired | put back | left unwired |
-| The server | stopped, data kept | kept running (default), or stopped, or deleted |
+| The server | stopped if setup started it, data kept | kept running (default), or stopped, or deleted |
 | The binary and the command on PATH | kept | removed |
 | Config, secrets, state | kept | kept, or deleted with `--purge-local` |
 | Backups | kept | kept |
@@ -42,6 +42,8 @@ On Windows, uninstall also stops the native server and deletes its scheduled tas
 |---|---|
 | `--stop` | Also stops the server. Its containers and data are kept. |
 | `--delete-data` | Also deletes the server and **every memory in its bank**. You must type the bank id to confirm. |
+
+`--stop` and `--delete-data` exclude each other.
 
 On the [native runtime](native-runtime.md), the database's unit runs a check that is part of backsight before every start, so it cannot start once backsight is gone: uninstall therefore stops and disables both units even without `--stop` (its plan says `stopped and disabled`), and keeps their data in `server/native/home`. A later install starts them again. `--delete-data` stops and disables both units before it removes anything, then removes the units and `server/native` (the database, Python, the virtual environments and the models); the password of a kept native server lives in `server/native/server.env`. On Windows the scheduled task runs backsight itself, so uninstall stops the supervisor and deletes the task even without `--stop` (its plan says `stopped and its scheduled task … deleted`), and keeps the data in `server\native`; a later install registers the task again. `--delete-data` also removes the empty folders pg0 left in `%USERPROFILE%\.pg0`, and that folder when nothing else is in it.
 

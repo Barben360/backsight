@@ -55,13 +55,15 @@ backsight update apply
 5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`). From v0.1.4-m5 it first renames a bank still called `claude-memory` to `backsight` (`backsight bank rename`); when the server is busy, the daily job does it after its backup;
 6. indexes the new version's docs for `backsight guide search` (a failure there is only a warning);
 7. migrates the local metrics index with the new version, only once the update is committed, so a rollback never meets a migrated index (a failure there is only a warning: the next `jobs tick` retries);
-8. records the update.
+8. migrates or builds the feedback ledger (`feedback/ledger.db`) with the new version, also once the update is committed (a failure there is only a warning: the next `jobs tick` retries);
+9. on Windows, restarts the server's supervisor when it needs to ([Windows](windows.md#updates-and-uninstall-while-claude-code-runs));
+10. records the update.
 
 Then restart Claude Code (or run `/reload-plugins`) to load the new plugin.
 
 After the upgrade that brings it, the maintenance run every 15 minutes (`jobs tick`) also adds earlier history to the per-memory counts: the memories shown and the clear credits that this machine's telemetry and the Claude Code transcripts still on disk recorded. It spends at most a minute per run and goes on at the next one until it is done; `backsight feedback import` does it at once.
 
-`--version <v>` installs a given version instead of the newest. `--source <dir>` reads releases from a local directory instead of GitHub.
+`--version <v>` installs a given version instead of the newest; it must be newer than the installed one (an update never downgrades: exit 2). `--allow-unordered` lets the server upgrade deploy a Hindsight version it cannot order against the deployed one. `--source <dir>` reads releases from a local directory instead of GitHub.
 
 ## Server upgrades
 
@@ -76,6 +78,7 @@ Any failure from the deploy on puts the safety backup back into the previous ver
 ## When an update fails
 
 - **Exit 20**: the download or its signature failed, or something blocks the update (a lock held, Docker stopped). Nothing changed.
+- **Exit 20 after a failed rollback**: a step failed, and so did putting things back. The message names the command that returns to the previous version: run it, then `backsight doctor`.
 - **Exit 30**: a step failed before the server upgrade passed. backsight put back its config and state, the server, the shim and the previous plugin: you are on the old version, as before.
 - **Exit 40**: the update itself passed but recording it failed. Run `backsight update apply` again: it finishes the update.
 

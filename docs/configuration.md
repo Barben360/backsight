@@ -16,9 +16,10 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 |---|---|
 | `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*`, `feedback.*`, `retain.*` | At the next hook or command: the hooks read the file each time. Except `recall.failure_pitfalls`: see the next line. |
 | `recall.failure_pitfalls` | After `backsight client install`, which wires the `PostToolUseFailure` hook only when it is `true` (off, a failed tool call starts no backsight process). Until then, `backsight doctor` and the session's first line report the wiring as drifted. |
-| `llm.*`, `network.*`, `server.ui_port`, the port of `server.url` | After `backsight server render` and `backsight server start`, which write the server's files again and recreate it. Then `backsight server llm check` tests an LLM change. |
+| `llm.*`, `embeddings.*`, `network.*`, `server.ui_port`, the port of `server.url` | After `backsight server render` and `backsight server start`, which write the server's files again and recreate it. Then `backsight server llm check` tests an LLM change. |
 | `backup.*`, `update.*` | At the next daily job, or the next `backup` or `update` command. |
 | `client.retention_days` | At the next `backsight client install` or `backsight client retention`. |
+| `terminal.*` | At the next command. |
 
 ## Top level
 
@@ -46,6 +47,8 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 | Key | Default | Effect |
 |---|---|---|
 | `client.retention_days` | `0` | The least number of days Claude Code keeps its transcripts (`cleanupPeriodDays`) that backsight keeps in Claude Code's settings. `0`: not managed. Setup sets it from your `retention` answer (3650 recommended), `backsight client retention` changes it. |
+
+Claude Code's directory is `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`. `--config-dir <dir>` on `setup`, `connect`, `verify` and the `client` commands picks another one (another Claude Code profile).
 
 ## `[projects]`
 
@@ -197,12 +200,13 @@ These environment variables change the look too; [commands](commands.md#at-a-ter
 
 | Variable | Effect |
 |---|---|
-| `BACKSIGHT_COLOR` | `always`, `never` or `auto` (the default): as `--color`, for every command. The flag wins over it. |
+| `BACKSIGHT_COLOR` | `always`, `never` or `auto` (the default): as `--color`, for every command but the plain ones, and not inside Claude Code (`CLAUDECODE`). The flag wins over it; any other value is ignored. |
 | `BACKSIGHT_SPLASH` | `0`: no splash; color stays. As `--no-splash`. |
-| `NO_COLOR` | Set and not empty: no color ([no-color.org](https://no-color.org)), unless `--color=always` or `BACKSIGHT_COLOR=always`. |
+| `NO_COLOR` | Set and not empty: no color ([no-color.org](https://no-color.org)), and so no splash, unless `--color=always` or `BACKSIGHT_COLOR=always`. |
 | `CLAUDECODE` | Set by Claude Code in its shell: no color and no splash, so Claude reads plain text. Only `--color=always` overrides it. |
-| `TERM` | `dumb`: no color under `auto`. |
+| `TERM` | `dumb`: no color and no splash under `auto`. |
 | `COLORTERM`, `WT_SESSION` | `truecolor`/`24bit`, or Windows Terminal: full colors; else 256 colors when `TERM` contains `256color`, else 16. |
+| `LC_ALL`, `LC_CTYPE`, `LANG` | Linux: the first one set says whether the terminal takes UTF-8; when it does not, the splash draws the ASCII logo. Windows reads the console's code page instead. |
 
 `FORCE_COLOR` and `CLICOLOR_FORCE` are ignored: set in a shell profile, they would reach the commands Claude runs, which inherit that environment.
 

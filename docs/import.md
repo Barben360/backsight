@@ -20,7 +20,7 @@ The plan changes nothing. It shows, for each top-level folder, the files, charac
 - `--exclude <pattern>` (repeatable) skips paths that match, relative to the folder: `*` stays inside one folder, `**` crosses any depth. Example: `--exclude 'archive/**' --exclude '**/_index.md'`.
 - A file's date is its header's `date:` or `created:` field when it has one, else the time it was last modified. Memories keep that date, so an old note reads as old.
 - Secrets in the files (keys, tokens, passwords) are replaced with a placeholder before anything is sent, as for sessions.
-- The memories go to the transverse project (the memory every project shares). `--project <name>` puts them in one project instead.
+- The memories go to the transverse project (the memory every project shares). `--project <name>` puts them in one project instead. A folder keeps the project of its first import: to change it, `backsight import purge <id>` first.
 
 ## Import
 
@@ -49,7 +49,7 @@ Each run starts a new spending window: the cap counts what this run sends, and `
 
 ## Run it again
 
-Running the same command on the same folder later sends only the new and changed files. The `--exclude` and `--ext` you gave the first time are reused when you give none. A file you deleted from the folder stays in the memory: `import list` counts it as no longer in the folder.
+Running the same command on the same folder later sends only the new and changed files. The `--exclude` and `--ext` of the folder's last import are reused when you give none. A file you deleted from the folder stays in the memory: `import list` counts it as no longer in the folder.
 
 ## Undo an import
 

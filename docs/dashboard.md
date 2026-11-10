@@ -1,6 +1,6 @@
 # The memory dashboard
 
-backsight can tell you whether its memory is working and what it costs. Every answer comes from `backsight stats <view>`: plain text for you, `--json` for an agent or a script. The views read the local metrics index (built from backsight's own usage events, the feedback journal and the local status files) and, for the server's side, a few read-only calls to the server. They print counts, times, ids, project and session names; never the text of a memory, a prompt or an error (`stats memories <id> --text` is the one exception, and only when you ask for it).
+backsight can tell you whether its memory is working and what it costs. Every answer comes from `backsight stats <view>`: plain text for you, `--json` for an agent or a script. The views read the local metrics index (built from backsight's own usage events, the feedback journal, the local status files and the local record in `metrics/`, the other PCs' figures included) and, for the server's side, a few read-only calls to the server. They print counts, times, ids, project and session names; never the text of a memory, a prompt or an error (`stats memories <id> --text` is the one exception, and only when you ask for it).
 
 Start with `backsight stats overview`: it answers "is memory working?" in four lines and lists what needs your attention, each with the command that helps.
 
@@ -34,7 +34,7 @@ The cookie then lives in the browser of the other PC, and other users of that PC
 
 ## What the pages show
 
-Each page asks one question, and its cards answer parts of it. Overview, Quality, Cost, Bank and Pipeline are in the top bar, with System; Projects, Sessions and Memories are under Browse. Releases and Definitions appear in developer mode (see Preferences). Days opens from links in other pages.
+Each page asks one question, and its cards answer parts of it. Overview, Quality, Cost, Bank and Pipeline are in the top bar, with System; Projects, Sessions and Memories are under Browse. Releases and Definitions are in the Developer menu in developer mode (see Preferences); Definitions is also linked from every page's footer. Days opens from links in other pages.
 
 | Page | The question it asks | What it shows | `stats` view |
 |---|---|---|---|
@@ -45,7 +45,7 @@ Each page asks one question, and its cards answer parts of it. Overview, Quality
 | Pipeline | Is it flowing? | Items sent (from sessions, notes, subagent reports), what waits on this PC and on the server, the time to turn a session into memories, how long until a session's memories come back, the sessions sent that never turned into memories, the background jobs and the steps that crashed. | `backsight stats pipeline` |
 | System | Is the service up? | The memory server, this PC, what needs a look here, the doctor's checks, how they did day by day and whether the last scan found a possible secret. | `backsight stats system` |
 | Releases | Did a release or a setting help? | The numbers per backsight version, a comparison of two versions, the days Claude used memory, the settings in effect and a command that replays a setting. Read differences as hints, not proof. | `backsight stats releases` |
-| Definitions | What does each number mean? | Every number: its question, what it counts, when it is watched and how many events it needs, grouped by axis (Found, Right, Cost, Flowing, memory, review). | `backsight stats defs` |
+| Definitions | What does each number mean? | Every number: its question, what it counts, when it is watched and how many events it needs, grouped by axis (Found, Right, Cost, Bank, Flowing, To review). | `backsight stats defs` |
 | Projects | Which projects use memory? | One row per project; a project's name opens its own page. | `backsight stats projects` |
 | Sessions | Which sessions used memory? | One row per session, which you can filter; an id opens that session turn by turn ("What happened in session ...?"). | `backsight stats sessions` |
 | Memories | Which memories does recall show? | One row per memory of the feedback ledger (every memory recall has shown on this PC, whatever the window), with an order and a filter and badges for what to review; an id opens that memory ("How has memory ... done?"). | `backsight stats memories` |
@@ -84,7 +84,7 @@ These cards come from the daily upkeep's record (see the notes of v0.1.28-m7 in 
 - **Sent, never turned into memories** lists the newest of those sessions with what happened: the server's task failed, it finished with no memory, or nothing was recorded. Sessions still being turned into memories (sent less than 24 hours ago) are not in it.
 
 **System**
-- **Have the health checks passed lately?** Each check's result for each day, from the daily upkeep's run: ok, watch or problem. A day without a run is shown as none, which is not a fault. Checks that had a non-ok day come first.
+- **Have the health checks passed lately?** Each check's result for each day, from the daily upkeep's run: ok, watch or attention. A day without a run is shown as "no upkeep run" (a dashed ring), which is not a fault. Checks that had a non-ok day come first.
 - **Could memory hold a secret?** Four states: no scan yet, a scan that found nothing, a scan that found some (with the command to list and forget them) and a scan older than 30 days, which is only a reminder. A scan that found some puts the Overview's Flowing axis on watch.
 
 **Cost and Bank**
@@ -163,8 +163,9 @@ A card with no number usually says why; a dash stands where a value simply does 
 
 | The page says | It means | What to do |
 |---|---|---|
-| "12 of 140: too few to judge. 140 prompts; 200 are needed." | The number is shown but there are too few events to judge it. | Nothing is wrong. Use memory a while and look again. |
+| "12 of 15: too few to judge. 15 prompts; 20 are needed." | The number is shown but there are too few events to judge it. | Nothing is wrong. Use memory a while and look again. |
 | "Nothing recorded in the last 7 days." | No event of this kind in the window. | Pick a longer window: the card offers the longer ones up to 90 days. |
+| "No reading yet." | A number that tells a state (what waits, the server, the memory's size, the checks, the jobs) has not been read yet. | Not a fault; look again later. |
 | "Memory feedback is off (`feedback.enabled`). Quality numbers need it. Found, Cost and Flowing still work." | backsight is not recording which memories Claude used. | To see quality numbers, set `enabled = true` under `[feedback]` in `config.toml` ([configuration](configuration.md)). |
 | "This PC runs the server only: activity is recorded on the PCs that use it." | This PC hosts the memory server and has no Claude Code activity of its own. | Open the dashboard on a PC that uses the memory. |
 | "Memory server not answering since 14:02." (or without the time) | The dashboard could not read the server. Numbers that come from the server wait; the others stay. | Run `backsight doctor`; it gives the fix. |
@@ -203,7 +204,7 @@ The cookie still works if it was written by an older backsight, which kept fewer
 ## Keyboard and screen readers
 
 - **Skip to content.** The first Tab stop on every page is "Skip to content", which jumps over the top bar.
-- **Tab order.** On the Overview it runs: Skip to content, the logo, the pages (Overview, Quality, Cost, Bank, Pipeline, Browse, System), the window picker (24 h, 7 d, 30 d, 90 d), the project filter, Refresh, Preferences, then the verdict's info and CLI buttons, and the cards from top to bottom. Enter or Space opens a menu.
+- **Tab order.** On the Overview it runs: Skip to content, the logo, the pages (Overview, Quality, Cost, Bank, Pipeline, Browse, System), the window picker (24 h, 7 d, 30 d, 90 d, Custom window), the project filter, Refresh, Preferences, the switch of the scope line when other PCs share, then the verdict's info and CLI buttons, and the cards from top to bottom. Enter or Space opens a menu.
 - **Charts have a table.** Every chart card has a "Show as a table" control with the same numbers as text, which a screen reader can walk. It needs no script. On a window over 200 days a chart shows no per-day values on hover, and its table lists the latest 120 days. The small trends in the Overview's tiles have a spoken summary instead.
 - **Copy buttons need scripts.** Commands the page suggests have a Copy button. Without scripts the button is absent and the command is plain text you can select. With scripts, if the browser does not let the page use the clipboard, the button selects the command and says "Selected: press Ctrl+C".
 - **Works without scripts.** Everything else, including the menus, the preferences and the table views, works with scripts off.
@@ -241,7 +242,7 @@ Flags go after the view word: `backsight stats overview --days 30`, `--project <
 - **Statuses.** `ok`, `watch` (worth a look), `bad` (act now). A rate is judged on its interval, not its point: a rate is watched only when even the favourable end of its interval is past the line, so a lucky or unlucky small sample does not raise an alarm. `info` marks counts to review that are not alarms.
 - **Borderline.** The point value is past a fixed threshold but the interval still reaches the good side: the status keeps the interval's reading, and the number is marked as close to the line. Only fixed thresholds can be borderline, not comparisons with the weeks before.
 - **Compared with before.** Some metrics are also compared with their usual level: the median of the four previous weeks (7-day windows), needing at least two of them with enough data. Falling clearly below it is a `watch`, whatever the window you selected.
-- **Unreliable.** Quality numbers depend on Claude telling backsight which memories it used. When fewer than 80% of the turns that showed memory say so (and at least 20 turns were counted), the quality numbers carry the tag `unreliable` and the Right axis cannot be judged.
+- **Unreliable.** Quality numbers depend on Claude telling backsight which memories it used. When even the upper end of the interval of turns that showed memory and say so is under 80% (and at least 20 turns were counted), the quality numbers carry the tag `unreliable` and the Right axis cannot be judged.
 - **Not declared.** A turn that showed memory but ended with no statement of what was used. Such turns are counted apart, never as "unused".
 - **Recent-weighted counts.** The review-queue counts (often shown but never used, hidden, reported wrong) weigh recent shows and credits more than old ones, so an old burst does not keep a memory on the list. They are listings to review (`info`), not alarms.
 - **"Last 7 days" whatever the window.** The verdict and the attention list always judge the last 7 days against the 7 before, for the selected project. The window you choose (`--days`, `--since`) changes the displayed counts, charts and tables, not the verdict: the lines under each axis and in the summary text quote the last 7 days too. A few metrics are judged on "now" (hook failures over the last 24 hours, the current local backlog); the window only sets their displayed counts.
