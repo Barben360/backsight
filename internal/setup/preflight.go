@@ -70,7 +70,7 @@ type Probes struct {
 	// is nothing to reach first. SchedulerOff: the answer skips that step.
 	UserScheduler func(ctx context.Context) error
 	SchedulerOff  bool
-	// ServerOnly: a host without Claude Code (setup --role server); the
+	// ServerOnly: a host without a coding tool (setup --role server); the
 	// Claude Code checks and lines are skipped.
 	ServerOnly bool
 	// Runtime is the server's runtime: "" or "docker", or "native"

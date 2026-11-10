@@ -34,7 +34,14 @@ type State struct {
 	// RetainSince: live retain only takes sessions started after it; older
 	// ones belong to backfill (decision 0050).
 	RetainSince *time.Time `json:"retain_since,omitempty"`
-	Client      *Client    `json:"client,omitempty"`
+	// Client is Claude Code's entry. It keeps the key "client" that every
+	// older binary reads: one run after a downgrade still finds the
+	// profile client install wired, never the shell's. Read and write it
+	// through ClientOf and ClientFor.
+	Client *Client `json:"client,omitempty"`
+	// Clients: every other coding tool's entry, by harness id ("codex").
+	// An older binary keeps the key as it found it (extra).
+	Clients map[string]*Client `json:"clients,omitempty"`
 	// Scheduler: the OS entries `jobs install` wrote (decision 0025).
 	Scheduler *Scheduler `json:"scheduler,omitempty"`
 	// RestoreEpoch: the bank's restore epoch the cursors were last
@@ -373,16 +380,62 @@ func (s State) EpochOf(bank string) int {
 	return s.RestoreEpoch.Epoch
 }
 
-// Client remembers Claude Code settings as they were before backsight first
-// changed them, so uninstall can offer them back (decision 0052).
+// Harness ids: the coding tools backsight wires, as the harness: tag of
+// their conversations names them.
+const (
+	HarnessClaudeCode = "claude-code"
+	HarnessCodex      = "codex"
+)
+
+// Client remembers, for one coding tool, its settings as they were before
+// backsight first changed them, so uninstall can offer them back (decision
+// 0052), and the profile client install wired.
 type Client struct {
 	// RetentionBefore: absent = not recorded yet; null = the key was absent.
 	RetentionBefore json.RawMessage `json:"retention_before,omitempty"`
-	// Profile is the Claude Code directory client install wired ("" = the
-	// default ~/.claude); ShimPrevious the binary the shim ran before, for
-	// a rollback.
+	// Profile is the tool's directory client install wired ("" = its
+	// default, ~/.claude for Claude Code). It is recorded once, at install,
+	// and every later command uses it: never the shell's CLAUDE_CONFIG_DIR
+	// (or the like) of the moment. ShimPrevious the binary the shim ran
+	// before, for a rollback (in Claude Code's entry, where older binaries
+	// write it).
 	Profile      string `json:"profile,omitempty"`
 	ShimPrevious string `json:"shim_previous,omitempty"`
+}
+
+// ClientOf is the entry of the coding tool harness (a harness id), nil
+// when none was recorded.
+func (s State) ClientOf(harness string) *Client {
+	if harness == HarnessClaudeCode {
+		return s.Client
+	}
+	return s.Clients[harness]
+}
+
+// ClientFor is the entry of harness, made empty when none was recorded.
+func (s *State) ClientFor(harness string) *Client {
+	if c := s.ClientOf(harness); c != nil {
+		return c
+	}
+	c := &Client{}
+	if harness == HarnessClaudeCode {
+		s.Client = c
+		return c
+	}
+	if s.Clients == nil {
+		s.Clients = map[string]*Client{}
+	}
+	s.Clients[harness] = c
+	return c
+}
+
+// ProfileOf is the profile client install recorded for harness: "" for
+// the tool's default directory, or when nothing was recorded.
+func (s State) ProfileOf(harness string) string {
+	if c := s.ClientOf(harness); c != nil {
+		return c.Profile
+	}
+	return ""
 }
 
 // RemoteServer is the server this client joined, by the id its data holds

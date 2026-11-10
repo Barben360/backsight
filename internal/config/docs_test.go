@@ -80,7 +80,7 @@ func literal(v reflect.Value) string {
 }
 
 // docRow is one key row of the reference: | `key` | `default` | effect |.
-var docRow = regexp.MustCompile("^\\|\\s*`([a-z_]+(?:\\.[a-z_]+)?)`\\s*\\|\\s*(.*?)\\s*\\|\\s*(.*?)\\s*\\|\\s*$")
+var docRow = regexp.MustCompile("^\\|\\s*`([a-z_]+(?:\\.[a-z_]+){0,2})`\\s*\\|\\s*(.*?)\\s*\\|\\s*(.*?)\\s*\\|\\s*$")
 
 type docKey struct {
 	line          int

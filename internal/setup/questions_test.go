@@ -199,7 +199,7 @@ func adopted(t *testing.T) *config.Config {
 	cfg := config.Default(paths.Dirs{Data: "/d"}, "/home/u")
 	cfg.Server.URL, cfg.Server.UIPort = "http://127.0.0.1:18888", 19999
 	cfg.LLM.Provider, cfg.LLM.Model = "deepseek", "deepseek-v4-flash"
-	cfg.Client.RetentionDays = 3650
+	cfg.Clients.ClaudeCode.RetentionDays = 3650
 	return &cfg
 }
 
@@ -227,7 +227,7 @@ func TestAnExistingConfigAnswersAndRefusesContradictions(t *testing.T) {
 			t.Errorf("%v contradicts the config but got %v", a, err)
 		}
 	}
-	cfg.Client.RetentionDays = 0 // not managed yet: still a question
+	cfg.Clients.ClaudeCode.RetentionDays = 0 // not managed yet: still a question
 	qs, _, _ = Resolve(Inputs{Config: cfg})
 	if !find(t, qs, "retention").Asked() {
 		t.Error("retention_days = 0 must leave the retention question open")

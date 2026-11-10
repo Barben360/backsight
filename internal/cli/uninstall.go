@@ -667,8 +667,8 @@ func retentionOfferFor(home string, st state.State, rec *setup.Record, cfg confi
 	}
 	o := &retentionOffer{Settings: settings, Before: before, Current: string(now), Action: "changed_since"}
 	var wrote []string
-	if cfg.Client.RetentionDays > 0 {
-		wrote = append(wrote, fmt.Sprint(cfg.Client.RetentionDays))
+	if cfg.Clients.ClaudeCode.RetentionDays > 0 {
+		wrote = append(wrote, fmt.Sprint(cfg.Clients.ClaudeCode.RetentionDays))
 	}
 	if rec != nil {
 		for _, v := range rec.Undo.Retention {
