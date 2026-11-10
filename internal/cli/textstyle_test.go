@@ -3,10 +3,13 @@ package cli
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/termstyle"
 	"github.com/Barben360/backsight/internal/token"
 )
@@ -150,5 +153,30 @@ func TestColorRunNeedsNoTerminal(t *testing.T) {
 	plain, colored := colorRun(t, "version")
 	if plain == colored {
 		t.Fatal("forced color left version plain")
+	}
+}
+
+// coloredGolden runs args again with color forced on: the output, with
+// normalize applied and its escapes stripped, is the golden name's text,
+// and a text golden (not a -json one) is colored somewhere.
+func coloredGolden(t *testing.T, name string, normalize func(string) string, args ...string) {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forceColor(t)
+	defer t.Setenv("BACKSIGHT_COLOR", "")
+	var out, errb bytes.Buffer
+	if code := Execute(args, &out, &errb); code != output.OK {
+		t.Fatalf("colored %v: exit %d: %s", args, code, errb.String())
+	}
+	got := normalize(out.String())
+	if termstyle.Strip(got) != string(want) {
+		t.Errorf("%s: the colored output strips to\n%s\nwant\n%s", name, termstyle.Strip(got), want)
+	}
+	isJSON := strings.Contains(name, "-json")
+	if hasEsc := strings.Contains(got, "\x1b["); hasEsc == isJSON {
+		t.Errorf("%s: colored output has escapes = %v", name, hasEsc)
 	}
 }

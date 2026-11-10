@@ -105,6 +105,7 @@ func TestStatsOutputIsUnchanged(t *testing.T) {
 				t.Fatalf("exit %d: %s %s", code, out, errOut)
 			}
 			cliGolden(t, c.name, []byte(goldenPort.ReplaceAllString(out, "127.0.0.1:PORT")))
+			coloredGolden(t, c.name, func(s string) string { return goldenPort.ReplaceAllString(s, "127.0.0.1:PORT") }, c.args...)
 		})
 	}
 }
