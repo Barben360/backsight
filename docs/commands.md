@@ -8,6 +8,22 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 - `--plan`: show what the command would do, changing nothing. Commands that change configuration, your files or the server's setup have it. Data operations do not: `secret set`, `backup create`, `store`, `forget <id>` and `retain flush` do what you asked; `retain backfill --plan`, `retain reattribute --plan` and `forget --project --plan` preview the larger ones.
 - `--non-interactive`: never prompt; when an answer or a secret is missing, exit 10 and say what is needed.
 - `--answer id=value` (repeatable) or `--answers-file <file>`: answers for commands that ask questions (`setup`, `uninstall`). Never secrets.
+- `--color auto|always|never` (every command): color in text output. `auto`, the default, colors a stream only when it is a terminal itself, `TERM` is not `dumb`, `NO_COLOR` is unset and the command does not run inside Claude Code (`CLAUDECODE` set). `--json` and the plain commands below are never colored, whatever this says. `BACKSIGHT_COLOR` sets the same for every command ([configuration](configuration.md#terminal-the-look-at-a-terminal)).
+- `--no-splash` (every command): no splash before the output; color stays as resolved. `BACKSIGHT_SPLASH=0` does the same.
+
+## At a terminal
+
+At an interactive terminal, text output is colored and most commands start with a splash: the backsight logo beside a short panel about backsight itself (its version and Hindsight's, the server's last answer, the setup, what waits to be sent, the last daily checks, a newer release), never about the project. The splash prints once, before the command's first line on stdout, when stdout is a terminal at least 72 columns wide; an error that prints only `backsight: <error>` gets none. The panel reads a few local files under a 50 ms budget and never writes or creates anything; a line it cannot read in time is left out.
+
+Every word keeps its meaning without color: statuses still say `ok`, `warn`, `fail`, `WARN` or `ERROR`. Removing the color codes gives back exactly the plain text, so a pipe, a redirect, `--json` and Claude's own shell get the same bytes as before.
+
+| Class | Splash | Color | Commands |
+|---|---|---|---|
+| plain | no | no | `hook`, `hook-child`, `mcp`, `completion`, `jobs` and its subcommands, `secret` and its subcommands, `server token`, `server supervise`, `server native-check`, `backup identity show`, `recall-prompt`, `detect-replay`: commands run by programs or printing a value meant to be captured |
+| no splash | no | yes | `guide` (its text goes to a pager) |
+| full | yes | yes | every other command |
+
+Colored so far: `doctor`, `version`, `update check`, `update apply`, `stats` and its views (not their tables), the step lines of `setup`, `connect`, `restore`, `update apply`, `server install`, `server runtime`, the plans and results of `setup`, `connect` and `uninstall`, setup's questions, the red `backsight:` before an error on stderr, and the progress of `retain backfill` and `restore`. Passphrase and secret prompts are never colored.
 
 ## Exit codes
 
