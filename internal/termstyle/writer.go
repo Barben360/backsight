@@ -16,6 +16,8 @@ type Writer struct {
 	resolve func() Level
 	once    sync.Once
 	level   Level
+	before  func(io.Writer)
+	first   sync.Once
 }
 
 // NewWriter wraps w; resolve is called at most once, lazily.
@@ -27,8 +29,16 @@ func NewWriter(w io.Writer, resolve func() Level) *Writer {
 // escape processing on before any byte reaches it), then passes p through.
 func (w *Writer) Write(p []byte) (int, error) {
 	w.Level()
+	if len(p) > 0 && w.before != nil {
+		w.first.Do(func() { w.before(w.w) })
+	}
 	return w.w.Write(p)
 }
+
+// BeforeFirstWrite sets fn to run once, before the first non-empty Write
+// reaches the wrapped writer (raw), after the level is resolved: the
+// splash goes there (decision 0084 D3). Set it before any write.
+func (w *Writer) BeforeFirstWrite(fn func(raw io.Writer)) { w.before = fn }
 
 // Level is the stream's color level, resolved on the first call.
 func (w *Writer) Level() Level {
