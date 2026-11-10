@@ -57,6 +57,10 @@ func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
 // mcpConnect starts the memory server of home, the machine the
 // environment points at, and connects a client.
 func mcpConnect(t *testing.T, home string) *mcp.ClientSession {
+	return mcpConnectMode(t, home, false)
+}
+
+func mcpConnectMode(t *testing.T, home string, codex bool) *mcp.ClientSession {
 	t.Helper()
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
@@ -67,7 +71,7 @@ func mcpConnect(t *testing.T, home string) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID, parentStart: mcpParentStart, sessionID: mcpSessionID})
+	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", codex: codex, tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID, parentStart: mcpParentStart, sessionID: mcpSessionID})
 	ct, st := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {

@@ -66,13 +66,15 @@ func TestComputeOneTransaction(t *testing.T) {
 			rate.Value = &v
 		}
 		empty := float64(den - num)
-		return map[string]Observation{
+		observations := map[string]Observation{
 			"recall.hit_rate":      {Num: num, Den: den},
 			"recall.empty_reasons": {Den: den},
-		}, map[string]Metric{
+		}
+		metrics := map[string]Metric{
 			"recall.hit_rate":      rate,
 			"recall.empty_reasons": {Value: &empty},
-		}, nil
+		}
+		return observations, metrics, nil
 	})
 
 	src := x.source()

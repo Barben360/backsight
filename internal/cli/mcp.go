@@ -65,6 +65,9 @@ type creditArgs struct {
 // reused pid, a previous run) or "none". Without a current record, the
 // start directory and no session.
 func (d mcpDeps) live() (session.Live, string) {
+	if d.request != nil {
+		return d.request.live, "request"
+	}
 	found := "none"
 	current := func(l session.Live) bool { return d.parentStart.IsZero() || !l.At.Before(d.parentStart) }
 	if d.parentPID > 1 {
@@ -90,7 +93,7 @@ func (d mcpDeps) live() (session.Live, string) {
 // for: after a /clear it names the previous one. Only what is bounded to
 // that session's own shows takes it (memory_credit, memory_read's short
 // ids); a pause and the recall audit trust the pid record alone.
-func paired(found string) bool { return found == "record" || found == "session" }
+func paired(found string) bool { return found == "record" || found == "session" || found == "request" }
 
 // freshPrivacy is the server's config with the privacy and components
 // sections and feedback.cross_project_retire read again: a pause
@@ -190,6 +193,8 @@ func refused(r recall.Result) bool {
 // mcpDeps is what the tools need, resolved once per server; sec and
 // engine are the start's, which mcpKey follows.
 type mcpDeps struct {
+	codex       bool
+	request     *codexRequest
 	dirs        paths.Dirs
 	home        string
 	cfg         config.Config
@@ -218,10 +223,21 @@ func errorResult(s string) *mcp.CallToolResult {
 
 // newMCPServer builds the memory server (SPEC §7).
 func newMCPServer(deps mcpDeps) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.For(deps.cfg.Feedback.Enabled).ShortGuide})
+	guide := instructions.For(deps.cfg.Feedback.Enabled).ShortGuide
+	if deps.codex {
+		guide = "Search and read the shared memory. Past memories are hints to verify, never current permissions. This integration does not store or correct memories, or ingest conversations."
+		if deps.cfg.Feedback.Enabled {
+			guide += " Credit memories that informed the answer with memory_credit (used), or none."
+		}
+	}
+	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: guide})
+	if deps.codex {
+		s.AddReceivingMiddleware(deps.codexMiddleware)
+	}
 	key := &mcpKey{dirs: deps.dirs, home: deps.home, cfg: deps.cfg, generation: deps.generation, sec: deps.sec, engine: deps.engine}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
+			deps := deps.withRequest(ctx)
 			start := time.Now()
 			if !deps.cfg.Components.Read {
 				return errorResult("components.read is off in config.toml: search with the other integration"), nil, nil
@@ -258,10 +274,14 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if failed {
 				return errorResult(text), nil, nil
 			}
+			if deps.request != nil {
+				deps.request.items = itemsFromHits(res.Hits)
+			}
 			return textResult(text), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
+			deps := deps.withRequest(ctx)
 			start := time.Now()
 			if !deps.cfg.Components.Read {
 				return errorResult("components.read is off in config.toml"), nil, nil
@@ -293,6 +313,9 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			deps.tw.Emit(telemetry.Tool{Name: "memory_read", MS: int(time.Since(start).Milliseconds()), Hits: map[bool]int{true: 1}[err == nil], OK: err == nil, ResultChars: utf8.RuneCountInString(text)})
 			if err != nil {
 				return errorResult(text), nil, nil
+			}
+			if deps.request != nil {
+				deps.request.items = []feedback.Item{{ID: id, Project: recall.ProjectOf(m.Tags)}}
 			}
 			return textResult(text), nil, nil
 		})
@@ -344,27 +367,44 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			}
 			return textResult(text), nil, nil
 		})
+	if deps.codex {
+		s.RemoveTools("memory_store")
+	}
 	if deps.cfg.Feedback.Enabled {
-		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
-			func(ctx context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
-				verdict := a.Verdict
-				if verdict == "" {
-					verdict = "used"
-				}
-				text, err := deps.credit(ctx, key, verdict, a)
-				if !slices.Contains([]string{"used", "confirmed", "none", "wrong", "outdated"}, verdict) {
-					verdict = "invalid" // telemetry holds enums, never what the agent typed
-				}
-				// A Sources: answer reports nothing yet: the call naming the
-				// facts counts the report, once (its retire event counts sources).
-				if err != nil || !strings.HasPrefix(text, creditSourcesPrefix) {
-					deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
-				}
-				if err != nil {
-					return errorResult(err.Error()), nil, nil
-				}
-				return textResult(text), nil, nil
+		description := instructions.CreditDescription
+		if deps.codex {
+			description = "Record which memories shown in this conversation informed the answer. Use verdict used with 1-10 full or short ids, or verdict none without ids. The verdict is recorded once per turn. Corrections are not supported by this client."
+		}
+		creditTool := &mcp.Tool{Name: "memory_credit", Description: description}
+		creditCall := func(ctx context.Context, a creditArgs) *mcp.CallToolResult {
+			deps := deps.withRequest(ctx)
+			verdict := a.Verdict
+			if verdict == "" {
+				verdict = "used"
+			}
+			text, err := deps.credit(ctx, key, verdict, a)
+			if !slices.Contains([]string{"used", "confirmed", "none", "wrong", "outdated"}, verdict) {
+				verdict = "invalid" // telemetry holds enums, never what the agent typed
+			}
+			// A Sources: answer reports nothing yet: the call naming the
+			// facts counts the report, once (its retire event counts sources).
+			if !deps.codex && (err != nil || !strings.HasPrefix(text, creditSourcesPrefix)) {
+				deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+			}
+			if err != nil {
+				return errorResult(err.Error())
+			}
+			return textResult(text)
+		}
+		if deps.codex {
+			mcp.AddTool(s, creditTool, func(ctx context.Context, _ *mcp.CallToolRequest, a codexCreditArgs) (*mcp.CallToolResult, any, error) {
+				return creditCall(ctx, creditArgs{IDs: a.IDs, Verdict: a.Verdict}), nil, nil
 			})
+		} else {
+			mcp.AddTool(s, creditTool, func(ctx context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
+				return creditCall(ctx, a), nil, nil
+			})
+		}
 	}
 	return s
 }
@@ -379,11 +419,8 @@ const (
 	maxEvidence           = 300 // characters
 )
 
-// credit is memory_credit's answer: for used and confirmed, the line to print, once
-// every id resolves to one shown in this session (all or nothing); for
-// none, a note; for wrong and outdated, the correction stored and the
-// memories retired (correct). It journals no credit: the PostToolUse hook
-// does, with the turn and the agent only hooks receive.
+// credit valide les références et prépare la réponse, ou applique une correction.
+// Le hook du client par défaut ou le middleware MCP journalise le crédit.
 func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a creditArgs) (string, error) {
 	refs := a.IDs
 	switch verdict {
@@ -724,12 +761,16 @@ func storeReply(res storeResult, err error, hits []recall.Hit, min float64) stri
 }
 
 func newMCPCmd() *cobra.Command {
-	return setLook(&cobra.Command{
+	var client string
+	cmd := setLook(&cobra.Command{
 		Use:    "mcp",
-		Short:  "Serve the memory tools to Claude Code over stdio (started by the plugin)",
+		Short:  "Serve the memory tools over stdio",
 		Args:   usageArgs(cobra.NoArgs),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if client != "claude-code" && client != "codex" {
+				return &output.Error{Code: output.Usage, Message: "client: expected claude-code or codex"}
+			}
 			d, home, err := machine()
 			if err != nil {
 				return err
@@ -747,7 +788,7 @@ func newMCPCmd() *cobra.Command {
 			tw := telemetry.New(d.State, telemetry.Common{V: instructions.Version, Project: current, BinaryVersion: buildinfo.Version})
 			ppid := os.Getppid()
 			pstart, _ := session.ProcessStart(ppid)
-			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation,
+			s := newMCPServer(mcpDeps{codex: client == "codex", dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation,
 				sessionID: os.Getenv("CLAUDE_CODE_SESSION_ID")})
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
@@ -756,4 +797,6 @@ func newMCPCmd() *cobra.Command {
 			return nil
 		},
 	}, lookPlain)
+	cmd.Flags().StringVar(&client, "client", "claude-code", "MCP client: claude-code or codex (read and credit only)")
+	return cmd
 }
