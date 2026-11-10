@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -367,5 +368,42 @@ func TestAppliedKinds(t *testing.T) {
 		if Applied(k) {
 			t.Errorf("Applied(%q) = true", k)
 		}
+	}
+}
+
+// A line carries the client: claude-code when the journal names none, the
+// journal's own otherwise, and an event's own wins; a line written before
+// the field reads as claude-code.
+func TestClientFieldRoundTripsAndOldLinesReadAsClaudeCode(t *testing.T) {
+	dir := t.TempDir()
+	j := NewJournal(dir, common)
+	cc := common
+	cc.Client = "codex"
+	jc := NewJournal(dir, cc)
+	if err := j.Append(Event{Kind: "turn"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := jc.Append(Event{Kind: "turn"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := jc.Append(Event{Kind: "turn", Client: "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	file, _ := j.Position()
+	appendRaw(t, file, `{"schema":1,"seq":9,"ts":"2026-10-28T10:00:00Z","kind":"turn"}`+"\n")
+	events, skipped, err := ReadFrom(file, 0)
+	if err != nil || skipped != 0 || len(events) != 4 {
+		t.Fatalf("%d events, %d skipped, %v", len(events), skipped, err)
+	}
+	var got []string
+	for _, e := range events {
+		got = append(got, e.Client)
+	}
+	if want := []string{"claude-code", "codex", "claude-code", "claude-code"}; !slices.Equal(got, want) {
+		t.Errorf("clients %v, want %v", got, want)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(raw), `"client":"codex"`) {
+		t.Errorf("the client is not in the file: %v %s", err, raw)
 	}
 }

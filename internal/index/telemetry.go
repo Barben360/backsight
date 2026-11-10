@@ -198,7 +198,7 @@ var telKinds = map[string]telKind{
 }
 
 // commonKeys are the writer's own fields, on every line.
-var commonKeys = []string{"ts", "event", "v", "session", "project", "binary_version"}
+var commonKeys = []string{"ts", "event", "v", "session", "project", "binary_version", "client"}
 
 // telemetryRows maps one telemetry line to its rows and its time (unix
 // ms), or names why it is skipped.
@@ -219,6 +219,8 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		return nil, 0, errMissingField
 	}
 	session, project, binary := d.id("session"), d.name("project"), d.name("binary_version")
+	clientStr, _ := d.str("client")
+	client := clientValue(clientStr)
 	k, typed := telKinds[event]
 	if !typed {
 		r := row{table: "events"}
@@ -229,6 +231,7 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		r.add("session", session)
 		r.add("project", project)
 		r.add("binary_version", binary)
+		r.add("client", client)
 		r.add("fields", d.payload(payloadAllow[event]))
 		if d.err != "" {
 			return nil, 0, d.err
@@ -243,6 +246,7 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 	r.add("project", project)
 	r.add("binary_version", binary)
 	r.add("v", d.name("v"))
+	r.add("client", client)
 	if k.n {
 		r.add("n", d.integer("n"))
 	}

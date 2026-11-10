@@ -130,6 +130,7 @@ func (x *fx) tel(ts time.Time, ev telemetry.Event, session, project string) {
 	fields["session"] = session
 	fields["project"] = project
 	fields["binary_version"] = x.binary
+	fields["client"] = "claude-code"
 	line, err := json.Marshal(fields)
 	if err != nil {
 		x.t.Fatal(err)
