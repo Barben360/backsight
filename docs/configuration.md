@@ -185,6 +185,14 @@ Every 15 minutes, `backsight jobs tick` turns that record into counts per memory
 
 Recall then adds to each memory's score k × ((uses + α) / (uses + misses + α + β) − α / (α + β)), uses and misses faded by their half-lives: a memory Claude often uses climbs by up to k × β / (α + β) (0.075 by default), one often shown at the top and not used sinks by up to k × α / (α + β) (0.025), and a memory with nothing counted keeps its score. The floors on the server's score (`recall.min_score`, `recall.global_min_score`) apply before the boost, so it reorders memories but never lets one under them in. An observation hidden after Claude reported it wrong or outdated is not recalled on this machine. With `share_ledger` on, recall also adds the other machines' uses and misses, and skips what one of them hid unless `backsight forget --restore <id>` restored it here since; when their counts have not been fetched or cannot be read, it uses this machine's alone. When the ledger cannot be read, recall goes on without boost and without hiding.
 
+## `[terminal]`: the look at a terminal
+
+At an interactive terminal, a backsight command starts with a splash: the logo beside a short panel about backsight itself (version, server, setup, queue, checks, update), never about the project. backsight never writes this section: an older backsight refuses a `config.toml` with keys it does not know, so remove the section before installing an older version.
+
+| Key | Default | Effect |
+|---|---|---|
+| `terminal.logo` | `"blocks"` | The splash's logo: `"blocks"` (half blocks) or `"braille"` (finer, needs a font with braille characters). Any other value draws `"blocks"`. A console that is not UTF-8 always gets the ASCII logo. |
+
 ## Examples
 
 Quieter recall: fewer, closer memories.
