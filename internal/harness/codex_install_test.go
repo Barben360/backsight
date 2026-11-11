@@ -694,7 +694,8 @@ func TestCodexNameClash(t *testing.T) {
 	if got, err := c.NameClash(context.Background(), env, shim); err != nil || got != "" {
 		t.Errorf("no server: %q %v", got, err)
 	}
-	ours := `[{"name":"memory","transport":{"type":"stdio","command":"` + shim + `","args":["mcp","--harness","codex"]}}]`
+	quoted, _ := json.Marshal(shim)
+	ours := `[{"name":"memory","transport":{"type":"stdio","command":` + string(quoted) + `,"args":["mcp","--harness","codex"]}}]`
 	f.mcp = ours
 	if got, err := c.NameClash(context.Background(), env, shim); err != nil || got != "" {
 		t.Errorf("backsight's own: %q %v", got, err)

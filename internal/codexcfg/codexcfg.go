@@ -1,6 +1,7 @@
 package codexcfg
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
@@ -92,16 +93,30 @@ func ApprovalFallback(tools ...string) func(doc []byte) ([]byte, []claudecfg.Cha
 }
 
 // MCPServerTable reports that config.toml configures an MCP server named
-// name ([mcp_servers.<name>]), the user's own.
+// name ([mcp_servers.<name>]), the user's own. It reads the whole file
+// with a full TOML decoder: a check never fails on what only the narrow
+// editor does not handle.
 func MCPServerTable(doc []byte, name string) (bool, error) {
-	d, err := parse(doc)
+	_, ok, err := Lookup(doc, []string{"mcp_servers", name})
+	return ok, err
+}
+
+// Lookup is the value at path in config.toml, decoded in full (for the
+// reads; the edits are the narrow editor's).
+func Lookup(doc []byte, path []string) (any, bool, error) {
+	tree, err := decode(doc)
 	if err != nil {
-		return false, err
+		return nil, false, fmt.Errorf("config.toml is not valid TOML: %w", err)
 	}
-	for _, it := range d.items {
-		if len(it.path) >= 2 && it.path[0] == "mcp_servers" && it.path[1] == name && (it.kind == headerItem || it.kind == keyvalItem) {
-			return true, nil
+	var v any = tree
+	for _, p := range path {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		if v, ok = m[p]; !ok {
+			return nil, false, nil
 		}
 	}
-	return false, nil
+	return v, true, nil
 }

@@ -361,7 +361,7 @@ func (c Codex) Untrusted(env Env) []string {
 	}
 	var out []string
 	for _, key := range CodexTrustKeys() {
-		if _, ok, err := codexcfg.Get(raw, []string{"hooks", "state", key, "trusted_hash"}); err != nil {
+		if _, ok, err := codexcfg.Lookup(raw, []string{"hooks", "state", key, "trusted_hash"}); err != nil {
 			return nil
 		} else if !ok {
 			out = append(out, key)

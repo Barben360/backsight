@@ -143,7 +143,8 @@ func (f *fakeCodexCLI) Run(_ context.Context, env []string, args ...string) ([]b
 		if s := source(); s != "" && s != args[3] {
 			return nil, errors.New("marketplace 'backsight' is already added from a different source")
 		}
-		appendTable("[marketplaces.backsight]", "source_type = \"local\"\nsource = \""+args[3]+"\"\n")
+		quoted, _ := json.Marshal(args[3]) // a TOML basic string, escaped as Codex writes it
+		appendTable("[marketplaces.backsight]", "source_type = \"local\"\nsource = "+string(quoted)+"\n")
 	case line == "plugin marketplace remove backsight":
 		if source() == "" {
 			return nil, errors.New("marketplace `backsight` is not configured or installed")
