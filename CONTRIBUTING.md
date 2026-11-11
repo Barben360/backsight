@@ -114,6 +114,7 @@ Every Monday, `.github/workflows/price-drift.yml` compares the binary's price ta
 - A test (`internal/cli/docs_commands_test.go`) checks that every backsight command and flag written in code (inline or in a code block) in `README.md`, `CONTRIBUTING.md`, `SECURITY.md` and `docs/*.md` exists in the command tree. Rename a command or a flag, and the docs must follow.
 - `docs/compatibility.md`'s `## Current` section and `SECURITY.md`'s keys are checked against what the binary pins and trusts (`internal/cli/release_docs_test.go`). The README's Hindsight badge is checked against the same pin.
 - `docs/agent-guide.md` is for coding agents that install backsight; keep it in line with the other docs.
+- `docs/spec/` is the specification and decision record ([docs/spec/README.md](docs/spec/README.md)): the `decision NNNN` the code cites is `docs/spec/decisions/NNNN-*.md`. It is not embedded in the binary. New behaviour starts there: propose a decision by pull request before the code.
 - Text a user sees (help, setup questions, errors, doctor checks, generated files, release notes) names no design record, experiment, milestone or spec section: users cannot look them up. Say the reason in plain words instead. `internal/cli/publictext_test.go` enforces it; code comments may cite them.
 
 ## The agent contract
