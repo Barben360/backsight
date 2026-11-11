@@ -27,20 +27,18 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/harnessid"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
-// Harness ids: the value of each harness's harness: tag, the key of its
-// config and state entries, and the client field of statistics
-// (ClaudeCode for records that name none). They are internal/harnessid's,
-// the leaf package the state, the statistics writers and retain share:
-// none of them can import this package (its adapters import
-// instructions, whose tests import their users). Codex has no adapter
-// yet.
-const (
-	ClaudeCode = harnessid.ClaudeCode
-	Codex      = harnessid.Codex
-)
+// ClaudeCode is Claude Code's harness id: the value of its harness: tag,
+// the key of its config and state entries, and the client field of
+// statistics (of records that name none too). The ids are
+// internal/harnessid's, the leaf package the state, the statistics
+// writers and retain share: none of them can import this package (its
+// adapters import instructions, whose tests import their users). Codex's
+// is harnessid.Codex (here, Codex is its adapter).
+const ClaudeCode = harnessid.ClaudeCode
 
 // Adapter is one harness. Its methods are grouped in small interfaces, so
 // code that needs one concern (a hook decoder, a conversation reader)
@@ -235,6 +233,11 @@ type Hooks interface {
 	// because the tool's process tree may not pair the memory server with
 	// the hooks by process id on goos.
 	PairsBySession(goos string) bool
+	// PairsByPID says hooks record their session under the tool's process
+	// id, where the memory server it started looks it up first: a tool
+	// whose server takes each call's session elsewhere (MCPCallSession)
+	// keeps no such record, and its server reads none.
+	PairsByPID() bool
 }
 
 // backsight's hook events: the argument of `backsight hook <event>`,
@@ -271,6 +274,13 @@ type HookInput struct {
 	Error                string // a failed tool call
 	IsInterrupt          bool   // a failed tool call: the user interrupted it
 	StopHookActive       bool   // a stop: the turn goes on from a stop hook's block
+	// The fields Codex adds (Claude Code's decoder leaves them zero): the
+	// turn of a turn-scoped event, the tool call's id (equal to the memory
+	// call's _meta.callId), the model, the permission mode.
+	TurnID         string
+	ToolUseID      string
+	Model          string
+	PermissionMode string
 }
 
 // HookOutput is a hook's answer before encoding. At most one of Block and
@@ -321,7 +331,32 @@ type Tools interface {
 	ToolPrefix() string
 	// ToolNames are the memory tools' full names.
 	ToolNames() []string
+	// QuestionTool is the tool the agent asks the user a question with,
+	// which the question gate stops once per prompt ("" when the harness
+	// has none).
+	QuestionTool() string
 	// Skills are backsight's skill files for shim, by path relative to
 	// the integration's root.
 	Skills(shim string) map[string][]byte
+}
+
+// HookCommander is a harness that runs a hook handler as one shell string
+// (Codex): the generator asks it for each handler's command.
+type HookCommander interface {
+	// HookCommand is the handler's command for backsight's event, the
+	// shim quoted for sh or, windows, for cmd /C.
+	HookCommand(shim, event string, windows bool) (string, error)
+}
+
+// HomeRecorder is a harness whose home is resolved once, at setup or
+// client install, and recorded in its state entry, never read from a
+// shell afterwards (Codex).
+type HomeRecorder interface {
+	// ShellHome resolves the home: flag when set, else the tool's
+	// variable when set and non-empty, else its default under home.
+	ShellHome(home, flag string, getenv func(string) string) (string, error)
+	// RecordHome records the resolved home in s ("" for the default).
+	RecordHome(s *state.State, toolHome string) error
+	// RecordedHome is the home recorded ("" for the default).
+	RecordedHome(st state.State) (string, error)
 }

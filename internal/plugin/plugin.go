@@ -32,6 +32,10 @@ const (
 	layout = "6"
 )
 
+// QuestionTool is Claude Code's tool for asking the user a question, which
+// the question gate's PreToolUse hook matches.
+const QuestionTool = "AskUserQuestion"
+
 // ToolNames are the four memory tools as Claude Code names them.
 var ToolNames = []string{
 	"mcp__plugin_" + Name + "_" + Server + "__memory_search",
@@ -69,7 +73,7 @@ var events = []event{
 	{"SessionStart", "startup", "session-start", 10, false},
 	{"SessionStart", "resume|clear|compact|fork", "session-start", 5, false},
 	{"UserPromptSubmit", "", "user-prompt-submit", 25, false},
-	{"PreToolUse", "AskUserQuestion", "pre-tool-use", 10, false},
+	{"PreToolUse", QuestionTool, "pre-tool-use", 10, false},
 	{"PostToolUse", "mcp__plugin_" + Name + "_" + Server + "__.*", "post-tool-use", 2, false},
 	// A failed tool call: the pitfalls memory knows about it. Wired only
 	// with the [recall] failure switch (off by default, see docs/configuration.md).

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -13,14 +14,18 @@ import (
 var claudeCode = harness.Claude{}
 
 // toolRunner runs the command of harness id: the claude CLI through
-// claudeRunner (tests replace it); nil for a harness whose command
-// backsight never runs.
+// claudeRunner, the codex CLI through codexRunner (tests replace both);
+// nil for a harness whose command backsight never runs.
 func toolRunner(id string) harness.Runner {
-	if id != harness.ClaudeCode {
+	runner := map[string]func() claudeCLI{
+		harness.ClaudeCode: func() claudeCLI { return claudeRunner },
+		harnessid.Codex:    func() claudeCLI { return codexRunner },
+	}[id]
+	if runner == nil {
 		return nil
 	}
 	return func(ctx context.Context, env []string, args ...string) ([]byte, error) {
-		return claudeRunner.Run(ctx, env, args...)
+		return runner().Run(ctx, env, args...) // read at the call: tests replace the runners
 	}
 }
 

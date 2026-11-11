@@ -165,7 +165,7 @@ func syntheticInput(h plugin.Hook, sid, dir string) []byte {
 	case "UserPromptSubmit":
 		in["prompt"] = "backsight verify"
 	case "PreToolUse":
-		in["tool_name"], in["tool_input"] = "AskUserQuestion", map[string]any{"questions": []any{}}
+		in["tool_name"], in["tool_input"] = claudeCode.QuestionTool(), map[string]any{"questions": []any{}}
 	case "PostToolUse":
 		in["tool_name"], in["tool_input"], in["tool_response"] = claudeCode.ToolNames()[0], map[string]any{"query": "verify"}, map[string]any{}
 	case "PostToolUseFailure":

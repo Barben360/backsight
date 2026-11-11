@@ -69,7 +69,7 @@ type creditArgs struct {
 func (d mcpDeps) live() (session.Live, string) {
 	found := "none"
 	current := func(l session.Live) bool { return d.parentStart.IsZero() || !l.At.Before(d.parentStart) }
-	if d.parentPID > 1 {
+	if d.parentPID > 1 && d.harnessOf().PairsByPID() {
 		if l, ok := session.ReadLive(d.dirs.SessionsDir(), d.parentPID); ok {
 			if current(l) {
 				return l, "record"
@@ -214,14 +214,20 @@ type mcpDeps struct {
 	getenv  func(string) string
 }
 
+// harnessOf is the harness that started this server, Claude Code's when
+// none was named.
+func (d mcpDeps) harnessOf() harness.Adapter {
+	if d.adapter == nil {
+		return harness.Default()
+	}
+	return d.adapter
+}
+
 // forCall is d for one tool call: the session the harness names for it
 // (its _meta, or the server's environment) replaces the server's, so a
 // server shared by several sessions files each call under its own.
 func (d mcpDeps) forCall(req *mcp.CallToolRequest) mcpDeps {
-	a := d.adapter
-	if a == nil {
-		a = harness.Default()
-	}
+	a := d.harnessOf()
 	var meta map[string]any
 	if req != nil && req.Params != nil {
 		meta = req.Params.GetMeta()
