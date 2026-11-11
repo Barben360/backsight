@@ -61,6 +61,15 @@ func UpdatedLine(project, kind, id string) string {
 	return line(emojiUpdated, "Updated", project+" · "+kind+" · replaces "+short(id), "<the fact, in a few words>")
 }
 
+// StoreReplacesIt and StoreReplacesOne follow the memories memory_store
+// shows, where memory_credit is offered (v18, issue 317): an Updated line
+// names the memory a fact replaces but retires nothing, so a fact that
+// makes it false or obsolete is reported outdated, while it counts as shown.
+const (
+	StoreReplacesIt  = "If this fact replaces it, report it outdated with memory_credit, so it is retired."
+	StoreReplacesOne = "If this fact replaces one of them, report that one outdated with memory_credit, so it is retired."
+)
+
 // why is what a wrong or outdated verdict's line says.
 func why(verdict string) string {
 	if verdict == "outdated" {

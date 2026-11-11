@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -172,7 +174,11 @@ func newReadCmd(e *env) *cobra.Command {
 			if err != nil {
 				return blocked(err)
 			}
-			m, err := cl.GetMemory(cmd.Context(), cfg.Server.Bank, args[0])
+			id, err := readCmdID(args[0])
+			if err != nil {
+				return err
+			}
+			m, err := cl.GetMemory(cmd.Context(), cfg.Server.Bank, id)
 			var apiErr *hindsight.APIError
 			if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
 				return &output.Error{Code: output.Usage, Message: "no memory " + args[0]}
@@ -183,6 +189,33 @@ func newReadCmd(e *env) *cobra.Command {
 			return e.emit("read", m, func() string { return readText(m) })
 		},
 	}
+}
+
+// shortRefRE: the start of a memory id, as the hook lines and the tools
+// print it (8 characters or more), not a whole one.
+var shortRefRE = regexp.MustCompile(`^[0-9a-f]{8}[0-9a-f-]{0,27}$`)
+
+// readCmdID is the memory id read's ref names: a whole id or any other
+// ref as it is, a short one resolved among the ids this PC's journal
+// holds, as memory_read does among a session's (issue 317). The server
+// takes only whole ids: a short one the journal does not hold is refused
+// here.
+func readCmdID(ref string) (string, error) {
+	if fullUUIDRE.MatchString(ref) || !shortRefRE.MatchString(ref) {
+		return ref, nil
+	}
+	var events []feedback.Event
+	if d, _, err := machine(); err == nil {
+		events, _, _ = feedback.Read(d.FeedbackDir(), time.Time{})
+	}
+	id, err := resolveLogged(ref, events)
+	switch {
+	case err != nil:
+		return "", &output.Error{Code: output.Usage, Message: err.Error()}
+	case id == ref:
+		return "", &output.Error{Code: output.Usage, Message: "no memory shown on this PC starts with " + ref + ": give its full id"}
+	}
+	return id, nil
 }
 
 func readText(m hindsight.MemoryDetail) string {

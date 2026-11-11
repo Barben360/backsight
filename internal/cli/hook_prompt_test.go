@@ -256,6 +256,45 @@ func TestOutcomeOfThePreviousInjection(t *testing.T) {
 	}
 }
 
+// Issue 317: when a machine message (a sub-agent's hand-back, another
+// session's message, a skill's expansion) came after the injection, the
+// developer's next prompt answers that work, not the memory: the outcome
+// is still logged, never as contradicted. The next injection is judged
+// again.
+func TestOutcomeAfterAMachineMessageIsNotContradicted(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	prompt(t, home, "s1", longPrompt)
+	for _, machine := range []string{"<task-notification>\n<task-id>a1</task-id>\n</task-notification>",
+		"Another Claude session sent a message:\n<agent-message from=\"a1\">\n[Subagent hand-back] done</agent-message>"} {
+		prompt(t, home, "s1", machine)
+	}
+	prompt(t, home, "s1", "no, actually we never use PostgreSQL 15 anywhere")
+	outcomes := func() []string {
+		var out []string
+		for _, l := range strings.Split(telemetryText(t, home), "\n") {
+			if strings.Contains(l, `"event":"outcome"`) {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	if o := outcomes(); len(o) != 1 || !strings.Contains(o[0], `"contradicted":false`) || !strings.Contains(o[0], `"n":1`) {
+		t.Fatalf("outcomes %q", o)
+	}
+	// a later injection (prompt 2's) followed by the developer's own
+	// correction counts: the machine message came before it
+	_ = sessions(home).Update("s1", func(st *session.State) error {
+		st.LastInject = st.Prompts
+		st.Injected = append(st.Injected, session.Injection{ID: "m2", Prompt: st.Prompts})
+		return nil
+	})
+	prompt(t, home, "s1", "no, actually we never deploy billing on Fridays")
+	if o := outcomes(); len(o) != 2 || !strings.Contains(o[1], `"contradicted":true`) {
+		t.Errorf("outcomes %q", o)
+	}
+}
+
 // v7: the prompt-recall block ends with the ask to declare the memories
 // used, on the first prompt (before the reminder) as on later ones.
 func TestRecallHeaderEndsWithTheCreditLine(t *testing.T) {
@@ -611,13 +650,13 @@ func TestPostToolUseJournalsTheStoreShow(t *testing.T) {
 		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_store",
 			"tool_response": []map[string]string{{"type": "text", "text": text}}})
 	}
-	store(storeReply(res, nil, nil, 0.8))
+	store(storeReply(res, nil, nil, 0.8, 1, true))
 	if n := len(eventsOf(journalEvents(t, home), "shows")); n != 0 {
 		t.Fatalf("a store without a similar memory journaled %d shows", n)
 	}
 	hit := recall.Hit{ID: "7d1e93a0-0000-4000-8000-000000000001", Text: "trap (1d ago, 9f9f9f9f-0000-4000-8000-000000000009)\n- x (1d ago, 8e8e8e8e-0000-4000-8000-000000000008)",
 		Project: "infra", Age: "3d", Score: 0.9}
-	store(storeReply(res, nil, []recall.Hit{hit}, 0.8))
+	store(storeReply(res, nil, []recall.Hit{hit}, 0.8, 1, true))
 	shows := eventsOf(journalEvents(t, home), "shows")
 	if len(shows) != 1 {
 		t.Fatalf("shows %+v", shows)
@@ -633,13 +672,32 @@ func TestPostToolUseJournalsTheStoreShow(t *testing.T) {
 	}
 	hit.Text = "posing note:9f9f9f9f-0000-4000-8000-000000000009"
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_store",
-		"tool_response": []map[string]string{{"type": "text", "text": storeReply(res, nil, []recall.Hit{hit}, 0.8)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": storeReply(res, nil, []recall.Hit{hit}, 0.8, 1, true)}}})
 	st, _ := sessions(home).Load("s1")
 	if !slices.Contains(st.Seen, hit.ID) {
 		t.Errorf("the main agent's store show is not in seen: %v", st.Seen)
 	}
 	if slices.Contains(st.Stored, "note:9f9f9f9f-0000-4000-8000-000000000009") || !slices.Contains(st.Stored, res.Document) {
 		t.Errorf("stored %v", st.Stored)
+	}
+}
+
+// A correction's answer shows two memories: both are journaled, ranks 1
+// and 2 with their projects; the note's id comes from the head only.
+func TestPostToolUseJournalsBothMemoriesACorrectionShows(t *testing.T) {
+	home := hookHome(t)
+	res := storeResult{Status: "stored", Document: "note:0b4c2a52-0000-4000-8000-00000000abcd", Project: "billing", Kind: "correction"}
+	hits := []recall.Hit{{ID: "7d1e93a0-0000-4000-8000-000000000001", Text: "first note:9f9f9f9f-0000-4000-8000-000000000009", Project: "infra", Age: "3d", Score: 0.7},
+		{ID: "8e2f04b1-0000-4000-8000-000000000002", Text: "second", Project: "billing", Age: "1d", Score: 0.65}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_store",
+		"tool_response": []map[string]string{{"type": "text", "text": storeReply(res, nil, hits, 0.6, 2, true)}}})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || itemsText(shows[0].Items) != hits[0].ID+":1:0,"+hits[1].ID+":2:0" || itemProjects(shows[0].Items) != "infra,billing" {
+		t.Fatalf("shows %+v", shows)
+	}
+	st, _ := sessions(home).Load("s1")
+	if !slices.Contains(st.Seen, hits[0].ID) || !slices.Contains(st.Seen, hits[1].ID) || slices.Contains(st.Stored, "note:9f9f9f9f-0000-4000-8000-000000000009") || !slices.Contains(st.Stored, res.Document) {
+		t.Errorf("seen %v stored %v", st.Seen, st.Stored)
 	}
 }
 

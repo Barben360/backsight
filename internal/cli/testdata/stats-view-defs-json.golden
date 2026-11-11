@@ -1442,7 +1442,7 @@
           "id": "injection.contradicted",
           "label": "Corrections after memory was shown",
           "question": "Does the user correct Claude after memory is shown?",
-          "definition": "The share of turns with injected memories where the next prompt looked like a correction.",
+          "definition": "The share of turns with injected memories where the next prompt looked like a correction, with no subagent's hand-back or other session's message between.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "none",

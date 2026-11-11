@@ -1,0 +1,11 @@
+stored (correction, project billing) note:0b4c2a52-0000-4000-8000-00000000abcd
+Similar memories: does this fact update or repeat one of them?
+[billing]
+- Billing uses PostgreSQL 15. (3d ago, 7d1e93a0-0000-4000-8000-000000000001)
+[billing]
+- The replicas run PostgreSQL 15. (1d ago, 8e2f04b1-0000-4000-8000-000000000002)
+If this fact replaces one of them, report that one outdated with memory_credit, so it is retired.
+Print one line in your final message, an Updated line if the fact updates one of them:
+> 🧠🔄 **Updated (billing · correction · replaces 7d1e93a0)** — <the fact, in a few words>
+> 🧠🔄 **Updated (billing · correction · replaces 8e2f04b1)** — <the fact, in a few words>
+> 🧠💾 **Saved (billing · correction)** — <the fact, in a few words>

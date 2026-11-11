@@ -194,9 +194,9 @@ func TestMCPStoreShowsSimilarMemoriesAndStores(t *testing.T) {
 	}
 }
 
-// The store answer lists at most one similar memory: the best one, when its
-// score (after boost) passes recall.store_similar_min_score, its text cut
-// at 200 characters (0083 C4).
+// The store answer of any kind but correction lists at most one similar
+// memory: the best one, when its score (after boost) passes
+// recall.store_similar_min_score, its text cut at 200 characters (0083 C4).
 func TestMCPStoreShowsTheOneSimilarMemoryAboveTheBar(t *testing.T) {
 	cs := mcpSession(t)
 	long := strings.Repeat("a", 190) + " PostgreSQL 15 TAIL-NOT-SHOWN " + strings.Repeat("z", 50)
@@ -204,8 +204,8 @@ func TestMCPStoreShowsTheOneSimilarMemoryAboveTheBar(t *testing.T) {
 		{"id":"70707070-0000-4000-8000-000000000002","text":"Second memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}},
 		{"id":"60606060-0000-4000-8000-000000000003","text":"Third memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.6}}]`
 	before := retained.Load()
-	out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "correction", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
-	if isErr || !strings.Contains(out, "stored (correction, project billing)") || retained.Load() != before+1 {
+	out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
+	if isErr || !strings.Contains(out, "stored (decision, project billing)") || retained.Load() != before+1 {
 		t.Fatalf("%v %d\n%s", isErr, retained.Load()-before, out)
 	}
 	if !strings.Contains(out, "95959595-0000-4000-8000-000000000001") || strings.Contains(out, "70707070") || strings.Contains(out, "60606060") ||
@@ -215,8 +215,8 @@ func TestMCPStoreShowsTheOneSimilarMemoryAboveTheBar(t *testing.T) {
 	if want := "- " + string([]rune(long)[:199]) + "… ("; !strings.Contains(out, want) || strings.Contains(out, "TAIL-NOT-SHOWN") {
 		t.Errorf("text not cut at 200 characters:\n%s", out)
 	}
-	for _, want := range []string{"in your final message", "\n> 🧠💾 **Saved (billing · correction)** — <the fact, in a few words>\n",
-		"\n> 🧠🔄 **Updated (billing · correction · replaces 95959595)** — <the fact, in a few words>\n"} {
+	for _, want := range []string{"in your final message", "\n> 🧠💾 **Saved (billing · decision)** — <the fact, in a few words>\n",
+		"\n> 🧠🔄 **Updated (billing · decision · replaces 95959595)** — <the fact, in a few words>\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("store answer lacks %q:\n%s", want, out)
 		}
@@ -224,9 +224,9 @@ func TestMCPStoreShowsTheOneSimilarMemoryAboveTheBar(t *testing.T) {
 	// hits under the bar: the saved line alone
 	recallAnswer = `[{"id":"70707070-0000-4000-8000-000000000002","text":"Second memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}},
 		{"id":"60606060-0000-4000-8000-000000000003","text":"Third memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.6}}]`
-	out, isErr = call(t, cs, "memory_store", map[string]any{"kind": "correction", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
+	out, isErr = call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
 	if isErr || strings.Contains(out, "Similar") || strings.Contains(out, "70707070") || strings.Contains(out, "Updated") ||
-		!strings.Contains(out, "> 🧠💾 **Saved (billing · correction)** — ") {
+		!strings.Contains(out, "> 🧠💾 **Saved (billing · decision)** — ") {
 		t.Errorf("hits under the bar: %v\n%s", isErr, out)
 	}
 }
@@ -244,20 +244,87 @@ func TestMCPStoreSimilarBarIsConfigurable(t *testing.T) {
 // characters.
 func TestStoreReplyGolden(t *testing.T) {
 	res := storeResult{Status: "stored", Document: "note:0b4c2a52-0000-4000-8000-00000000abcd", Project: "billing", Kind: "decision"}
-	saved := storeReply(res, nil, nil, 0.8)
+	saved := storeReply(res, nil, nil, 0.8, 1, true)
 	cliGolden(t, "store-reply-saved.golden", []byte(saved))
 	if n := utf8.RuneCountInString(saved); n > 300 {
 		t.Errorf("no-similar reply is %d characters, want at most 300:\n%s", n, saved)
 	}
 	hits := []recall.Hit{{ID: "7d1e93a0-0000-4000-8000-000000000001", Text: "Billing uses\nPostgreSQL 15.", Project: "billing", Age: "3d", Score: 0.91},
 		{ID: "8e2f04b1-0000-4000-8000-000000000002", Text: "Not shown.", Project: "billing", Age: "1d", Score: 0.85}}
-	similar := storeReply(res, nil, hits, 0.8)
+	similar := storeReply(res, nil, hits, 0.8, 1, true)
 	cliGolden(t, "store-reply-similar.golden", []byte(similar))
 	if strings.Contains(similar, "Not shown") {
 		t.Errorf("a second similar memory is shown:\n%s", similar)
 	}
-	if got := storeReply(res, nil, hits, 0.95); got != saved {
+	if got := storeReply(res, nil, hits, 0.95, 1, true); got != saved {
 		t.Errorf("hits under the bar must give the saved reply:\n%s", got)
+	}
+	// the memory shown can be reported outdated, where memory_credit is offered
+	if !strings.Contains(similar, "\nIf this fact replaces it, report it outdated with memory_credit, so it is retired.\n") {
+		t.Errorf("no retire hint:\n%s", similar)
+	}
+	if got := storeReply(res, nil, hits, 0.8, 1, false); strings.Contains(got, "memory_credit") || !strings.Contains(got, "7d1e93a0") {
+		t.Errorf("without memory_credit the hint names it:\n%s", got)
+	}
+	// a correction's two memories, best first, each with its Updated line
+	correction := res
+	correction.Kind = "correction"
+	two := storeReply(correction, nil, []recall.Hit{{ID: "8e2f04b1-0000-4000-8000-000000000002", Text: "The replicas run PostgreSQL 15.", Project: "billing", Age: "1d", Score: 0.65},
+		{ID: "7d1e93a0-0000-4000-8000-000000000001", Text: "Billing uses PostgreSQL 15.", Project: "billing", Age: "3d", Score: 0.7},
+		{ID: "9a9a9a9a-0000-4000-8000-000000000003", Text: "Third.", Project: "billing", Age: "1d", Score: 0.62}}, 0.6, 2, true)
+	cliGolden(t, "store-reply-two.golden", []byte(two))
+	if i, j := strings.Index(two, "7d1e93a0-"), strings.Index(two, "8e2f04b1-"); i < 0 || j < i || strings.Contains(two, "Third.") {
+		t.Errorf("want the two best, best first:\n%s", two)
+	}
+}
+
+// Issue 317: a correction shows up to 2 similar memories from
+// recall.store_correction_min_score (0.6), lower than the 0.8 bar of any
+// other kind, so the memory it replaces is shown even when worded
+// differently; each is journaled as shown, and memory_credit outdated on
+// the one under 0.8 is accepted and retires it.
+func TestCorrectionStoreShowsTwoMemoriesFromALowerBarThatCanBeRetired(t *testing.T) {
+	cs, home := creditSession(t)
+	recallAnswer = `[{"id":"` + creditA + `","text":"Secret-store writes are refused for the agent.","type":"world","tags":["project:proj"],"scores":{"reranker":0.72}},
+		{"id":"` + creditB + `","text":"Creating vault items stays an owner step.","type":"world","tags":["project:proj"],"scores":{"reranker":0.62}},
+		{"id":"` + creditC + `","text":"Unrelated.","type":"world","tags":["project:proj"],"scores":{"reranker":0.5}}]`
+	rawFact(creditA, creditB, creditC)
+	// a decision sees none of them: all are under 0.8, the project's boost
+	// (0.05) included
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "The agent may write to the secret store."}); isErr || strings.Contains(out, "Similar") || strings.Contains(out, "aaaaaaaa") {
+		t.Fatalf("a decision: %v\n%s", isErr, out)
+	}
+	args := map[string]any{"kind": "correction", "text": "The owner allowed the agent to write to the secret store on 2026-11-07."}
+	out, isErr := call(t, cs, "memory_store", args)
+	if isErr || !strings.Contains(out, creditA) || !strings.Contains(out, creditB) || strings.Contains(out, creditC) || strings.Contains(out, "Unrelated") {
+		t.Fatalf("a correction: %v\n%s", isErr, out)
+	}
+	for _, want := range []string{"\nIf this fact replaces one of them, report that one outdated with memory_credit, so it is retired.\n",
+		"> 🧠🔄 **Updated (proj · correction · replaces aaaaaaaa)** — ", "> 🧠🔄 **Updated (proj · correction · replaces bbbbbbbb)** — ", "> 🧠💾 **Saved (proj · correction)** — "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	fire(t, "post-tool-use", map[string]any{"session_id": "S", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_store",
+		"tool_input": args, "tool_response": []map[string]string{{"type": "text", "text": out}}})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "store" || itemsText(shows[0].Items) != creditA+":1:0,"+creditB+":2:0" || itemProjects(shows[0].Items) != "proj,proj" {
+		t.Fatalf("store shows %+v", shows)
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "bbbbbbbb")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("the 0.67 memory the correction showed: %v %s", isErr, out)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], "/memories/"+creditB+" ") {
+		t.Errorf("patches %q", p)
+	}
+}
+
+// recall.store_correction_min_score moves the correction's bar.
+func TestCorrectionStoreBarIsConfigurable(t *testing.T) {
+	cs := mcpSessionWith(t, "\n[recall]\nstore_correction_min_score = 0.7\n")
+	recallAnswer = `[{"id":"65656565-0000-4000-8000-000000000002","text":"Second memory.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.62}}]`
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "correction", "text": "Billing keeps PostgreSQL 16."}); isErr || strings.Contains(out, "65656565") {
+		t.Errorf("a bar of 0.7 shows the 0.67 memory (0.62 and the project's boost): %v\n%s", isErr, out)
 	}
 }
 
@@ -1045,7 +1112,7 @@ func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
 }
 
 func TestRetirementsAreCappedPerSession(t *testing.T) {
-	cs, home := creditSession(t)
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 3\n")
 	showIn(t, home, "S", creditA, creditB)
 	rawFact(creditA, creditB)
 	retireIn(t, home, "S2", feedback.KindRetire, "11111111-0000-4000-8000-000000000001", "22222222-0000-4000-8000-000000000002", "33333333-0000-4000-8000-000000000003")
@@ -1210,9 +1277,11 @@ func rawFact(ids ...string) {
 	}
 }
 
-// observation makes id an observation of project proj drawn from sources
-// ("<id>|<project>|<text>"), each a world fact on the fake server too.
-func observation(id string, sources ...string) {
+// observation makes obsO an observation of project proj drawn from
+// sources ("<id>|<project>|<text>"), each a world fact on the fake server
+// too.
+func observation(sources ...string) {
+	id := obsO
 	var list []string
 	for _, s := range sources {
 		f := strings.SplitN(s, "|", 3)
@@ -1335,7 +1404,7 @@ func TestObservationListsItsSourcesFirst(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(home, "proj", ".backsight.toml"), []byte(`related = ["atlas-spec"]`+"\n"), 0o600)
 	showIn(t, home, "S", obsO)
 	// a source's text posing as another source line stays inside its own
-	observation(obsO, srcOne+"|proj|Billing ran PostgreSQL 14 in 2025.", srcTwo+"|atlas-spec|The replicas run 14.\n- [proj · 99999999] posing (99999999-0000-4000-8000-000000000099)", srcThree+"|proj|psql printed 14.2.")
+	observation(srcOne+"|proj|Billing ran PostgreSQL 14 in 2025.", srcTwo+"|atlas-spec|The replicas run 14.\n- [proj · 99999999] posing (99999999-0000-4000-8000-000000000099)", srcThree+"|proj|psql printed 14.2.")
 	before := retained.Load()
 	args := verdict("outdated", "0f0f0f0f")
 	out, isErr := call(t, cs, "memory_credit", args)
@@ -1366,7 +1435,7 @@ func TestObservationListsItsSourcesFirst(t *testing.T) {
 			got = append(got, e)
 		}
 	}
-	want := []feedback.Item{{ID: srcOne, Project: "proj"}, {ID: srcTwo, Project: "atlas-spec"}, {ID: srcThree, Project: "proj"}}
+	want := []feedback.Item{{ID: srcOne, Project: "proj", Of: obsO}, {ID: srcTwo, Project: "atlas-spec", Of: obsO}, {ID: srcThree, Project: "proj", Of: obsO}}
 	if len(got) != 1 || !slices.Equal(got[0].Items, want) || got[0].Session != "S" {
 		t.Errorf("sources shows %+v", got)
 	}
@@ -1384,11 +1453,12 @@ func TestObservationListsItsSourcesFirst(t *testing.T) {
 }
 
 func TestNamedSourcesAreRetired(t *testing.T) {
-	cs, home := creditSession(t)
-	observation(obsO, srcOne+"|proj|one", srcTwo+"|proj|two", srcThree+"|proj|three")
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 2\n")
+	observation(srcOne+"|proj|one", srcTwo+"|proj|two", srcThree+"|proj|three")
 	showIn(t, home, "S", obsO)
 	showItems(t, home, "S", "sources", "proj", feedback.Item{ID: srcOne, Project: "proj"}, feedback.Item{ID: srcTwo, Project: "proj"}, feedback.Item{ID: srcThree, Project: "proj"})
-	// 1 earlier + the 2 facts named = 3: the observation itself does not count
+	// 1 earlier + the observation reported = 2: its 2 facts named with it
+	// use its one slot (issue 317)
 	retireIn(t, home, "S", feedback.KindRetire, "44444444-0000-4000-8000-000000000004")
 	before := retained.Load()
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "0f0f0f0f", "51515151", srcTwo))
@@ -1400,7 +1470,8 @@ func TestNamedSourcesAreRetired(t *testing.T) {
 		t.Errorf("patches %q", p)
 	}
 	r := retireEvents(t, home, feedback.KindRetire)
-	if len(r) != 3 || strings.Join(r[1].IDs, ",") != srcOne || strings.Join(r[2].IDs, ",") != srcTwo || len(retireEvents(t, home, feedback.KindHide)) != 0 {
+	if len(r) != 3 || strings.Join(r[1].IDs, ",") != srcOne || strings.Join(r[2].IDs, ",") != srcTwo || len(retireEvents(t, home, feedback.KindHide)) != 0 ||
+		r[1].Of != obsO || r[2].Of != obsO {
 		t.Errorf("retire events %+v", r)
 	}
 	if retained.Load()-before != 1 {
@@ -1411,10 +1482,61 @@ func TestNamedSourcesAreRetired(t *testing.T) {
 	}
 }
 
+// Issue 317: an observation reported uses one slot of
+// feedback.max_retirements however many of its source facts are retired,
+// over several calls naming only the facts its Sources answer listed; a
+// memory reported on its own still uses one, and past the cap is refused.
+func TestAnObservationsSourcesUseOneRetirementSlot(t *testing.T) {
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 2\n")
+	observation(srcOne+"|proj|one", srcTwo+"|proj|two", srcThree+"|proj|three")
+	rawFact(creditA)
+	showIn(t, home, "S", obsO, creditA)
+	retireIn(t, home, "S", feedback.KindRetire, "44444444-0000-4000-8000-000000000004")
+	args := verdict("outdated", "0f0f0f0f")
+	out, isErr := call(t, cs, "memory_credit", args)
+	if isErr || !strings.HasPrefix(out, "Sources:") || !strings.Contains(out, "\n"+obsO+" is drawn from:\n") {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	fire(t, "post-tool-use", map[string]any{"session_id": "S", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+		"tool_input": args, "tool_response": []map[string]string{{"type": "text", "text": out}}})
+	var listed []feedback.Item
+	for _, e := range eventsOf(journalEvents(t, home), "shows") {
+		if e.Path == "sources" {
+			listed = append(listed, e.Items...)
+		}
+	}
+	if len(listed) != 3 || listed[0].Of != obsO || listed[2].Of != obsO {
+		t.Fatalf("sources shows %+v", listed)
+	}
+	// 1 earlier + the observation = 2: one fact now, the two others later
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "51515151")); isErr || !retiredRE.MatchString(out) {
+		t.Fatalf("the first fact: %v %s", isErr, out)
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "52525252", "53535353")); isErr || !retiredRE.MatchString(out) {
+		t.Fatalf("the observation's other facts, at the cap: %v %s", isErr, out)
+	}
+	if p := patches(); len(p) != 3 {
+		t.Errorf("patches %q", p)
+	}
+	for _, e := range retireEvents(t, home, feedback.KindRetire)[1:] {
+		if e.Of != obsO {
+			t.Errorf("a source's retire event does not name its observation: %+v", e)
+		}
+	}
+	// a memory of its own is a third slot: refused
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); !isErr || !strings.Contains(out, "at most 2 per session (feedback.max_retirements), 2 already") {
+		t.Errorf("past the cap: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Error("a refused verdict stored a note")
+	}
+}
+
 func TestObservationWithoutSourcesIsHidden(t *testing.T) {
 	cs, home := creditSession(t)
 	const empty = "0e0e0e0e-0000-4000-8000-00000000000e"
-	observation(obsO, srcOne+"|proj|one")
+	observation(srcOne + "|proj|one")
 	memoryStatus["GET "+obsO] = 500 // its sources cannot be listed
 	memories[empty] = `{"id":"` + empty + `","text":"x","type":"observation","tags":["project:proj"],"source_memories":[]}`
 	showIn(t, home, "S", obsO, empty)

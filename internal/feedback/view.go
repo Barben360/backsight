@@ -17,6 +17,7 @@ import (
 // an older line).
 type Show struct {
 	ID, Turn, Agent, Path, Key, Project string
+	Of                                  string // a sources show's observation (Item.Of)
 	Rank                                int
 	At                                  time.Time
 }
@@ -32,16 +33,36 @@ func Shows(events []Event, session string) []Show {
 	return out
 }
 
-// Retirements counts the memories session retired: the ids of its retire
-// and hide events, whatever turn they came in (feedback.max_retirements).
-func Retirements(events []Event, session string) int {
-	n := 0
-	for _, e := range events {
-		if (e.Kind == KindRetire || e.Kind == KindHide) && e.Session == session {
-			n += len(e.IDs)
+// RetiredSlots are the memories session reported and had retired, each
+// once, in journal order, whatever turn they came in
+// (feedback.max_retirements): the observation a retired fact names (Of),
+// else each id of its retire and hide events (issue 317: one observation
+// reported is one slot, however many of its source facts it took).
+func RetiredSlots(events []Event, session string) []string {
+	var slots []string
+	add := func(id string) {
+		if !slices.Contains(slots, id) {
+			slots = append(slots, id)
 		}
 	}
-	return n
+	for _, e := range events {
+		if (e.Kind != KindRetire && e.Kind != KindHide) || e.Session != session {
+			continue
+		}
+		if e.Kind == KindRetire && e.Of != "" {
+			add(e.Of)
+			continue
+		}
+		for _, id := range e.IDs {
+			add(id)
+		}
+	}
+	return slots
+}
+
+// Retirements counts the session's RetiredSlots.
+func Retirements(events []Event, session string) int {
+	return len(RetiredSlots(events, session))
 }
 
 // ShowsOf is the shows of one shows event.
@@ -53,7 +74,7 @@ func ShowsOf(e Event) []Show {
 		if project == "" {
 			project = e.Project
 		}
-		out = append(out, Show{ID: it.ID, Turn: e.Turn, Agent: e.Agent, Path: e.Path, Project: project, Rank: it.Rank, At: e.TS,
+		out = append(out, Show{ID: it.ID, Turn: e.Turn, Agent: e.Agent, Path: e.Path, Project: project, Rank: it.Rank, At: e.TS, Of: it.Of,
 			Key: e.Session + "|" + e.Turn + "|" + at + "|" + it.ID})
 	}
 	return out

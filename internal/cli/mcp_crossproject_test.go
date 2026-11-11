@@ -137,7 +137,7 @@ func TestCrossProjectRetireRefusesSeveralProjects(t *testing.T) {
 // One budget: another project's retirements count toward the session's
 // feedback.max_retirements with its own.
 func TestCrossProjectRetireCountsTowardTheSessionBudget(t *testing.T) {
-	cs, home := creditSession(t)
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 3\n")
 	showForeign(t, home)
 	retireIn(t, home, "S", feedback.KindRetire, "11111111-0000-4000-8000-000000000001", "22222222-0000-4000-8000-000000000002")
 	before := retained.Load()

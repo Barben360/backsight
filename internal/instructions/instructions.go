@@ -37,8 +37,10 @@ import (
 // short guide and memory_store leave merges, releases and CI status to the conversation, and close
 // the loop on a settled open item rather than on any shipped work; v16 (0083 C7): each rule once
 // across the guide, the MCP instructions and the tool texts, the guide keeping only the conversation's
-// rules, shorter memory_store and memory_credit descriptions, the briefing asks for the process rules).
-const Version = "v17"
+// rules, shorter memory_store and memory_credit descriptions, the briefing asks for the process rules);
+// v18 (issue 317): memory_store shows a correction up to two similar memories, and after the memories
+// it shows asks for memory_credit outdated on the one the fact replaces.
+const Version = "v18"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
