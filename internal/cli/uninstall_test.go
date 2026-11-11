@@ -706,12 +706,20 @@ func TestUninstallDeletesTheMetricsDocument(t *testing.T) {
 // The two deletes (shared counts and daily figures) share one budget: with a
 // server that never answers, the uninstall waits for it once, not twice.
 func TestUninstallDeletesShareOneBudget(t *testing.T) {
-	old := uninstallShareBudget
-	uninstallShareBudget = time.Second
-	t.Cleanup(func() { uninstallShareBudget = old })
+	// The shared budget ends once the first delete reached the server (as
+	// its deadline would, while that delete hangs), not after a time.
+	old := uninstallShareContext
+	var end atomic.Pointer[context.CancelFunc] // read by the server's goroutine
+	uninstallShareContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(ctx)
+		end.Store(&cancel)
+		return ctx, cancel
+	}
+	t.Cleanup(func() { uninstallShareContext = old })
 	var reached atomic.Int32
 	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		reached.Add(1)
+		(*end.Load())()
 		<-r.Context().Done()
 	}))
 	t.Cleanup(hang.Close)
@@ -730,7 +738,7 @@ func TestUninstallDeletesShareOneBudget(t *testing.T) {
 			t.Errorf("%s: %+v", name, s)
 		}
 	}
-	// The first delete hangs until the shared budget expires; the second
+	// The first delete hangs until the shared budget ends; the second
 	// must then not start (two budgets would let two requests through).
 	if n := reached.Load(); n != 1 {
 		t.Errorf("%d delete requests reached the server, want exactly 1", n)

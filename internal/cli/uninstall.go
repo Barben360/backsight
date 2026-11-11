@@ -125,6 +125,12 @@ var jobLockWaitHook = func() {}
 // daily figures together.
 var uninstallShareBudget = 5 * time.Second
 
+// uninstallShareContext is the deletes' shared budget; tests end it
+// themselves, once a delete reached the server.
+var uninstallShareContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, uninstallShareBudget)
+}
+
 // The Windows seams; tests replace them (TestMain refuses both).
 var (
 	// deleteTaskFolder deletes Task Scheduler's empty folder \<project>,
@@ -481,7 +487,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// after: before the server stops.
 	if f.purgeLocal {
 		// One budget for both deletes: the uninstall waits 5 s at most.
-		sctx, scancel := context.WithTimeout(ctx, uninstallShareBudget)
+		sctx, scancel := uninstallShareContext(ctx)
 		add(uninstallSharedCounts(sctx, d, cfg, sec, generation, f.plan))
 		add(uninstallMetricsDocument(sctx, d, cfg, sec, generation, f.plan))
 		scancel()
