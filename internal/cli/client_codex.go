@@ -168,7 +168,7 @@ func clientInstallCodex(ctx context.Context, flag string, plan bool) (clientInst
 	}
 	add("codex", "done", version+" in "+dir)
 
-	// 2. No server of the user's named memory: its tools would be named as
+	// 2. No server of the user's named backsight: its tools would be named as
 	// backsight's, and backsight's hooks would take its calls for its own.
 	shim := filepath.Join(c.dirs.Data, "bin", plugin.ShimName(runtime.GOOS))
 	clash, err := codex.NameClash(ctx, env, shim)
@@ -177,9 +177,9 @@ func clientInstallCodex(ctx context.Context, flag string, plan bool) (clientInst
 	}
 	if clash != "" {
 		return res, &output.Error{Code: output.NeedsUser,
-			Message: "Codex already has an MCP server named " + plugin.Server + ": " + clash + ". backsight's memory server has that name, so both would share their tool names (" + codex.ToolPrefix() + "…). " +
+			Message: "Codex already has an MCP server named " + harness.CodexServer + ": " + clash + ". backsight's memory server has that name, so both would share their tool names (" + codex.ToolPrefix() + "…). " +
 				"Rename or remove that server, then wire Codex again",
-			Actions: []output.Action{{Kind: "run_as_user", Cmd: "codex mcp remove " + plugin.Server, Why: "or rename it in config.toml: the name memory is backsight's"}},
+			Actions: []output.Action{{Kind: "run_as_user", Cmd: "codex mcp remove " + harness.CodexServer, Why: "or rename it in config.toml: the name " + harness.CodexServer + " is backsight's"}},
 			Resume:  "backsight client install --codex"}
 	}
 

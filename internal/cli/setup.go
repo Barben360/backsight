@@ -202,6 +202,9 @@ type setupEnv struct {
 	// importEsts: the import folder estimates of this run, by folder and
 	// model.
 	importEsts map[string]importEst
+	// codexImportEsts: the estimates of importing Codex's own memories,
+	// by model.
+	codexImportEsts map[string]importEst
 	// Codex (decision 0085): codexDir is its home (absolute) when the codex
 	// command answers there, "" when it does not (setup then wires Claude
 	// Code alone, as before Codex); claudeFound, the claude command answers;
@@ -495,7 +498,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 		}
 	}
 	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime(),
-		Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories}
+		Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories, CodexImport: s.codexImportFor()}
 	// --reconfigure: the questions the last run answered are asked again,
 	// their answers the defaults; the hidden answers (ports, project) stay.
 	prev := map[string]string{}
@@ -553,7 +556,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 		}
 		trial[next.ID] = v
 		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs, Import: s.importEstimate,
-			Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories}); errors.As(err, &ue) {
+			Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories, CodexImport: s.codexImportFor()}); errors.As(err, &ue) {
 			fmt.Fprintln(s.e.stdout, "  "+ue.Msg)
 			continue
 		}
@@ -749,8 +752,14 @@ func (s *setupEnv) scanImport(path, model string) importEst {
 	if len(scan.Files) == 0 {
 		return importEst{err: fmt.Errorf("no Markdown or text file to import in it (backsight import %s --plan lists what it skips)", scan.Root)}
 	}
+	return importEstOf(scan, nil, cfg, model)
+}
+
+// importEstOf prices the files of scan that toSend accepts (all when nil)
+// for model, with the cap the import would set.
+func importEstOf(scan fileimport.Scan, toSend func(fileimport.File) bool, cfg config.Config, model string) importEst {
 	prices := retain.PricesForLLM(cfg.LLM)
-	plan := fileimport.BuildPlan(scan, nil, "", "", prices)
+	plan := fileimport.BuildPlan(scan, toSend, "", "", prices)
 	maxCost, maxTokens := importCap(filesImportFlags{}, plan.Total, prices)
 	work := importDuration(plan.Total.Duration) + " of extraction"
 	if maxTokens == 0 {
@@ -1325,7 +1334,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 
 // clientSteps wire Claude Code: a server-only host has none, they are
 // skipped there.
-var clientSteps = []string{"client", "retention", "codex", "verify", "reference", "backfill", "import", "codex_memories"}
+var clientSteps = []string{"client", "retention", "codex", "verify", "reference", "backfill", "import", "codex_import", "codex_memories"}
 
 func serverOnlyStep(name string) setup.Step {
 	return setup.Step{Name: name, Status: "skipped", Detail: "server-only host"}
@@ -1615,6 +1624,11 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		return st.Name == "import" && st.Status == "done" && !strings.HasPrefix(st.Detail, "0 ")
 	}) {
 		res.NextSteps = append(res.NextSteps, "your folder is being imported in the background: backsight import list shows its progress")
+	}
+	if slices.ContainsFunc(rec.Steps, func(st setup.Step) bool {
+		return st.Name == "codex_import" && st.Status == "done" && !strings.HasPrefix(st.Detail, "0 ")
+	}) {
+		res.NextSteps = append(res.NextSteps, "Codex's own memories are being imported in the background: backsight import list shows their progress")
 	}
 	if answers["role"] == config.RoleServer {
 		res.NextSteps = append(res.NextSteps, "open the server to your other PCs: backsight server expose --private <this host's LAN or tailnet address> --out <file> "+

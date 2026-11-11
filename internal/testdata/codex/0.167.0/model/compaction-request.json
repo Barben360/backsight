@@ -92,7 +92,7 @@
         "call_id": "call_fake_6_0",
         "id": "fc_01a1c72b-a6c3-7983-9b1e-b05fab780dad",
         "name": "memory_search",
-        "namespace": "mcp__memory",
+        "namespace": "mcp__backsight",
         "type": "function_call"
       },
       {
@@ -154,7 +154,7 @@
         "call_id": "call_fake_14_4",
         "id": "fc_01a1c72b-a87f-7882-b9df-79e8268f5e5c",
         "name": "memory_store",
-        "namespace": "mcp__memory",
+        "namespace": "mcp__backsight",
         "type": "function_call"
       },
       {

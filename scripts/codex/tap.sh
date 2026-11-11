@@ -17,13 +17,14 @@ export BACKSIGHT_HOME=@BSHOME@
 id=$(date +%s%N)-$$
 case "${1:-}" in
   hook)
+    ev=${*: -1} # the event: the last word (hook <event>, or hook --harness codex <event>)
     in=$(cat)
-    printf '%s' "$in" > "$d/$id-hook-$2.in.json"
-    printf '%s\n' "$env0" > "$d/$id-hook-$2.env"
-    out=$(printf '%s' "$in" | "$real" "$@" 2> "$d/$id-hook-$2.err")
+    printf '%s' "$in" > "$d/$id-hook-$ev.in.json"
+    printf '%s\n' "$env0" > "$d/$id-hook-$ev.env"
+    out=$(printf '%s' "$in" | "$real" "$@" 2> "$d/$id-hook-$ev.err")
     rc=$?
-    printf '%s' "$out" > "$d/$id-hook-$2.out"
-    echo "$rc" > "$d/$id-hook-$2.rc"
+    printf '%s' "$out" > "$d/$id-hook-$ev.out"
+    echo "$rc" > "$d/$id-hook-$ev.rc"
     printf '%s' "$out"
     exit "$rc"
     ;;

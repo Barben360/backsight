@@ -119,7 +119,7 @@ func TestCodexThreadsBecomeTheirDocuments(t *testing.T) {
 	}
 	got := segLines(t, it)
 	if len(got) != 16 || got[0] != "system: REF-ID: conversation:"+codexRoot || !strings.HasPrefix(got[1], "user: first turn <<fake") ||
-		got[2] != "action: mcp__memory__memory_search codex spike" || got[len(got)-1] != "assistant: RESUMED" {
+		got[2] != "action: mcp__backsight__memory_search codex spike" || got[len(got)-1] != "assistant: RESUMED" {
 		t.Errorf("segment:\n%s", strings.Join(got, "\n"))
 	}
 	for _, injected := range []string{"environment_context", "Memory reminder", "Memory: an issue", "subagent_notification", "summary: the conversation so far", "skills_instructions"} {

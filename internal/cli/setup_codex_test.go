@@ -107,7 +107,8 @@ func TestSetupWiresCodexAndUndoGivesItBack(t *testing.T) {
 	for _, s := range env.Data.Steps {
 		names = append(names, s.Name)
 	}
-	if i, j := slices.Index(names, "import"), slices.Index(names, "codex_memories"); i < 0 || j != i+1 || slices.Index(names, "codex") != slices.Index(names, "retention")+1 {
+	// The import of Codex's own memories sits between them (block 11).
+	if i, j := slices.Index(names, "import"), slices.Index(names, "codex_memories"); i < 0 || j != i+2 || names[i+1] != "codex_import" || slices.Index(names, "codex") != slices.Index(names, "retention")+1 {
 		t.Errorf("step order %v", names)
 	}
 	by := stepsByName(env.Data.Steps)
@@ -160,11 +161,11 @@ func TestSetupWiresBothAndStopsOnAMemoryServer(t *testing.T) {
 	home, steps := setupMachine(t)
 	withLLMKey(t, home)
 	f := withCodex(t, home)
-	codexHomeWith(t, home, "[mcp_servers.memory]\ncommand = \"/usr/bin/mem\"\n")
+	codexHomeWith(t, home, "[mcp_servers.backsight]\ncommand = \"/usr/bin/mem\"\n")
 	steps.real["client install"] = true
 	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
 	env := parseSetup(t, out)
-	if code != output.NeedsUser || env.Error == nil || !strings.Contains(env.Error.Message, "[mcp_servers.memory]") {
+	if code != output.NeedsUser || env.Error == nil || !strings.Contains(env.Error.Message, "[mcp_servers.backsight]") {
 		t.Fatalf("exit %d %s", code, out)
 	}
 	if by := stepsByName(env.Data.Steps); by["client"].Status != "done" || by["codex"].Status != "failed" {

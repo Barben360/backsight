@@ -20,7 +20,6 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
-	"github.com/Barben360/backsight/internal/transcript"
 )
 
 const (
@@ -254,12 +253,9 @@ func parentEntrypoint(path string) string {
 	if path == "" {
 		return ""
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	return transcript.Entrypoint(f)
+	// read by the harness whose conversation it is: a Codex rollout's
+	// originator (codex_exec…), a Claude Code transcript's entrypoint
+	return retain.EntrypointOf(retain.HarnessOf(conversationReaders(), path), path)
 }
 
 // subagentRan: the subagent wrote its own transcript. Claude Code's

@@ -128,6 +128,10 @@ type Inputs struct {
 	// question's default). CodexMemories: Codex's own memories are on
 	// there (decision 0085 D10).
 	Codex, ClaudeFound, CodexMemories bool
+	// CodexImport counts the files `backsight import --from codex` would
+	// send from Codex's own memories, priced for a model; nil or 0 files:
+	// no codex_import question (decision 0085 D10).
+	CodexImport func(model string) (files int, cost string)
 }
 
 // The coding tools the tools question picks from.
@@ -157,7 +161,7 @@ func Tools(answers map[string]string) (claude, codex bool) {
 var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth, "runtime": "docker"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "tools", "retention", "backups", "reference", "backfill", "import", "import_path", "codex_memories", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "tools", "retention", "backups", "reference", "backfill", "import", "import_path", "codex_import", "codex_memories", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -404,8 +408,28 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			qs = append(qs, pq)
 		}
 	}
+	// Codex's own memories, imported as answered, before the step that
+	// may turn them off.
+	if codex && !serverOnly && in.CodexImport != nil {
+		if n, cost := in.CodexImport(model); n > 0 {
+			files := "files"
+			if n == 1 {
+				files = "file"
+			}
+			cq := Question{ID: "codex_import", Prompt: fmt.Sprintf("Codex's own memories hold %d %s backsight can import (their summaries, each to its project). Import them in the background?", n, files),
+				Default: "no", Recommended: "yes",
+				Options: []Option{{Value: "yes", Label: fmt.Sprintf("import %d %s, within a spending cap (backsight import --from codex)", n, files), Cost: cost},
+					{Value: "no", Label: "leave them in Codex"}}}
+			if provider == "claude-code" {
+				cq.Options[0].Caveat = "sent unattended on your subscription"
+			}
+			if err := add(cq); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	// Codex's own memories, turned off only as answered (the step comes
-	// after the import, so their files can be imported first).
+	// after the imports, so their files can be imported first).
 	if codex && in.CodexMemories {
 		if err := add(Question{ID: "codex_memories", Prompt: "Codex's own memories are on. Beside backsight's, two memories would answer the same questions. Turn Codex's off (undoable)?",
 			Default: "off", Recommended: "off",

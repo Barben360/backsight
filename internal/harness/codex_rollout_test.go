@@ -21,7 +21,7 @@ import (
 // codex_rollout.go's ledger: block 6, https://github.com/Barben360/backsight/issues/281.
 func init() {
 	codexOwns("codex_rollout.go", codexPart{over: true,
-		done: []string{"Conversations", "SessionOf", "Size", "Open", "ReadConversation", "Subagents", "AgentType", "Current"}})
+		done: []string{"Conversations", "SessionOf", "Size", "Open", "ReadConversation", "Subagents", "AgentType", "Current", "Entrypoint"}})
 }
 
 // The recorded threads (internal/testdata/codex/0.167.0/rollouts) and the
@@ -114,11 +114,11 @@ func TestCodexRootRolloutReadsAsCheckedByHand(t *testing.T) {
 	recs, st := readAll(t, paths["root.jsonl"], 0)
 	want := []turnLine{
 		{"user", `first turn <<fake [{"call":"memory_search","args":{"queries":["codex spike"]}},{"call":"exec_command","args":{"cmd":"env | sort > /out/fixtures-env-shell.txt; echo ok"}},{"call":"exec_command","args":{"cmd":"apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: hello.txt\n+hello from the fake model\n*** End Patch\nEOF\n"}},{"call":"request_user_input","args":{"questions":[{"id":"pick","header":"Pick","question":"Which one?","options":[{"label":"A (Recommended)","description":"a"},{"label":"B","description":"b"}]}]}},{"call":"memory_store","args":{"kind":"decision","text":"Decision (2026-11-10): the Codex harness records fixtures with a fake model."}},{"say":"T1-DONE"}]>>`},
-		{"action", "mcp__memory__memory_search codex spike"},
+		{"action", "mcp__backsight__memory_search codex spike"},
 		{"action", "exec_command env | sort > /out/fixtures-env-shell.txt; echo ok"},
 		{"action", "exec_command apply_patch <<'EOF'"},
 		{"action", "request_user_input"},
-		{"action", "mcp__memory__memory_store"},
+		{"action", "mcp__backsight__memory_store"},
 		{"assistant", "T1-DONE"},
 		// a target is its first line, cut at 100 characters
 		{"action", `spawn_agent sub task <<fake [{"call":"memory_search","args":{"queries":["subagent check"]}},{"call":"exec_comman`},
@@ -181,7 +181,7 @@ func TestCodexToolCallsKeepTheirInput(t *testing.T) {
 	}
 	search, shell, patch := tools[0], tools[1], tools[2]
 	var queries []string
-	if search.Name != "mcp__memory__memory_search" || search.ID != "call_fake_6_0" || json.Unmarshal(search.Input["queries"], &queries) != nil || !slices.Equal(queries, []string{"codex spike"}) {
+	if search.Name != "mcp__backsight__memory_search" || search.ID != "call_fake_6_0" || json.Unmarshal(search.Input["queries"], &queries) != nil || !slices.Equal(queries, []string{"codex spike"}) {
 		t.Errorf("memory search %+v", search)
 	}
 	var cmd string

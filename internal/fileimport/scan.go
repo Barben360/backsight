@@ -45,6 +45,14 @@ type ScanOptions struct {
 	Exclude []string // globs relative to the root
 	Ext     []string // extra extensions, with the dot
 	Now     time.Time
+	// Skip, when set, names the reason a path below the root is skipped
+	// ("" reads it), after the hidden and excluded checks: a folder is
+	// then not walked. A preset (Codex's memories) knows its layout.
+	Skip func(rel string, dir bool) string
+	// Inspect, when set, sees each file to send (its raw bytes, once they
+	// passed every check) and may set its date and project, or name the
+	// reason it is skipped.
+	Inspect func(rel string, raw []byte, f *File) string
 }
 
 // File is one file to send.
@@ -57,6 +65,8 @@ type File struct {
 	Date          time.Time `json:"date"`   // UTC
 	DateFromMtime bool      `json:"date_from_mtime,omitempty"`
 	Redacted      []string  `json:"redacted,omitempty"` // kinds, sorted
+	// Project: the project a preset maps this file to; "" is the import's.
+	Project string `json:"project,omitempty"`
 }
 
 // Scan is what a folder holds for an import.
@@ -65,6 +75,13 @@ type Scan struct {
 	Files       []File              // sorted by Rel
 	Skipped     map[string][]string // reason -> relative paths, sorted
 	SkippedDirs map[string][]string // excluded | hidden -> relative dirs, sorted
+	// Preset: the reader that made the scan ("" a plain folder); Stores:
+	// the stores it read, for a preset that has several.
+	Preset string
+	Stores []string
+	// KeptOut: the working folders kept out of memory a preset's sources
+	// name, which keep its consolidated files out (mixes_excluded).
+	KeptOut []string
 }
 
 // ScanDir reads root recursively. Hidden components and excludes apply to
@@ -110,7 +127,17 @@ func ScanDir(root string, opt ScanOptions) (Scan, error) {
 				s.SkippedDirs[SkipExcluded] = append(s.SkippedDirs[SkipExcluded], rel)
 				return fs.SkipDir
 			}
+			if opt.Skip != nil {
+				if reason := opt.Skip(rel, true); reason != "" {
+					s.SkippedDirs[reason] = append(s.SkippedDirs[reason], rel)
+					return fs.SkipDir
+				}
+			}
 			return nil
+		}
+		reason := ""
+		if opt.Skip != nil && !hidden && !excluded {
+			reason = opt.Skip(rel, false)
 		}
 		switch {
 		case hidden:
@@ -118,6 +145,9 @@ func ScanDir(root string, opt ScanOptions) (Scan, error) {
 			return nil
 		case excluded:
 			skip(SkipExcluded, rel)
+			return nil
+		case reason != "":
+			skip(reason, rel)
 			return nil
 		case d.Type()&fs.ModeSymlink != 0:
 			skip(SkipSymlink, rel)
@@ -156,6 +186,12 @@ func ScanDir(root string, opt ScanOptions) (Scan, error) {
 			f.Date = t
 		} else {
 			f.Date, f.DateFromMtime = info.ModTime().UTC(), true
+		}
+		if opt.Inspect != nil {
+			if reason := opt.Inspect(rel, raw, &f); reason != "" {
+				skip(reason, rel)
+				return nil
+			}
 		}
 		s.Files = append(s.Files, f)
 		return nil

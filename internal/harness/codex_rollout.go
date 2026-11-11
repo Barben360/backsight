@@ -570,6 +570,14 @@ func (c Codex) Subagents(path string) []string {
 	return out
 }
 
+// Entrypoint is how the thread of the rollout at path was started: its
+// session_meta's originator (codex-tui, codex_exec…), read from its first
+// line alone; "" when unknown. A hook asks it within its budget.
+func (Codex) Entrypoint(path string) string {
+	m, _ := ReadRolloutMeta(path)
+	return m.Originator
+}
+
 // AgentType is a subagent rollout's role ("default" when it has none), ""
 // for a rollout that is no subagent's.
 func (Codex) AgentType(path string) string {

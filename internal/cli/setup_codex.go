@@ -3,9 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/fileimport"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
 )
 
@@ -88,6 +92,29 @@ func (s *setupEnv) withTools(steps []setupStep, answers map[string]string, withR
 		}
 		return setup.Step{Name: "codex", Status: "done", Detail: "plugins backsight@backsight and backsight-hooks@backsight in " + cr.Profile}, nil
 	}}
+	imp := setupStep{"codex_import", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
+		if answers["codex_import"] != "yes" {
+			return setup.Step{Name: "codex_import", Status: "skipped", Detail: codexImportSkipped(answers)}, nil
+		}
+		// An extra, as the folder import: what keeps it from being queued
+		// is said, with the command, and setup goes on.
+		cmd := "backsight import --from codex --codex-home " + s.codexDir
+		args := []string{"import", "--from", "codex", "--codex-home", s.codexDir}
+		if answers["provider"] == "claude-code" {
+			args = append(args, "--allow-subscription") // answered yes past the caveat
+		}
+		out := subcommand(ctx, args...)
+		if out.Err != nil {
+			return setup.Step{Name: "codex_import", Status: "skipped", Detail: fmt.Sprintf("not queued: %s; run %s once that is fixed", strings.TrimSuffix(errMessage(out.Err), "."), cmd)}, nil
+		}
+		var ir filesImportResult
+		_ = json.Unmarshal(out.Data, &ir)
+		detail := fmt.Sprintf("%d file(s) of Codex's memories queued: jobs tick sends them in the background (backsight import list shows them)", ir.Plan.Files)
+		if answers["scheduler"] == "off" {
+			detail += "; with no scheduler, run backsight jobs tick to send them"
+		}
+		return setup.Step{Name: "codex_import", Status: "done", Detail: detail}, nil
+	}}
 	memories := setupStep{"codex_memories", 1, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 		if answers["codex_memories"] != "off" {
 			why := "Codex's own memories are off"
@@ -108,18 +135,76 @@ func (s *setupEnv) withTools(steps []setupStep, answers map[string]string, withR
 		}
 		return setup.Step{Name: "codex_memories", Status: "done", Detail: detail}, nil
 	}}
-	return insertSteps(steps, install, memories)
+	return insertSteps(steps, install, imp, memories)
 }
 
-// insertSteps puts install after the retention step and memories after
-// the import step (the import comes first, so Codex's memory files can be
-// imported before they are turned off).
-func insertSteps(steps []setupStep, install, memories setupStep) []setupStep {
+// insertSteps puts install after the retention step, then the import of
+// Codex's memories and the memories step after the import step (the
+// imports come first, so Codex's memory files are queued before they are
+// turned off).
+func insertSteps(steps []setupStep, install, imp, memories setupStep) []setupStep {
 	at := func(name string) int {
 		return slices.IndexFunc(steps, func(st setupStep) bool { return st.name == name }) + 1
 	}
 	steps = slices.Insert(steps, at("retention"), install)
-	return slices.Insert(steps, at("import"), memories)
+	return slices.Insert(steps, at("import"), imp, memories)
+}
+
+// codexImportSkipped says why the import of Codex's memories is skipped.
+func codexImportSkipped(answers map[string]string) string {
+	if answers["codex_import"] == "no" {
+		return "not asked for"
+	}
+	return "no Codex memory file to import"
+}
+
+// codexImportFor estimates the import of Codex's own memories in the home
+// setup acts on, for a model; nil without Codex.
+func (s *setupEnv) codexImportFor() func(model string) (int, string) {
+	if s.codexDir == "" {
+		return nil
+	}
+	return func(model string) (int, string) {
+		if e, ok := s.codexImportEsts[model]; ok {
+			return e.files, e.cost
+		}
+		e := s.scanCodexMemories(model)
+		if s.codexImportEsts == nil {
+			s.codexImportEsts = map[string]importEst{}
+		}
+		s.codexImportEsts[model] = e
+		return e.files, e.cost
+	}
+}
+
+// scanCodexMemories reads Codex's memory stores as `import --from codex`
+// would, and prices what it would send: the files not sent already when
+// this PC imported them before. It reads the files only, never the server.
+func (s *setupEnv) scanCodexMemories(model string) importEst {
+	cfg := config.Default(s.dirs, s.home)
+	if s.cfg != nil {
+		cfg = *s.cfg
+	}
+	if model != cfg.LLM.Model { // the configured prices are another model's
+		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
+	}
+	scan, err := scanCodexImport(s.home, s.codexDir, cfg.Projects.Transverse, cfg.Privacy.ExcludePaths, nil)
+	if err != nil {
+		return importEst{err: err}
+	}
+	var toSend func(fileimport.File) bool
+	if id := retain.ReadMachineID(s.dirs.State); id != "" {
+		if m, found, _ := fileimport.LoadManifest(s.dirs.ImportDir(), fileimport.PresetSourceID(id, fileimport.PresetCodex, scan.Root)); found {
+			m.Entries = slices.Clone(m.Entries)
+			m.Merge(scan, nil)
+			unsent := map[string]bool{}
+			for _, e := range m.Unsent() {
+				unsent[e.Rel] = true
+			}
+			toSend = func(f fileimport.File) bool { return unsent[f.Rel] }
+		}
+	}
+	return importEstOf(scan, toSend, cfg, model)
 }
 
 func notPickedStep(name string) setup.Step {
@@ -139,6 +224,13 @@ func (s *setupEnv) planTools(steps []setup.Step, a map[string]string) []setup.St
 	if !codexOn {
 		return steps
 	}
+	imp := setup.Step{Name: "codex_import", Status: "skipped", Detail: codexImportSkipped(a)}
+	if a["codex_import"] == "yes" {
+		imp = setup.Step{Name: "codex_import", Status: "planned", Detail: "backsight import --from codex --codex-home " + s.codexDir + ": queue Codex's memory files for jobs tick"}
+		if n, cost := s.codexImportFor()(a["model"]); n > 0 {
+			imp.Detail = fmt.Sprintf("backsight import --from codex --codex-home %s: queue %d file(s) for jobs tick (%s)", s.codexDir, n, cost)
+		}
+	}
 	memories := setup.Step{Name: "codex_memories", Status: "skipped", Detail: "Codex's own memories are off"}
 	switch a["codex_memories"] {
 	case "off":
@@ -151,7 +243,7 @@ func (s *setupEnv) planTools(steps []setup.Step, a map[string]string) []setup.St
 		return slices.IndexFunc(steps, func(st setup.Step) bool { return st.Name == name }) + 1
 	}
 	steps = slices.Insert(steps, at("retention"), install)
-	return slices.Insert(steps, at("import"), memories)
+	return slices.Insert(steps, at("import"), imp, memories)
 }
 
 // codexNextSteps are what a setup that wired Codex leaves the user to do.
