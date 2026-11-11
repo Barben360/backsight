@@ -177,10 +177,12 @@ type Privacy struct {
 // sdk-ts, sdk-py), codex exec, and Codex's SDKs. Codex's are its
 // originators at openai/codex 0d37c06 (0.167.0): codex exec sets
 // codex_exec (codex-rs/exec/src/lib.rs), the TypeScript SDK codex_sdk_ts
-// (sdk/typescript/src/exec.ts), and codex-app-server-sdk is the app
-// server's SDK (codex-rs/otel/src/metrics/tags.rs, the known originators).
+// (sdk/typescript/src/exec.ts), codex-app-server-sdk is the app server's
+// SDK, and codex_mcp_server is Codex run as a tool by another agent, whose
+// own conversation already holds the work (both in the known originators
+// of codex-rs/otel/src/metrics/tags.rs).
 func DefaultSkipEntrypoints() []string {
-	return []string{"sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk"}
+	return []string{"sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"}
 }
 
 // SkipsEntrypoint reports whether records written under entrypoint ep stay

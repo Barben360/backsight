@@ -14,7 +14,7 @@ digest = ""
 transverse = [".claude", "u"]
 [privacy]
 exclude_paths = []
-skip_entrypoints = ["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk"]
+skip_entrypoints = ["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"]
 [components]
 read = true
 write = true

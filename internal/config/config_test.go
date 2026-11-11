@@ -786,14 +786,14 @@ func TestSetRuntime(t *testing.T) {
 }
 
 // Headless runs stay out of memory by default, Claude Code's and Codex's
-// (decision 0071 C1): Claude Code's Agent SDK entrypoints, codex exec and
-// Codex's SDKs (their originators in Codex 0.167's source); interactive
-// front ends are sent.
+// (decision 0071 C1): Claude Code's Agent SDK entrypoints, codex exec,
+// Codex's SDKs and Codex as another agent's MCP tool (their originators in
+// Codex 0.167's source); interactive front ends are sent.
 func TestHeadlessEntrypointsAreSkippedByDefault(t *testing.T) {
 	p := Default(dirs, "/home/u").Privacy
 	for ep, skip := range map[string]bool{
 		"sdk-cli": true, "sdk-ts": true, "sdk-py": true,
-		"codex_exec": true, "codex_sdk_ts": true, "codex-app-server-sdk": true,
+		"codex_exec": true, "codex_sdk_ts": true, "codex-app-server-sdk": true, "codex_mcp_server": true,
 		"cli": false, "claude-desktop": false, "codex-tui": false, "codex_vscode": false, "codex_cli_rs": false, "codex_desktop": false, "": false,
 	} {
 		if got := p.SkipsEntrypoint(ep); got != skip {

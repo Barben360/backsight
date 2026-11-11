@@ -65,7 +65,7 @@ Claude Code's directory is `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`. `--c
 | Key | Default | Effect |
 |---|---|---|
 | `privacy.exclude_paths` | `[]` | Directories whose sessions are never sent and get no briefing (their subdirectories and a project's worktrees too). `backsight pause --project` adds the current project, `backsight resume --project` removes it. |
-| `privacy.skip_entrypoints` | `["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk"]` | Entrypoints (glob patterns) whose turns are never sent: Claude Code's entrypoint, or the front end a Codex thread was started from. The default skips headless runs: Claude Code's Agent SDK (`sdk-cli`, `sdk-ts`, `sdk-py`), `codex exec` and Codex's SDKs; `[]` sends them too. A `config.toml` that sets this key keeps its own value: add the Codex patterns to it to skip those runs too. |
+| `privacy.skip_entrypoints` | `["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"]` | Entrypoints (glob patterns) whose turns are never sent: Claude Code's entrypoint, or the front end a Codex thread was started from. The default skips headless runs: Claude Code's Agent SDK (`sdk-cli`, `sdk-ts`, `sdk-py`), `codex exec`, Codex's SDKs, and Codex run as another agent's tool (its MCP server); `[]` sends them too. A `config.toml` that sets this key keeps its own value: add the Codex patterns to it to skip those runs too. |
 
 ## `[components]`
 
