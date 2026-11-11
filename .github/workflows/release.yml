@@ -35,7 +35,7 @@ jobs:
       # builds from scratch: modules from the proxy, checked against go.sum.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # Only the owner releases, with no manual approval: the tag ruleset
       # lets only admins create v* tags (repository settings), and this
