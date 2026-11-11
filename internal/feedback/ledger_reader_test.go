@@ -3,7 +3,6 @@ package feedback
 import (
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // The reader never waits for the ledger lock: with the lock held, All
@@ -21,29 +20,25 @@ func TestCurrentReaderReadsWithoutTheLock(t *testing.T) {
 	}
 	defer release()
 
+	// The lock is held until the test returns: a reader that waits for it
+	// either hangs until go test's -timeout or meets the hook.
+	waited := false
+	inLockWait = func() { waited = true }
+	t.Cleanup(func() { inLockWait = nil })
+
 	var r LedgerReader = CurrentReader{Dir: dir}
-	type result struct {
-		l   Ledger
-		err error
+	l, err := r.All()
+	if err != nil {
+		t.Fatal(err)
 	}
-	done := make(chan result, 1)
-	go func() {
-		l, err := r.All()
-		done <- result{l, err}
-	}()
-	select {
-	case res := <-done:
-		if res.err != nil {
-			t.Fatal(res.err)
-		}
-		if h := res.l.Memories["o1"].Hidden; h == nil || !h.Since.Equal(at(130)) {
-			t.Errorf("o1 not hidden since the journaled hide: %+v", res.l.Memories["o1"])
-		}
-		if res.l.Memories["m1"].Shown != 1 {
-			t.Errorf("the settled ledger is missing: %+v", res.l.Memories)
-		}
-	case <-time.After(5 * time.Second): // a wait on the lock never ends: it is held until the test returns
-		t.Fatal("All waited for the ledger lock")
+	if waited {
+		t.Error("All waited for the ledger lock")
+	}
+	if h := l.Memories["o1"].Hidden; h == nil || !h.Since.Equal(at(130)) {
+		t.Errorf("o1 not hidden since the journaled hide: %+v", l.Memories["o1"])
+	}
+	if l.Memories["m1"].Shown != 1 {
+		t.Errorf("the settled ledger is missing: %+v", l.Memories)
 	}
 }
 

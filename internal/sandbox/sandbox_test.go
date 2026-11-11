@@ -53,7 +53,9 @@ func setup(t *testing.T) (*hindsight.Client, config.Config, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second)
+	// Out of reach: go test's -timeout ends a hang first, so a busy runner
+	// never cuts a call to the live server.
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,17 +69,17 @@ func run(t *testing.T, args ...string) (int, string) {
 	return code, out.String() + errb.String()
 }
 
-// document waits for an async retain to land.
+// document waits for an async retain to land, with no deadline of its
+// own: a retain that never lands hangs until go test's -timeout.
 func document(t *testing.T, cl *hindsight.Client, bank, id string) hindsight.Document {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		doc, err := cl.GetDocument(context.Background(), bank, id)
 		if err == nil {
 			return doc
 		}
 		var apiErr *hindsight.APIError
-		if !errors.As(err, &apiErr) || apiErr.Kind != hindsight.NotFound || time.Now().After(deadline) {
+		if !errors.As(err, &apiErr) || apiErr.Kind != hindsight.NotFound {
 			t.Fatalf("document %s: %v", id, err)
 		}
 		time.Sleep(2 * time.Second)
@@ -248,10 +250,10 @@ func llmCountsWork(t *testing.T, cl *hindsight.Client, cfg config.Config) {
 	if err := cl.RetainNow(context.Background(), bank, []hindsight.RetainItem{{Content: "We keep PostgreSQL 16 for billing because of partial indexes.", DocumentID: "control", Tags: []string{}}}); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(time.Minute); llmCalls(t, cfg, bank) == 0; time.Sleep(2 * time.Second) {
-		if time.Now().After(deadline) {
-			t.Fatal("an extracting retain logged no LLM call: the count cannot prove 0 calls")
-		}
+	// No deadline: a retain that never logs an LLM call (a count that
+	// cannot see any) hangs until go test's -timeout.
+	for llmCalls(t, cfg, bank) == 0 {
+		time.Sleep(2 * time.Second)
 	}
 }
 

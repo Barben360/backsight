@@ -177,13 +177,20 @@ func (o Outbox) Limits() (warn, max int64) {
 // deadline of their own (store, the jobs, backfill) wait that long.
 const lockWait = 3 * time.Second
 
+// lockNow and lockAfter are the clock and the timer of lock's wait,
+// variables so a test can step the wait without waiting.
+var (
+	lockNow   = time.Now
+	lockAfter = time.After
+)
+
 // lock takes the outbox lock, waiting until LockDeadline (when set, else
 // lockWait from now) or ctx's deadline, whichever comes first; ctx ending
 // stops the wait.
 func (o Outbox) lock(ctx context.Context, command string) (func(), error) {
 	deadline := o.LockDeadline
 	if deadline.IsZero() {
-		deadline = time.Now().Add(lockWait)
+		deadline = lockNow().Add(lockWait)
 	}
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -193,7 +200,7 @@ func (o Outbox) lock(ctx context.Context, command string) (func(), error) {
 		if err == nil {
 			return func() { _ = l.Release() }, nil
 		}
-		if !time.Now().Before(deadline) {
+		if !lockNow().Before(deadline) {
 			return nil, err
 		}
 		var held *state.HeldError
@@ -203,7 +210,7 @@ func (o Outbox) lock(ctx context.Context, command string) (func(), error) {
 		select { // short waits: notes are tiny
 		case <-ctx.Done():
 			return nil, err
-		case <-time.After(min(20*time.Millisecond, time.Until(deadline))):
+		case <-lockAfter(min(20*time.Millisecond, deadline.Sub(lockNow()))):
 		}
 	}
 }
