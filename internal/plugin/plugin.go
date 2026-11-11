@@ -19,6 +19,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/instructions"
 )
 
@@ -187,10 +188,14 @@ func files(shim, version string, w Wiring) (map[string][]byte, error) {
 }
 
 // SkillFiles are backsight's skills for shim, by path relative to the
-// plugin's root (skills/<name>/SKILL.md).
-func SkillFiles(shim string) map[string][]byte {
+// plugin's root (skills/<name>/SKILL.md), as Claude Code reads them.
+func SkillFiles(shim string) map[string][]byte { return SkillFilesFor(harnessid.ClaudeCode, shim) }
+
+// SkillFilesFor are SkillFiles as client (a harness id) reads them
+// (instructions.SkillsFor).
+func SkillFilesFor(client, shim string) map[string][]byte {
 	out := map[string][]byte{}
-	for _, sk := range instructions.Skills(skillShim(targetOS, shim)) {
+	for _, sk := range instructions.SkillsFor(client, skillShim(targetOS, shim)) {
 		out["skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
 	}
 	return out

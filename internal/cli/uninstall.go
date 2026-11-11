@@ -487,6 +487,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// 3b. Codex, where backsight wired it: its plugins and marketplace, the
 	// hook trust Codex leaves behind, and Codex's own memories on again when
 	// backsight turned them off.
+	codexRemoved := false
 	for _, dir := range codexHomes(home, st, rec) {
 		name := "codex " + dir
 		memories := st.ClientOf(harnessid.Codex) != nil && st.ClientOf(harnessid.Codex).MemoriesOff
@@ -513,6 +514,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			return fail(name, err)
 		}
 		add(undoAction{Name: name, Status: "done", Detail: codexRemovedDetail(detail)})
+		codexRemoved = true
 	}
 	saveRecord(func(u *setup.Undo) { u.CodexHomes = nil })
 
@@ -636,6 +638,9 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	}
 	if len(profiles) > 0 {
 		res.NextSteps = append(res.NextSteps, "restart Claude Code (or /reload-plugins): its sessions still run the removed plugin")
+	}
+	if codexRemoved {
+		res.NextSteps = append(res.NextSteps, "restart Codex: its open sessions still run the removed plugins")
 	}
 	return res, nil
 }

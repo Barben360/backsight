@@ -95,7 +95,7 @@ func newStoreCmd(e *env) *cobra.Command {
 				return err
 			}
 			cwd, _ := os.Getwd()
-			sid := noteSession(shellSession(os.Getenv), os.Getenv("CLAUDE_CODE_SESSION_ID"))
+			sid := noteSession(shellSessionHere(), os.Getenv("CLAUDE_CODE_SESSION_ID"))
 			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, sid, cwd, kind, proj, strings.Join(args, " "))
 			telemetry.New(d.State, telemetry.Common{Session: sid, BinaryVersion: buildinfo.Version}).Emit(storeEvent(kind, res, false))
 			if res.Document == "" {

@@ -30,7 +30,7 @@ import (
 // codex is Codex's adapter, for the commands that wire Codex.
 var codex = harness.Codex{}
 
-const codexHomeFlag = "Codex's home (default: the one recorded when Codex was wired, else $CODEX_HOME, else ~/.codex)"
+var codexHomeFlag = codex.Texts().ProfileFlag
 
 // codexTrustText is what the user does once the hooks plugin was added:
 // Codex runs no hook it was not shown (0085 D5).
@@ -108,7 +108,7 @@ func refuseCodexMove(ctx context.Context, home, dir string, st state.State) erro
 
 func needsCodex(msg string) error {
 	return &output.Error{Code: output.NeedsUser, Message: msg, Actions: []output.Action{
-		{Kind: "install", Cmd: "npm install -g @openai/codex", Why: "backsight wires itself into Codex through its plugin commands"},
+		{Kind: "install", Cmd: codex.Texts().InstallCmd, Why: codex.Texts().InstallWhy},
 		{Kind: "run_as_user", Cmd: "backsight client install --codex", Why: "then wire Codex again"},
 	}, Resume: "backsight client install --codex"}
 }

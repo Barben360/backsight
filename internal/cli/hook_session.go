@@ -112,6 +112,7 @@ func (h *hookEnv) startOnSession() {
 // briefing only once it changed (compactStart).
 func (h *hookEnv) sessionStart() []byte {
 	h.startSessionTurn()
+	h.recordStartedIn()
 	switch h.in.Source {
 	case "startup", "":
 	case "compact":
@@ -160,9 +161,9 @@ func (h *hookEnv) sessionStart() []byte {
 		// it); another tool's recorded one, and what install recorded there.
 		env, rec := wiredRecord(h.adapter, h.home, h.dirs.Data, st)
 		if drift := h.adapter.Drift(env, rec, &h.cfg); len(drift) > 0 {
-			banner += "\n" + instructions.DriftLine(drift[0])
+			banner += "\n" + instructions.DriftLineFor(h.adapter.ID(), drift[0])
 		}
-		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
+		if line := updateBanner(h.adapter.ID(), st.UpdateCheck, buildinfo.Version); line != "" {
 			banner += "\n" + line
 		}
 		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" && h.cfg.Server.Mode == "remote" {
@@ -182,7 +183,7 @@ func (h *hookEnv) sessionStart() []byte {
 		banner += "\n" + instructions.QuarantineLine(len(held))
 	}
 	if h.firstSession() {
-		banner = instructions.FirstSessionNotice(h.cfg.Server.URL, h.cfg.LLM.Provider) + "\n" + banner
+		banner = instructions.FirstSessionNoticeFor(h.adapter.ID(), h.cfg.Server.URL, h.cfg.LLM.Provider) + "\n" + banner
 	}
 	ids := make([]string, 0, len(items))
 	for _, it := range items {
