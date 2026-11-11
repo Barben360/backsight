@@ -49,6 +49,7 @@ func retry(op func() error) error {
 		if err == nil || !Held(err) || !time.Now().Before(deadline) {
 			return err
 		}
+		RetryHook()
 		time.Sleep(retryEvery)
 	}
 }

@@ -16,11 +16,11 @@ Include what you can:
 
 Never paste real memories, transcripts, API keys or backup archives into a report. If the proof needs one, say so and we will agree on a way to share it.
 
-backsight is a one-person preview project: reports are answered on a best-effort basis. A fix ships as a new release, and the advisory is published once the release is out.
+backsight is a one-person project: reports are answered on a best-effort basis. A fix ships as a new release, and the advisory is published once the release is out.
 
 ## Supported versions
 
-backsight is a preview. Only the latest release, pre-releases included, gets security fixes: there are no backports. `backsight update check` tells you when a newer release exists, and `backsight update apply` installs it.
+Only the latest release, pre-releases included, gets security fixes: there are no backports. `backsight update check` tells you when a newer release exists, and `backsight update apply` installs it.
 
 ## Threat model
 

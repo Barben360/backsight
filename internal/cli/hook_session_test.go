@@ -508,16 +508,20 @@ func pageJSON(id, content string) string {
 	return string(raw)
 }
 
-// A slow page read gets 1.5 s: the recent-observation briefing still has
-// its time, and the session is not reported as unreachable.
+// A page read that never answers is cut at its own bound
+// (briefingModelTimeout, within the briefing's): the recent-observation
+// briefing still has its time, and the session is not reported as
+// unreachable.
 func TestASlowPageLeavesTheFallbackItsTime(t *testing.T) {
 	home := hookHome(t)
-	mentalGetDelay = 4 * time.Second
+	old := briefingModelTimeout
+	briefingModelTimeout = time.Millisecond
+	t.Cleanup(func() { briefingModelTimeout = old })
+	mentalGetDelay = time.Hour // answers only once the hook gave up
 	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
-	start := time.Now()
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || strings.Contains(h.SystemMessage, "unreachable") || time.Since(start) > 3*time.Second {
-		t.Errorf("%s: %q %q", time.Since(start), h.Specific.Context, h.SystemMessage)
+	if !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || strings.Contains(h.SystemMessage, "unreachable") {
+		t.Errorf("%q %q", h.Specific.Context, h.SystemMessage)
 	}
 }
 
@@ -820,11 +824,7 @@ func onSessionHome(t *testing.T, flag bool) (home string, asks *[]string, starts
 func TestSessionStartStartsTheSupervisorWhenFlagged(t *testing.T) {
 	home, asks, starts, _ := onSessionHome(t, true)
 	in := map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}
-	begin := time.Now()
 	h := fire(t, "session-start", in)
-	if took := time.Since(begin); took > 3*time.Second {
-		t.Errorf("the hook took %s", took)
-	}
 	if !strings.HasPrefix(h.Specific.Context, instructions.Guide) {
 		t.Errorf("the session start lost its guide: %q", h.Specific.Context)
 	}

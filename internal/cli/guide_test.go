@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -143,6 +144,9 @@ func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 			f.recall++
 			if f.delay > 0 {
 				f.mu.Unlock()
+				// The body read whole, the server notices the client
+				// hanging up (its context ends).
+				_, _ = io.Copy(io.Discard, r.Body)
 				select {
 				case <-time.After(f.delay):
 				case <-r.Context().Done():
@@ -451,7 +455,6 @@ func applyStepIndex(steps []step, name string) int {
 // fallback's reason, so the user knows what to fix.
 func TestGuideSearchSaysWhyItFellBack(t *testing.T) {
 	old := guideCallTimeout
-	guideCallTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { guideCallTimeout = old })
 	for name, c := range map[string]struct {
 		set    func(home string, f *docsHindsight)
@@ -460,8 +463,10 @@ func TestGuideSearchSaysWhyItFellBack(t *testing.T) {
 		"config unreadable": {func(home string, _ *docsHindsight) {
 			_ = os.WriteFile(filepath.Join(home, "backsight", "config", "config.toml"), []byte("[server\nurl = "), 0o600)
 		}, "config unreadable"},
-		"key refused":   {func(_ string, f *docsHindsight) { f.status["*"] = http.StatusUnauthorized }, "the server refused the API key"},
-		"timeout":       {func(_ string, f *docsHindsight) { f.delay = 2 * time.Second }, "did not answer in time"},
+		"key refused": {func(_ string, f *docsHindsight) { f.status["*"] = http.StatusUnauthorized }, "the server refused the API key"},
+		// The recall answers only once the client gave up, each call
+		// bounded by 1 ms; the other cases keep the default bound.
+		"timeout":       {func(_ string, f *docsHindsight) { f.delay, guideCallTimeout = time.Hour, time.Millisecond }, "did not answer in time"},
 		"refresh fails": {func(_ string, f *docsHindsight) { f.status["POST /memories"] = http.StatusInternalServerError }, "could not be refreshed"},
 		"no hit":        {func(_ string, f *docsHindsight) { f.rank = nil }, "the semantic search found nothing in bank claude-memory-docs"},
 		"foreign bank": {func(_ string, f *docsHindsight) {
@@ -469,6 +474,7 @@ func TestGuideSearchSaysWhyItFellBack(t *testing.T) {
 		}, `the docs bank claude-memory-docs is not backsight's (its name is "team docs", not "backsight docs")`},
 	} {
 		t.Run(name, func(t *testing.T) {
+			guideCallTimeout = old
 			home := devInstall(t, true)
 			withGuideDocs(t)
 			f := newDocsHindsight(t, home)

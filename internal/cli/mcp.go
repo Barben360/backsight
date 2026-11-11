@@ -37,7 +37,7 @@ type searchArgs struct {
 	Queries  []string `json:"queries" jsonschema:"1-4 short keyword queries"`
 	Projects []string `json:"projects,omitempty" jsonschema:"other projects to search fully, exact names as listed at session start; unnamed, a project is reached only by a strong match"`
 	Scope    string   `json:"scope,omitempty" jsonschema:"auto (current project, transverse, related projects and the whole memory; default) or all (the whole memory only)"`
-	Limit    int      `json:"limit,omitempty" jsonschema:"most memories returned (default 8)"`
+	Limit    int      `json:"limit,omitempty" jsonschema:"most memories returned (default 20)"`
 	MinScore *float64 `json:"min_score,omitempty" jsonschema:"relevance floor (default 0.4); lower it to widen"`
 }
 

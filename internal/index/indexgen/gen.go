@@ -1,6 +1,7 @@
 // Package indexgen writes synthetic state directories (telemetry, journal
-// and ledger files, as the producers write them) for the metrics index's
-// time budgets and for the metrics views' budgets. Test support only: it
+// and ledger files, as the producers write them) for the tests and
+// benchmarks of the metrics index, its views and the dashboard on a
+// history of some size. Test support only: it
 // takes a testing.TB and fails the test on any error. It must not import
 // internal/index, whose own tests import it.
 package indexgen
@@ -50,9 +51,9 @@ func (x *gen) clientOf(m map[string]any, n int) {
 	}
 }
 
-// Budget is the volume the budgets are measured on: 13 months, above a
-// year of the author's PC (the journal is about 4 % of the telemetry
-// there; 30 k lines a year is more).
+// Budget is the volume the index's benchmarks measure on: 13 months,
+// above a year of the author's PC (the journal is about 4 % of the
+// telemetry there; 30 k lines a year is more).
 var Budget = Spec{Months: 13, TelemetryPerYear: 400_000, JournalPerYear: 30_000, Memories: 5_000, Seed: 1, Collection: true}
 
 // Now is the fixed "now" of the generated state.

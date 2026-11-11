@@ -116,22 +116,14 @@ func TestReportLeavesTheIndexOut(t *testing.T) {
 func TestDoctorMetricsIndexReadIsBounded(t *testing.T) {
 	prevInspect, prevTimeout := inspectIndex, indexFactsTimeout
 	t.Cleanup(func() { inspectIndex, indexFactsTimeout = prevInspect, prevTimeout })
-	indexFactsTimeout = 50 * time.Millisecond
+	indexFactsTimeout = time.Millisecond
 	inspectIndex = func(ctx context.Context, _ index.Options) (index.Status, error) {
-		select {
-		case <-ctx.Done():
-			return index.Status{}, &fs.PathError{Op: "open", Path: "/home/CANARY-index-path", Err: ctx.Err()}
-		case <-time.After(10 * time.Second):
-			return index.Status{}, nil
-		}
+		<-ctx.Done() // hangs until the bound cuts it
+		return index.Status{}, &fs.PathError{Op: "open", Path: "/home/CANARY-index-path", Err: ctx.Err()}
 	}
-	start := time.Now()
 	_, err := indexFacts(context.Background(), pathsOf(t.TempDir()), t.TempDir())
 	if err == nil || err.Error() != "timeout" {
 		t.Errorf("err %v, want the class timeout", err)
-	}
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("waited %v", d)
 	}
 }
 

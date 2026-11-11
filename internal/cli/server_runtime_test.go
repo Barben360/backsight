@@ -450,6 +450,10 @@ func TestSwitchDockerToNative(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	w.rts["docker"].cleanSize = 4242 // what clean would delete of the source
+	at := time.Date(2026, 11, 2, 7, 30, 0, 0, time.UTC)
+	oldNow := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = oldNow })
 	d := pathsOf(home)
 	before, _ := os.ReadFile(d.ConfigFile())
 	code, env, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
@@ -475,7 +479,7 @@ func TestSwitchDockerToNative(t *testing.T) {
 	}
 	if rs := switchState(t, home); rs == nil || rs.Step != "done" || rs.From != "docker" || rs.To != "native" || rs.Overlap != 1 || rs.Backup != env.Data.Backup {
 		t.Errorf("runtime_switch %+v", rs)
-	} else if rs.KeptBytes != 4242 || time.Since(rs.KeptAt) > time.Minute { // doctor shows it for a day without sizing it again
+	} else if rs.KeptBytes != 4242 || !rs.KeptAt.Equal(at) { // doctor shows it for a day without sizing it again
 		t.Errorf("runtime_switch kept %d bytes at %v", rs.KeptBytes, rs.KeptAt)
 	}
 	// No restore epoch, no temporary key: the target runs on the server's

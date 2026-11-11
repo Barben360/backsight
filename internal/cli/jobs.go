@@ -486,6 +486,12 @@ func (t *tickRead) again() {
 // reading included (its server checks keep their importCheckBudget).
 var importTickBudget = 60 * time.Second
 
+// importTickContext bounds the import by importTickBudget; tests end it
+// themselves, at a point of the import they choose.
+var importTickContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, importTickBudget)
+}
+
 // importInTick imports earlier history, once the binary that brings it
 // is installed: at each tick, within importTickBudget, until a run goes
 // through every source (the ledger's HistoryImported). A run cut short
@@ -499,7 +505,7 @@ func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 	if l, err := ledger(); err != nil || !l.HistoryImported.IsZero() {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(ctx, importTickBudget)
+	ctx, cancel := importTickContext(ctx)
 	defer cancel()
 	res, err := importHistory(ctx, d, home, time.Time{}, false, "jobs tick")
 	shows, credits := res.totals()

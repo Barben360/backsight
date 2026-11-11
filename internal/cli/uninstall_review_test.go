@@ -567,14 +567,21 @@ func TestUninstallWaitsForTheJobs(t *testing.T) {
 	})
 	t.Run("finishes during the wait", func(t *testing.T) {
 		m := installMachine(t)
-		short(t, 5*time.Second)
 		l, err := state.TryAcquire(filepath.Join(pathsOf(m.home).LocksDir(), "job-tick.lock"), "jobs tick")
 		if err != nil {
 			t.Fatal(err)
 		}
-		go func() { time.Sleep(300 * time.Millisecond); _ = l.Release() }()
-		if code, _, out := uninstall(t); code != output.OK {
-			t.Fatalf("exit %d\n%s", code, out)
+		// The job ends once uninstall found its lock held and waits.
+		waits := 0
+		old := jobLockWaitHook
+		jobLockWaitHook = func() {
+			if waits++; waits == 1 {
+				_ = l.Release()
+			}
+		}
+		t.Cleanup(func() { jobLockWaitHook = old })
+		if code, _, out := uninstall(t); code != output.OK || waits != 1 {
+			t.Fatalf("exit %d after %d wait(s), want 1\n%s", code, waits, out)
 		}
 	})
 }
