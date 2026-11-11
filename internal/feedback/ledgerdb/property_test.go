@@ -58,7 +58,7 @@ func TestRebuildEqualsIncrementalProperty(t *testing.T) {
 	if incremental := folds - refolds; incremental*4 < folds {
 		t.Errorf("%d of %d folds incremental over the back-dating seeds, want at least 25 %%", incremental, folds)
 	}
-	t.Logf("%d seeds in %v; back-dating seeds: %d folds, %d refolds", len(runs), time.Since(start), folds, refolds)
+	t.Logf("%d seeds in %v; back-dating seeds: %d folds, %d refolds", len(runs), time.Since(start), folds, refolds) //nolint:forbidigo // logged, never asserted
 }
 
 type propertyStats struct{ folds, refolds, partials int }

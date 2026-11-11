@@ -98,7 +98,9 @@ func TestApplyOneWaitsThenSeesTheHolderCommitted(t *testing.T) {
 		busy    time.Duration
 		relocks bool // the holder takes the lock again right after its commit
 	}{
-		{"lock freed", 5 * time.Second, false},
+		// Out of reach (go test's -timeout ends a hang first): a slow
+		// holder's commit never outlasts the wait.
+		{"lock freed", time.Hour, false},
 		{"lock taken again", 100 * time.Millisecond, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

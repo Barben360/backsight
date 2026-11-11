@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf16"
 
 	"github.com/Barben360/backsight/internal/scheduler"
@@ -24,19 +23,15 @@ import (
 // answers, or a pipe failing otherwise, starts nothing.
 func TestStartIfDownStartsThroughConhostWithoutWaiting(t *testing.T) {
 	h, f := taskFixture(t)
-	taskRunWait = 5 * time.Second // a wait for the answer would show
-	start := time.Now()
 	started, err := h.n.StartIfDown(context.Background())
 	if err != nil || !started {
 		t.Fatalf("started %v, %v", started, err)
-	}
-	if took := time.Since(start); took > time.Second {
-		t.Errorf("StartIfDown took %s: it waited for the supervisor", took)
 	}
 	want := scheduler.HeadlessArgs(h.n.shim(), "server", "supervise", "--backsight-home", h.n.Env["BACKSIGHT_HOME"])
 	if len(f.detached) != 1 || !slices.Equal(f.detached[0], want) || !slices.Equal(f.detached[0], h.superviseArgs(false)) {
 		t.Errorf("detached starts %q, want one of %q", f.detached, want)
 	}
+	// A wait for the supervisor would ask the pipe again after the start.
 	if got := f.ev.all(); !slices.Equal(got, []string{"pipe status", "detached " + strings.Join(want, " ")}) {
 		t.Errorf("events %q: one status question, then the start", got)
 	}

@@ -19,11 +19,16 @@ import (
 
 const token = "tok-fake"
 
+// outOfReach bounds the calls of the tests that mean "it answers", not "it
+// is fast": go test's -timeout (20 min) ends a hang first, so a busy
+// runner never cuts a call to an in-process server.
+const outOfReach = time.Hour
+
 func server(t *testing.T, h http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, err := New(srv.URL, token, 2*time.Second)
+	c, err := New(srv.URL, token, outOfReach)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,25 +156,23 @@ func TestUnreachable(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
-	c, _ := New(url, token, time.Second)
+	c, _ := New(url, token, outOfReach)
 	_, err := c.Health(context.Background())
 	if !errors.Is(err, ErrUnreachable) {
 		t.Errorf("want ErrUnreachable, got %v", err)
 	}
 }
 
+// The server never answers: only the call's own bound ends it (without
+// it, the call hangs until go test's -timeout).
 func TestDeadline(t *testing.T) {
 	c := server(t, func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-		case <-time.After(5 * time.Second):
-		}
+		<-r.Context().Done()
 	})
-	c.http.Timeout = 100 * time.Millisecond
-	start := time.Now()
+	c.http.Timeout = time.Millisecond
 	_, err := c.Health(context.Background())
-	if !errors.Is(err, ErrTimeout) || errors.Is(err, ErrUnreachable) || time.Since(start) > 2*time.Second {
-		t.Errorf("want ErrTimeout (not unreachable), got %v after %s", err, time.Since(start))
+	if !errors.Is(err, ErrTimeout) || errors.Is(err, ErrUnreachable) {
+		t.Errorf("want ErrTimeout (not unreachable), got %v", err)
 	}
 }
 
@@ -239,7 +242,7 @@ func TestNoTokenNoAuthorizationHeader(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
 	}))
 	t.Cleanup(srv.Close)
-	c, _ := New(srv.URL, "", time.Second)
+	c, _ := New(srv.URL, "", outOfReach)
 	if _, err := c.Health(context.Background()); err != nil {
 		t.Errorf("an empty token must send no Authorization header: %v", err)
 	}
@@ -253,7 +256,7 @@ func TestBasePathPrefixKept(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	t.Cleanup(srv.Close)
-	c, _ := New(srv.URL+"/hs/", token, time.Second)
+	c, _ := New(srv.URL+"/hs/", token, outOfReach)
 	if _, err := c.BankStats(context.Background(), "a:b"); err != nil {
 		t.Fatal(err)
 	}
@@ -480,33 +483,31 @@ func TestGetDocumentKeepsPerProjectIDs(t *testing.T) {
 	}
 }
 
-// A fake dial that blocks until its context ends stands for a server that
-// silently drops the SYN; the call must fail at the connect bound, far
-// before its 20 s budget, and read as a timeout like any other.
+// A server that silently drops the SYN: the call's dial is bounded by the
+// connect bound, far below its 20 s budget, and the dial's deadline error
+// (what net.Dialer returns at its Timeout, given at once by the fake)
+// reads as a timeout like any other.
 func TestClientFailsAtTheConnectBoundOnASilentServer(t *testing.T) {
 	old := dialContext
 	t.Cleanup(func() { dialContext = old })
+	dials := 0
 	dialContext = func(ctx context.Context, d *net.Dialer, network, addr string) (net.Conn, error) {
+		dials++
 		if d.Timeout != connectTimeout {
 			t.Errorf("dialer timeout = %s, want %s", d.Timeout, connectTimeout)
 		}
-		ctx, cancel := context.WithTimeout(ctx, d.Timeout) // what net.Dialer does with its Timeout
-		defer cancel()
-		<-ctx.Done()
 		return nil, &net.OpError{Op: "dial", Net: network, Err: os.ErrDeadlineExceeded}
 	}
 	c, err := New("http://192.0.2.1:9", token, 20*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	_, err = c.Health(context.Background())
-	el := time.Since(start)
 	if !errors.Is(err, ErrTimeout) || errors.Is(err, ErrUnreachable) {
 		t.Errorf("want ErrTimeout, got %v", err)
 	}
-	if el < connectTimeout-100*time.Millisecond || el > connectTimeout+2*time.Second {
-		t.Errorf("failed after %s, want about %s", el, connectTimeout)
+	if dials == 0 {
+		t.Error("the call never dialled")
 	}
 }
 
