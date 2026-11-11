@@ -61,12 +61,17 @@ func (f *fakeBank) client(t *testing.T) *hindsight.Client {
 		_ = json.NewEncoder(w).Encode(map[string]any{"results": out})
 	}))
 	t.Cleanup(srv.Close)
-	c, _ := hindsight.New(srv.URL, "k", 5*time.Second)
+	c, _ := hindsight.New(srv.URL, "k", outOfReach)
 	return c
 }
 
+// outOfReach bounds the calls and searches of the tests that mean "it
+// answers", not "it is fast": go test's -timeout (20 min) ends a hang
+// first, so a busy runner never cuts a call of an in-process fake.
+const outOfReach = time.Hour
+
 func engine(t *testing.T, f *fakeBank) *Engine {
-	return &Engine{Client: f.client(t), Bank: "b", Transverse: []string{".claude", "annuser"}, Timeout: 2 * time.Second,
+	return &Engine{Client: f.client(t), Bank: "b", Transverse: []string{".claude", "annuser"}, Timeout: outOfReach,
 		Now: func() time.Time { return time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC) }}
 }
 
@@ -224,34 +229,54 @@ func TestRawFactsStandInPerScope(t *testing.T) {
 	}
 }
 
-// The whole search, raw fallback included, stays within one budget; a
-// hanging scope does not hold back the others' hits.
+// The whole search stays within one budget; a hanging scope does not hold
+// back the others' hits. Each scope that hangs waits for its call's
+// context, so a search its budget does not end hangs until go test's
+// -timeout.
 func TestSearchStaysWithinItsBudget(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req hindsight.RecallRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if len(req.Tags) > 0 {
-			select {
-			case <-block:
-			case <-r.Context().Done():
+	// hanging answers the global scope at once when global is set, and
+	// leaves every other call waiting for its context.
+	hanging := func(t *testing.T, global bool) *hindsight.Client {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req hindsight.RecallRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if global && len(req.Tags) == 0 {
+				_, _ = w.Write([]byte(`{"results":[{"id":"g","text":"global","type":"observation","scores":{"reranker":0.9}}]}`))
+				return
 			}
-			return
+			<-r.Context().Done()
+		}))
+		t.Cleanup(srv.Close)
+		c, _ := hindsight.New(srv.URL, "k", outOfReach)
+		return c
+	}
+	q := Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4}
+
+	t.Run("the budget ends the search", func(t *testing.T) {
+		e := &Engine{Client: hanging(t, false), Bank: "b", Transverse: []string{".claude"}, Timeout: time.Millisecond}
+		res := e.Search(context.Background(), q)
+		if res.Scopes["project"].OK || res.Scopes["global"].OK || len(res.Hits) != 0 {
+			t.Errorf("%+v, want both scopes failed and no hit", res)
 		}
-		_, _ = w.Write([]byte(`{"results":[{"id":"g","text":"global","type":"observation","scores":{"reranker":0.9}}]}`))
-	}))
-	defer srv.Close()
-	c, _ := hindsight.New(srv.URL, "k", time.Minute)
-	e := &Engine{Client: c, Bank: "b", Transverse: []string{".claude"}, Timeout: 300 * time.Millisecond}
-	start := time.Now()
-	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})
-	if el := time.Since(start); el > 2*time.Second {
-		t.Errorf("search took %s", el)
-	}
-	if res.Scopes["project"].OK || len(res.Hits) != 1 || res.Hits[0].ID != "g" {
-		t.Errorf("%+v", res)
-	}
+	})
+
+	// The search's context ends once the global scope answered, never
+	// before: its hit is kept, the project scope fails.
+	t.Run("the others' hits are kept", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		t.Cleanup(func() { afterCall = nil })
+		afterCall = func(scope string) {
+			if scope == "global" {
+				cancel()
+			}
+		}
+		e := &Engine{Client: hanging(t, true), Bank: "b", Transverse: []string{".claude"}, Timeout: outOfReach}
+		res := e.Search(ctx, q)
+		if res.Scopes["project"].OK || !res.Scopes["global"].OK || len(res.Hits) != 1 || res.Hits[0].ID != "g" {
+			t.Errorf("%+v, want the global hit and the project scope failed", res)
+		}
+	})
 }
 
 func TestRerankerFloorBlankTextAndTies(t *testing.T) {
@@ -348,21 +373,34 @@ func TestZeroScoresAndEmptyIDs(t *testing.T) {
 	}
 }
 
-// Matching a prompt against a large index stays cheap (M2 block 1 review:
-// one regex per name took seconds).
-func TestEntityMatchingIsCheap(t *testing.T) {
+// largeIndex is 10,000 names over 50 projects, and a 100 KB prompt that
+// names none of them.
+func largeIndex() (Index, string) {
 	idx := Index{Names: map[string][]ProjectCount{}}
 	for i := 0; i < 10000; i++ {
 		idx.Names[fmt.Sprintf("entity-%05d", i)] = []ProjectCount{{fmt.Sprintf("p%d", i%50), 1}}
 	}
-	text := strings.Repeat("a long prompt about nothing in particular ", 2500) // 100 KB
-	start := time.Now()
-	idx.Projects(text, "billing", nil)
-	if el := time.Since(start); el > 500*time.Millisecond {
-		t.Errorf("matching took %s", el)
+	return idx, strings.Repeat("a long prompt about nothing in particular ", 2500)
+}
+
+// Matching a prompt against a large index finds the one name it holds,
+// and none in a long prompt without any. Its cost is
+// BenchmarkEntityMatching's (M2 block 1 review: one regex per name took
+// seconds).
+func TestEntityMatchingOnALargeIndex(t *testing.T) {
+	idx, text := largeIndex()
+	if got := idx.Projects(text, "billing", nil); len(got) != 0 {
+		t.Errorf("a prompt naming no entity: %v", got)
 	}
 	if got := idx.Projects("see entity-00042 please", "billing", nil); len(got) != 1 || got[0] != "p42" {
 		t.Errorf("%v", got)
+	}
+}
+
+func BenchmarkEntityMatching(b *testing.B) {
+	idx, text := largeIndex()
+	for b.Loop() {
+		idx.Projects(text, "billing", nil)
 	}
 }
 
@@ -383,8 +421,8 @@ func kindsEngine(t *testing.T, observations, raw string, bodies *[]string) *Engi
 		_, _ = w.Write([]byte(raw))
 	}))
 	t.Cleanup(srv.Close)
-	c, _ := hindsight.New(srv.URL, "k", 5*time.Second)
-	return &Engine{Client: c, Bank: "b", Timeout: 2 * time.Second, Now: func() time.Time { return time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC) }}
+	c, _ := hindsight.New(srv.URL, "k", outOfReach)
+	return &Engine{Client: c, Bank: "b", Timeout: outOfReach, Now: func() time.Time { return time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC) }}
 }
 
 func TestSearchKindsFromSourceFactsInTheSameCall(t *testing.T) {

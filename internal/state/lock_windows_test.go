@@ -17,11 +17,13 @@ import (
 )
 
 // A scanner or an editor holds the lock file for a moment: releasing and
-// breaking still remove it.
+// breaking still remove it. The handle closes at the removal's first
+// retry, the retry bound out of reach (go test's -timeout ends a hang
+// first).
 func TestLockRemovalWaitsForAHandleThatHoldsTheFile(t *testing.T) {
 	old := fsutil.RetryFor
-	fsutil.RetryFor = 3 * time.Second
-	t.Cleanup(func() { fsutil.RetryFor = old })
+	fsutil.RetryFor = time.Hour
+	t.Cleanup(func() { fsutil.RetryFor, fsutil.RetryHook = old, func() {} })
 	p := filepath.Join(t.TempDir(), "locks", "x.lock")
 	l, err := TryAcquire(p, "test")
 	if err != nil {
@@ -31,9 +33,17 @@ func TestLockRemovalWaitsForAHandleThatHoldsTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(400 * time.Millisecond); _ = r.Close() }()
+	retries := 0
+	fsutil.RetryHook = func() {
+		if retries++; retries == 1 {
+			_ = r.Close()
+		}
+	}
 	if err := l.Release(); err != nil {
 		t.Fatalf("Release while the file is held: %v", err)
+	}
+	if retries == 0 {
+		t.Error("the removal never met the handle: nothing waited")
 	}
 	if _, err := os.Stat(p); err == nil {
 		t.Error("the lock file is still there")

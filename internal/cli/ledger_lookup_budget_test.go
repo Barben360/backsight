@@ -122,7 +122,7 @@ func TestLedgerLookupOnARealCopy(t *testing.T) {
 		}
 		adjust(ids)
 		if i >= warmUp {
-			took = append(took, time.Since(start))
+			took = append(took, time.Since(start)) //nolint:forbidigo // logged, never asserted (env-gated measurement)
 		}
 	}
 	files, _ := filepath.Glob(filepath.Join(d.TelemetryDir(), "events-*.jsonl"))

@@ -143,7 +143,7 @@ func buildBacksight(t *testing.T, out string) {
 	if raw, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building backsight: %v\n%s", err, raw)
 	}
-	t.Logf("built backsight in %s", time.Since(start).Round(time.Second))
+	t.Logf("built backsight in %s", time.Since(start).Round(time.Second)) //nolint:forbidigo // logged, never asserted
 }
 
 // alive: pid runs.
@@ -209,6 +209,15 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	if err := copyFileForTest(built, n.shim()); err != nil {
 		t.Fatal(err)
 	}
+	// The waits that only bound a failure go out of reach (go test's
+	// -timeout is the guard): a loaded runner, Defender scanning each
+	// fresh binary, must not fail the test. taskRunWait and the status
+	// asks of its wait stay: the wait's end is the fallback to the
+	// detached start, on both paths (noTaskSys's /Run succeeds and runs
+	// nothing, as a task without a console logon does).
+	oldStop, oldOp := superviseStopWait, askOpWait
+	t.Cleanup(func() { superviseStopWait, askOpWait = oldStop, oldOp })
+	superviseStopWait, askOpWait = time.Hour, time.Hour
 
 	fakes := filepath.Join(home, "fakes")
 	file := func(name string) string { return filepath.Join(fakes, name) }
@@ -276,14 +285,10 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 		t.Fatal(err)
 	}
 	var st supervise.Status
-	deadline := time.Now().Add(60 * time.Second)
 	for {
 		st, err = supervise.Ask(ctx, project, "status")
 		if err == nil && st.DB == "running" && st.API == "running" {
 			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("status %+v %v, want both running\nsupervisor log:\n%s", st, err, supervisorLog(h))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -293,10 +298,11 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	}
 	// "running" is the start's: a fake writes its pid once it runs.
 	var children []int
-	for end := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if children = append(pidsIn(file("pg.pids")), pidsIn(file("api.pids"))...); len(children) == 2 || time.Now().After(end) {
+	for {
+		if children = append(pidsIn(file("pg.pids")), pidsIn(file("api.pids"))...); len(children) >= 2 {
 			break
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	if len(children) != 2 {
 		t.Fatalf("children %v, want postgres' and the API's", children)
@@ -311,12 +317,10 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	if err := h.Stop(ctx); err != nil {
 		t.Fatalf("Stop: %v\nsupervisor log:\n%s", err, supervisorLog(h))
 	}
+	// The job ends them all: one left running hangs the test.
 	for _, pid := range append(children, supPID) {
-		for end := time.Now().Add(5 * time.Second); alive(pid) && time.Now().Before(end); {
+		for alive(pid) {
 			time.Sleep(100 * time.Millisecond)
-		}
-		if alive(pid) {
-			t.Errorf("pid %d still runs after Stop", pid)
 		}
 	}
 	if _, err := supervise.Ask(ctx, project, "status"); !errors.Is(err, supervise.ErrNotRunning) {

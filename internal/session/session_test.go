@@ -37,21 +37,52 @@ func TestUpdateThenLoad(t *testing.T) {
 	}
 }
 
-// Hooks never wait: a held lock gives up at once (SPEC §6.1).
+// fakeLockClock gives Update a clock of the test that each pause
+// advances, the pause taking no time, and each reading a microsecond (a
+// try's own time); it returns the pauses taken.
+func fakeLockClock(t *testing.T) func() []time.Duration {
+	t.Helper()
+	oldNow, oldSleep := lockNow, lockSleep
+	t.Cleanup(func() { lockNow, lockSleep = oldNow, oldSleep })
+	clock := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	var pauses []time.Duration
+	lockNow = func() time.Time {
+		clock = clock.Add(time.Microsecond)
+		return clock
+	}
+	lockSleep = func(d time.Duration) {
+		clock = clock.Add(d)
+		pauses = append(pauses, d)
+	}
+	return func() []time.Duration { return pauses }
+}
+
+// Hooks never wait: a held lock gives up at once (SPEC §6.1); with a
+// Retry it is tried again until Retry is over, no longer.
 func TestUpdateGivesUpOnAHeldLock(t *testing.T) {
-	s := store(t)
-	l, err := state.TryAcquire(filepath.Join(s.Locks, "state-abc.lock"), "other hook")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = l.Release() }()
-	start := time.Now()
-	err = s.Update("abc", func(st *State) error { st.Prompts = 1; return nil })
-	if !errors.Is(err, ErrBusy) || time.Since(start) > 100*time.Millisecond {
-		t.Errorf("err %v after %s", err, time.Since(start))
-	}
-	if st, _ := s.Load("abc"); st.Prompts != 0 {
-		t.Error("written despite the lock")
+	for _, c := range []struct {
+		retry time.Duration
+		waits time.Duration // the pauses' total
+	}{{0, 0}, {100 * time.Millisecond, 100 * time.Millisecond}} {
+		s := store(t)
+		s.Retry = c.retry
+		pauses := fakeLockClock(t)
+		l, err := state.TryAcquire(filepath.Join(s.Locks, "state-abc.lock"), "other hook")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.Update("abc", func(st *State) error { st.Prompts = 1; return nil })
+		var waited time.Duration
+		for _, d := range pauses() {
+			waited += d
+		}
+		if !errors.Is(err, ErrBusy) || waited != c.waits {
+			t.Errorf("retry %s: err %v after pauses %v, want ErrBusy after %s of them", c.retry, err, pauses(), c.waits)
+		}
+		if st, _ := s.Load("abc"); st.Prompts != 0 {
+			t.Errorf("retry %s: written despite the lock", c.retry)
+		}
+		_ = l.Release()
 	}
 }
 

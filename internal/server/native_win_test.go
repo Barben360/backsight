@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,12 +96,45 @@ func TestStrayProcs(t *testing.T) {
 	}
 }
 
+// fakeRetryClock gives renameRetry and removeAllRetry a clock of the test
+// that each pause advances, the pause itself taking no time: their tries
+// are counted, never timed. onPause, when set, runs at each pause (a
+// handle released while the call retries). It returns the pauses taken.
+func fakeRetryClock(t *testing.T, onPause func()) func() []time.Duration {
+	t.Helper()
+	oldNow, oldSleep := retryNow, retrySleep
+	t.Cleanup(func() { retryNow, retrySleep = oldNow, oldSleep })
+	var mu sync.Mutex
+	clock := time.Unix(1_700_000_000, 0)
+	var pauses []time.Duration
+	retryNow = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	retrySleep = func(d time.Duration) {
+		mu.Lock()
+		clock = clock.Add(d)
+		pauses = append(pauses, d)
+		mu.Unlock()
+		if onPause != nil {
+			onPause()
+		}
+	}
+	return func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(pauses)
+	}
+}
+
 // Fix round 1: a directory's move is retried while it is denied (a file
 // just closed, an indexer), a few seconds at most; any other failure is
 // not retried.
 func TestRenameRetriesWhileDenied(t *testing.T) {
 	old, oldWait := osRename, renameRetryWait
 	t.Cleanup(func() { osRename, renameRetryWait = old, oldWait })
+	fakeRetryClock(t, nil)
 	renameRetryWait = 2 * time.Second
 	denied := &os.LinkError{Op: "rename", Old: "a", New: "b", Err: fs.ErrPermission}
 	for _, tc := range []struct {
@@ -127,12 +161,16 @@ func TestRenameRetriesWhileDenied(t *testing.T) {
 		})
 	}
 	t.Run("denied for good", func(t *testing.T) {
+		pauses := fakeRetryClock(t, nil)
 		renameRetryWait = 300 * time.Millisecond
 		calls := 0
 		osRename = func(string, string) error { calls++; return denied }
-		start := time.Now()
-		if err := renameRetry("a", "b"); !errors.Is(err, fs.ErrPermission) || calls < 2 || time.Since(start) > 2*time.Second {
-			t.Errorf("renameRetry = %v after %d call(s) in %s, want denied after retries within the wait", err, calls, time.Since(start))
+		// A try every 100 ms of the wait, the last at its end.
+		if err := renameRetry("a", "b"); !errors.Is(err, fs.ErrPermission) || calls != 4 {
+			t.Errorf("renameRetry = %v after %d call(s), want denied after 4 (one each 100 ms of the 300 ms wait)", err, calls)
+		}
+		if got := pauses(); !slices.Equal(got, []time.Duration{100 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}) {
+			t.Errorf("pauses %v, want three of 100 ms", got)
 		}
 	})
 }

@@ -164,6 +164,10 @@ type Store struct {
 	Retry time.Duration
 }
 
+// lockNow and lockSleep are Update's clock and pause while the lock is
+// busy; tests fake them.
+var lockNow, lockSleep = time.Now, time.Sleep
+
 // ErrBusy: another hook holds this session's lock.
 var ErrBusy = errors.New("session state busy")
 
@@ -246,7 +250,7 @@ func (s Store) Update(id string, fn func(*State) error) error {
 	// Not session-<id>.lock: that one is the flusher's, held during its
 	// network calls.
 	lockPath := filepath.Join(s.Locks, "state-"+id+".lock")
-	deadline := time.Now().Add(s.Retry)
+	deadline := lockNow().Add(s.Retry)
 	var l *state.Lock
 	var err error
 	for {
@@ -258,10 +262,10 @@ func (s Store) Update(id string, fn func(*State) error) error {
 		if !errors.As(err, &held) {
 			break
 		}
-		if time.Now().After(deadline) {
+		if lockNow().After(deadline) {
 			return ErrBusy
 		}
-		time.Sleep(5 * time.Millisecond)
+		lockSleep(5 * time.Millisecond)
 	}
 	if err != nil {
 		return err

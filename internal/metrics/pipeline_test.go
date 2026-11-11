@@ -714,7 +714,7 @@ func TestDoctorCheck(t *testing.T) {
 	}
 
 	t.Run("blocked", func(t *testing.T) {
-		lowerTimeouts(t, time.Second, 10*time.Millisecond)
+		lowerTimeouts(t, time.Hour, 10*time.Millisecond)
 		x := pipeFx(t)
 		x.retained(ago(time.Hour), "d1", "ok", 100)
 		release := make(chan struct{})

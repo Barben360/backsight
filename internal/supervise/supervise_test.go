@@ -134,53 +134,54 @@ func cleanTransport(t *testing.T, project string) {
 
 var cleaned sync.Map
 
-// fast shortens the supervisor's numbers for the test.
+// fast shortens the supervisor's delays for the test. The deadlines whose
+// end would fail a test go out of reach: a loaded machine must not trip
+// one in a test that does not test it (those that do set their own).
+// apiStopWait stays short: its end is the kill that completes a stop
+// when the interrupt does not end the API (a CTRL_BREAK that does not
+// reach it on a Windows runner), the same stop either way.
 func fast(t *testing.T) {
 	t.Helper()
 	old := tm
 	tm.backoffMin, tm.backoffMax = 20*time.Millisecond, 200*time.Millisecond
-	tm.readyPoll, tm.readyWait = 10*time.Millisecond, 20*time.Second
-	tm.apiStopWait, tm.dbStopWait = 3*time.Second, 10*time.Second
-	tm.requestWait = 3 * time.Second
+	tm.readyPoll, tm.readyWait = 10*time.Millisecond, time.Hour
+	tm.apiStopWait, tm.dbStopWait = 3*time.Second, time.Hour
+	tm.requestWait = time.Hour
 	t.Cleanup(func() { tm = old })
 }
 
-// start runs the supervisor in a goroutine; the test's end stops it.
-// The channel gets Run's error once.
+// start runs the supervisor in a goroutine; the test's end stops it, by
+// its context when the channel does not answer, and waits for it (go
+// test's -timeout is the guard against one that never stops). The channel
+// gets Run's error once.
 func (x *fx) start(opts Options) <-chan error {
 	x.t.Helper()
 	done := make(chan error, 1)
 	finished := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		err := Run(context.Background(), x.cfg, opts)
+		err := Run(ctx, x.cfg, opts)
 		close(finished)
 		done <- err
 	}()
 	x.t.Cleanup(func() {
-		_, _ = ask(x.cfg.Project, opStop)
-		select {
-		case <-finished:
-		case <-time.After(20 * time.Second):
-			x.t.Errorf("%s: the supervisor did not stop", x.cfg.Project)
+		if _, err := ask(x.cfg.Project, opStop); err != nil {
+			cancel()
 		}
+		<-finished
+		cancel()
 	})
 	return done
 }
 
-func ask(project, op string) (Status, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return Ask(ctx, project, op)
-}
+func ask(project, op string) (Status, error) { return Ask(context.Background(), project, op) }
 
-// waitFor polls cond for up to 15 s.
-func waitFor(t *testing.T, what string, cond func() bool) {
+// waitFor polls cond until it holds; the string names it for the
+// reader. No deadline of its own: go test's -timeout is the guard, so a
+// loaded machine never fails a wait.
+func waitFor(t *testing.T, _ string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
 	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -204,16 +205,8 @@ func readFile(path string) string {
 
 func calls(t *testing.T, fake string) int { return len(testtool.Calls(t, fake)) }
 
-func waitExit(t *testing.T, done <-chan error, within time.Duration) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(within):
-		t.Fatalf("Run did not return within %s", within)
-		return nil
-	}
-}
+// waitExit is Run's error once it returned.
+func waitExit(done <-chan error) error { return <-done }
 
 func TestSuperviseStartsDBThenAPIAfterReady(t *testing.T) {
 	fast(t)
@@ -380,7 +373,7 @@ func TestRefusalStartsNothingAndIsReported(t *testing.T) {
 	if _, err := ask(x.cfg.Project, opStop); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(t, done, 5*time.Second); err != nil {
+	if err := waitExit(done); err != nil {
 		t.Errorf("Run after stop: %v", err)
 	}
 }
@@ -512,7 +505,7 @@ func TestStopStopsAPIThenDBAndExitsZero(t *testing.T) {
 	if _, err := ask(x.cfg.Project, opStop); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(t, done, 15*time.Second); err != nil {
+	if err := waitExit(done); err != nil {
 		t.Fatalf("Run after stop: %v, want nil (exit 0)", err)
 	}
 	if got := testtool.Calls(t, x.ctl); !reflect.DeepEqual(got, [][]string{x.cfg.PGCtlStop[1:]}) {
@@ -544,7 +537,7 @@ func TestStopKillsAPostgresThatOutlivesPgCtl(t *testing.T) {
 	if _, err := ask(x.cfg.Project, opStop); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(t, done, 10*time.Second); err != nil {
+	if err := waitExit(done); err != nil {
 		t.Fatal(err)
 	}
 	if l := x.log("supervisor"); !strings.Contains(l, "killing") {
@@ -616,14 +609,17 @@ func TestSecondSupervisorExitsWithoutStartingAnything(t *testing.T) {
 
 	second := newFx(t, "single", fakes{})
 	checked := false
-	start := time.Now()
-	// Bounded, so a second supervisor that does run fails the test
-	// instead of hanging it.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A second supervisor that does run gets as far as the guard, which
+	// refuses and ends it: the test fails instead of hanging.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := Run(ctx, second.cfg, Options{Check: func(context.Context, io.Writer) error { checked = true; return nil }})
-	if err != nil || time.Since(start) > 2*time.Second {
-		t.Errorf("the second supervisor returned %v after %s, want nil within 2 s", err, time.Since(start))
+	err := Run(ctx, second.cfg, Options{Check: func(context.Context, io.Writer) error {
+		checked = true
+		cancel()
+		return finalErr{"the second supervisor's guard ran"}
+	}})
+	if err != nil {
+		t.Errorf("the second supervisor returned %v, want nil", err)
 	}
 	if checked {
 		t.Error("the second supervisor ran the guard")
@@ -651,7 +647,7 @@ func TestTwoProjectsSuperviseSideBySide(t *testing.T) {
 	if _, err := ask(a.cfg.Project, opStop); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(t, doneA, 15*time.Second); err != nil {
+	if err := waitExit(doneA); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := ask(b.cfg.Project, opStatus); err != nil || st.DB != stateRunning || st.API != stateRunning {
@@ -818,20 +814,44 @@ func TestReadinessTimeoutKillsAndRestartsPostgres(t *testing.T) {
 }
 
 // An API that ignores the interrupt is killed once apiStopWait is over.
+// The wait's timer is the test's: the API is killed when it fires, not
+// before.
 func TestAPIIgnoringTheInterruptIsKilled(t *testing.T) {
 	fast(t)
 	tm.apiStopWait = 500 * time.Millisecond
+	waits, fire := make(chan time.Duration, 8), make(chan time.Time)
+	tm.after = func(d time.Duration) <-chan time.Time {
+		waits <- d
+		return fire
+	}
 	x := newFx(t, "stubborn", fakes{api: "ignoresignals\npid {dir}/api.pids\nwaitfile {dir}/never"})
 	x.start(Options{})
 	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
 	waitFor(t, "the API's pid", func() bool { return strings.TrimSpace(readFile(x.file("api.pids"))) != "" })
-	start := time.Now()
-	st, err := ask(x.cfg.Project, opAPIStop)
-	if err != nil || st.API != stateStopped {
-		t.Fatalf("api-stop: %+v %v", st, err)
+	answered := make(chan error, 1)
+	go func() {
+		st, err := ask(x.cfg.Project, opAPIStop)
+		if err == nil && st.API != stateStopped {
+			err = fmt.Errorf("answered %+v, want the API stopped", st)
+		}
+		answered <- err
+	}()
+	select {
+	case d := <-waits:
+		if d != tm.apiStopWait {
+			t.Errorf("the API is given %s after the interrupt, want %s", d, tm.apiStopWait)
+		}
+	case err := <-answered:
+		t.Fatalf("api-stop answered (%v) without waiting for the API to stop", err)
 	}
-	if d := time.Since(start); d < tm.apiStopWait {
-		t.Errorf("api-stop answered after %s, before the %s the API is given", d, tm.apiStopWait)
+	select {
+	case err := <-answered:
+		t.Fatalf("api-stop answered (%v) before the wait was over", err)
+	default:
+	}
+	close(fire)
+	if err := <-answered; err != nil {
+		t.Fatalf("api-stop: %v", err)
 	}
 	if l := x.log("supervisor"); !strings.Contains(l, "api killed, still running 500ms after the interrupt") {
 		t.Errorf("supervisor log: want the kill after the wait:\n%s", l)
@@ -880,12 +900,17 @@ func TestRedactorNeverCutsASecretInALongLine(t *testing.T) {
 	}
 }
 
-// slowWriter delays each write: a log writer behind a busy disk, so the
-// last output arrives after the child exited.
-type slowWriter struct{ io.WriteCloser }
+// lateWriter holds each write until exited holds: a log writer behind a
+// busy disk, so the last output arrives after the child exited.
+type lateWriter struct {
+	io.WriteCloser
+	exited func() bool
+}
 
-func (w slowWriter) Write(p []byte) (int, error) {
-	time.Sleep(300 * time.Millisecond)
+func (w lateWriter) Write(p []byte) (int, error) {
+	for !w.exited() {
+		time.Sleep(10 * time.Millisecond)
+	}
 	return w.WriteCloser.Write(p)
 }
 
@@ -893,17 +918,19 @@ func (w slowWriter) Write(p []byte) (int, error) {
 // returned, though they reach it after the child exited.
 func TestLastOutputReachesTheLog(t *testing.T) {
 	fast(t)
-	tm.wrapOutput = func(w io.WriteCloser) io.WriteCloser { return slowWriter{w} }
 	x := newFx(t, "lastwords", fakes{
 		pg:  "write {dir}/ready x\nwaitfile {dir}/pg-stop\nstdout database system is shut down",
 		api: "waitfile {dir}/never",
 	})
+	tm.wrapOutput = func(w io.WriteCloser) io.WriteCloser {
+		return lateWriter{w, func() bool { return strings.Contains(x.log("supervisor"), "db stopped") }}
+	}
 	done := x.start(Options{NoAPI: true})
 	waitStatus(t, x.cfg.Project, stateRunning, stateStopped)
 	if _, err := ask(x.cfg.Project, opStop); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(t, done, 15*time.Second); err != nil {
+	if err := waitExit(done); err != nil {
 		t.Fatal(err)
 	}
 	if l := x.log("db"); !strings.Contains(l, "database system is shut down") {
@@ -920,17 +947,13 @@ func TestUnknownRequestIsAnsweredWithTheStatus(t *testing.T) {
 	x.start(Options{Version: "8.8.8"})
 	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
 	for _, line := range []string{`{"op":"reboot"}`, `not json`} {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		c, err := dial(ctx, x.cfg.Project)
+		c, err := dial(context.Background(), x.cfg.Project)
 		if err != nil {
-			cancel()
 			t.Fatal(err)
 		}
-		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 		_, _ = c.Write([]byte(line + "\n"))
 		raw, err := io.ReadAll(c)
 		_ = c.Close()
-		cancel()
 		var st Status
 		if err != nil || json.Unmarshal(raw, &st) != nil || st.Proto != Proto || st.Version != "8.8.8" || st.DB != stateRunning {
 			t.Errorf("request %q answered %q (%v), want the status", line, raw, err)
@@ -981,7 +1004,6 @@ func TestAPIStartRefreshesTheRedactedSecrets(t *testing.T) {
 func TestRedactorHandlesAPeriodicSecretPromptly(t *testing.T) {
 	var b strings.Builder
 	l := newLineRedactor(nopWriteCloser{&b}, []string{"aaaaaaaa"})
-	start := time.Now()
 	for range 64 {
 		_, _ = l.Write([]byte(strings.Repeat("a", 64<<10)))
 	}
@@ -992,8 +1014,10 @@ func TestRedactorHandlesAPeriodicSecretPromptly(t *testing.T) {
 	}
 	_, _ = l.Write([]byte("\n"))
 	_ = l.Close()
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("4 MiB of a periodic secret took %s", d)
+	// One pass per part: the forms are searched in each byte once, and in
+	// the kept tail again with the next part, never again and again.
+	if limit := len(l.forms) * (4<<20 + 64*(l.keep+1)); l.scanned > limit {
+		t.Errorf("redacting 4 MiB searched %d bytes, want at most %d (one pass per part)", l.scanned, limit)
 	}
 	got := b.String()
 	if strings.Contains(got, "aaaaaaaa") || !strings.HasSuffix(got, "\n") || strings.Count(got, "[redacted]") < (4<<20)/8-1024 {
@@ -1009,17 +1033,18 @@ func (nopWriteCloser) Close() error { return nil }
 // interrupted: it is killed at once, and the log says why.
 func TestNoConsoleKillsTheAPIAtOnce(t *testing.T) {
 	fast(t)
-	tm.apiStopWait = 10 * time.Second
+	// Every timer fires at once and is recorded: a wait would show.
+	fa := &fakeAfter{fire: 1 << 20}
+	tm.after = fa.after
 	tm.interrupt = func(*os.Process) error { return errors.New("no console") }
 	x := newFx(t, "noconsole", fakes{})
 	x.start(Options{})
 	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
-	start := time.Now()
 	if st, err := ask(x.cfg.Project, opAPIStop); err != nil || st.API != stateStopped {
 		t.Fatalf("api-stop: %+v %v", st, err)
 	}
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("api-stop took %s: no wait for an interrupt that could not be sent", d)
+	if got := fa.got(); len(got) != 0 {
+		t.Errorf("api-stop waited %v: no wait for an interrupt that could not be sent", got)
 	}
 	l := x.log("supervisor")
 	if !strings.Contains(l, "api: no console to interrupt it: killed") || strings.Contains(l, "after the interrupt") {
