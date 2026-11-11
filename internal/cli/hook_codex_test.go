@@ -14,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 )
@@ -375,6 +376,9 @@ func TestShellSessionFromCodexsShell(t *testing.T) {
 	}{
 		{map[string]string{"CODEX_SESSION_ID": cxRoot, "CODEX_THREAD_ID": cxAgent}, cxRoot},
 		{map[string]string{"BACKSIGHT_SESSION": "s1", "CODEX_SESSION_ID": cxRoot}, "s1"},
+		// Claude Code started from a Codex shell: Claude Code's session.
+		{map[string]string{"CLAUDE_CODE_SESSION_ID": "s-claude", "CODEX_SESSION_ID": cxRoot}, ""},
+		{map[string]string{"BACKSIGHT_SESSION": "s1", "CLAUDE_CODE_SESSION_ID": "s-claude", "CODEX_SESSION_ID": cxRoot}, "s1"},
 		{map[string]string{"CODEX_THREAD_ID": cxAgent}, ""},
 		{map[string]string{"CODEX_SESSION_ID": "../x"}, ""},
 		{nil, ""},
@@ -384,14 +388,81 @@ func TestShellSessionFromCodexsShell(t *testing.T) {
 			t.Errorf("%v: %q, want %q", c.env, got, c.want)
 		}
 	}
-	// pause, from a Codex shell, pauses the root session.
+}
+
+// The commands that take the shell's session (store, pause, why, feedback
+// log): from Codex's shell, the root session Codex names; from a Claude
+// Code session started in a Codex shell (CLAUDE_CODE_SESSION_ID set,
+// CODEX_SESSION_ID inherited), what each took before Codex: store
+// Claude Code's session, why the latest session, pause and feedback log
+// none.
+func TestShellCommandsTakeCodexsSessionOnlyOutsideClaudeCode(t *testing.T) {
 	home := hookHome(t)
+	t.Chdir(filepath.Join(home, "billing"))
+	_ = sessions(home).Update(cxRoot, func(st *session.State) error {
+		st.Injected = []session.Injection{{ID: "c1", Text: "codex memory", Rule: "first"}}
+		return nil
+	})
+	time.Sleep(10 * time.Millisecond)
+	_ = sessions(home).Update("latest", func(st *session.State) error {
+		st.Injected = []session.Injection{{ID: "l1", Text: "latest memory", Rule: "first"}}
+		return nil
+	})
 	t.Setenv("BACKSIGHT_SESSION", "")
 	t.Setenv("CODEX_SESSION_ID", cxRoot)
+
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-claude")
+	if code, _, out := storeJSON(t, "--kind", "decision", "Billing keeps PostgreSQL 16."); code != 0 {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != "s-claude" {
+		t.Errorf("under Claude Code: note names session %q, want s-claude", got)
+	}
+	if code, _, _ := run(t, "pause"); code != output.Usage {
+		t.Errorf("under Claude Code: pause exit %d, want a usage error (no session)", code)
+	}
+	if paused, _ := session.Paused(pathsOf(home).SessionsDir(), cxRoot); paused {
+		t.Error("under Claude Code: the inherited Codex session was paused")
+	}
+	if _, out, _ := run(t, "why"); !strings.Contains(out, "latest memory") || strings.Contains(out, "codex memory") {
+		t.Errorf("under Claude Code: why shows\n%s", out)
+	}
+	if code, _, _ := run(t, "feedback", "log"); code != output.Usage {
+		t.Errorf("under Claude Code: feedback log exit %d, want a usage error (no session)", code)
+	}
+
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	if code, _, out := storeJSON(t, "--kind", "decision", "Billing keeps its cron."); code != 0 {
+		t.Fatal(out)
+	}
+	if got := lastNoteSession(t); got != cxRoot {
+		t.Errorf("from Codex: note names session %q", got)
+	}
+	if _, out, _ := run(t, "why"); !strings.Contains(out, "codex memory") {
+		t.Errorf("from Codex: why shows\n%s", out)
+	}
+	if code, out, errOut := run(t, "feedback", "log", "--json"); code != output.OK || !strings.Contains(out, cxRoot) {
+		t.Errorf("from Codex: feedback log exit %d\n%s%s", code, out, errOut)
+	}
 	if code, out, errOut := run(t, "pause"); code != 0 {
-		t.Fatalf("pause: %d %s %s", code, out, errOut)
+		t.Fatalf("from Codex: pause %d %s %s", code, out, errOut)
 	}
 	if paused, _ := session.Paused(pathsOf(home).SessionsDir(), cxRoot); !paused {
-		t.Error("the Codex session is not paused")
+		t.Error("from Codex: the Codex session is not paused")
+	}
+}
+
+// Claude Code's prompt path is Claude Code's whatever its payload holds:
+// one carrying an agent_id still recalls (the subagent-task skip is
+// Codex's).
+func TestClaudePromptWithAnAgentIDStillRecalls(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	h := fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "agent_id": "a7", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "memory m1 about billing") {
+		t.Errorf("context:\n%s", h.Specific.Context)
+	}
+	if st, _ := sessions(home).Load("s1"); st.Prompts != 1 {
+		t.Errorf("prompt %d", st.Prompts)
 	}
 }

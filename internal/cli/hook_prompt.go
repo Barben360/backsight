@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
@@ -236,10 +237,11 @@ func (h *hookEnv) userPrompt() []byte {
 	prompt := h.in.Prompt
 	promptAt := now()
 	ev := telemetry.Prompt{Plen: len([]rune(prompt)), IDs: []string{}, Lang: promptLang(prompt)}
-	if h.in.AgentID != "" {
+	if h.in.AgentID != "" && h.adapter.ID() == harnessid.Codex {
 		// A subagent's task (Codex fires the prompt hook for it, 0085 D3):
 		// SubagentStart gave it the short guide; it is no prompt of the
 		// session, and the turn stays its parent's, whose end is checked.
+		// Codex's only: Claude Code's prompt path stays as it was.
 		ev.Decision, ev.Reason = "skip", "subagent"
 		h.tw.Emit(ev)
 		return nil
