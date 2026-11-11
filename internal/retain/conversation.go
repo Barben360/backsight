@@ -111,8 +111,17 @@ func firstCWD(h Harness, path string) string {
 	return ""
 }
 
+// EntrypointReader is a harness that tells how a conversation was started
+// without reading it all (Codex: its first line).
+type EntrypointReader interface {
+	Entrypoint(path string) string
+}
+
 // entrypointOf is how a conversation was started; "" when unknown.
 func entrypointOf(h Harness, path string) string {
+	if e, ok := h.(EntrypointReader); ok && !isClaude(h) {
+		return e.Entrypoint(path)
+	}
 	if isClaude(h) {
 		fh, err := os.Open(path)
 		if err != nil {
