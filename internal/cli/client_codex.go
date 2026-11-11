@@ -14,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/codexcfg"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/output"
@@ -211,7 +212,9 @@ func clientInstallCodex(ctx context.Context, flag string, plan bool) (clientInst
 	}
 
 	// The Codex home this install wired, from --codex-home, the record or
-	// the shell: every later command reads the recorded one.
+	// the shell: every later command reads the recorded one. The hash of
+	// the program behind the shim: Codex trusts the hooks, not it (D5).
+	shimSum, _ := fsutil.HashFile(shim) // "" when it cannot be read
 	if err := state.Update(c.dirs, "client install", func(s *state.State) error {
 		if s.ShimTarget != "" && s.ShimTarget != target {
 			s.ClientFor(harnessid.ClaudeCode).ShimPrevious = s.ShimTarget
@@ -220,7 +223,8 @@ func clientInstallCodex(ctx context.Context, flag string, plan bool) (clientInst
 		if err := codex.RecordHome(s, profile); err != nil {
 			return err
 		}
-		s.ClientFor(harnessid.Codex).PluginVersion = inst.Version
+		e := s.ClientFor(harnessid.Codex)
+		e.PluginVersion, e.ShimSHA256, e.WiredAt = inst.Version, shimSum, now().UTC()
 		return nil
 	}); err != nil {
 		return res, partialError(err)

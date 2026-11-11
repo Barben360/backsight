@@ -97,6 +97,12 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	if h.adapter.PairsBySession(runtime.GOOS) || err != nil {
 		_ = session.WriteLiveSession(h.dirs.SessionsDir(), live)
 	}
+	// The hooks' heartbeat, whatever the components: doctor compares it
+	// with the tool's newest conversation (0085 D5). Codex's only: Claude
+	// Code's hooks are checked by their wiring.
+	if hookEvent(ctx) == harness.EventSessionStart && h.adapter.ID() != harness.ClaudeCode && h.in.AgentID == "" {
+		state.RecordHookRun(h.dirs, h.adapter.ID(), h.in.SessionID, now())
+	}
 	c := h.cfg.Components
 	if (side == readSide && !c.Read) || (side == writeSide && !c.Write) || (side == "" && !c.Read && !c.Write) {
 		return nil, false

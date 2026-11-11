@@ -20,6 +20,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indextest"
@@ -66,6 +67,7 @@ type fx struct {
 	home   string
 	dirs   paths.Dirs
 	binary string // binary_version of the lines and events written next
+	client string // the client of the lines written next ("" Claude Code's)
 
 	ledgerSet *feedback.Ledger     // nil: the ledger the journal folds to
 	localSet  *index.LocalStatus   // nil: an empty local status
@@ -131,7 +133,7 @@ func (x *fx) tel(ts time.Time, ev telemetry.Event, session, project string) {
 	fields["session"] = session
 	fields["project"] = project
 	fields["binary_version"] = x.binary
-	fields["client"] = "claude-code"
+	fields["client"] = harnessid.Or(x.client)
 	line, err := json.Marshal(fields)
 	if err != nil {
 		x.t.Fatal(err)

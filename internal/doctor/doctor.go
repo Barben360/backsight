@@ -128,6 +128,7 @@ type Env struct {
 	// terminal (issue 270).
 	OnCheck func(Check)
 	InstallProbes
+	CodexProbes
 }
 
 const (
@@ -258,6 +259,7 @@ func Run(ctx context.Context, env Env) Report {
 			wiring = &cfg
 		}
 		add(checkClient(env, loc, wiring))
+		add(codexChecks(ctx, env, nowFn())...)
 		if env.GitBash != nil {
 			add(checkGitBash(*env.GitBash))
 		}

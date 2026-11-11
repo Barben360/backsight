@@ -409,6 +409,14 @@ type Client struct {
 	// MemoriesOff: backsight turned the tool's own memories off (Codex,
 	// with the user's consent); uninstall turns them on again.
 	MemoriesOff bool `json:"memories_off,omitempty"`
+	// ShimSHA256 is the sha256 of the program the shim ran when client
+	// install wired the tool (Codex): the tool trusts backsight's hooks
+	// by their declaration, never by that program, so doctor reports one
+	// whose hash differs (decision 0085 D5). "" when not recorded.
+	ShimSHA256 string `json:"shim_sha256,omitempty"`
+	// WiredAt is when client install last wired the tool (Codex): doctor
+	// judges whether its hooks run on the sessions started since.
+	WiredAt time.Time `json:"wired_at,omitzero"`
 }
 
 // ClientOf is the entry of the coding tool harness (a harness id), nil
