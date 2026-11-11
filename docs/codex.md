@@ -188,6 +188,10 @@ Each session's document keeps which tool it came from (`harness:claude-code` or 
 - `backsight stats` adds both tools up, and adds a `By tool` line once both were used; `--client codex` (or `--client claude-code`) on any view counts one tool alone, each figure computed as the combined one.
 - The dashboard shows a `Coding tool` choice and, on the Overview, a card splitting sessions, recalls, Found, Used and context by tool ([dashboard](dashboard.md#claude-code-and-codex)).
 
+## Several PCs
+
+Each PC that joins a shared memory runs Claude Code, Codex or both: they all share one memory, whatever tool each runs. `backsight connect` runs setup's client steps, so on a PC with Codex it asks `tools` (and the Codex questions), and takes `--codex-home <dir>`; so does `backsight server install --ssh`, for the PC it runs from. After connect, restart each tool wired ([several PCs](several-pcs.md#join-from-another-pc)).
+
 ## Checking Codex
 
 Once Codex is wired, `backsight doctor` adds its Codex checks: `codex` (the version), `codex-plugins` (both plugins installed and enabled), `codex-drift` (the plugins are this binary's), `codex-hooks` (trusted, and run in the latest session), `codex-tools` (the memory tools declare what Codex needs to run them without asking), `codex-rollouts` (record types backsight does not know), `codex-memories` (Codex's own memories on), `codex-mcp-name` (another server named `backsight`) and `codex-shim` (the program behind the shim). A machine without Codex wired shows none of them. Each check, and its fix: [troubleshooting](troubleshooting.md#other-doctor-warnings).

@@ -107,6 +107,7 @@ backsight server install --ssh user@host
 - It opens the server on the address your ssh reached. `--private <ip>` picks another: a tailnet address, or a LAN one with `--answer cleartext_lan=yes`, as for `server expose`.
 - `--json` prints one progress line per step on stderr. `--non-interactive` never prompts: give `--answer consent=yes` and the LLM key with `--llm-key-from-file <file>`.
 - After a failure, run the same command again: every step can run again, so it goes on from where it stopped. The host is never rolled back; `backsight setup --undo` there undoes its setup.
+- Then it joins from this PC as `connect` does, wiring Claude Code, Codex or both: this PC's answers `tools`, `codex_import` and `codex_memories` go with `--answer`, and `--codex-home <dir>` names a Codex home other than `$CODEX_HOME` or `~/.codex` (kept for a rerun; `--print-commands` puts the answers on its `connect` line, and refuses `--codex-home`: give it to that `connect` yourself).
 
 No ssh access to the host? `backsight server install --print-commands` prints the same steps as commands to run yourself, on the host then on this PC. Every refusal and its fix: [server install --ssh stopped](troubleshooting.md#server-install---ssh-stopped).
 
