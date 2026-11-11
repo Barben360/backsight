@@ -310,23 +310,38 @@ func searchTexts(text string) map[string]string {
 // in the last parenthesis.
 var storeHitRE = regexp.MustCompile(`^- .* \([^()]* ago, ([^\s,()]+)\)\r?$`)
 
-// storeShows is the similar memory memory_store's answer shows (storeReply),
-// rank 1 with the project of the line above it: the lines after the last
-// header, both whole. The memory's text is on one line, so it can pose
-// neither as the header nor as the project.
+// storeShows is the similar memories memory_store's answer shows
+// (storeReply), ranked from 1, each with the project of the line above
+// it: the pairs of whole lines after the last header. A memory's text is
+// on one line, so it can pose neither as a header nor as a project.
 func storeShows(text string) []feedback.Item {
 	lines := strings.Split(text, "\n")
 	for i := len(lines) - 3; i >= 0; i-- {
-		if strings.TrimSuffix(lines[i], "\r") != storeSimilarHeader {
+		if h := strings.TrimSuffix(lines[i], "\r"); h != storeSimilarHeader && h != storeSimilarsHeader {
 			continue
 		}
-		g, l := searchGroupRE.FindStringSubmatch(lines[i+1]), storeHitRE.FindStringSubmatch(lines[i+2])
-		if g == nil || l == nil {
-			return nil
+		var items []feedback.Item
+		for k := i + 1; k+1 < len(lines); k += 2 {
+			g, l := searchGroupRE.FindStringSubmatch(lines[k]), storeHitRE.FindStringSubmatch(lines[k+1])
+			if g == nil || l == nil {
+				break
+			}
+			items = append(items, feedback.Item{ID: l[1], Rank: len(items) + 1, Project: g[1]})
 		}
-		return []feedback.Item{{ID: l[1], Rank: 1, Project: g[1]}}
+		return items
 	}
 	return nil
+}
+
+// storeHead is a memory_store answer before its similar memories: the
+// note's id is there, never in a memory's text below.
+func storeHead(text string) string {
+	for _, h := range []string{storeSimilarHeader, storeSimilarsHeader} {
+		if head, _, ok := strings.Cut(text, "\n"+h+"\n"); ok {
+			return head
+		}
+	}
+	return text
 }
 
 // readShow is memory_read's id as one unranked item, a short id resolved
@@ -427,20 +442,33 @@ func (h *hookEnv) journalCredit(text string) {
 // short id in the tag, its full id last.
 var sourceLineRE = regexp.MustCompile(`^- \[(.+?) · ([^\s\]]+)\] .* \(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)\r?$`)
 
+// sourceObsRE: the line naming the observation the fact lines below it
+// are drawn from, whole.
+var sourceObsRE = regexp.MustCompile(`^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) is drawn from:\r?$`)
+
 // sourcesShows reads the facts a Sources answer lists, in order, each
-// once, unranked, with its project. A fact's text is on its line (the
-// server makes it one), so only whole fact lines whose short id starts
-// their full id count; any other line is skipped rather than journaled
-// as a wrong show.
+// once, unranked, with its project and the observation it is listed for
+// (Of, issue 317). A fact's text is on its line (the server makes it one),
+// so only whole fact lines whose short id starts their full id count; any
+// other line is skipped rather than journaled as a wrong show, and an
+// observation line that does not parse leaves its facts without one.
 func sourcesShows(text string) []feedback.Item {
 	var items []feedback.Item
+	of := ""
 	for _, line := range strings.Split(text, "\n") {
+		if strings.HasSuffix(strings.TrimSuffix(line, "\r"), " is drawn from:") {
+			of = ""
+			if o := sourceObsRE.FindStringSubmatch(line); o != nil {
+				of = o[1]
+			}
+			continue
+		}
 		l := sourceLineRE.FindStringSubmatch(line)
 		if l == nil || !strings.HasPrefix(l[3], l[2]) {
 			continue
 		}
 		if !slices.ContainsFunc(items, func(it feedback.Item) bool { return it.ID == l[3] }) {
-			items = append(items, feedback.Item{ID: l[3], Project: l[1]})
+			items = append(items, feedback.Item{ID: l[3], Project: l[1], Of: of})
 		}
 	}
 	return items

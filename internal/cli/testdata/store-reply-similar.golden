@@ -2,6 +2,7 @@ stored (decision, project billing) note:0b4c2a52-0000-4000-8000-00000000abcd
 Similar memory: does this fact update or repeat it?
 [billing]
 - Billing uses PostgreSQL 15. (3d ago, 7d1e93a0-0000-4000-8000-000000000001)
+If this fact replaces it, report it outdated with memory_credit, so it is retired.
 Print one line in your final message, Updated if the fact updates that memory:
 > 🧠🔄 **Updated (billing · decision · replaces 7d1e93a0)** — <the fact, in a few words>
 > 🧠💾 **Saved (billing · decision)** — <the fact, in a few words>

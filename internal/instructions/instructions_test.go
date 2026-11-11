@@ -67,7 +67,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v17" {
+	if Version != "v18" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -505,6 +505,7 @@ var wordings = map[string]string{
 	"v15": "1c8774365de706f728d5ffd77598677ea22f235b0b8654c6ded8b6c5540f69ec",
 	"v16": "7d9fc362643e3a5a571090cec52a9ea4d4f2e79853d878dea8f9cd1fa2735a05",
 	"v17": "ae3cdc1cacf8c2ab0ace8301af83ff728b9b6f3ff6e4c6c496fc49df2f4e0f50",
+	"v18": "e3d71eb6c1dbb23e1ea4c64b3c8e60d322798803ff0f86d21c4fb762fce7b7c6",
 }
 
 func wordingHash() string {
@@ -513,7 +514,7 @@ func wordingHash() string {
 		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
 		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader,
 		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), ConfirmedLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
-		SavedLine("p", "k"), UpdatedLine("p", "k", "i"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
+		SavedLine("p", "k"), UpdatedLine("p", "k", "i"), StoreReplacesIt, StoreReplacesOne, RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
 		HiddenLine("wrong", "p", "i", true), HiddenLine("outdated", "p", "i", false), NotRetiredLine("p", "i", "r", true), NotRetiredLine("p", "i", "r", false),
 		NothingLine, RetroLine, Pointer([]string{"#1", "https://example.com/2"}),
 		ProjectsLine("p", []string{"l"}, []string{"a", "b"}, 1), ProjectNamed([]string{"a"}), ProjectNamed([]string{"a", "b"}), UnknownProjects([]string{"x"}, []string{"a"})}

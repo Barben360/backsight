@@ -43,6 +43,9 @@ type Item struct {
 	// RefreshedAt: a briefing page's last_refreshed_at, as the server
 	// wrote it, telling one version of the page from the next.
 	RefreshedAt string `json:"refreshed_at,omitempty"`
+	// Of: on a sources show, the observation the fact was listed for, so
+	// a verdict on the fact counts as one on the observation (issue 317).
+	Of string `json:"of,omitempty"`
 }
 
 // BriefingPagePrefix starts every briefing page's id (retain's
@@ -106,6 +109,10 @@ type Event struct {
 	// retired (Project is the session's); empty on lines written before
 	// the field.
 	MemoryProject string `json:"memory_project,omitempty"`
+	// Of: on a retire, the observation the agent reported, when the fact
+	// was retired as one of its sources: the observation is the slot of
+	// feedback.max_retirements (issue 317). Empty: the fact itself.
+	Of string `json:"of,omitempty"`
 }
 
 // CrossProject reports a retire or hide of a memory of another project

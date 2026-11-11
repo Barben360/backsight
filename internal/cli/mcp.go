@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -324,7 +325,14 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			// A refused key is followed here, before the note is queued: the
 			// store itself is never sent twice.
 			sec, eng := key.get()
-			q := recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: deps.cfg.Recall.StoreSimilarMinScore, Limit: 1}
+			bar, limit := deps.cfg.Recall.StoreSimilarMinScore, 1
+			if noteKind(a.Kind) == "correction" {
+				// The memory a correction replaces is often worded
+				// otherwise: a lower bar, and two, so it can be reported
+				// outdated and retired (issue 317).
+				bar, limit = deps.cfg.Recall.StoreCorrectionMinScore, storeCorrectionHits
+			}
+			q := recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: bar, Limit: limit}
 			similar := eng.Search(ctx, q)
 			if refused(similar) && key.refresh(sec.APIKey) {
 				sec, eng = key.get()
@@ -336,7 +344,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if res.Document == "" {
 				text = err.Error()
 			} else {
-				text = storeReply(res, err, similar.Hits, deps.cfg.Recall.StoreSimilarMinScore)
+				text = storeReply(res, err, similar.Hits, bar, limit, deps.cfg.Feedback.Enabled)
 			}
 			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found, ResultChars: utf8.RuneCountInString(text)})
 			if res.Document == "" {
@@ -569,10 +577,17 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	if err := sendsGate(d.dirs, d.generation)(); err != nil {
 		return "", fmt.Errorf("%w: nothing was changed", joinedElsewhere(err))
 	}
-	// Every call retires at least one memory: a session at its limit is
-	// refused before the server is asked anything.
-	done, limit := retirementsInSession(d.dirs, live.SessionID), cfg.Feedback.MaxRetirements
-	if done >= limit {
+	// Each memory reported uses one slot, an observation one for all the
+	// source facts it takes (issue 317). At the limit, a call none of
+	// whose ids maps to a slot already used is refused before the server
+	// is asked anything; any other is judged once the plan is known (a
+	// fact named with its counted observation takes that slot). An
+	// unreadable journal counts what it could read: a journal failure
+	// never fails a tool call.
+	events, _ := sessionJournal(d.dirs, live.SessionID)
+	used, listed := feedback.RetiredSlots(events, live.SessionID), listedFor(feedback.Shows(events, live.SessionID))
+	done, limit := len(used), cfg.Feedback.MaxRetirements
+	if done >= limit && !slices.ContainsFunc(ids, func(id string) bool { return slices.Contains(used, (retirePlan{}).slot(id, listed)) }) {
 		return "", capRefusal(limit, done, ids, owner)
 	}
 	plan := d.classify(ctx, key, ids, owner)
@@ -580,8 +595,16 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		d.tw.Emit(telemetry.Retire{Action: "sources", IDs: len(plan.listed)})
 		return sourcesText(plan), nil
 	}
-	if acted := plan.acted(); done+len(acted) > limit {
-		return "", capRefusal(limit, done, acted, owner)
+	slots := map[string]string{}
+	var fresh []string
+	for _, id := range plan.acted() {
+		slots[id] = plan.slot(id, listed)
+		if !slices.Contains(used, slots[id]) && !slices.Contains(fresh, slots[id]) {
+			fresh = append(fresh, slots[id])
+		}
+	}
+	if done+len(fresh) > limit {
+		return "", capRefusal(limit, done, plan.acted(), owner)
 	}
 	sec, _ := key.get()
 	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence, checked: true})
@@ -589,16 +612,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	if err != nil {
 		return "", err
 	}
-	return d.retire(ctx, key, live, verdict, res.Document, invalidationReason(verdict, evidence, correction, res.Document), ids, plan, owner)
-}
-
-// retirementsInSession is how many memories session sess retired, from
-// the journal since the month it began (sessionJournal); an unreadable
-// journal counts what it could read (a journal failure never fails a tool
-// call).
-func retirementsInSession(d paths.Dirs, sess string) int {
-	events, _ := sessionJournal(d, sess)
-	return feedback.Retirements(events, sess)
+	return d.retire(ctx, key, live, verdict, res.Document, invalidationReason(verdict, evidence, correction, res.Document), ids, plan, slots, owner)
 }
 
 // readID is the memory id memory_read's ref names: the id of a memory
@@ -687,19 +701,24 @@ func mcpSearchText(r recall.Result, feedback bool) string {
 	return searchText(r) + "\n" + instructions.For(feedback).SearchEnd + "\n"
 }
 
-// storeSimilarHeader opens the similar memory of a memory_store answer:
-// the PostToolUse hook journals the memory below it as shown (storeShow).
+// storeSimilarHeader opens the similar memory of a memory_store answer,
+// storeSimilarsHeader its similar memories (a correction's): the
+// PostToolUse hook journals the memories below it as shown (storeShows).
 const (
-	storeSimilarHeader = "Similar memory: does this fact update or repeat it?"
-	storeSimilarChars  = 200 // of the similar memory's text, ellipsis included
+	storeSimilarHeader  = "Similar memory: does this fact update or repeat it?"
+	storeSimilarsHeader = "Similar memories: does this fact update or repeat one of them?"
+	storeSimilarChars   = 200 // of a similar memory's text, ellipsis included
+	storeCorrectionHits = 2   // the similar memories a correction shows
 )
 
 // storeReply is memory_store's answer (SPEC §7, 0083 C4): the stored line,
 // err when the note was kept but not sent, then the line to print. The
-// best of hits at min or above (the score after boost), if any, comes
-// before it on two lines, its project then its text cut at 200
-// characters, and the Updated line naming it joins the Saved one.
-func storeReply(res storeResult, err error, hits []recall.Hit, min float64) string {
+// best limit of hits at bar or above (the score after boost), if any, come
+// before it, best first, on two lines each, its project then its text cut
+// at 200 characters; an Updated line naming each joins the Saved one, and
+// with credit (memory_credit is offered) the answer says how to retire
+// the memory the fact replaces (issue 317).
+func storeReply(res storeResult, err error, hits []recall.Hit, bar float64, limit int, credit bool) string {
 	var b strings.Builder
 	b.WriteString(storeText(res))
 	if err != nil {
@@ -707,19 +726,34 @@ func storeReply(res storeResult, err error, hits []recall.Hit, min float64) stri
 	}
 	project := safeProject(res.Project)
 	saved := instructions.SavedLine(project, res.Kind)
-	var best *recall.Hit
-	for i := range hits {
-		if hits[i].Score >= min && (best == nil || hits[i].Score > best.Score) {
-			best = &hits[i]
+	var shown []recall.Hit
+	for _, h := range hits {
+		if h.Score >= bar {
+			shown = append(shown, h)
 		}
 	}
-	if best == nil {
+	slices.SortStableFunc(shown, func(x, y recall.Hit) int { return cmp.Compare(y.Score, x.Score) })
+	shown = shown[:min(len(shown), max(limit, 1))]
+	if len(shown) == 0 {
 		b.WriteString("Print this line in your final message:\n" + saved + "\n")
 		return b.String()
 	}
-	fmt.Fprintf(&b, "%s\n[%s]\n- %s (%s ago, %s)\n", storeSimilarHeader, singleLine(best.Project), clip(singleLine(best.Text), storeSimilarChars), best.Age, best.ID)
-	b.WriteString("Print one line in your final message, Updated if the fact updates that memory:\n" +
-		instructions.UpdatedLine(project, res.Kind, best.ID) + "\n" + saved + "\n")
+	header, hint, ask := storeSimilarHeader, instructions.StoreReplacesIt, "Print one line in your final message, Updated if the fact updates that memory:\n"
+	if len(shown) > 1 {
+		header, hint, ask = storeSimilarsHeader, instructions.StoreReplacesOne, "Print one line in your final message, an Updated line if the fact updates one of them:\n"
+	}
+	b.WriteString(header + "\n")
+	for _, h := range shown {
+		fmt.Fprintf(&b, "[%s]\n- %s (%s ago, %s)\n", singleLine(h.Project), clip(singleLine(h.Text), storeSimilarChars), h.Age, h.ID)
+	}
+	if credit {
+		b.WriteString(hint + "\n")
+	}
+	b.WriteString(ask)
+	for _, h := range shown {
+		b.WriteString(instructions.UpdatedLine(project, res.Kind, h.ID) + "\n")
+	}
+	b.WriteString(saved + "\n")
 	return b.String()
 }
 

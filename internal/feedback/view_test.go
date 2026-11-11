@@ -224,6 +224,27 @@ func TestRetirementsCountTheSessionsRetiredIDs(t *testing.T) {
 	}
 }
 
+// Issue 317: a retirement counts per memory reported, so the source facts
+// retired for one observation (Of) use one slot, across calls; a fact
+// retired on its own, or an observation hidden, uses its own.
+func TestRetirementsCountAnObservationsFactsOnce(t *testing.T) {
+	events := []Event{
+		{Kind: KindRetire, Session: "s1", IDs: []string{"f1"}, Of: "o1"},
+		{Kind: KindRetire, Session: "s1", IDs: []string{"f2"}, Of: "o1"},
+		{Kind: KindRetire, Session: "s1", Turn: "p-4", IDs: []string{"f3"}, Of: "o1"},
+		{Kind: KindRetire, Session: "s1", IDs: []string{"f4"}},
+		{Kind: KindHide, Session: "s1", IDs: []string{"o2"}},
+		{Kind: KindRetire, Session: "s1", IDs: []string{"f5"}, Of: "o3"},
+		{Kind: KindRetire, Session: "s2", IDs: []string{"f6"}, Of: "o4"},
+	}
+	if got := RetiredSlots(events, "s1"); strings.Join(got, ",") != "o1,f4,o2,o3" {
+		t.Errorf("slots %q", got)
+	}
+	if n := Retirements(events, "s1"); n != 4 {
+		t.Errorf("s1: %d, want 4", n)
+	}
+}
+
 // A turn with a credit (any verdict, confirmed included) and a none is
 // the credits' turn: it never counts as a none.
 func TestCheckTurnCreditBeatsNone(t *testing.T) {

@@ -107,7 +107,8 @@ func TestCapCountsFromSessionStart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := retirementsInSession(d, "s1"); got != 3 {
+	events, _ := sessionJournal(d, "s1")
+	if got := feedback.Retirements(events, "s1"); got != 3 {
 		t.Errorf("%d retirement(s) counted, want 3", got)
 	}
 }

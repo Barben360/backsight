@@ -20,7 +20,7 @@ feedback.confident_rank            2
 feedback.credit_half_life_days     365
 feedback.cross_project_retire      1
 feedback.enabled                   1
-feedback.max_retirements           3
+feedback.max_retirements           10
 feedback.miss_half_life_days       90
 feedback.prior_credits             3
 feedback.prior_misses              9
@@ -43,6 +43,7 @@ recall.session_budget_chars        6000
 recall.sticky_bypass               0.97
 recall.sticky_max                  3
 recall.sticky_window_h             24
+recall.store_correction_min_score  0.6
 recall.store_similar_min_score     0.8
 
 Observational: weeks, projects and memory differ
