@@ -14,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
@@ -121,7 +122,10 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 // CLAUDE_CODE_SESSION_ID is set: the command runs under Claude Code (one
 // started from a Codex shell inherits its CODEX_SESSION_ID), which keeps
 // the session each command takes without this variable (store's
-// CLAUDE_CODE_SESSION_ID, why's latest session, none for pause).
+// CLAUDE_CODE_SESSION_ID, why's latest session, none for pause). The
+// commands ask shellSessionIn, which also knows a Codex started from
+// Claude Code's shell (which inherits BACKSIGHT_SESSION and
+// CLAUDE_CODE_SESSION_ID).
 func shellSession(getenv func(string) string) string {
 	if s := getenv("BACKSIGHT_SESSION"); s != "" {
 		return s
@@ -133,6 +137,64 @@ func shellSession(getenv func(string) string) string {
 		return s
 	}
 	return ""
+}
+
+// claudeShellSession is the Claude Code session a shell's variables name
+// (BACKSIGHT_SESSION from its env file, else CLAUDE_CODE_SESSION_ID), ""
+// when none is a valid id.
+func claudeShellSession(getenv func(string) string) string {
+	for _, k := range []string{"BACKSIGHT_SESSION", "CLAUDE_CODE_SESSION_ID"} {
+		if s := getenv(k); session.ValidID(s) {
+			return s
+		}
+	}
+	return ""
+}
+
+// shellSessionIn is shellSession, sessions (the sessions directory) told
+// which tool a shell holding both Claude Code's and Codex's variables runs
+// in: one tool started from the other's shell inherits the outer one's
+// variables. A Codex started from Claude Code finds that session in its
+// hooks' environment and records it on its own (StartedIn); a shell whose
+// Claude Code session is the one CODEX_SESSION_ID's session was started
+// from runs in that Codex. Otherwise (Claude Code started from Codex, or
+// nothing recorded) shellSession decides.
+func shellSessionIn(sessions string, getenv func(string) string) string {
+	if cx := getenv("CODEX_SESSION_ID"); sessions != "" && session.ValidID(cx) {
+		if outer := claudeShellSession(getenv); outer != "" {
+			if st, err := (session.Store{Dir: sessions}).Load(cx); err == nil && st.StartedIn == outer {
+				return cx
+			}
+		}
+	}
+	return shellSession(getenv)
+}
+
+// shellSessionHere is shellSessionIn on this machine's sessions.
+func shellSessionHere() string {
+	sessions := ""
+	if d, _, err := machine(); err == nil {
+		sessions = d.SessionsDir()
+	}
+	return shellSessionIn(sessions, os.Getenv)
+}
+
+// recordStartedIn records, at each start of a Codex session, the Claude
+// Code session its hooks' environment names (Codex started from Claude
+// Code's shell; none, a session resumed elsewhere forgets it), which
+// shellSessionIn reads.
+func (h *hookEnv) recordStartedIn() {
+	if h.adapter.ID() != harnessid.Codex {
+		return
+	}
+	outer := claudeShellSession(os.Getenv)
+	if st, err := h.store.Load(h.in.SessionID); err == nil && st.StartedIn == outer {
+		return // nothing to write: most starts
+	}
+	h.updateSession(func(st *session.State) error {
+		st.StartedIn = outer
+		return nil
+	})
 }
 
 // remote is the normalised git remote of the session's directory, recorded
