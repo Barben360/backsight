@@ -365,6 +365,7 @@ var (
 	retainedContents   []string     // the content of every accepted item
 	retainedDocIDs     []string     // the document of every accepted item
 	retainedStrategies []string     // the strategy of every accepted item
+	retainedTimestamps []time.Time  // the timestamp of every accepted item (zero: none sent)
 	sharedSends        atomic.Int64 // shared ledger documents retained (not in retained)
 	// fakeDocCreated overrides a document's created_at (default: when the
 	// fake accepted it).
@@ -404,7 +405,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	llmPeriod = ""
 	extractFails.Store(false)
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
-	retainedDocIDs, retainedStrategies = nil, nil
+	retainedDocIDs, retainedStrategies, retainedTimestamps = nil, nil, nil
 	fakeDocCreated = map[string]time.Time{}
 	recallFailTag = ""
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
@@ -737,7 +738,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			// Strict like Hindsight 1.1.0: unknown memories are 404 and an
 			// observation cannot be curated (400).
-			if strings.Contains(r.URL.Path, "/memories/") {
+			if strings.Contains(r.URL.Path, "/memories/") && !strings.Contains(r.URL.Path, "/documents/") { // a document id may hold "/memories/"
 				id := strings.TrimSuffix(r.URL.Path[strings.Index(r.URL.Path, "/memories/")+len("/memories/"):], "/observations")
 				m, ok := memories[id]
 				switch {
@@ -769,7 +770,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			default:
 				_, _ = w.Write([]byte(h))
 			}
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list") && !strings.Contains(r.URL.Path, "/documents/"):
 			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
@@ -796,6 +797,7 @@ func fakeHindsight(t *testing.T) (port int) {
 					Metadata   json.RawMessage `json:"metadata"`
 					Tags       []string        `json:"tags"`
 					Strategy   string          `json:"strategy"`
+					Timestamp  *time.Time      `json:"timestamp"`
 				} `json:"items"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -827,6 +829,11 @@ func fakeHindsight(t *testing.T) (port int) {
 				retainedContents = append(retainedContents, it.Content)
 				retainedDocIDs = append(retainedDocIDs, it.DocumentID)
 				retainedStrategies = append(retainedStrategies, it.Strategy)
+				var ts time.Time
+				if it.Timestamp != nil {
+					ts = it.Timestamp.UTC()
+				}
+				retainedTimestamps = append(retainedTimestamps, ts)
 			}
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):

@@ -12,12 +12,16 @@ type ImportFile struct {
 	Content                 string // redacted
 	SHA256                  string // of the raw file
 	Project                 string
-	MachineID, Version      string
-	Date                    time.Time
+	// MovedFrom: the project an earlier send of this document went to,
+	// when it now goes to another one ("" otherwise).
+	MovedFrom          string
+	MachineID, Version string
+	Date               time.Time
 }
 
 // ImportItem is the retain item of an imported file and its operation id:
-// a repeated send of the same content to the same document collapses.
+// a repeated send of the same content to the same document collapses,
+// and a send moving it to another project is a new operation.
 func ImportItem(bank string, f ImportFile) (hindsight.RetainItem, string) {
 	ts := f.Date
 	item := hindsight.RetainItem{
@@ -28,5 +32,9 @@ func ImportItem(bank string, f ImportFile) (hindsight.RetainItem, string) {
 		Metadata: map[string]string{"source": f.Source, "path": f.Rel, "sha256": f.SHA256,
 			"machine_id": f.MachineID, "binary_version": f.Version},
 	}
-	return item, uuid5(nsBacksight, bank+"\n"+f.DocumentID+"\n"+f.SHA256)
+	key := bank + "\n" + f.DocumentID + "\n" + f.SHA256
+	if f.MovedFrom != "" {
+		key += "\nmoved:" + f.MovedFrom + ">" + f.Project
+	}
+	return item, uuid5(nsBacksight, key)
 }

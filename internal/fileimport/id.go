@@ -26,3 +26,10 @@ func DocumentID(source, rel string, tombs []state.Tombstone) string {
 	}
 	return id
 }
+
+// PresetSourceID names a preset's import of root on one machine, apart
+// from a plain import of the same folder: the first 12 hex characters of
+// sha256(machine_id + "\n" + absolute root + "\n" + preset).
+func PresetSourceID(machineID, preset, absRoot string) string {
+	return hashOf([]byte(machineID + "\n" + absRoot + "\n" + preset))[:12]
+}
