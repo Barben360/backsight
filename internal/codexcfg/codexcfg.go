@@ -112,7 +112,7 @@ func ApprovalFallback(tools ...string) func(doc []byte) ([]byte, []claudecfg.Cha
 	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
 		var changes []claudecfg.Change
 		for _, t := range tools {
-			out, ch, err := Set(doc, []string{"plugins", "backsight@backsight", "mcp_servers", "memory", "tools", t, "approval_mode"}, `"approve"`)
+			out, ch, err := Set(doc, []string{"plugins", "backsight@backsight", "mcp_servers", "backsight", "tools", t, "approval_mode"}, `"approve"`)
 			if err != nil {
 				return nil, nil, err
 			}

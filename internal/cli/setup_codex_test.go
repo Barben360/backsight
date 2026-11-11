@@ -160,11 +160,11 @@ func TestSetupWiresBothAndStopsOnAMemoryServer(t *testing.T) {
 	home, steps := setupMachine(t)
 	withLLMKey(t, home)
 	f := withCodex(t, home)
-	codexHomeWith(t, home, "[mcp_servers.memory]\ncommand = \"/usr/bin/mem\"\n")
+	codexHomeWith(t, home, "[mcp_servers.backsight]\ncommand = \"/usr/bin/mem\"\n")
 	steps.real["client install"] = true
 	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
 	env := parseSetup(t, out)
-	if code != output.NeedsUser || env.Error == nil || !strings.Contains(env.Error.Message, "[mcp_servers.memory]") {
+	if code != output.NeedsUser || env.Error == nil || !strings.Contains(env.Error.Message, "[mcp_servers.backsight]") {
 		t.Fatalf("exit %d %s", code, out)
 	}
 	if by := stepsByName(env.Data.Steps); by["client"].Status != "done" || by["codex"].Status != "failed" {

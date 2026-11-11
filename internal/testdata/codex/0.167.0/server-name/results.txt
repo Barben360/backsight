@@ -1,0 +1,10 @@
+1 install: ok=true 0.167.0 in /home/tester/codex-name | plugin marketplace add /home/tester/backsight/data/codex-marketplace | plugin add backsight@backsight | plugin add backsight-hooks@backsight
+2 generated: .mcp.json server ["backsight"], PostToolUse matcher mcp__backsight__.*
+3 codex mcp list: ["backsight","probe"]
+4 codex exec (workspace-write): backsight/memory_search=completed backsight/memory_store=completed backsight/memory_credit=completed 
+5 the model is offered: [{"name":"multi_agent_v1","tools":["close_agent","resume_agent","send_input","spawn_agent","wait_agent"]},{"name":"mcp__backsight","tools":["memory_credit","memory_read","memory_search","memory_store"]},{"name":"mcp__probe","tools":["closed","destructive","plain","readonly"]}]
+6 PostToolUse tool_name (probe):  1 mcp__backsight__memory_credit 1 mcp__backsight__memory_search 1 mcp__backsight__memory_store 
+7 backsight's PostToolUse hook saw:  1 mcp__backsight__memory_credit 1 mcp__backsight__memory_search 1 mcp__backsight__memory_store 
+8 backsight's hook runs:  3 PostToolUse rc=0 1 SessionEnd rc=0 1 SessionStart rc=0 1 Stop rc=0 1 UserPromptSubmit rc=0 
+9 with a user server named memory: ok=true
+10 with a user server named backsight: ok=false Codex already has an MCP server named backsight: [mcp_servers.backsight] in /home/tester/codex-name/config.toml. backsig

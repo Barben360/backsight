@@ -32,9 +32,10 @@ func TestRegisterAddsASecondHarnessAndRemovesIt(t *testing.T) {
 	if _, ok := ByID("other-tool"); ok {
 		t.Fatal("registered before the test")
 	}
+	before := len(All()) // Claude Code and Codex
 	unregister := Register(other{})
 	all := All()
-	if len(all) != 2 || all[0].ID() != ClaudeCode || all[1].ID() != "other-tool" {
+	if len(all) != before+1 || all[0].ID() != ClaudeCode || all[before].ID() != "other-tool" {
 		t.Fatalf("%v", all)
 	}
 	if a, ok := ByID("other-tool"); !ok || a.Tag() != "harness:other-tool" || Of("other-tool").ID() != "other-tool" || TagOf("other-tool") != "harness:other-tool" {
@@ -45,22 +46,23 @@ func TestRegisterAddsASecondHarnessAndRemovesIt(t *testing.T) {
 		t.Error("the context's adapter is lost")
 	}
 	// All hands out a copy.
-	all[1] = Claude{}
-	if All()[1].ID() != "other-tool" {
+	all[before] = Claude{}
+	if All()[before].ID() != "other-tool" {
 		t.Error("All shares the registry")
 	}
 	unregister()
-	if _, ok := ByID("other-tool"); ok || len(All()) != 1 {
+	if _, ok := ByID("other-tool"); ok || len(All()) != before {
 		t.Errorf("still registered: %v", All())
 	}
 }
 
 func TestRegisterRefusesAnIDTwice(t *testing.T) {
+	before := len(All())
 	defer func() {
 		if recover() == nil {
 			t.Error("Claude Code's id registered a second time")
 		}
-		if len(All()) != 1 {
+		if len(All()) != before {
 			t.Errorf("%v", All())
 		}
 	}()

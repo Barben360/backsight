@@ -15,7 +15,7 @@ import (
 var codexTools = []map[string]any{
 	{"type": "function", "name": "exec_command"},
 	{"type": "custom", "name": "apply_patch"},
-	{"type": "namespace", "name": "mcp__memory", "tools": []any{
+	{"type": "namespace", "name": "mcp__backsight", "tools": []any{
 		map[string]any{"type": "function", "name": "memory_search"},
 		map[string]any{"type": "function", "name": "memory_store"},
 	}},
@@ -70,7 +70,7 @@ func text(it map[string]any) string {
 func TestScriptPlaysOneStepPerAnsweredCall(t *testing.T) {
 	prompt := user(`do it <<fake [{"call":"memory_search","args":{"queries":["x"]}},{"say":"all done"}]>>`)
 	first := item(t, body(t, developer("instructions"), prompt), false)
-	if first["type"] != "function_call" || first["name"] != "memory_search" || first["namespace"] != "mcp__memory" || first["arguments"] != `{"queries":["x"]}` {
+	if first["type"] != "function_call" || first["name"] != "memory_search" || first["namespace"] != "mcp__backsight" || first["arguments"] != `{"queries":["x"]}` {
 		t.Fatalf("first step: %v", first)
 	}
 	// Hook context after the prompt (a developer message) does not hide it.

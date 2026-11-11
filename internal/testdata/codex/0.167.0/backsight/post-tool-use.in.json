@@ -6,7 +6,7 @@
   "hook_event_name": "PostToolUse",
   "model": "fake-model",
   "permission_mode": "default",
-  "tool_name": "mcp__memory__memory_search",
+  "tool_name": "mcp__backsight__memory_search",
   "tool_input": {
     "queries": [
       "codex spike"

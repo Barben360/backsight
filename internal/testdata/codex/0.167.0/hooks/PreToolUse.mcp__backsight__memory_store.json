@@ -3,21 +3,13 @@
   "turn_id": "01a1c72b-a51a-7ae0-b12f-b52948e012b2",
   "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl",
   "cwd": "/home/tester/work",
-  "hook_event_name": "PostToolUse",
+  "hook_event_name": "PreToolUse",
   "model": "fake-model",
   "permission_mode": "default",
-  "tool_name": "mcp__memory__memory_store",
+  "tool_name": "mcp__backsight__memory_store",
   "tool_input": {
     "kind": "decision",
     "text": "Decision (2026-11-10): the Codex harness records fixtures with a fake model."
-  },
-  "tool_response": {
-    "content": [
-      {
-        "type": "text",
-        "text": "stored (decision, project work) note:44279acb-631c-5c4a-9e24-fcfcb33bb25c\nPrint this line in your final message:\n> 🧠💾 **Saved (work · decision)** — <the fact, in a few words>\n"
-      }
-    ]
   },
   "tool_use_id": "call_fake_14_4"
 }

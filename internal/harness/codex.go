@@ -29,18 +29,13 @@ import (
 //
 // A block touches this file only to add a field, never to restructure it.
 //
-// # Off until its blocks land
+// # On
 //
-// Codex is known to ByID but not on: it is not in All (which the flush
-// loop and every per-harness pass iterate), it is never Default, and no
-// command detects or wires it on a user's machine. A command line that
-// names it (`backsight hook --harness codex …`, `backsight mcp --harness
-// codex`) reaches its parts, a stub answering nothing (a hook prints
-// nothing until block 4); the memory server takes each call's session from
-// its _meta (codex_mcp.go, block 5). It is turned on by moving it from known to
-// adapters in registry.go, once blocks 3 (install records a Codex home)
-// and 6 (rollouts read) have landed; setup and doctor offer it from block
-// 3 on, through their own code.
+// Codex is registered beside Claude Code (registry.go): it is in All, so
+// the flush loop and every per-harness pass (jobs tick, backfill, retain
+// flush) read its rollouts in the Codex home client install recorded; it
+// is never Default. Setup offers it where the codex command answers, and
+// client install --codex wires it.
 //
 // # Contracts
 //
@@ -108,9 +103,17 @@ var ErrNotImplemented = errors.New("not available for Codex yet")
 // notYet is ErrNotImplemented for what, on one line.
 func notYet(what string) error { return fmt.Errorf("codex %s: %w", what, ErrNotImplemented) }
 
-// codexToolPrefix starts every memory tool's name under Codex: its MCP
-// tools are mcp__<server>__<tool>, the server being "memory" (0085 D1).
-const codexToolPrefix = "mcp__" + plugin.Server + "__"
+// CodexServer is the memory server's name under Codex, the key of its
+// .mcp.json. Codex names a plugin's MCP tools mcp__<server>__<tool>, the
+// plugin not in it: "memory" (Claude Code's, whose names carry the plugin)
+// would clash with any server of the user's named memory, so Codex's is
+// backsight (the user's decision, 2026-11-11; amends 0085 D1's
+// mcp__backsight__).
+const CodexServer = plugin.Name
+
+// codexToolPrefix starts every memory tool's name under Codex:
+// mcp__backsight__<tool>.
+const codexToolPrefix = "mcp__" + CodexServer + "__"
 
 func (Codex) ID() string         { return harnessid.Codex }
 func (Codex) Name() string       { return "Codex" }
