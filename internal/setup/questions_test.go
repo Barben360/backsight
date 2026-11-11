@@ -41,7 +41,7 @@ func has(qs []Question, id string) bool {
 }
 
 func TestFreshInstallAsksEverythingWithRecommendations(t *testing.T) {
-	qs, extra, err := Resolve(Inputs{Backfill: func(string) (int, string) { return 12, "≈ $0.40" }})
+	qs, extra, err := Resolve(Inputs{Backfill: func(string, bool, bool) Backlog { return claudeBacklog(12, "≈ $0.40") }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestProviderShapesTheFollowUpQuestions(t *testing.T) {
 		{"claude-code", "claude-haiku-5-5", false, true, "no"},
 	}
 	for _, c := range cases {
-		qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": c.provider}, Backfill: func(string) (int, string) { return 3, "" }})
+		qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": c.provider}, Backfill: func(string, bool, bool) Backlog { return claudeBacklog(3, "") }})
 		if err != nil {
 			t.Fatalf("%s: %v", c.provider, err)
 		}
@@ -132,18 +132,18 @@ func TestUnlistedProviderNeedsAModel(t *testing.T) { // see also TestNonInteract
 
 func TestBackfillPlanFollowsTheChosenModel(t *testing.T) {
 	var asked string
-	_, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "anthropic"}, Backfill: func(m string) (int, string) { asked = m; return 1, "" }})
+	_, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "anthropic"}, Backfill: func(m string, _, _ bool) Backlog { asked = m; return claudeBacklog(1, "") }})
 	if err != nil || asked != "claude-haiku-5-5" {
 		t.Errorf("backfill estimated for %q (%v), want the anthropic preset", asked, err)
 	}
-	_, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "anthropic", "model": "claude-sonnet-5-5"}, Backfill: func(m string) (int, string) { asked = m; return 1, "" }})
+	_, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "anthropic", "model": "claude-sonnet-5-5"}, Backfill: func(m string, _, _ bool) Backlog { asked = m; return claudeBacklog(1, "") }})
 	if asked != "claude-sonnet-5-5" {
 		t.Errorf("backfill estimated for %q, want the answered model", asked)
 	}
 }
 
 func TestNoBackfillOrReferenceQuestionWithoutCause(t *testing.T) {
-	qs, _, _ := Resolve(Inputs{Backfill: func(string) (int, string) { return 0, "" }})
+	qs, _, _ := Resolve(Inputs{Backfill: func(string, bool, bool) Backlog { return claudeBacklog(0, "") }})
 	if has(qs, "backfill") || has(qs, "reference") {
 		t.Errorf("questions %v", ids(qs))
 	}
@@ -322,7 +322,7 @@ func TestProviderChoicesStateTheirTerms(t *testing.T) {
 func TestResolveServerOnlyAsksNoClientQuestion(t *testing.T) {
 	asked := false
 	qs, extra, err := Resolve(Inputs{Answers: map[string]string{"role": "server"}, ReferencePieces: 3,
-		Backfill: func(string) (int, string) { asked = true; return 12, "≈ $0.40" }})
+		Backfill: func(string, bool, bool) Backlog { asked = true; return claudeBacklog(12, "≈ $0.40") }})
 	if err != nil {
 		t.Fatal(err)
 	}

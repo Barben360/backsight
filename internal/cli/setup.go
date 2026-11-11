@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/fileimport"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -651,9 +652,29 @@ func estimateFlusher(d paths.Dirs, home string, cfg config.Config, since time.Ti
 		Attribution:    retain.Attributor{Transverse: cfg.Projects.Transverse, Harnesses: conversationReaders()}, Harnesses: conversationReaders()}
 }
 
-// backfillEstimate counts the sessions backfill would send and prices
-// them for model; it reads the transcripts only, never the server.
-func (s *setupEnv) backfillEstimate(model string) (int, string) {
+// backfillTools are the coding tools setup's backfill covers, given the
+// ones this run wires: Claude Code when picked, Codex when picked or
+// wired already (an earlier run, client install --codex). The estimate
+// and the step both read it, so the question counts what the step queues.
+func (s *setupEnv) backfillTools(claude, codexPicked bool) (bool, bool) {
+	if codexPicked {
+		return claude, true
+	}
+	st, err := state.Load(s.dirs.StateFile())
+	if err != nil {
+		return claude, false
+	}
+	_, wired := codexWired(s.home, st)
+	return claude, wired
+}
+
+// backfillEstimate counts, per coding tool, the sessions setup's backfill
+// step would queue (backfillTools: Claude Code's transcripts of the
+// profile setup wires, Codex's rollouts of the home it wires or wired)
+// and prices them all for model; it reads the conversations only, never
+// the server.
+func (s *setupEnv) backfillEstimate(model string, claudePicked, codexPicked bool) setup.Backlog {
+	claude, withCodex := s.backfillTools(claudePicked, codexPicked)
 	cfg := config.Default(s.dirs, s.home)
 	if s.cfg != nil {
 		cfg = *s.cfg
@@ -661,7 +682,7 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	// A survey only: no client, no machine id written before the go.
 	idx, err := retain.LoadSentIndex(s.dirs.SentIndexDir())
 	if err != nil {
-		return 0, ""
+		return setup.Backlog{}
 	}
 	since := now().UTC()
 	if st, err := state.Load(s.dirs.StateFile()); err == nil && st.RetainSince != nil {
@@ -670,7 +691,61 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	if model != cfg.LLM.Model { // the configured prices are another model's
 		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
 	}
-	return backfillSurvey(s.dirs, s.home, s.loc.Projects, cfg, since, idx, false)
+	var files []string
+	if claude {
+		files, _ = filepath.Glob(filepath.Join(s.loc.Projects, "*", "*.jsonl"))
+	}
+	fromCodex := map[string]bool{}
+	if withCodex {
+		// The home this run wires is not recorded yet: read it as the step
+		// will once it is; else the one recorded.
+		rollouts := conversations(s.home, codex)
+		if codexPicked && s.codexDir != "" {
+			rollouts = codex.Conversations(harness.Env{Home: s.home, Profile: codexProfile(s.home, s.codexDir)})
+		}
+		for _, f := range rollouts {
+			fromCodex[f] = true
+		}
+		files = append(files, rollouts...)
+	}
+	fl := estimateFlusher(s.dirs, s.home, cfg, since, idx)
+	prices := retain.PricesForLLM(cfg.LLM)
+	cands, plan, err := surveyAll(fl, files, backfillFlags{}, prices)
+	if err != nil {
+		return setup.Backlog{}
+	}
+	var b setup.Backlog
+	if claude {
+		b.Tools = append(b.Tools, setup.ToolSessions{Tool: setup.ToolsClaude})
+	}
+	if withCodex {
+		b.Tools = append(b.Tools, setup.ToolSessions{Tool: setup.ToolsCodex})
+	}
+	for _, c := range cands {
+		i := 0
+		if fromCodex[c.Path] && claude {
+			i = 1
+		}
+		b.Tools[i].Sessions++
+	}
+	b.Cost = backfillCost(plan, prices, cfg.LLM.Model)
+	return b
+}
+
+// backfillStepArgs are setup's backfill step: the queue of the tools
+// backfillTools covers, Claude Code's from the profile setup wires.
+func (s *setupEnv) backfillStepArgs(answers map[string]string) []string {
+	claude, withCodex := s.backfillTools(setup.Tools(answers))
+	args := []string{"retain", "backfill", "--queue"}
+	switch {
+	case claude && withCodex:
+		args = append(args, "--tools", setup.ToolsBoth, "--projects-dir", s.loc.Projects)
+	case withCodex:
+		args = append(args, "--tools", setup.ToolsCodex)
+	default: // Claude Code's, as before Codex
+		args = append(args, "--projects-dir", s.loc.Projects)
+	}
+	return args
 }
 
 // backfillSurvey counts the sessions of projectsDir a backfill would send
@@ -689,12 +764,16 @@ func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, s
 	if err != nil {
 		return 0, ""
 	}
-	n := plan.Send + plan.NotesOnly
+	return plan.Send + plan.NotesOnly, backfillCost(plan, prices, model)
+}
+
+// backfillCost is plan's cost to show, with its cap and duration.
+func backfillCost(plan backfillPlan, prices retain.Prices, model string) string {
 	about := plan.Estimate.Duration.Round(time.Minute)
 	if prices.Known() {
-		return n, fmt.Sprintf("≈ %.2f %s, capped at %.2f %s, about %s", plan.Estimate.Cost, prices.Currency, plan.MaxCost, prices.Currency, about)
+		return fmt.Sprintf("≈ %.2f %s, capped at %.2f %s, about %s", plan.Estimate.Cost, prices.Currency, plan.MaxCost, prices.Currency, about)
 	}
-	return n, fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Estimate.InputTokens+plan.Estimate.OutputTokens)/1000, model, plan.MaxTokens/1000, about)
+	return fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Estimate.InputTokens+plan.Estimate.OutputTokens)/1000, model, plan.MaxTokens/1000, about)
 }
 
 // expandHome is p with a leading ~ read as the home folder: a setup
@@ -1205,24 +1284,46 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "scheduler", Status: "done", Detail: jr.Kind + ": jobs tick every 15 min, jobs maintain daily" + identity}, nil
 		}},
 		{"verify", 20, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
-			out := subcommand(ctx, clientArgs("verify")...)
-			var vr verifyResult
-			_ = json.Unmarshal(out.Data, &vr)
-			if out.Err != nil {
-				var failed []string
-				for _, c := range vr.Checks {
-					if c.Status == "fail" {
-						failed = append(failed, c.ID+": "+c.Summary)
-					}
-				}
-				if len(failed) > 0 {
-					e := *out.Err
-					e.Message = strings.Join(failed, "; ")
-					return setup.Step{}, &e
-				}
-				return setup.Step{}, out.Err
+			// Each tool wired, as it runs backsight: Claude Code's verify, then
+			// Codex's (one round trip: both reach the same server).
+			claude, codexOn := setup.Tools(answers)
+			var runs [][]string
+			if claude {
+				runs = append(runs, clientArgs("verify"))
 			}
-			return setup.Step{Name: "verify", Status: "done", Detail: fmt.Sprintf("%d checks passed: every hook, the MCP server, a retain/recall round trip", len(vr.Checks))}, nil
+			if codexOn {
+				args := []string{"verify", "--codex"}
+				if claude {
+					args = append(args, "--no-round-trip")
+				}
+				runs = append(runs, args)
+			}
+			checks := 0
+			for _, args := range runs {
+				out := subcommand(ctx, args...)
+				var vr verifyResult
+				_ = json.Unmarshal(out.Data, &vr)
+				if out.Err != nil {
+					var failed []string
+					for _, c := range vr.Checks {
+						if c.Status == "fail" {
+							failed = append(failed, verifyToolPrefix(vr, claude)+c.ID+": "+c.Summary)
+						}
+					}
+					if len(failed) > 0 {
+						e := *out.Err
+						e.Message = strings.Join(failed, "; ")
+						return setup.Step{}, &e
+					}
+					return setup.Step{}, out.Err
+				}
+				checks += len(vr.Checks)
+			}
+			detail := fmt.Sprintf("%d checks passed: every hook, the MCP server, a retain/recall round trip", checks)
+			if codexOn {
+				detail = fmt.Sprintf("%d checks passed: every hook and the MCP server of %s, a retain/recall round trip", checks, map[bool]string{true: "Claude Code and Codex", false: "Codex"}[claude])
+			}
+			return setup.Step{Name: "verify", Status: "done", Detail: detail}, nil
 		}},
 		{"reference", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			if answers["reference"] != "retire" {
@@ -1247,7 +1348,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if answers["backfill"] != "yes" {
 				return setup.Step{Name: "backfill", Status: "skipped", Detail: "not asked for"}, nil
 			}
-			args := []string{"retain", "backfill", "--queue", "--projects-dir", s.loc.Projects}
+			args := s.backfillStepArgs(answers)
 			if answers["provider"] == "claude-code" {
 				args = append(args, "--allow-subscription") // answered yes past the caveat
 			}
@@ -1832,6 +1933,12 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	backfill := "start empty"
 	if a["backfill"] == "yes" {
 		backfill = "queue past sessions for jobs tick"
+		switch claude, withCodex := s.backfillTools(setup.Tools(a)); {
+		case claude && withCodex:
+			backfill = "queue past sessions of Claude Code and Codex for jobs tick"
+		case withCodex:
+			backfill = "queue past Codex sessions for jobs tick"
+		}
 	}
 	importDetail := "no import"
 	if a["import"] == "yes" {

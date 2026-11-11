@@ -112,9 +112,10 @@ type Inputs struct {
 	Saved   map[string]string
 	// ReferencePieces counts the reference pieces wired into Claude Code.
 	ReferencePieces int
-	// Backfill estimates the sessions backfill would send for a model and
-	// the cost to show; 0 sessions: no backfill question.
-	Backfill func(model string) (sessions int, cost string)
+	// Backfill estimates the sessions backfill would send for a model, per
+	// coding tool it covers, and the cost to show, given the tools this
+	// setup wires (claude, codex); 0 sessions: no backfill question.
+	Backfill func(model string, claude, codex bool) Backlog
 	// Import checks a folder to import (decision 0081) and estimates it for
 	// a model: the folder as an absolute path, the files it would send and
 	// the cost to show. nil: no import question.
@@ -151,6 +152,56 @@ func Tools(answers map[string]string) (claude, codex bool) {
 		return true, true
 	}
 	return true, false
+}
+
+// Backlog is what a backfill would send: the past sessions of each coding
+// tool it covers (ToolsClaude, ToolsCodex), in order, and the cost to show
+// for them all.
+type Backlog struct {
+	Tools []ToolSessions
+	Cost  string
+}
+
+// ToolSessions are a coding tool's past sessions a backfill would send.
+type ToolSessions struct {
+	Tool     string
+	Sessions int
+}
+
+// Total is the sessions of every tool.
+func (b Backlog) Total() int {
+	n := 0
+	for _, t := range b.Tools {
+		n += t.Sessions
+	}
+	return n
+}
+
+// past says the sessions: as before Codex when the backfill covers
+// Claude Code alone, else naming each tool that has some.
+func (b Backlog) past() string {
+	plural := func(n int) string {
+		if n == 1 {
+			return "session"
+		}
+		return "sessions"
+	}
+	n := b.Total()
+	if len(b.Tools) == 1 && b.Tools[0].Tool == ToolsClaude {
+		return fmt.Sprintf("%d past %s", n, plural(n))
+	}
+	label := map[string]string{ToolsClaude: "Claude Code", ToolsCodex: "Codex"}
+	var parts, only []string
+	for _, t := range b.Tools {
+		if t.Sessions > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", t.Sessions, label[t.Tool]))
+			only = append(only, label[t.Tool])
+		}
+	}
+	if len(parts) == 1 {
+		return fmt.Sprintf("%d past %s %s", n, only[0], plural(n))
+	}
+	return fmt.Sprintf("%d past sessions (%s)", n, strings.Join(parts, ", "))
 }
 
 // Hidden answers have defaults and are never asked.
@@ -360,14 +411,10 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			return nil, nil, err
 		}
 	}
-	if in.Backfill != nil && claude {
-		if n, cost := in.Backfill(model); n > 0 {
-			sessions := "sessions"
-			if n == 1 {
-				sessions = "session"
-			}
-			bq := Question{ID: "backfill", Prompt: fmt.Sprintf("Send your %d past %s to the memory, in the background?", n, sessions), Default: "yes", Recommended: "yes",
-				Options: []Option{{Value: "yes", Label: "backfill in the background (jobs tick), within a spending cap", Cost: cost}, {Value: "no", Label: "start empty"}}}
+	if in.Backfill != nil && (claude || codex) {
+		if b := in.Backfill(model, claude, codex); b.Total() > 0 {
+			bq := Question{ID: "backfill", Prompt: "Send your " + b.past() + " to the memory, in the background?", Default: "yes", Recommended: "yes",
+				Options: []Option{{Value: "yes", Label: "backfill in the background (jobs tick), within a spending cap", Cost: b.Cost}, {Value: "no", Label: "start empty"}}}
 			if provider == "claude-code" {
 				bq.Default, bq.Recommended = "no", "no"
 				bq.Options[0].Caveat = "months of sessions replayed unattended on your subscription"

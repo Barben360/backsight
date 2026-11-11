@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/termstyle"
 )
@@ -39,6 +41,7 @@ type backfillFlags struct {
 	queue                   bool // queue for jobs tick, send nothing now (setup)
 	status                  bool // read the progress, send nothing
 	since, project, dir     string
+	tools                   string // claude-code, codex or both; "": every tool wired
 	maxCost                 float64
 	maxTokens               int64
 }
@@ -105,9 +108,9 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				}
 			}
 			prices := retain.PricesForLLM(cfg.LLM)
-			files := allConversations(home)
-			if fl.dir != "" {
-				files, _ = filepath.Glob(filepath.Join(fl.dir, "*", "*.jsonl"))
+			files, err := backfillFiles(home, fl)
+			if err != nil {
+				return err
 			}
 			cands, plan, err := surveyAll(f, files, fl, prices)
 			if err != nil {
@@ -125,6 +128,9 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				queue = append(queue, c.Path)
 			}
 			filters := fl.since + "|" + fl.project + "|" + fl.dir
+			if fl.tools != "" { // none: the filters of a queue begun before the flag
+				filters += "|" + fl.tools
+			}
 			capGiven := cmd.Flags().Changed("max-cost") || cmd.Flags().Changed("max-tokens")
 			// The lock comes first: a running backfill would write its old
 			// cap and queue back over this invocation's changes.
@@ -198,10 +204,50 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 	cmd.Flags().Int64Var(&fl.maxTokens, "max-tokens", 0, "token cap, for models without a price")
 	cmd.Flags().BoolVar(&fl.allowSubscription, "allow-subscription", false, "accept backfill on the Claude subscription lane")
 	cmd.Flags().StringVar(&fl.dir, "projects-dir", "", "read transcripts from another Claude Code profile's projects directory")
+	cmd.Flags().StringVar(&fl.tools, "tools", "", "the coding tools whose past sessions to send: claude-code, codex or both (default: every tool wired; claude-code alone with --projects-dir)")
 	cmd.Flags().BoolVar(&fl.status, "status", false, "show the progress of the queued backfill, sending nothing (no server needed)")
 	cmd.Flags().BoolVar(&fl.queue, "queue", false, "queue the backfill for jobs tick and return")
 	_ = cmd.Flags().MarkHidden("queue")
 	return cmd
+}
+
+// backfillFiles are the conversations a backfill reads: those of the tools
+// --tools names (Claude Code's from --projects-dir when given), by default
+// every wired tool's, or Claude Code's alone from --projects-dir. Codex's
+// are read only once it is wired.
+func backfillFiles(home string, fl backfillFlags) ([]string, error) {
+	claudeDir := func() []string {
+		files, _ := filepath.Glob(filepath.Join(fl.dir, "*", "*.jsonl"))
+		return files
+	}
+	if fl.tools == "" {
+		if fl.dir != "" {
+			return claudeDir(), nil
+		}
+		return allConversations(home), nil
+	}
+	if !slices.Contains([]string{setup.ToolsClaude, setup.ToolsCodex, setup.ToolsBoth}, fl.tools) {
+		return nil, &output.Error{Code: output.Usage, Message: "--tools takes " + setup.ToolsClaude + ", " + setup.ToolsCodex + " or " + setup.ToolsBoth}
+	}
+	claude, withCodex := setup.Tools(map[string]string{"tools": fl.tools})
+	if fl.dir != "" && !claude {
+		return nil, &output.Error{Code: output.Usage, Message: "--projects-dir is Claude Code's: it goes with --tools " + setup.ToolsClaude + " or " + setup.ToolsBoth}
+	}
+	var files []string
+	switch {
+	case claude && fl.dir != "":
+		files = claudeDir()
+	case claude:
+		files = transcripts(home)
+	}
+	if withCodex {
+		if !toolWired(codex) {
+			return nil, &output.Error{Code: output.NeedsUser, Message: "--tools " + fl.tools + ": Codex is not wired on this machine, so none of its sessions is read",
+				Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install --codex", Why: "wires Codex; its past sessions can be sent after"}}}
+		}
+		files = append(files, conversations(home, codex)...)
+	}
+	return files, nil
 }
 
 // surveyAll lists the sessions to send, oldest first, and the plan.
