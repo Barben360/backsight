@@ -35,12 +35,16 @@ work=$(mktemp -d)
 out=${OUT:-$work/out}
 mkdir -p "$out" "$work/in" "$work/bin"
 export BACKSIGHT_HOME=$work/in/backsight
+# compose …: the scratch stack's project, never the machine's own.
+compose() { docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" "$@"; }
+# hindsight: the server's container, as Compose names it.
+hindsight() { compose ps -q hindsight; }
 cleanup() {
   if [ "${KEEP:-}" != 1 ]; then
-    docker network disconnect -f "$net" "${project}-hindsight-1" >/dev/null 2>&1 || true
-    docker network rm "$net" >/dev/null 2>&1 || true
     if [ -f "$BACKSIGHT_HOME/data/server/compose.yaml" ]; then
-      docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" down -v >/dev/null 2>&1 || true
+      docker network disconnect -f "$net" "$(hindsight)" >/dev/null 2>&1 || true
+      docker network rm "$net" >/dev/null 2>&1 || true
+      compose down -v >/dev/null 2>&1 || true
     fi
     [ -n "${OUT:-}" ] || cp -r "$out" "${work}.out" 2>/dev/null || true
     rm -rf "$work"
@@ -79,7 +83,7 @@ TOML
   done
   "$bin" server render >/dev/null
   hfc_seed "$project"
-  docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" up -d --quiet-pull
+  compose up -d --quiet-pull
   for _ in $(seq 1 120); do
     curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 && break
     sleep 5
@@ -92,7 +96,7 @@ TOML
   # host's own ports stay out of its reach. Hindsight keeps its Compose
   # network too, which it needs to fetch its models at the first start.
   docker network create --internal "$net" >/dev/null
-  docker network connect --alias hindsight "$net" "${project}-hindsight-1"
+  docker network connect --alias hindsight "$net" "$(hindsight)"
   network=(--network "$net" -e "BS_SERVER_URL=http://hindsight:8888")
 fi
 

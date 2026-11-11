@@ -104,7 +104,7 @@ func TrustKeys(doc []byte) ([]string, error) {
 }
 
 // ApprovalFallback approves tools of backsight's memory server without a
-// prompt: [plugins."backsight@backsight".mcp_servers.memory.tools.<tool>]
+// prompt: [plugins."backsight@backsight".mcp_servers.backsight.tools.<tool>]
 // approval_mode = "approve", the key Codex's own "Always allow" writes. It
 // is the fallback of 0085 D6, for a Codex that stops honouring the tools'
 // hints: nothing applies it by default.

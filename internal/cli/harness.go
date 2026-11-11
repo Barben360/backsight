@@ -101,16 +101,12 @@ func toolWired(a harness.Adapter) bool {
 }
 
 // conversationReaders are the conversation readers of every harness that
-// is on, and Codex's, on or not: retain reads each conversation it is handed
+// is on (Codex among them): retain reads each conversation it is handed
 // with the one that recognises its path, so a Codex rollout a hook or a
 // cursor names is never read as a Claude Code transcript.
 func conversationReaders() []retain.Harness {
 	var out []retain.Harness
-	codex := false
 	for _, a := range harness.All() {
-		out, codex = append(out, a), codex || a.ID() == harnessid.Codex
-	}
-	if a, ok := harness.ByID(harnessid.Codex); ok && !codex {
 		out = append(out, a)
 	}
 	return out

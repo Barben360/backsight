@@ -116,7 +116,7 @@ The user's PCs can share one memory, held by the server on one machine, the host
 ### Joining the host from this PC
 
 1. Ask the user to make a token on the host, in a terminal of their own: `backsight server token --out <file>` (the server must be exposed first: `backsight server expose --private <ip> --out <file>` writes one too). They carry the file to this PC themselves (`scp`, a USB stick), never through a chat, and give you its path only.
-2. If `backsight version` fails, install the binary ([step 1](#1-install-the-binary)). A PC that joins needs Claude Code, not Docker.
+2. If `backsight version` fails, install the binary ([step 1](#1-install-the-binary)). A PC that joins needs Claude Code, Codex or both, not Docker.
 3. Show the plan:
 
    ```sh
