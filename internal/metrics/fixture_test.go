@@ -20,8 +20,8 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
-	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/harnessid"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indextest"
 	"github.com/Barben360/backsight/internal/instructions"

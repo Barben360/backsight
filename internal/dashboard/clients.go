@@ -91,8 +91,8 @@ type ByClient struct {
 // recalls that added memory, of turns that used it, and the context added
 // per session, worded as the tiles word them.
 type ByClientRow struct {
-	Name, Href                   string
-	Sessions, Recalls            int64
+	Name, Href                  string
+	Sessions, Recalls           int64
 	GotMemory, Used, PerSession string
 }
 
