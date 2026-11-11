@@ -25,21 +25,33 @@ import (
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
+// shippedServerTimeout and shippedDoctorTimeout are the bounds as
+// backsight ships them, read before TestMain raises them.
+var shippedServerTimeout, shippedDoctorTimeout = ServerTimeout, doctorTimeout
+
+// TestMain raises the server and doctor bounds out of reach (go test's
+// -timeout ends a hang first): the fakes answer in-process, and a busy
+// runner must not turn a read into server_down. A test of the bounds
+// lowers them itself (lowerTimeouts, shortRead).
+func TestMain(m *testing.M) {
+	ServerTimeout, doctorTimeout = time.Hour, time.Hour
+	os.Exit(m.Run())
+}
+
 func TestServerTimeoutIsThreeSeconds(t *testing.T) {
-	if ServerTimeout != 3*time.Second {
-		t.Fatalf("ServerTimeout = %s, want 3s", ServerTimeout)
+	if shippedServerTimeout != 3*time.Second {
+		t.Fatalf("ServerTimeout = %s, want 3s", shippedServerTimeout)
 	}
-	if doctorTimeout != 10*time.Second {
-		t.Fatalf("doctorTimeout = %s, want 10s", doctorTimeout)
+	if shippedDoctorTimeout != 10*time.Second {
+		t.Fatalf("doctorTimeout = %s, want 10s", shippedDoctorTimeout)
 	}
 }
 
 func TestFetchParallelOverlaps(t *testing.T) {
 	// Three calls wait on a barrier that opens once all three have
-	// started: a serial run would wait on the first until the guard
-	// context ends, and fail it.
-	guard, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// started: a serial run would wait on the first for its hour, so
+	// this test hangs until go test's -timeout. No guard context: each
+	// part below hangs the same way when its call is not cut.
 	var started atomic.Int32
 	release := make(chan struct{})
 	barrier := func(ctx context.Context) error {
@@ -53,10 +65,7 @@ func TestFetchParallelOverlaps(t *testing.T) {
 			return ctx.Err()
 		}
 	}
-	errs := fetchParallel(guard, within(time.Hour), map[string]func(context.Context) error{"a": barrier, "b": barrier, "c": barrier})
-	if guard.Err() != nil {
-		t.Fatal("the guard context ended: the calls did not run at once")
-	}
+	errs := fetchParallel(context.Background(), within(time.Hour), map[string]func(context.Context) error{"a": barrier, "b": barrier, "c": barrier})
 	if len(errs) != 0 {
 		t.Fatalf("errors = %v, want none", errs)
 	}
@@ -65,11 +74,8 @@ func TestFetchParallelOverlaps(t *testing.T) {
 	// timeout; the others succeed.
 	ok := func(context.Context) error { return nil }
 	blocking := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
-	errs = fetchParallel(guard, shortFor("slow"), map[string]func(context.Context) error{
+	errs = fetchParallel(context.Background(), shortFor("slow"), map[string]func(context.Context) error{
 		"a": ok, "b": ok, "c": ok, "slow": blocking})
-	if guard.Err() != nil {
-		t.Fatal("the guard context ended: the blocking call was not cut at its timeout")
-	}
 	if len(errs) != 1 || !errors.Is(errs["slow"], context.DeadlineExceeded) {
 		t.Fatalf("errors = %v, want only slow: deadline exceeded", errs)
 	}
@@ -78,10 +84,7 @@ func TestFetchParallelOverlaps(t *testing.T) {
 	hang := make(chan struct{})
 	defer close(hang)
 	deaf := func(context.Context) error { <-hang; return nil }
-	errs = fetchParallel(guard, shortFor("deaf"), map[string]func(context.Context) error{"a": ok, "deaf": deaf})
-	if guard.Err() != nil {
-		t.Fatal("the guard context ended: a call ignoring its context held fetchParallel")
-	}
+	errs = fetchParallel(context.Background(), shortFor("deaf"), map[string]func(context.Context) error{"a": ok, "deaf": deaf})
 	if len(errs) != 1 || !errors.Is(errs["deaf"], context.DeadlineExceeded) {
 		t.Fatalf("errors = %v, want only deaf: deadline exceeded", errs)
 	}
@@ -138,7 +141,7 @@ func TestServerFaultsThroughTheClient(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if c.name == "timeout" {
-				lowerTimeouts(t, 10*time.Millisecond, time.Minute) // the fake blocks until the call's deadline
+				lowerTimeouts(t, 10*time.Millisecond, time.Hour) // the fake blocks until the call's deadline
 			}
 			x := newFx(t, fxNow)
 			x.server.fail("BankStats", c.err)
@@ -388,14 +391,14 @@ func within(d time.Duration) func(string) time.Duration {
 	return func(string) time.Duration { return d }
 }
 
-// shortFor is a read timeout of 10 ms for key, a minute for the others:
+// shortFor is a read timeout of 10 ms for key, an hour for the others:
 // only the read meant to time out does, however slow the runner.
 func shortFor(key string) func(string) time.Duration {
 	return func(k string) time.Duration {
 		if k == key {
 			return 10 * time.Millisecond
 		}
-		return time.Minute
+		return time.Hour
 	}
 }
 
@@ -403,7 +406,7 @@ func shortFor(key string) func(string) time.Duration {
 // context cannot hold the view: its read times out, the others are kept,
 // and its late answer is dropped. Only the deaf read has a short timeout
 // (it blocks until the test releases it, so it ends by its timeout); the
-// tags read has a minute, however slow the runner.
+// tags read has an hour, however slow the runner.
 func TestLoadServerAbandonsADeafRead(t *testing.T) {
 	shortRead(t, "stats")
 	x := newFx(t, fxNow)
@@ -425,7 +428,7 @@ func TestLoadServerAbandonsADeafRead(t *testing.T) {
 }
 
 func TestDoctorRun(t *testing.T) {
-	lowerTimeouts(t, time.Minute, time.Minute)
+	lowerTimeouts(t, time.Hour, time.Hour)
 	x := newFx(t, fxNow)
 	x.server.set(func(d *fakeData) { d.Stats.TotalNodes = 7 })
 
@@ -444,7 +447,7 @@ func TestDoctorRun(t *testing.T) {
 
 	// A run that ignores its context is abandoned at doctorTimeout; the
 	// server reads are not held back.
-	lowerTimeouts(t, time.Minute, 10*time.Millisecond)
+	lowerTimeouts(t, time.Hour, 10*time.Millisecond)
 	hang := make(chan struct{})
 	defer close(hang)
 	src.Doctor = func(context.Context) ([]DoctorCheck, error) { <-hang; return checks, nil }

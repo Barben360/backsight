@@ -149,7 +149,7 @@ func TestOutboxSizeLimits(t *testing.T) {
 // default wait to its 1.5 s.
 func TestOutboxConcurrentAppends(t *testing.T) {
 	o := outbox(t)
-	o.LockDeadline = time.Now().Add(time.Minute)
+	o.LockDeadline = time.Now().Add(time.Hour) // out of reach: go test's -timeout ends a hang first
 	old := whileAppending
 	whileAppending = func() { time.Sleep(200 * time.Millisecond) }
 	t.Cleanup(func() { whileAppending = old })
@@ -189,12 +189,39 @@ func holdLock(t *testing.T, o Outbox) (release func()) {
 	return release
 }
 
+// stepLock runs the outbox lock's wait on a fake clock that starts at at:
+// each pause of the wait moves it by the pause, at once, then calls step
+// with the time waited so far. It returns that time.
+func stepLock(t *testing.T, step func(waited time.Duration)) (waited func() time.Duration) {
+	t.Helper()
+	oldNow, oldAfter := lockNow, lockAfter
+	t.Cleanup(func() { lockNow, lockAfter = oldNow, oldAfter })
+	var mu sync.Mutex
+	now := at
+	lockNow = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	lockAfter = func(d time.Duration) <-chan time.Time {
+		mu.Lock()
+		now = now.Add(d)
+		w := now.Sub(at)
+		mu.Unlock()
+		step(w)
+		c := make(chan time.Time, 1)
+		c <- now
+		return c
+	}
+	return func() time.Duration { mu.Lock(); defer mu.Unlock(); return now.Sub(at) }
+}
+
 // By default an append waits for a lock held 1.5 s, past the old 50 tries
 // (about 1 s), and goes in once it is free.
 func TestOutboxAppendWaitsPastASecondByDefault(t *testing.T) {
 	o := outbox(t)
 	release := holdLock(t, o)
-	time.AfterFunc(1500*time.Millisecond, release)
+	stepLock(t, func(waited time.Duration) {
+		if waited >= 1500*time.Millisecond {
+			release()
+		}
+	})
 	if _, err := o.Append(NewNote("b", "lesson", "p", "waited", at)); err != nil {
 		t.Fatalf("refused while the lock was held 1.5 s: %v", err)
 	}
@@ -204,38 +231,62 @@ func TestOutboxAppendWaitsPastASecondByDefault(t *testing.T) {
 }
 
 // LockDeadline is the caller's bound on the wait: a lock still held then
-// refuses the append at that time, the outbox untouched.
+// refuses the append at that time, the outbox untouched. Without one, the
+// wait is lockWait's 3 s.
 func TestOutboxLockDeadlineBoundsTheWait(t *testing.T) {
-	o := outbox(t)
-	holdLock(t, o)
-	start := time.Now()
-	o.LockDeadline = start.Add(300 * time.Millisecond)
-	_, err := o.Append(NewNote("b", "lesson", "p", "refused", at))
-	took := time.Since(start)
-	var held *state.HeldError
-	if !errors.As(err, &held) {
-		t.Fatalf("err %v, want the lock's holder", err)
-	}
-	if took < 300*time.Millisecond || took > 800*time.Millisecond {
-		t.Errorf("refused after %v, want at its 300 ms deadline", took.Round(time.Millisecond))
-	}
-	if got, _ := o.Pending(); got != 0 {
-		t.Errorf("%d notes queued by a refused append", got)
+	for _, c := range []struct {
+		name     string
+		deadline time.Duration // after the wait began; 0: none
+		want     time.Duration
+	}{
+		{"its deadline", 300 * time.Millisecond, 300 * time.Millisecond},
+		{"the default", 0, 3 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := outbox(t)
+			holdLock(t, o)
+			waited := stepLock(t, func(time.Duration) {})
+			if c.deadline > 0 {
+				o.LockDeadline = at.Add(c.deadline)
+			}
+			_, err := o.Append(NewNote("b", "lesson", "p", "refused", at))
+			var held *state.HeldError
+			if !errors.As(err, &held) {
+				t.Fatalf("err %v, want the lock's holder", err)
+			}
+			if w := waited(); w != c.want {
+				t.Errorf("refused after waiting %v, want %v", w, c.want)
+			}
+			if got, _ := o.Pending(); got != 0 {
+				t.Errorf("%d notes queued by a refused append", got)
+			}
+		})
 	}
 }
 
-// Flush's wait for the lock ends with its context.
+// Flush's wait for the lock ends with its context: the context ends during
+// the first pause, whose timer never fires, so a wait deaf to its context
+// hangs until go test's -timeout.
 func TestOutboxFlushWaitEndsWithItsContext(t *testing.T) {
 	e := newEnv(t)
 	o := outbox(t)
 	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
 	holdLock(t, o)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	start := time.Now()
-	_, err := o.Flush(ctx, e.f.Client, "b", "m1")
-	if took := time.Since(start); err == nil || took > 800*time.Millisecond {
-		t.Errorf("flush under a held lock: %v after %v, want an error by its 300 ms deadline", err, took.Round(time.Millisecond))
+	oldAfter := lockAfter
+	t.Cleanup(func() { lockAfter = oldAfter })
+	pauses := 0
+	lockAfter = func(time.Duration) <-chan time.Time {
+		pauses++
+		cancel()
+		return nil
+	}
+	if _, err := o.Flush(ctx, e.f.Client, "b", "m1"); err == nil || pauses != 1 {
+		t.Errorf("flush under a held lock: %v after %d pauses, want an error at the first", err, pauses)
+	}
+	if got, _ := o.Pending(); got != 1 {
+		t.Errorf("%d notes after the refused flush, want the one", got)
 	}
 }
 

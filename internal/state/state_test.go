@@ -140,6 +140,21 @@ func TestUpdateCallbackErrorWritesNothing(t *testing.T) {
 	}
 }
 
+// onLockWait sets LockWaitHook for the test: f runs at each wait for the
+// held state lock, and the count of those waits is returned.
+func onLockWait(t *testing.T, f func()) (waits func() int) {
+	t.Helper()
+	n := 0
+	LockWaitHook = func() {
+		n++
+		if f != nil {
+			f()
+		}
+	}
+	t.Cleanup(func() { LockWaitHook = func() {} })
+	return func() int { return n }
+}
+
 // UpdateWithin waits for a held state lock up to its bound, then gives up
 // with the HeldError; fn's own error is never retried.
 func TestUpdateWithinWaitsForTheLock(t *testing.T) {
@@ -148,9 +163,14 @@ func TestUpdateWithinWaitsForTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func(l *Lock) { time.Sleep(150 * time.Millisecond); _ = l.Release() }(l) // its own l: the test reuses the variable
-	if err := UpdateWithin(d, "test", 5*time.Second, func(s *State) error { s.PluginVersion = "0.2.0"; return nil }); err != nil {
+	// The holder lets go at the first wait; the bound is out of reach (go
+	// test's -timeout ends a hang first).
+	waits := onLockWait(t, func() { _ = l.Release() })
+	if err := UpdateWithin(d, "test", time.Hour, func(s *State) error { s.PluginVersion = "0.2.0"; return nil }); err != nil {
 		t.Fatalf("not retried until the lock was free: %v", err)
+	}
+	if n := waits(); n != 1 {
+		t.Errorf("%d waits, want the one until the lock was free", n)
 	}
 	if s, _ := Load(d.StateFile()); s.PluginVersion != "0.2.0" {
 		t.Errorf("not written: %+v", s)
@@ -163,10 +183,13 @@ func TestUpdateWithinWaitsForTheLock(t *testing.T) {
 		t.Fatalf("the lock was not released after the update: %v", err)
 	}
 	defer func() { _ = l2.Release() }()
-	start := time.Now()
+	waits = onLockWait(t, nil)
 	var held *HeldError
-	if err := UpdateWithin(d, "test", 200*time.Millisecond, func(s *State) error { s.PluginVersion = "lost"; return nil }); !errors.As(err, &held) || time.Since(start) < 200*time.Millisecond {
-		t.Errorf("a lock held past the bound: %v after %s", err, time.Since(start))
+	if err := UpdateWithin(d, "test", 200*time.Millisecond, func(s *State) error { s.PluginVersion = "lost"; return nil }); !errors.As(err, &held) {
+		t.Errorf("a lock held past the bound: %v, want the HeldError", err)
+	}
+	if waits() == 0 {
+		t.Error("gave up at once, without waiting for the lock")
 	}
 	_ = l2.Release()
 	calls := 0
@@ -183,16 +206,24 @@ func TestSaveWithinTakesTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waits := onLockWait(t, nil)
 	var held *HeldError
 	if err := SaveWithin(d, "test", 100*time.Millisecond, []byte(`{"plugin_version":"x"}`)); !errors.As(err, &held) {
 		t.Errorf("written under someone else's lock: %v", err)
 	}
+	if waits() == 0 {
+		t.Error("gave up at once, without waiting for the lock")
+	}
 	if _, err := os.Stat(d.StateFile()); err == nil {
 		t.Error("state.json written without the lock")
 	}
-	go func() { time.Sleep(100 * time.Millisecond); _ = l.Release() }()
-	if err := SaveWithin(d, "test", 5*time.Second, []byte(`{"plugin_version":"x"}`)); err != nil {
+	// The holder lets go at the first wait; the bound out of reach.
+	waits = onLockWait(t, func() { _ = l.Release() })
+	if err := SaveWithin(d, "test", time.Hour, []byte(`{"plugin_version":"x"}`)); err != nil {
 		t.Fatal(err)
+	}
+	if n := waits(); n != 1 {
+		t.Errorf("%d waits, want the one until the lock was free", n)
 	}
 	if raw, _ := os.ReadFile(d.StateFile()); string(raw) != `{"plugin_version":"x"}` {
 		t.Errorf("%s", raw)

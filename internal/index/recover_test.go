@@ -643,8 +643,6 @@ func TestStatusUpdatesKeepAnotherWritersStamp(t *testing.T) {
 	case <-waiting:
 	case err := <-done:
 		t.Fatalf("the update did not wait for the other writer's lock (%v)", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the update never waited")
 	}
 	if err := writeStatus(d, recoveryState{RebuiltAt: clock.Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
@@ -687,13 +685,15 @@ func TestFullDiskDuringAMigrationLeavesTheFile(t *testing.T) {
 }
 
 // TestASlowQuickCheckDoesNotFailTheOpen: a quick_check that outlasts its
-// own bound is skipped: the open succeeds within the caller's context,
-// CheckedAt is not stamped, but CheckTriedAt is: the next opens within
-// checkEvery do not pay the bound again, one after it does.
+// own bound is skipped: the open succeeds, its caller's context alive and
+// unbounded (a check without a bound of its own would hang until go
+// test's -timeout), CheckedAt is not stamped, but CheckTriedAt is: the
+// next opens within checkEvery do not pay the bound again, one after it
+// does.
 func TestASlowQuickCheckDoesNotFailTheOpen(t *testing.T) {
 	prevRun, prevTimeout := runQuickCheck, quickCheckTimeout
 	t.Cleanup(func() { runQuickCheck, quickCheckTimeout = prevRun, prevTimeout })
-	quickCheckTimeout = 50 * time.Millisecond
+	quickCheckTimeout = time.Millisecond
 	calls := 0
 	runQuickCheck = func(ctx context.Context, _ *sql.DB) error {
 		calls++
@@ -703,9 +703,7 @@ func TestASlowQuickCheckDoesNotFailTheOpen(t *testing.T) {
 	r := newRecEnv(t)
 	open := func(n, wantCalls int) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		ix, err := Open(ctx, r.opts())
-		cancel()
+		ix, err := Open(context.Background(), r.opts())
 		if err != nil {
 			t.Fatalf("open %d: %v", n, err)
 		}

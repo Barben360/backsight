@@ -31,7 +31,8 @@ func TestGitHubOpenRefusesAnAssetTheAPIRefuses(t *testing.T) {
 	}
 }
 
-// A releases list that never comes stops at the source's timeout.
+// A releases list that never comes stops at the source's timeout (without
+// it, this hangs until go test's -timeout).
 func TestGitHubReleasesTimesOut(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -42,13 +43,9 @@ func TestGitHubReleasesTimesOut(t *testing.T) {
 	}))
 	t.Cleanup(func() { close(release); srv.Close() })
 	g := newTestGitHub(srv.URL, "")
-	g.Timeout = 100 * time.Millisecond
-	start := time.Now()
+	g.Timeout = time.Millisecond
 	_, err := g.Releases(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "unreachable") || !strings.Contains(err.Error(), "deadline") {
 		t.Errorf("a hanging server: %v", err)
-	}
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("returned after %s, the timeout is %s", d, g.Timeout)
 	}
 }
