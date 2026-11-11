@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,37 @@ func TestRemoveTrustIsUndone(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(target); !bytes.Equal(got, before) {
 		t.Error("undo did not put the file back as it was")
+	}
+}
+
+// A trust table with a sub-table cannot be removed whole: refused, named
+// by TrustKeys for the user to remove by hand.
+func TestRemoveTrustRefusesASubTable(t *testing.T) {
+	in := []byte("[hooks.state]\n\n[hooks.state.\"backsight@backsight:x\"]\ntrusted_hash = \"a\"\n\n[hooks.state.\"backsight@backsight:x\".sub]\nk = 1\n")
+	if _, _, err := RemoveTrust(in); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("removed: %v", err)
+	}
+	keys, err := TrustKeys(in)
+	if err != nil || !slices.Equal(keys, []string{"backsight@backsight:x"}) {
+		t.Errorf("keys %v %v", keys, err)
+	}
+	if keys, err := TrustKeys([]byte("model = 1\n")); err != nil || len(keys) != 0 {
+		t.Errorf("no trust: %v %v", keys, err)
+	}
+}
+
+// Uninstall's way back sets memories = true only while the key is absent:
+// a value the user set since stays.
+func TestMemoriesBackOn(t *testing.T) {
+	out, ch, err := MemoriesBackOn([]byte("[features]\n"))
+	if err != nil || string(out) != "[features]\nmemories = true\n" || !ch[0].Changed() {
+		t.Errorf("absent: %q %v %v", out, ch, err)
+	}
+	for _, in := range []string{"[features]\nmemories = false\n", "[features]\nmemories = true\n"} {
+		out, ch, err := MemoriesBackOn([]byte(in))
+		if err != nil || string(out) != in || len(ch) != 0 {
+			t.Errorf("%q: %q %v %v", in, out, ch, err)
+		}
 	}
 }
 

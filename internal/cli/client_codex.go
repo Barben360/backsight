@@ -72,6 +72,40 @@ func codexProfile(home, dir string) string {
 	return dir
 }
 
+// refuseCodexMove refuses to wire the Codex home dir while backsight is
+// still installed in the one recorded, another: recording dir would leave
+// that one wired and out of uninstall's reach. Once its plugins are gone
+// (removed by hand), dir is recorded instead.
+func refuseCodexMove(ctx context.Context, home, dir string, st state.State) error {
+	wired, ok := codexWired(home, st)
+	if !ok || filepath.Clean(wired) == filepath.Clean(dir) {
+		return nil
+	}
+	if a, errA := os.Stat(wired); errA == nil {
+		if b, errB := os.Stat(dir); errB == nil && os.SameFile(a, b) {
+			return nil
+		}
+	}
+	there, err := codex.Installed(ctx, harnessEnv(codex, home, codexProfile(home, wired)))
+	if err != nil && !errors.Is(err, harness.ErrMissing) {
+		return blocked(fmt.Errorf("checking the Codex home backsight is wired to (%s): %w", wired, err))
+	}
+	if !there && err == nil {
+		return nil
+	}
+	env := "CODEX_HOME=" + wired + " "
+	if codexProfile(home, wired) == "" {
+		env = ""
+	}
+	return &output.Error{Code: output.Blocked,
+		Message: "backsight is wired into the Codex home " + wired + ", not " + dir + ": wiring " + dir + " would leave " + wired +
+			" wired, out of uninstall's reach. Remove backsight's plugins from " + wired + " first, then run this again",
+		Actions: []output.Action{{Kind: "run_as_user", Cmd: env + "codex plugin remove " + strings.Join(harness.CodexPluginIDs(), " && "+env+"codex plugin remove ") +
+			" && " + env + "codex plugin marketplace remove " + harness.CodexMarketplace,
+			Why: "backsight's plugins out of " + wired}},
+		Resume: "backsight client install --codex --codex-home " + dir}
+}
+
 func needsCodex(msg string) error {
 	return &output.Error{Code: output.NeedsUser, Message: msg, Actions: []output.Action{
 		{Kind: "install", Cmd: "npm install -g @openai/codex", Why: "backsight wires itself into Codex through its plugin commands"},
@@ -119,6 +153,9 @@ func clientInstallCodex(ctx context.Context, flag string, plan bool) (clientInst
 		defer func() { _ = l.Release() }()
 	}
 	before, _ := state.Load(c.dirs.StateFile())
+	if err := refuseCodexMove(ctx, home, dir, before); err != nil {
+		return res, err
+	}
 
 	// 1. A recent enough codex (0085 D9).
 	version, err := codex.Detect(ctx, env)
@@ -295,27 +332,57 @@ func codexMemoriesText(r clientConfigResult) string {
 // marketplace with Codex's own commands, then, through the config editor
 // (command names the run), the [hooks.state] tables Codex leaves behind
 // and, with memoriesOn, Codex's own memories turned on again (0085 D8).
-// The codex command missing is ErrMissing, with nothing done.
-func removeCodex(ctx context.Context, d paths.Dirs, home, dir, command string, memoriesOn bool) (string, error) {
+// The codex command missing is ErrMissing, with nothing done. An edit
+// config.toml holds in a form the narrow editor does not handle is left
+// to the user: warnings say what to change by hand, and the removal goes
+// on (a rerun would only meet the same file).
+func removeCodex(ctx context.Context, d paths.Dirs, home, dir, command string, memoriesOn bool) (detail string, warnings []string, err error) {
 	env := harnessEnv(codex, home, codexProfile(home, dir))
 	if err := codex.Uninstall(ctx, env); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	edits := []claudecfg.Edit{{Target: codex.Locate(env).Settings, Apply: codexcfg.RemoveTrust}}
+	settings := codex.Locate(env).Settings
+	if _, err := os.Stat(settings); errors.Is(err, os.ErrNotExist) {
+		return "", nil, nil
+	}
+	runner := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: command, Now: now}
+	var done []string
+	// One run per edit: a trust table the editor cannot remove never keeps
+	// Codex's memories off.
+	apply := func(edit func([]byte) ([]byte, []claudecfg.Change, error), byHand func() string) error {
+		run, fr, err := runner.Apply([]claudecfg.Edit{{Target: settings, Apply: edit}})
+		switch {
+		case errors.Is(err, codexcfg.ErrUnsupported):
+			warnings = append(warnings, byHand()+" ("+err.Error()+")")
+		case err != nil:
+			return editError(err)
+		case hasChanges(fr):
+			done = append(done, changedPaths(fr)+" (backup copies: run "+run+")")
+		}
+		return nil
+	}
+	if err := apply(codexcfg.RemoveTrust, func() string {
+		raw, _ := os.ReadFile(settings)
+		keys, _ := codexcfg.TrustKeys(raw)
+		var tables []string
+		for _, k := range keys {
+			tables = append(tables, `[hooks.state."`+k+`"]`)
+		}
+		if len(tables) == 0 {
+			tables = []string{`[hooks.state."backsight@backsight:…"] and [hooks.state."backsight-hooks@backsight:…"]`}
+		}
+		return "backsight's hook trust stays in " + settings + ": delete " + strings.Join(tables, ", ") + " (and what they hold) by hand"
+	}); err != nil {
+		return "", warnings, err
+	}
 	if memoriesOn {
-		edits = append(edits, claudecfg.Edit{Target: codex.Locate(env).Settings, Apply: codexcfg.MemoriesTrue})
+		if err := apply(codexcfg.MemoriesBackOn, func() string {
+			return "Codex's own memories stay off: set memories = true under [features] in " + settings + " by hand, or run codex features enable memories"
+		}); err != nil {
+			return strings.Join(done, "; "), warnings, err
+		}
 	}
-	if _, err := os.Stat(codex.Locate(env).Settings); errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	run, fr, err := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: command, Now: now}.Apply(edits)
-	if err != nil {
-		return "", editError(err)
-	}
-	if !hasChanges(fr) {
-		return "", nil
-	}
-	return changedPaths(fr) + " (backup copies: run " + run + ")", nil
+	return strings.Join(done, "; "), warnings, nil
 }
 
 // codexRemovedDetail says what removeCodex did, edits the details.

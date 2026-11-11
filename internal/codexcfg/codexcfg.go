@@ -2,6 +2,7 @@ package codexcfg
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
@@ -66,11 +67,40 @@ func MemoriesBack(pre []byte) func(doc []byte) ([]byte, []claudecfg.Change, erro
 	}
 }
 
-// MemoriesTrue sets `memories = true` in [features]: uninstall's way back
-// when the pre-image is gone.
+// MemoriesTrue sets `memories = true` in [features], whatever was there
+// (`client codex-memories on`: the user asks for it).
 func MemoriesTrue(doc []byte) ([]byte, []claudecfg.Change, error) {
 	out, ch, err := Set(doc, MemoriesKey, "true")
 	return out, []claudecfg.Change{ch}, err
+}
+
+// MemoriesBackOn sets `memories = true` only while the key is absent, as
+// backsight's MemoriesOff left it: uninstall's way back. A value the user
+// set since (memories = false included) is theirs and stays.
+func MemoriesBackOn(doc []byte) ([]byte, []claudecfg.Change, error) {
+	if _, there, err := Get(doc, MemoriesKey); err != nil || there {
+		return doc, nil, err
+	}
+	return MemoriesTrue(doc)
+}
+
+// TrustKeys are backsight's [hooks.state."<key>"] keys in config.toml, read
+// with a full TOML decoder: what to name when the narrow editor cannot
+// remove them.
+func TrustKeys(doc []byte) ([]string, error) {
+	v, ok, err := Lookup(doc, []string{"hooks", "state"})
+	if err != nil || !ok {
+		return nil, err
+	}
+	m, _ := v.(map[string]any)
+	var out []string
+	for k := range m {
+		if IsTrustTable([]string{"hooks", "state", k}) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ApprovalFallback approves tools of backsight's memory server without a

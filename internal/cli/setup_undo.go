@@ -225,10 +225,11 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 	for _, dir := range append([]string(nil), rec.Undo.CodexHomes...) {
 		name := "codex " + dir
 		if !f.plan {
-			edits, err := removeCodex(ctx, d, home, dir, "setup --undo", false)
+			edits, warnings, err := removeCodex(ctx, d, home, dir, "setup --undo", false)
 			if err != nil {
 				return fail(name, err)
 			}
+			res.Kept = append(res.Kept, warnings...) // what is left for the user to remove by hand
 			if err := forgetCodex(d, home, dir, "setup --undo"); err != nil {
 				return fail(name, err)
 			}

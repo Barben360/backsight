@@ -119,9 +119,27 @@ func TestClientInstallCodexRecordsItsHome(t *testing.T) {
 	if st.ProfileOf(harnessid.Codex) != shellHome {
 		t.Errorf("recorded %q", st.ProfileOf(harnessid.Codex))
 	}
-	// --codex-home moves it, explicitly.
+	// --codex-home to another home is refused while backsight is still
+	// installed in the recorded one (it would be left wired, untracked)...
+	f.calls = nil
+	code, out, _ := run(t, "client", "install", "--codex", "--codex-home", other, "--json")
+	if code != output.Blocked || !strings.Contains(out, jsonPathOf(shellHome)) || !strings.Contains(out, "codex plugin marketplace remove backsight") || len(f.mutating()) != 0 {
+		t.Errorf("a move with the recorded home still wired: exit %d %s, ran %v", code, out, f.mutating())
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.ProfileOf(harnessid.Codex) != shellHome {
+		t.Errorf("the refusal re-recorded %q", st.ProfileOf(harnessid.Codex))
+	}
+	// ... and goes once its plugins are removed from there.
+	for _, args := range [][]string{{"plugin", "remove", "backsight@backsight"}, {"plugin", "remove", "backsight-hooks@backsight"}, {"plugin", "marketplace", "remove", "backsight"}} {
+		if _, err := f.Run(t.Context(), harness.Codex{}.ProfileEnv(home, shellHome), args...); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if res := installCodex(t, "--codex-home", other); res.Profile != other {
 		t.Errorf("--codex-home: %s", res.Profile)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.ProfileOf(harnessid.Codex) != other {
+		t.Errorf("recorded %q after the move", st.ProfileOf(harnessid.Codex))
 	}
 	if code, _, _ := run(t, "client", "install", "--codex", "--codex-home", filepath.Join(home, "nope")); code != output.Usage {
 		t.Errorf("a missing --codex-home: exit %d", code)
@@ -274,6 +292,69 @@ func TestCodexInstallThenUninstallGivesConfigBack(t *testing.T) {
 	st, _ := state.Load(pathsOf(home).StateFile())
 	if st.ClientOf(harnessid.Codex) != nil {
 		t.Errorf("state keeps Codex: %+v", st.ClientOf(harnessid.Codex))
+	}
+}
+
+// A trust table the editor cannot remove (a sub-table under it) never
+// stops uninstall: a warning names it for the user, Codex's memories still
+// come back on, the Codex entry is forgotten and the rest of uninstall
+// runs; a second uninstall has no Codex left to fail on.
+func TestUninstallGoesOnPastATrustTableItCannotEdit(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	f := withCodex(t, home)
+	dir := codexHomeWith(t, home, codexStart)
+	installCodex(t)
+	f.memories = true
+	if code, out, _ := run(t, "client", "codex-memories", "off"); code != output.OK {
+		t.Fatal(out)
+	}
+	cfgPath := filepath.Join(dir, "config.toml")
+	cfg, _ := os.ReadFile(cfgPath)
+	odd := "\n[hooks.state.\"backsight@backsight:hooks/hooks.json:stop:0:0\"]\ntrusted_hash = \"sha256:aa\"\n\n[hooks.state.\"backsight@backsight:hooks/hooks.json:stop:0:0\".extra]\nk = 1\n"
+	_ = os.WriteFile(cfgPath, append(cfg, odd...), 0o600)
+	code, out, errOut := run(t, "uninstall", "--json")
+	if code != output.OK {
+		t.Fatalf("uninstall: exit %d %s %s", code, out, errOut)
+	}
+	if !strings.Contains(out, `delete [hooks.state.\"backsight@backsight:hooks/hooks.json:stop:0:0\"]`) {
+		t.Errorf("no warning naming the table: %s", out)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(after), "memories = true") || !strings.Contains(string(after), ".extra]") {
+		t.Errorf("config.toml after:\n%s", after)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.ClientOf(harnessid.Codex) != nil {
+		t.Errorf("the Codex entry stays: %+v", st.ClientOf(harnessid.Codex))
+	}
+	if !strings.Contains(out, `"name": "server"`) && !strings.Contains(out, `"name": "binaries"`) {
+		t.Errorf("uninstall stopped before its later steps: %s", out)
+	}
+	if code, out, _ := run(t, "uninstall", "--json"); code != output.OK || strings.Contains(out, `"codex `) {
+		t.Errorf("second uninstall: exit %d %s", code, out)
+	}
+}
+
+// Codex's memories set by the user after backsight turned them off stay as
+// the user set them: uninstall turns them on only while the key is absent.
+func TestUninstallKeepsTheUsersMemoriesSetting(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	f := withCodex(t, home)
+	dir := codexHomeWith(t, home, codexStart)
+	installCodex(t)
+	f.memories = true
+	if code, out, _ := run(t, "client", "codex-memories", "off"); code != output.OK {
+		t.Fatal(out)
+	}
+	cfgPath := filepath.Join(dir, "config.toml")
+	cfg, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, []byte(strings.Replace(string(cfg), "[features]\n", "[features]\nmemories = false\n", 1)), 0o600)
+	if code, out, _ := run(t, "uninstall", "--json"); code != output.OK {
+		t.Fatal(out)
+	}
+	if after, _ := os.ReadFile(cfgPath); !strings.Contains(string(after), "memories = false") || strings.Contains(string(after), "memories = true") {
+		t.Errorf("the user's setting changed:\n%s", after)
 	}
 }
 

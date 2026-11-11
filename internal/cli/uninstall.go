@@ -488,7 +488,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			add(undoAction{Name: name, Status: "planned", Detail: detail})
 			continue
 		}
-		detail, err := removeCodex(ctx, d, home, dir, "uninstall", memories)
+		detail, warnings, err := removeCodex(ctx, d, home, dir, "uninstall", memories)
 		switch {
 		case errors.Is(err, harness.ErrMissing):
 			add(undoAction{Name: name, Status: "skipped", Detail: "the codex command was not found"})
@@ -498,6 +498,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		case err != nil:
 			return fail(name, err)
 		}
+		res.Warnings = append(res.Warnings, warnings...)
 		if err := forgetCodex(d, home, dir, "uninstall"); err != nil {
 			return fail(name, err)
 		}

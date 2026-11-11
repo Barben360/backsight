@@ -145,6 +145,7 @@ func (c Codex) marketplaceRoot(ctx context.Context, env Env) (string, error) {
 			Name   string `json:"name"`
 			Root   string `json:"root"`
 			Source struct {
+				Type   string `json:"sourceType"`
 				Source string `json:"source"`
 			} `json:"marketplaceSource"`
 		} `json:"marketplaces"`
@@ -153,18 +154,36 @@ func (c Codex) marketplaceRoot(ctx context.Context, env Env) (string, error) {
 		return "", fmt.Errorf("codex plugin marketplace list --json: unexpected output: %w", err)
 	}
 	for _, m := range list.Marketplaces {
-		if m.Name == CodexMarketplace {
-			if m.Source.Source != "" {
-				return m.Source.Source, nil
-			}
-			if m.Root == "" {
-				return "?", nil // added, root unknown: added again to be sure
-			}
-			return m.Root, nil
+		if m.Name != CodexMarketplace {
+			continue
 		}
+		if t := m.Source.Type; t != "" && t != "local" {
+			// A git or remote marketplace of the user's, named backsight.
+			return foreignMarket + t + " " + m.Source.Source, nil
+		}
+		if m.Source.Source != "" {
+			return m.Source.Source, nil
+		}
+		if m.Root == "" {
+			return foreignMarket + "unknown source", nil // nothing says it is backsight's
+		}
+		return m.Root, nil
 	}
 	return "", nil
 }
+
+// foreignMarket starts the root marketplaceRoot gives for a marketplace
+// named backsight that is not a local folder.
+const foreignMarket = "\x00"
+
+// ownMarket reports that root is a marketplace folder backsight generates
+// for Codex (<data>/codex-marketplace/), here or at a moved data directory.
+func ownMarket(root string) bool {
+	return root != "" && !strings.HasPrefix(root, foreignMarket) && filepath.Base(filepath.Clean(root)) == filepath.Base(CodexMarketplaceDir(""))
+}
+
+// showMarket is root as the user reads it.
+func showMarket(root string) string { return strings.TrimPrefix(root, foreignMarket) }
 
 // Install generates the two plugins in <data>/codex-marketplace/ and adds
 // them with Codex's own commands (0085 D2): the marketplace when it is not
@@ -206,13 +225,21 @@ func (c Codex) Install(ctx context.Context, env Env, in Integration, plan bool) 
 	case "":
 		steps = append(steps, []string{"plugin", "marketplace", "add", mkt})
 	default:
-		// Another root that still holds a marketplace is another install's,
-		// but for this install's Claude Code marketplace (added by hand): two
-		// installs cannot share a Codex home. A root that is gone is this
-		// install's data directory, moved.
-		if _, err := os.Stat(filepath.Join(root, ".claude-plugin")); err == nil && root != "?" && filepath.Clean(root) != filepath.Join(in.Data, "marketplace") {
-			return res, &InstallError{Stage: Conflict, Err: errors.New("this Codex home (" + c.Locate(env).Dir + ") is wired to another backsight install, whose marketplace is " +
-				root + ": give this install its own Codex home (CODEX_HOME or --codex-home), or uninstall the other one first")}
+		// This install's own Claude Code marketplace (added by hand), or a
+		// generated Codex marketplace whose folder is gone (this install's
+		// data directory, moved), is replaced. Another generated one still
+		// there is another install's (two installs cannot share a Codex
+		// home), and any other marketplace named backsight is the user's:
+		// both refused, never removed.
+		_, statErr := os.Stat(filepath.Join(root, ".claude-plugin"))
+		mine := filepath.Clean(root) == filepath.Join(in.Data, "marketplace") || (ownMarket(root) && statErr != nil)
+		if !mine {
+			why := "is wired to another backsight install, whose marketplace is " + root + ": give this install its own Codex home (CODEX_HOME or --codex-home), or uninstall the other one first"
+			if !ownMarket(root) {
+				why = "already has a marketplace named " + CodexMarketplace + " that backsight did not make (" + showMarket(root) + "): remove it (codex plugin marketplace remove " +
+					CodexMarketplace + ") if it is no longer needed, or give backsight its own Codex home (CODEX_HOME or --codex-home)"
+			}
+			return res, &InstallError{Stage: Conflict, Err: errors.New("this Codex home (" + c.Locate(env).Dir + ") " + why)}
 		}
 		steps = append(steps, []string{"plugin", "marketplace", "remove", CodexMarketplace}, []string{"plugin", "marketplace", "add", mkt})
 	}
@@ -262,18 +289,20 @@ func (c Codex) Uninstall(ctx context.Context, env Env) error {
 	if err != nil {
 		return err
 	}
+	root, err := c.marketplaceRoot(ctx, env)
+	if err != nil {
+		return err
+	}
 	for _, id := range CodexPluginIDs() {
-		if _, ok := installed[id]; ok {
+		// Only plugins of backsight's marketplace: a marketplace of the
+		// user's named backsight, and what it installed, stay.
+		if p, ok := installed[id]; ok && (ownMarket(root) || ownMarket(filepath.Dir(filepath.Dir(p.Source.Path)))) {
 			if _, err := c.run(ctx, env, "plugin", "remove", id); err != nil {
 				return err
 			}
 		}
 	}
-	root, err := c.marketplaceRoot(ctx, env)
-	if err != nil {
-		return err
-	}
-	if root != "" {
+	if ownMarket(root) {
 		if _, err := c.run(ctx, env, "plugin", "marketplace", "remove", CodexMarketplace); err != nil {
 			return err
 		}
@@ -297,19 +326,21 @@ func removeEmptyDirs(dir string) {
 	_ = os.Remove(dir) // fails, harmlessly, when something is still there
 }
 
-// Installed reports whether either plugin or the marketplace is
-// registered (`codex plugin list --json`, `codex plugin marketplace list
-// --json`).
+// Installed reports whether backsight's marketplace, or a plugin from it,
+// is registered (`codex plugin list --json`, `codex plugin marketplace
+// list --json`); a marketplace of the user's named backsight is not.
 func (c Codex) Installed(ctx context.Context, env Env) (bool, error) {
 	installed, err := c.plugins(ctx, env)
 	if err != nil {
 		return false, err
 	}
-	if len(installed) > 0 {
-		return true, nil
+	for _, p := range installed {
+		if ownMarket(filepath.Dir(filepath.Dir(p.Source.Path))) {
+			return true, nil
+		}
 	}
 	root, err := c.marketplaceRoot(ctx, env)
-	return root != "", err
+	return ownMarket(root), err
 }
 
 // Drift lists what no longer matches the install (0085 D5): the plugin

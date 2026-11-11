@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -284,6 +285,7 @@ func TestCodexTrustKeysAreCodexs(t *testing.T) {
 // the block 3 report), on an in-memory install.
 type fakeCodex struct {
 	root      string            // marketplace root, "" when not added
+	rootType  string            // its sourceType, "" for local
 	installed map[string]string // plugin id → version
 	disabled  map[string]bool
 	ran       [][]string
@@ -306,7 +308,7 @@ func (f *fakeCodex) run(_ context.Context, env []string, args ...string) ([]byte
 		if f.root == "" {
 			return []byte(`{"marketplaces": []}`), nil
 		}
-		return json.Marshal(map[string]any{"marketplaces": []any{map[string]any{"name": "backsight", "root": f.root, "marketplaceSource": map[string]string{"sourceType": "local", "source": f.root}}}})
+		return json.Marshal(map[string]any{"marketplaces": []any{map[string]any{"name": "backsight", "root": f.root, "marketplaceSource": map[string]string{"sourceType": cmp.Or(f.rootType, "local"), "source": f.root}}}})
 	case "mcp list --json":
 		return []byte(f.mcp), nil
 	case "features list":
@@ -739,5 +741,32 @@ func TestCodexMemoriesOn(t *testing.T) {
 	f.features = "hooks stable true\n"
 	if _, err := (Codex{}).MemoriesOn(context.Background(), Env{Run: f.run}); err == nil {
 		t.Error("no row read as off")
+	}
+}
+
+// A marketplace of the user's named backsight (a git one, or a local folder
+// backsight did not generate, even one gone) is never removed: install
+// refuses, naming it; uninstall and Installed leave it and its plugins.
+func TestCodexForeignMarketplace(t *testing.T) {
+	home := t.TempDir()
+	data := filepath.Join(home, "data")
+	for name, f := range map[string]*fakeCodex{
+		"git":        {root: "https://github.com/someone/backsight", rootType: "git", installed: map[string]string{"backsight@backsight": "2.0"}},
+		"local gone": {root: filepath.Join(home, "my-plugins"), installed: map[string]string{"backsight@backsight": "2.0"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := Env{Home: home, Run: f.run}
+			_, err := Codex{}.Install(context.Background(), env, codexIntegration(t, data, "1.0.0"), false)
+			var ie *InstallError
+			if !errors.As(err, &ie) || ie.Stage != Conflict || !strings.Contains(err.Error(), f.root) || !strings.Contains(err.Error(), "did not make") || len(f.ran) != 0 {
+				t.Errorf("install: %v, ran %v", err, f.ran)
+			}
+			if there, err := (Codex{}).Installed(context.Background(), env); err != nil || there {
+				t.Errorf("installed: %v %v", there, err)
+			}
+			if err := (Codex{}).Uninstall(context.Background(), env); err != nil || len(f.ran) != 0 {
+				t.Errorf("uninstall ran %v: %v", f.ran, err)
+			}
+		})
 	}
 }
