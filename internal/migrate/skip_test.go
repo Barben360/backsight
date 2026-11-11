@@ -3,7 +3,9 @@ package migrate
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -39,6 +41,10 @@ func TestHeadlessSkipMigrationIsJournaledAndUndoable(t *testing.T) {
 	if !strings.Contains(string(golden), today) {
 		t.Fatal("the golden no longer holds today's default: update this test")
 	}
+	// The golden's two paths, as this platform writes them (setup writes
+	// absolute ones; /d/server is not one on Windows).
+	quote := func(p string) string { return strconv.Quote(p) }
+	golden = []byte(strings.NewReplacer(`"/d/server"`, quote(filepath.Join(d.Data, "server")), `"/d/backups"`, quote(filepath.Join(d.Data, "backups"))).Replace(string(golden)))
 	old := strings.Replace(string(golden), today, `skip_entrypoints = ["sdk-*"] # as setup wrote it`, 1)
 	writeConfig(t, d, old)
 	ran, err := Apply(context.Background(), Env{Dirs: d}, []Migration{headlessMigration(t)})
