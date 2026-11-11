@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
@@ -28,6 +29,17 @@ const (
 	nudgeTerms     = 4
 	approvalMaxLen = 40
 )
+
+// machinePrompter is a harness that tells the prompts it writes itself
+// apart (Codex), beside the ones machineRE knows.
+type machinePrompter interface{ MachinePrompt(prompt string) bool }
+
+// harnessMachinePrompt: a's own message, by its rule; false for a harness
+// that has none.
+func harnessMachinePrompt(a harness.Adapter, prompt string) bool {
+	m, ok := a.(machinePrompter)
+	return ok && m.MachinePrompt(prompt)
+}
 
 // machineRE: prompts the harness wrote, not a human (C12, E1).
 var machineRE = regexp.MustCompile(`^\s*(?:<(?:agent-message|task-notification|teammate-message|local-command-[\w-]+|system-reminder|bash-std(?:out|err)|command-name|command-message|command-args)\b|Another Claude session sent a message)`)
@@ -225,7 +237,16 @@ func (h *hookEnv) userPrompt() []byte {
 	prompt := h.in.Prompt
 	promptAt := now()
 	ev := telemetry.Prompt{Plen: len([]rune(prompt)), IDs: []string{}, Lang: promptLang(prompt)}
-	if machineRE.MatchString(prompt) {
+	if h.in.AgentID != "" && h.adapter.ID() == harnessid.Codex {
+		// A subagent's task (Codex fires the prompt hook for it, 0085 D3):
+		// SubagentStart gave it the short guide; it is no prompt of the
+		// session, and the turn stays its parent's, whose end is checked.
+		// Codex's only: Claude Code's prompt path stays as it was.
+		ev.Decision, ev.Reason = "skip", "subagent"
+		h.tw.Emit(ev)
+		return nil
+	}
+	if machineRE.MatchString(prompt) || harnessMachinePrompt(h.adapter, prompt) {
 		h.beginTurn(0, true) // not a prompt, but its hooks journal under a turn of their own
 		ev.Decision, ev.Reason = "skip", "machine"
 		h.tw.Emit(ev)

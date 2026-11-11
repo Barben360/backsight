@@ -110,7 +110,7 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 				return e.emit(name, res, func() string { return pauseText(res) })
 			}
 			if sid == "" {
-				sid = os.Getenv("BACKSIGHT_SESSION")
+				sid = shellSession(os.Getenv)
 			}
 			if sid == "" {
 				return &output.Error{Code: output.Usage, Message: "no session: run it inside a Claude Code session (the /backsight:pause skill), or give --session"}
@@ -130,7 +130,7 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 			return e.emit(name, res, func() string { return pauseText(res) })
 		},
 	}
-	cmd.Flags().StringVar(&sid, "session", "", "session id (default: $BACKSIGHT_SESSION)")
+	cmd.Flags().StringVar(&sid, "session", "", "session id (default: $BACKSIGHT_SESSION, else Codex's $CODEX_SESSION_ID)")
 	cmd.Flags().BoolVar(&proj, "project", false, "the whole project: add (pause) or remove (resume) its directory in privacy.exclude_paths")
 	cmd.Flags().BoolVar(&plan, "plan", false, "with --project: show the config change without writing it")
 	return cmd
