@@ -211,16 +211,13 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	}
 	// The waits that only bound a failure go out of reach (go test's
 	// -timeout is the guard): a loaded runner, Defender scanning each
-	// fresh binary, must not fail the test. The task path keeps
-	// taskRunWait and the status asks of its wait: its end is the
-	// fallback to the detached start, the path a runner without a console
-	// logon takes.
-	oldRun, oldStop, oldOp := taskRunWait, superviseStopWait, askOpWait
-	t.Cleanup(func() { taskRunWait, superviseStopWait, askOpWait = oldRun, oldStop, oldOp })
+	// fresh binary, must not fail the test. taskRunWait and the status
+	// asks of its wait stay: the wait's end is the fallback to the
+	// detached start, on both paths (noTaskSys's /Run succeeds and runs
+	// nothing, as a task without a console logon does).
+	oldStop, oldOp := superviseStopWait, askOpWait
+	t.Cleanup(func() { superviseStopWait, askOpWait = oldStop, oldOp })
 	superviseStopWait, askOpWait = time.Hour, time.Hour
-	if forceDetached {
-		taskRunWait = time.Hour
-	}
 
 	fakes := filepath.Join(home, "fakes")
 	file := func(name string) string { return filepath.Join(fakes, name) }

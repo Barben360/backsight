@@ -134,15 +134,18 @@ func cleanTransport(t *testing.T, project string) {
 
 var cleaned sync.Map
 
-// fast shortens the supervisor's delays for the test. Its deadlines go
-// out of reach: a loaded machine must not trip one in a test that does
-// not test it (those that do set their own).
+// fast shortens the supervisor's delays for the test. The deadlines whose
+// end would fail a test go out of reach: a loaded machine must not trip
+// one in a test that does not test it (those that do set their own).
+// apiStopWait stays short: its end is the kill that completes a stop
+// when the interrupt does not end the API (a CTRL_BREAK that does not
+// reach it on a Windows runner), the same stop either way.
 func fast(t *testing.T) {
 	t.Helper()
 	old := tm
 	tm.backoffMin, tm.backoffMax = 20*time.Millisecond, 200*time.Millisecond
 	tm.readyPoll, tm.readyWait = 10*time.Millisecond, time.Hour
-	tm.apiStopWait, tm.dbStopWait = time.Hour, time.Hour
+	tm.apiStopWait, tm.dbStopWait = 3*time.Second, time.Hour
 	tm.requestWait = time.Hour
 	t.Cleanup(func() { tm = old })
 }
