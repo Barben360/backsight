@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 
 	"github.com/Barben360/backsight/internal/fileimport"
-	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/project"
@@ -15,42 +13,36 @@ import (
 )
 
 // importCodexHome is the Codex home `import --from codex` reads (decision
-// 0085 D10): --codex-home when given; else the home setup recorded for
-// Codex on this PC; else, Codex not set up here, the one Codex itself
-// would use, $CODEX_HOME when set and non-empty, else ~/.codex. It must
-// be a folder.
+// 0085 D1, D10): --codex-home when given; else the home client install
+// recorded for Codex on this PC (the adapter's RecordedHome); else, Codex
+// not set up here, the one Codex itself would use (ShellHome: $CODEX_HOME
+// when set and non-empty, else ~/.codex). It must be a folder.
 func importCodexHome(home, flag string, st state.State, getenv func(string) string) (string, error) {
-	p := expandHome(flag)
-	if p == "" && st.ClientOf(harnessid.Codex) != nil {
-		// The adapter's RecordedHome; until its block lands, the entry it
-		// reads (state.ProfileOf), "" being ~/.codex.
-		r := st.ProfileOf(harnessid.Codex)
-		if a, ok := harness.ByID(harnessid.Codex); ok {
-			if rec, ok := a.(harness.HomeRecorder); ok {
-				if got, err := rec.RecordedHome(st); err == nil {
-					r = got
-				}
-			}
+	var p string
+	switch {
+	case flag != "":
+		p = expandHome(flag)
+	case st.ClientOf(harnessid.Codex) != nil:
+		r, err := codex.RecordedHome(st)
+		if err != nil {
+			return "", blocked(err)
 		}
 		if p = r; p == "" {
 			p = filepath.Join(home, ".codex")
 		}
-	}
-	if p == "" {
-		if p = getenv("CODEX_HOME"); p == "" {
-			p = filepath.Join(home, ".codex")
+	default:
+		r, err := codex.ShellHome(home, "", getenv)
+		if err != nil {
+			return "", &output.Error{Code: output.Usage, Message: err.Error() + ": give the Codex home with --codex-home"}
 		}
+		p = r
 	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
-		msg := "no Codex home at " + abs
-		if errors.Is(err, os.ErrNotExist) || err == nil {
-			msg += ": give it with --codex-home"
-		}
-		return "", &output.Error{Code: output.Usage, Message: msg}
+		return "", &output.Error{Code: output.Usage, Message: "no Codex home at " + abs + ": give it with --codex-home"}
 	}
 	return abs, nil
 }

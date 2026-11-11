@@ -107,7 +107,8 @@ func TestSetupWiresCodexAndUndoGivesItBack(t *testing.T) {
 	for _, s := range env.Data.Steps {
 		names = append(names, s.Name)
 	}
-	if i, j := slices.Index(names, "import"), slices.Index(names, "codex_memories"); i < 0 || j != i+1 || slices.Index(names, "codex") != slices.Index(names, "retention")+1 {
+	// The import of Codex's own memories sits between them (block 11).
+	if i, j := slices.Index(names, "import"), slices.Index(names, "codex_memories"); i < 0 || j != i+2 || names[i+1] != "codex_import" || slices.Index(names, "codex") != slices.Index(names, "retention")+1 {
 		t.Errorf("step order %v", names)
 	}
 	by := stepsByName(env.Data.Steps)

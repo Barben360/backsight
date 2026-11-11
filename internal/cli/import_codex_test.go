@@ -17,10 +17,15 @@ import (
 
 // codexStoreHome is a Codex home holding the recorded memory stores of
 // variant (internal/testdata/codex/0.167.0/memories/<v1|v2|dual>), with
-// the .git/ the recording lists but did not copy, every file dated at.
+// the .git/ the recording lists but did not copy, every file dated at. The
+// path is the one the import reports (links and Windows short names
+// resolved).
 func codexStoreHome(t *testing.T, variant string, at time.Time) string {
 	t.Helper()
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	src := filepath.Join("..", "testdata", "codex", "0.167.0", "memories", variant)
 	for _, store := range fileimport.CodexStores {
 		from := filepath.Join(src, store)
@@ -321,17 +326,64 @@ func TestImportCodexKeepsOutExcludedFolders(t *testing.T) {
 	if p.Files != 0 || p.Skipped[fileimport.SkipOptedOut] != 1 || p.Skipped[fileimport.SkipMixesExcluded] != 1 {
 		t.Fatalf("plan = files %d skipped %v", p.Files, p.Skipped)
 	}
+	// The plan names the folder that keeps the consolidated file out.
+	if !slices.Equal(p.MixesExcludedBy, []string{secret}) {
+		t.Errorf("mixes_excluded_by = %v, want %v", p.MixesExcludedBy, secret)
+	}
+	_, text, _ := run(t, "import", "--from", "codex", "--codex-home", codex, "--plan")
+	if !strings.Contains(text, "1 holds a kept-out folder's work ("+secret+")") {
+		t.Errorf("plan text does not name %s:\n%s", secret, text)
+	}
 
-	// A folder kept out after the import was queued: its summary is not sent.
+	// A folder kept out after the import was queued: neither its summary
+	// nor the consolidated file that draws on it is sent.
 	home = importHome(t)
 	fastBackfill(t)
 	codex = t.TempDir()
+	writeCodexFile(t, filepath.Join(codex, "memories_v2", "memory_summary.md"), "v1\n## User Profile\nworks on open\n")
 	writeCodexFile(t, filepath.Join(codex, "memories_v2", "rollout_summaries", "a.md"), codexSummary(open, "2026-11-10T19:00:00+00:00", "open plans"))
 	run(t, "import", "--from", "codex", "--codex-home", codex)
+	if n := len(manifestOf(t, home).Unsent()); n != 2 {
+		t.Fatalf("queued %d, want 2", n)
+	}
 	configure(t, home, "[privacy]\nexclude_paths = ['"+filepath.ToSlash(open)+"']")
 	tick(t)
 	if len(importDocs()) != 0 || len(manifestOf(t, home).Unsent()) != 0 {
 		t.Errorf("sent %v, left %v", importDocs(), manifestOf(t, home).Unsent())
+	}
+}
+
+// An entry sent before entries recorded their send's project (no
+// sent_project): moved, it still has what its old project drew cleared.
+func TestImportCodexMovesAnOldEntry(t *testing.T) {
+	home := importHome(t)
+	fastBackfill(t)
+	codex := t.TempDir()
+	app := filepath.Join(t.TempDir(), "src", "app")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCodexFile(t, filepath.Join(codex, "memories_v2", "rollout_summaries", "a.md"), codexSummary(app, "2026-11-10T19:06:22+00:00", "the app's tests need Docker"))
+	run(t, "import", "--from", "codex", "--codex-home", codex)
+	tick(t)
+	m := manifestOf(t, home)
+	m.Entries[0].SentProject = "" // as an older manifest wrote it
+	if err := fileimport.SaveManifest(pathsOf(home).ImportDir(), m); err != nil {
+		t.Fatal(err)
+	}
+	doc := m.Entries[0].Document
+	listAnswer[""] = `[{"id":"fact-1","document_id":"` + doc + `","fact_type":"world"}]`
+	memories["fact-1"] = `{"id":"fact-1","type":"world"}`
+	writeCodexFile(t, filepath.Join(app, ".backsight.toml"), "project = \"renamed\"\n")
+	if _, env, _ := importFiles(t, "--from", "codex", "--codex-home", codex); env.Data.Merge.Moved != 1 {
+		t.Fatalf("merge = %+v", env.Data.Merge)
+	}
+	tick(t)
+	if !slices.ContainsFunc(curation, func(c string) bool { return strings.Contains(c, "/memories/fact-1/observations") }) {
+		t.Errorf("the old project's observations were not cleared: %v", curation)
+	}
+	if i := retainedOf(doc); i < 0 || !strings.Contains(retainedTags[i], "project:renamed") {
+		t.Errorf("not resent to the new project: %v", retainedTags)
 	}
 }
 
