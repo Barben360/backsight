@@ -118,13 +118,11 @@ func TestVerifyDumpOnATransientThatEnds(t *testing.T) {
 		}
 		return nil
 	}
-	start := time.Now()
+	// The error tells the ended wait from one run to verifyWait's end
+	// ("did not answer within").
 	_, err := n.VerifyDump(context.Background(), filepath.Join(t.TempDir(), "db.dump"), []string{"documents"})
 	if err == nil || !strings.Contains(err.Error(), "the throwaway database stopped") || !strings.Contains(err.Error(), "initdb: could not create directory") {
 		t.Errorf("a Transient that ended: %v", err)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Errorf("reported after %s: the wait did not end with the Transient", d)
 	}
 }
 
