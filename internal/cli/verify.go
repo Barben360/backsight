@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/output"
@@ -51,28 +52,38 @@ type verifyCheck struct {
 type verifyResult struct {
 	Checks []verifyCheck `json:"checks"`
 	Failed int           `json:"failed"`
+	// Client is the coding tool whose hooks and server ran, "codex" for
+	// Codex ("" is Claude Code's, as every older result).
+	Client string `json:"client,omitempty"`
 }
 
 func newVerifyCmd(e *env) *cobra.Command {
 	var configDir string
-	var noRoundTrip, live bool
+	var noRoundTrip, live, codexOn bool
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Run every hook and the MCP server as Claude Code would, then a retain/recall round trip in a scratch bank",
 		Long: "Run every hook and the MCP server as Claude Code would, then a retain/recall round trip in a scratch bank.\n\n" +
 			"With --live, check the real pipeline instead, read-only: this machine's latest settled session reached the\n" +
 			"configured server and an observation was consolidated from it. Exit 0 pass, 40 pending (rerun after wait_s),\n" +
-			"20 fail.",
+			"20 fail.\n\n" +
+			"With --codex, run Codex's hooks and memory server as Codex would instead (Codex must be wired: backsight client install --codex).",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if codexOn && configDir != "" {
+				return &output.Error{Code: output.Usage, Message: "--config-dir is Claude Code's directory: --codex runs Codex's hooks"}
+			}
 			if live {
+				if codexOn {
+					return &output.Error{Code: output.Usage, Message: "--live checks the latest settled session of every wired tool, Codex's too: drop --codex"}
+				}
 				if noRoundTrip {
 					return &output.Error{Code: output.Usage, Message: "--live reads the real bank and makes no round trip: drop --no-round-trip"}
 				}
 				res, err := runVerifyLive(cmd.Context(), configDir)
 				return e.report("verify", res, func() string { return liveText(res, liveResume(configDir)) }, err)
 			}
-			res, err := runVerify(cmd.Context(), configDir, noRoundTrip)
+			res, err := runVerify(cmd.Context(), configDir, noRoundTrip, codexOn)
 			if err == nil && res.Failed > 0 {
 				err = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", res.Failed)}}
 			}
@@ -82,12 +93,16 @@ func newVerifyCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&configDir, "config-dir", "", "Claude Code's directory the hooks run for (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	cmd.Flags().BoolVar(&noRoundTrip, "no-round-trip", false, "skip the retain/recall round trip (no LLM call)")
 	cmd.Flags().BoolVar(&live, "live", false, "check, read-only, that this machine's latest settled session was sent and consolidated")
+	cmd.Flags().BoolVar(&codexOn, "codex", false, "run Codex's hooks and memory server as Codex would, instead of Claude Code's")
 	return cmd
 }
 
-func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyResult, error) {
+func runVerify(ctx context.Context, configDir string, noRoundTrip, codexOn bool) (verifyResult, error) {
 	res := verifyResult{Checks: []verifyCheck{}}
-	d, _, err := machine()
+	if codexOn {
+		res.Client = harnessid.Codex
+	}
+	d, home, err := machine()
 	if err != nil {
 		return res, err
 	}
@@ -103,8 +118,18 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 			res.Failed++
 		}
 	}
+	if codexOn {
+		if st, err := state.Load(d.StateFile()); err != nil || !codexOnRecord(home, st) {
+			return res, &output.Error{Code: output.NeedsUser, Message: "Codex is not wired on this machine: nothing of backsight's runs in it",
+				Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install --codex", Why: "wires Codex: its hooks and memory server"}}}
+		}
+	}
 	shim := verifyShim(d)
 	if _, err := os.Stat(shim); err != nil {
+		if codexOn {
+			return res, &output.Error{Code: output.NeedsUser, Message: "no backsight shim at " + shim + ": Codex has nothing to run",
+				Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install --codex", Why: "installs the shim Codex's plugins run for their hooks and memory server"}}}
+		}
 		return res, &output.Error{Code: output.NeedsUser, Message: "no backsight shim at " + shim + ": Claude Code has nothing to run",
 			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install", Why: "installs the shim the plugin's hooks and MCP server run"}}}
 	}
@@ -133,10 +158,23 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 	if configDir != "" {
 		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	for _, h := range plugin.Hooks(plugin.WiringOf(cfg)) {
-		add(verifyHook(ctx, sd, shim, env, h, sid, work))
+	if codexOn {
+		turn := "backsight-verify-turn-" + randomHex(4)
+		seen := map[string]bool{}
+		for _, e := range codex.Events() {
+			if seen[e.Event] { // SessionStart's two rows run one handler
+				continue
+			}
+			seen[e.Event] = true
+			add(runVerifyHook(ctx, sd, shim, env, codex.HookArgs(e.Event), e.Name, e.Event, e.Timeout, codexSyntheticInput(e, sid, turn, work), sid, work))
+		}
+		add(verifyCodexMCP(ctx, shim, env, work, cfg.Feedback.Enabled, sid, turn))
+	} else {
+		for _, h := range plugin.Hooks(plugin.WiringOf(cfg)) {
+			add(verifyHook(ctx, sd, shim, env, h, sid, work))
+		}
+		add(verifyMCP(ctx, shim, env, work, cfg.Feedback.Enabled))
 	}
-	add(verifyMCP(ctx, shim, env, work, cfg.Feedback.Enabled))
 	if noRoundTrip {
 		add(verifyCheck{ID: "round_trip", Status: "skipped", Summary: "--no-round-trip"})
 		return res, nil
@@ -180,11 +218,18 @@ func syntheticInput(h plugin.Hook, sid, dir string) []byte {
 }
 
 func verifyHook(ctx context.Context, d paths.Dirs, shim string, env []string, h plugin.Hook, sid, dir string) verifyCheck {
-	c := verifyCheck{ID: "hook " + h.Arg}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(h.Timeout)*time.Second+2*time.Second)
+	return runVerifyHook(ctx, d, shim, env, []string{"hook", h.Arg}, h.Event, h.Arg, h.Timeout, syntheticInput(h, sid, dir), sid, dir)
+}
+
+// runVerifyHook runs the shim with args, input on stdin, as the harness
+// runs its hook event (backsight's arg), within the hook's timeout.
+func runVerifyHook(ctx context.Context, d paths.Dirs, shim string, env, args []string, event, arg string, timeout int, input []byte, sid, dir string) verifyCheck {
+	c := verifyCheck{ID: "hook " + arg}
+	h := plugin.Hook{Event: event, Arg: arg}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second+2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, shim, "hook", h.Arg)
-	cmd.Env, cmd.Dir, cmd.Stdin = env, dir, bytes.NewReader(syntheticInput(h, sid, dir))
+	cmd := exec.CommandContext(ctx, shim, args...)
+	cmd.Env, cmd.Dir, cmd.Stdin = env, dir, bytes.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	start := time.Now()

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,10 +18,13 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/termstyle"
 )
@@ -39,6 +43,7 @@ type backfillFlags struct {
 	queue                   bool // queue for jobs tick, send nothing now (setup)
 	status                  bool // read the progress, send nothing
 	since, project, dir     string
+	tools                   string // claude-code, codex or both; "": every tool wired
 	maxCost                 float64
 	maxTokens               int64
 }
@@ -105,9 +110,9 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				}
 			}
 			prices := retain.PricesForLLM(cfg.LLM)
-			files := allConversations(home)
-			if fl.dir != "" {
-				files, _ = filepath.Glob(filepath.Join(fl.dir, "*", "*.jsonl"))
+			files, err := backfillFiles(home, fl)
+			if err != nil {
+				return err
 			}
 			cands, plan, err := surveyAll(f, files, fl, prices)
 			if err != nil {
@@ -125,6 +130,9 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				queue = append(queue, c.Path)
 			}
 			filters := fl.since + "|" + fl.project + "|" + fl.dir
+			if fl.tools != "" { // none: the filters of a queue begun before the flag
+				filters += "|" + fl.tools
+			}
 			capGiven := cmd.Flags().Changed("max-cost") || cmd.Flags().Changed("max-tokens")
 			// The lock comes first: a running backfill would write its old
 			// cap and queue back over this invocation's changes.
@@ -198,10 +206,50 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 	cmd.Flags().Int64Var(&fl.maxTokens, "max-tokens", 0, "token cap, for models without a price")
 	cmd.Flags().BoolVar(&fl.allowSubscription, "allow-subscription", false, "accept backfill on the Claude subscription lane")
 	cmd.Flags().StringVar(&fl.dir, "projects-dir", "", "read transcripts from another Claude Code profile's projects directory")
+	cmd.Flags().StringVar(&fl.tools, "tools", "", "the coding tools whose past sessions to send: claude-code, codex or both (default: every tool wired; claude-code alone with --projects-dir)")
 	cmd.Flags().BoolVar(&fl.status, "status", false, "show the progress of the queued backfill, sending nothing (no server needed)")
 	cmd.Flags().BoolVar(&fl.queue, "queue", false, "queue the backfill for jobs tick and return")
 	_ = cmd.Flags().MarkHidden("queue")
 	return cmd
+}
+
+// backfillFiles are the conversations a backfill reads: those of the tools
+// --tools names (Claude Code's from --projects-dir when given), by default
+// every wired tool's, or Claude Code's alone from --projects-dir. Codex's
+// are read only once it is wired.
+func backfillFiles(home string, fl backfillFlags) ([]string, error) {
+	claudeDir := func() []string {
+		files, _ := filepath.Glob(filepath.Join(fl.dir, "*", "*.jsonl"))
+		return files
+	}
+	if fl.tools == "" {
+		if fl.dir != "" {
+			return claudeDir(), nil
+		}
+		return allConversations(home), nil
+	}
+	if !slices.Contains([]string{setup.ToolsClaude, setup.ToolsCodex, setup.ToolsBoth}, fl.tools) {
+		return nil, &output.Error{Code: output.Usage, Message: "--tools takes " + setup.ToolsClaude + ", " + setup.ToolsCodex + " or " + setup.ToolsBoth}
+	}
+	claude, withCodex := setup.Tools(map[string]string{"tools": fl.tools})
+	if fl.dir != "" && !claude {
+		return nil, &output.Error{Code: output.Usage, Message: "--projects-dir is Claude Code's: it goes with --tools " + setup.ToolsClaude + " or " + setup.ToolsBoth}
+	}
+	var files []string
+	switch {
+	case claude && fl.dir != "":
+		files = claudeDir()
+	case claude:
+		files = transcripts(home)
+	}
+	if withCodex {
+		if !toolWired(codex) {
+			return nil, &output.Error{Code: output.NeedsUser, Message: "--tools " + fl.tools + ": Codex is not wired on this machine, so none of its sessions is read",
+				Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install --codex", Why: "wires Codex; its past sessions can be sent after"}}}
+		}
+		files = append(files, conversations(home, codex)...)
+	}
+	return files, nil
 }
 
 // surveyAll lists the sessions to send, oldest first, and the plan.
@@ -338,6 +386,10 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		res.Paused = reason
 		return res, &output.Error{Code: output.Partial, Message: "backfill paused: " + msg}
 	}
+	_, home, err := machine()
+	if err != nil {
+		return res, blocked(err)
+	}
 	dropped, err := dropSettled(d)
 	if err != nil {
 		return res, blocked(err)
@@ -368,6 +420,22 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			}
 			res.Finished = true
 			return res, nil
+		}
+		if codexUnheld(home, st, b.Sessions[0]) {
+			// Codex unwired since it was queued (client uninstall --codex,
+			// or a run under way when it ran): never read, dropped.
+			path := b.Sessions[0]
+			if err := backfillUpdate(d, f, func(s *state.State) {
+				if s.Backfill != nil && len(s.Backfill.Sessions) > 0 && s.Backfill.Sessions[0] == path {
+					s.Backfill.Sessions, s.Backfill.Total = s.Backfill.Sessions[1:], max(s.Backfill.Total-1, s.Backfill.Done)
+				}
+			}); errors.Is(err, errStartedOver) {
+				return startedOver()
+			} else if err != nil {
+				return res, blocked(err)
+			}
+			res.Dropped++
+			continue
 		}
 		if inTick && sent >= tickBackfillLimit {
 			return res, nil
@@ -488,6 +556,7 @@ func notesOnly(d paths.Dirs, path string) (only, replayed bool) {
 // would otherwise hold saves that cost next to nothing. It never calls the
 // server, so a tick runs it on a paused backfill too.
 func dropSettled(d paths.Dirs) (int, error) {
+	_, home, _ := machine() // "": no Codex home is wired anywhere
 	n := 0
 	err := state.Update(d, "retain backfill", func(s *state.State) error {
 		n = 0
@@ -497,7 +566,12 @@ func dropSettled(d paths.Dirs) (int, error) {
 		}
 		var keep []string
 		allNotes := true
+		unheld := 0
 		for _, p := range b.Sessions {
+			if codexUnheld(home, *s, p) { // Codex unwired since: out of the queue and its total
+				unheld++
+				continue
+			}
 			if _, err := os.Stat(retain.CurrentPath(conversationReaders(), p)); errors.Is(err, fs.ErrNotExist) {
 				n++
 				continue
@@ -510,13 +584,31 @@ func dropSettled(d paths.Dirs) (int, error) {
 			allNotes = allNotes && only
 			keep = append(keep, p)
 		}
-		b.Sessions, b.Done = keep, b.Done+n
+		b.Sessions, b.Done, b.Total = keep, b.Done+n, max(b.Total-unheld, b.Done+n)
+		n += unheld
 		if len(keep) == 0 || (allNotes && b.Paused == "budget") {
 			b.Paused = ""
 		}
 		return nil
 	})
 	return n, err
+}
+
+// codexUnheld: path is a Codex conversation that no wired Codex home
+// holds (Codex unwired since it was queued, its record removed): it is
+// never read, as nothing of an unwired Codex home is.
+func codexUnheld(home string, st state.State, path string) bool {
+	if retain.HarnessOf(conversationReaders(), path).ID() != harnessid.Codex {
+		return false
+	}
+	dir, ok := codexWired(home, st)
+	return !ok || !underDir(codex.Locate(harness.Env{Home: home, Profile: dir}).Conversations, path)
+}
+
+// underDir: path is dir or inside it.
+func underDir(dir, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // measure sets the spend from the bank's per-day token sums: the start
