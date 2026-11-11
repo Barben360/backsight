@@ -90,9 +90,10 @@ type timing struct {
 	readyPoll, readyWait               time.Duration // pg_isready
 	apiStopWait, dbStopWait            time.Duration // CTRL_BREAK → kill; pg_ctl stop
 	requestWait                        time.Duration // a client's request and answer
-	after                              func(time.Duration) <-chan time.Time
-	now                                func() time.Time
-	interrupt                          func(*os.Process) error // CTRL_BREAK / SIGTERM to the group
+	// after times the restart delays and the API's stop wait.
+	after     func(time.Duration) <-chan time.Time
+	now       func() time.Time
+	interrupt func(*os.Process) error // CTRL_BREAK / SIGTERM to the group
 	// wrapOutput, set by a test, wraps a child's log writer (a slow one).
 	wrapOutput func(io.WriteCloser) io.WriteCloser
 }

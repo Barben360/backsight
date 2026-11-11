@@ -119,6 +119,9 @@ type lineRedactor struct {
 	forms [][]byte
 	keep  int // keepTail, or the longest form if longer
 	buf   []byte
+	// scanned is the bytes the forms were searched in: what redaction
+	// cost, which a test bounds.
+	scanned int
 }
 
 const (
@@ -160,6 +163,7 @@ func (l *lineRedactor) Write(p []byte) (int, error) {
 
 func (l *lineRedactor) redacted(b []byte) []byte {
 	for _, f := range l.forms {
+		l.scanned += len(b)
 		b = bytes.ReplaceAll(b, f, []byte("[redacted]"))
 	}
 	return b
