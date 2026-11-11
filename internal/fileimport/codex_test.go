@@ -334,15 +334,36 @@ func TestScanCodexKeepsOutExcludedFolders(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a network cwd is never looked at", func(t *testing.T) {
-		home := t.TempDir()
-		writeFile(t, filepath.Join(home, "memories_v2", "rollout_summaries", "a.md"), "cwd: //host/share\n\nx\n")
-		var asked []string
-		CodexKeptOut(home, func(cwd string) bool { asked = append(asked, cwd); return true })
-		if len(asked) != 0 {
-			t.Errorf("asked about %v", asked)
-		}
-	})
+	// A cwd that cannot be checked without reaching another machine is
+	// never looked at, and keeps the consolidated files home (fail closed),
+	// even with nothing else kept out.
+	for _, cwd := range []string{"//home/u/secret", `\\host\share`, `/\host\share`} {
+		t.Run("network cwd "+cwd, func(t *testing.T) {
+			home := t.TempDir()
+			writeFile(t, filepath.Join(home, "memories_v2", "memory_summary.md"), "v1\n## User Profile\n")
+			writeFile(t, filepath.Join(home, "memories", "MEMORY.md"), "# Memory\n")
+			writeFile(t, filepath.Join(home, "memories_v2", "rollout_summaries", "a.md"),
+				"thread_id: 01a1c748-85f2-7011-b1ee-74ef2a380048\nupdated_at: 2026-11-10T19:00:00+00:00\nrollout_path: /gone.jsonl\ncwd: "+cwd+"\n\nsecret work\n")
+			var asked []string
+			s, err := ScanCodex(home, CodexOptions{OptedOut: func(c string) bool { asked = append(asked, c); return false }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(asked) != 0 {
+				t.Errorf("asked about %v", asked)
+			}
+			if len(s.Files) != 0 || !reflect.DeepEqual(s.Skipped[SkipMixesExcluded], []string{"memories/MEMORY.md", "memories_v2/memory_summary.md"}) {
+				t.Errorf("sent %v, skipped %v", rels(s.Files), s.Skipped)
+			}
+			if plan := BuildPlan(s, nil, "src", "home", retain.Prices{}); !reflect.DeepEqual(plan.MixesExcludedBy, []string{cwd}) {
+				t.Errorf("mixes_excluded_by = %v, want the cwd as written", plan.MixesExcludedBy)
+			}
+			// No privacy check given at all (the tick without a resolver): still closed.
+			if got := CodexKeptOut(home, nil); !reflect.DeepEqual(got, []string{cwd}) {
+				t.Errorf("without a check: %v", got)
+			}
+		})
+	}
 }
 
 func TestScanCodexUntrustedFiles(t *testing.T) {
@@ -384,7 +405,9 @@ func TestScanCodexUntrustedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(rels(s.Files), []string{"memories_v2/memory_summary.md", "memories_v2/rollout_summaries/good.md"}) {
+	// The relative and network cwds cannot be checked: the consolidated
+	// file stays home (fail closed).
+	if !reflect.DeepEqual(rels(s.Files), []string{"memories_v2/rollout_summaries/good.md"}) {
 		t.Errorf("sent %v", rels(s.Files))
 	}
 	p := func(names ...string) []string {
@@ -400,10 +423,11 @@ func TestScanCodexUntrustedFiles(t *testing.T) {
 			"rollout_summaries/unc-rollout.md", "rollout_summaries/two-cwds.md", "rollout_summaries/bad-thread.md", "rollout_summaries/no-header.md",
 			"rollout_summaries/net-cwd-slashes.md", "rollout_summaries/net-cwd-mixed.md", "rollout_summaries/net-cwd-mixed2.md",
 			"rollout_summaries/device-rollout.md", "rollout_summaries/pipe-cwd.md"),
-		SkipCodexUnknown: p("rollout_summaries/not-md.txt", "notes.txt"),
-		SkipCodexNotes:   p("extensions/ad_hoc/resources/2026-11-10T21-00-00-note.md"),
-		SkipNotText:      p("rollout_summaries/binary.md", "rollout_summaries/invalid.md"),
-		SkipTooLarge:     p("rollout_summaries/huge.md"),
+		SkipCodexUnknown:  p("rollout_summaries/not-md.txt", "notes.txt"),
+		SkipCodexNotes:    p("extensions/ad_hoc/resources/2026-11-10T21-00-00-note.md"),
+		SkipNotText:       p("rollout_summaries/binary.md", "rollout_summaries/invalid.md"),
+		SkipTooLarge:      p("rollout_summaries/huge.md"),
+		SkipMixesExcluded: p("memory_summary.md"),
 	}
 	if runtime.GOOS != "windows" {
 		want[SkipSymlink] = p("rollout_summaries/link.md")

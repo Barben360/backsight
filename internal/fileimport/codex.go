@@ -375,21 +375,27 @@ const codexSummariesLimit = 10_000
 // (their first 4 KiB, whatever else is wrong with the file: a bad header,
 // too large, not text) and of a v1 store's raw_memories.md (Codex's merge
 // of every thread it remembers). The consolidated files draw on the same
-// threads. A cwd that is not a local absolute path cannot be looked at
-// and is passed over. Sorted, each once.
+// threads. It fails closed: a cwd that is not a plain local absolute path
+// (a network or device path, a relative one, none) cannot be checked
+// without reaching out, so it is never looked at and counts as kept out,
+// named as written. nil optedOut keeps no local folder out. Sorted, each
+// once.
 func CodexKeptOut(home string, optedOut func(string) bool) []string {
-	if optedOut == nil {
-		return nil
-	}
 	found := map[string]bool{}
 	check := func(r io.Reader, limit int64) {
 		sc := bufio.NewScanner(io.LimitReader(r, limit))
 		sc.Buffer(make([]byte, 0, 64*1024), int(limit)+1)
 		for sc.Scan() {
-			if cwd, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "cwd:"); ok {
-				if cwd = strings.TrimSpace(cwd); !found[cwd] && localAbs(cwd) && optedOut(cwd) {
-					found[cwd] = true
-				}
+			cwd, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "cwd:")
+			if !ok {
+				continue
+			}
+			switch cwd = strings.TrimSpace(cwd); {
+			case found[cwd]:
+			case !localAbs(cwd):
+				found[cwd] = true
+			case optedOut != nil && optedOut(cwd):
+				found[cwd] = true
 			}
 		}
 	}
