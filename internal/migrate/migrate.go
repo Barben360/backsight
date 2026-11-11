@@ -43,6 +43,7 @@ type Migration struct {
 // renumbered or edited (an install may already have recorded it).
 var registry = []Migration{
 	{ID: ClientsTableID, Summary: "config.toml: Claude Code's [client] table becomes [clients.claude_code]", Run: clientsTable},
+	{ID: HeadlessSkipID, Summary: "config.toml: privacy.skip_entrypoints' former default (sdk-* only) also skips Codex's headless runs", Run: headlessSkip},
 }
 
 // All is the registry of this binary, in order.

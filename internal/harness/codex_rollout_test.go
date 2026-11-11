@@ -21,7 +21,7 @@ import (
 // codex_rollout.go's ledger: block 6, https://github.com/Barben360/backsight/issues/281.
 func init() {
 	codexOwns("codex_rollout.go", codexPart{over: true,
-		done: []string{"Conversations", "SessionOf", "Size", "Open", "ReadConversation", "Subagents", "AgentType", "Current"}})
+		done: []string{"Conversations", "SessionOf", "Size", "Open", "ReadConversation", "Subagents", "AgentType", "Current", "Entrypoint"}})
 }
 
 // The recorded threads (internal/testdata/codex/0.167.0/rollouts) and the

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -372,4 +373,42 @@ func setKey(raw []byte, table, key, value string) ([]byte, error) {
 		s += nl
 	}
 	return []byte(s + "[" + table + "]" + nl + entry + nl), nil
+}
+
+// LegacySkipEntrypoints is privacy.skip_entrypoints' default before
+// Codex's headless runs joined it, as setup wrote it in full into every
+// config.toml.
+var legacySkipEntrypoints = []string{"sdk-*"}
+
+// MigrateSkipEntrypoints returns raw with privacy.skip_entrypoints set to
+// today's default (DefaultSkipEntrypoints) when the file sets exactly the
+// former default, ["sdk-*"], editing that one line in place (its comment
+// kept). Any other value is the user's own choice and stays, as does a
+// file without the key; changed is false then. A form a line edit cannot
+// change safely (a dotted key, an inline table, a value over several
+// lines) is left as it is, changed false, err nil: the user's value still
+// holds.
+func MigrateSkipEntrypoints(raw []byte) (out []byte, changed bool, err error) {
+	var doc struct {
+		Privacy struct {
+			SkipEntrypoints *[]string `toml:"skip_entrypoints"`
+		} `toml:"privacy"`
+	}
+	if toml.Unmarshal(raw, &doc) != nil || doc.Privacy.SkipEntrypoints == nil || !slices.Equal(*doc.Privacy.SkipEntrypoints, legacySkipEntrypoints) {
+		return raw, false, nil
+	}
+	out, err = setKey(raw, "privacy", "skip_entrypoints", tomlStrings(DefaultSkipEntrypoints()))
+	if err != nil {
+		return raw, false, nil
+	}
+	return out, true, nil
+}
+
+// tomlStrings is list as a one-line TOML array of strings.
+func tomlStrings(list []string) string {
+	quoted := make([]string, len(list))
+	for i, s := range list {
+		quoted[i] = strconv.Quote(s)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
