@@ -126,6 +126,10 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip, codexOn bool)
 	}
 	shim := verifyShim(d)
 	if _, err := os.Stat(shim); err != nil {
+		if codexOn {
+			return res, &output.Error{Code: output.NeedsUser, Message: "no backsight shim at " + shim + ": Codex has nothing to run",
+				Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install --codex", Why: "installs the shim Codex's plugins run for their hooks and memory server"}}}
+		}
 		return res, &output.Error{Code: output.NeedsUser, Message: "no backsight shim at " + shim + ": Claude Code has nothing to run",
 			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install", Why: "installs the shim the plugin's hooks and MCP server run"}}}
 	}

@@ -94,6 +94,7 @@ func TestBackfillKeepsACompressedRollout(t *testing.T) {
 		t.Fatal(err)
 	}
 	gone := filepath.Join(day, "rollout-2026-11-10T20-34-58-01a1c72b-cd0a-7550-ae7a-76acc8d479c6.jsonl")
+	wireCodexRecord(t, home) // a queued rollout is kept only while its Codex home is wired
 	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
 		s.Backfill = &state.Backfill{Total: 2, MaxCost: 10, Currency: "USD", Sessions: []string{packed, gone}}
 		return nil

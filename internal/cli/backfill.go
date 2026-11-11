@@ -18,6 +18,8 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -384,6 +386,10 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		res.Paused = reason
 		return res, &output.Error{Code: output.Partial, Message: "backfill paused: " + msg}
 	}
+	_, home, err := machine()
+	if err != nil {
+		return res, blocked(err)
+	}
 	dropped, err := dropSettled(d)
 	if err != nil {
 		return res, blocked(err)
@@ -414,6 +420,22 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			}
 			res.Finished = true
 			return res, nil
+		}
+		if codexUnheld(home, st, b.Sessions[0]) {
+			// Codex unwired since it was queued (client uninstall --codex,
+			// or a run under way when it ran): never read, dropped.
+			path := b.Sessions[0]
+			if err := backfillUpdate(d, f, func(s *state.State) {
+				if s.Backfill != nil && len(s.Backfill.Sessions) > 0 && s.Backfill.Sessions[0] == path {
+					s.Backfill.Sessions, s.Backfill.Total = s.Backfill.Sessions[1:], max(s.Backfill.Total-1, s.Backfill.Done)
+				}
+			}); errors.Is(err, errStartedOver) {
+				return startedOver()
+			} else if err != nil {
+				return res, blocked(err)
+			}
+			res.Dropped++
+			continue
 		}
 		if inTick && sent >= tickBackfillLimit {
 			return res, nil
@@ -534,6 +556,7 @@ func notesOnly(d paths.Dirs, path string) (only, replayed bool) {
 // would otherwise hold saves that cost next to nothing. It never calls the
 // server, so a tick runs it on a paused backfill too.
 func dropSettled(d paths.Dirs) (int, error) {
+	_, home, _ := machine() // "": no Codex home is wired anywhere
 	n := 0
 	err := state.Update(d, "retain backfill", func(s *state.State) error {
 		n = 0
@@ -543,7 +566,12 @@ func dropSettled(d paths.Dirs) (int, error) {
 		}
 		var keep []string
 		allNotes := true
+		unheld := 0
 		for _, p := range b.Sessions {
+			if codexUnheld(home, *s, p) { // Codex unwired since: out of the queue and its total
+				unheld++
+				continue
+			}
 			if _, err := os.Stat(retain.CurrentPath(conversationReaders(), p)); errors.Is(err, fs.ErrNotExist) {
 				n++
 				continue
@@ -556,13 +584,31 @@ func dropSettled(d paths.Dirs) (int, error) {
 			allNotes = allNotes && only
 			keep = append(keep, p)
 		}
-		b.Sessions, b.Done = keep, b.Done+n
+		b.Sessions, b.Done, b.Total = keep, b.Done+n, max(b.Total-unheld, b.Done+n)
+		n += unheld
 		if len(keep) == 0 || (allNotes && b.Paused == "budget") {
 			b.Paused = ""
 		}
 		return nil
 	})
 	return n, err
+}
+
+// codexUnheld: path is a Codex conversation that no wired Codex home
+// holds (Codex unwired since it was queued, its record removed): it is
+// never read, as nothing of an unwired Codex home is.
+func codexUnheld(home string, st state.State, path string) bool {
+	if retain.HarnessOf(conversationReaders(), path).ID() != harnessid.Codex {
+		return false
+	}
+	dir, ok := codexWired(home, st)
+	return !ok || !underDir(codex.Locate(harness.Env{Home: home, Profile: dir}).Conversations, path)
+}
+
+// underDir: path is dir or inside it.
+func underDir(dir, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // measure sets the spend from the bank's per-day token sums: the start

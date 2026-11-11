@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/termstyle"
@@ -144,14 +147,23 @@ func clientUninstallCodex(ctx context.Context, flag string, plan bool) (clientUn
 		if err := forgetCodex(d, home, dir, "client uninstall"); err != nil {
 			return res, partialError(err)
 		}
-		if rec != nil && containsClean(rec.Undo.CodexHomes, dir) {
-			var keep []string
-			for _, h := range rec.Undo.CodexHomes {
-				if filepath.Clean(h) != dir {
-					keep = append(keep, h)
+		// Its queued past sessions go too: nothing of this home is read now,
+		// and the backfill's total says so.
+		if err := state.Update(d, "client uninstall", func(s *state.State) error {
+			if b := s.Backfill; b != nil {
+				var keep []string
+				for _, p := range b.Sessions {
+					if !underDir(codex.Locate(harness.Env{Home: home, Profile: dir}).Conversations, p) {
+						keep = append(keep, p)
+					}
 				}
+				b.Sessions, b.Total = keep, max(b.Total-(len(b.Sessions)-len(keep)), b.Done)
 			}
-			rec.Undo.CodexHomes = keep
+			return nil
+		}); err != nil {
+			return res, partialError(err)
+		}
+		if rec != nil && forgetInRecord(d, rec, dir) {
 			if err := rec.Save(d.SetupFile()); err != nil {
 				return res, partialError(err)
 			}
@@ -164,13 +176,35 @@ func clientUninstallCodex(ctx context.Context, flag string, plan bool) (clientUn
 	return res, nil
 }
 
-func containsClean(list []string, dir string) bool {
-	for _, h := range list {
+// forgetInRecord drops the Codex home dir from setup's record: the home
+// (setup --undo would remove it again) and its client codex-memories runs
+// (setup --undo would put memories = true back in a config.toml backsight
+// no longer owns). It reports a change to save.
+func forgetInRecord(d paths.Dirs, rec *setup.Record, dir string) bool {
+	changed := false
+	var homes []string
+	for _, h := range rec.Undo.CodexHomes {
 		if filepath.Clean(h) == dir {
-			return true
+			changed = true
+			continue
 		}
+		homes = append(homes, h)
 	}
-	return false
+	rec.Undo.CodexHomes = homes
+	settings := filepath.Join(dir, "config.toml")
+	var runs []string
+	for _, ts := range rec.Undo.ConfigRuns {
+		if m, err := claudecfg.LoadManifest(d.PreImagesDir(), ts); err == nil && m.Command == "client codex-memories" &&
+			slices.ContainsFunc(m.Files, func(f claudecfg.ManifestFile) bool { return filepath.Clean(f.Target) == settings }) {
+			changed = true
+			delete(rec.Undo.Retention, ts)
+			claudecfg.Unpin(d.PreImagesDir(), ts)
+			continue
+		}
+		runs = append(runs, ts)
+	}
+	rec.Undo.ConfigRuns = runs
+	return changed
 }
 
 func clientUninstallText(st termstyle.Style, r clientUninstallResult) string {
