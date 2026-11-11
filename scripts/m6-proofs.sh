@@ -918,14 +918,17 @@ m6_check_several_pcs() {
 # lines, so what proves the recall is each shown memory's source document
 # (backsight read), never its text.
 m6_check_codex_claude() {
-  local nonce proj hb cx addr out rc i note_a note_b ids id from_a from_b pid
+  local nonce proj hb cx addr out rc i note_a note_b ids id from_a from_b
   nonce=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
   proj=bs-m6-codex-$nonce
   hb=$(m6_home b)
   cx=$hb/codex-$nonce
   [ -n "${M6_CODEX_DIR:-}" ] || fail "no M6_CODEX_DIR: the driver gives B Codex and the fake model (scripts/codex/fetch.sh)"
   out=$(m6_sh b "$(m6_q "$M6_CODEX_DIR/codex") --version" < /dev/null 2>&1) || fail "no codex in $M6_CODEX_DIR on B: $out"
-  # B's Codex: its own home, pointed at the fake model it runs.
+  # B's Codex: its own home, pointed at the fake model it runs. The model
+  # is stopped however the check ends (m6_check runs it in a subshell of
+  # its own: this trap is that subshell's).
+  trap "m6_codex_stop_model $(m6_q "$cx")" EXIT
   m6_sh b "mkdir -p $(m6_q "$cx/model") $(m6_q "$hb/work/$proj") && (nohup $(m6_q "$M6_CODEX_DIR/fakeresponses") -addr 127.0.0.1:0 -addr-file $(m6_q "$cx/addr") -log $(m6_q "$cx/model") > $(m6_q "$cx/model.log") 2>&1 < /dev/null & echo \$! > $(m6_q "$cx/model.pid"))" < /dev/null ||
     fail "cannot start the fake model on B"
   for i in $(seq 1 50); do
@@ -975,10 +978,17 @@ m6_check_codex_claude() {
     fi
   done
   [ -n "$from_b" ] || fail "none of the $(wc -w <<<"$ids") memories of $proj A's search shows comes from B's $note_b"
-  pid=$(m6_sh b "cat $(m6_q "$cx/model.pid")" < /dev/null 2> /dev/null || true)
-  [ -z "$pid" ] || m6_sh b "kill $pid" < /dev/null > /dev/null 2>&1 || true
   m6_result codex-claude PASS "A (Claude Code) stored $note_a, B's Codex was shown $from_a built from it; B's Codex stored $note_b, A's search shows $from_b built from it" \
     "$(jq -cn --arg a "$note_a" --arg b "$note_b" '{note_a: $a, note_b: $b}')"
+}
+
+# m6_codex_stop_model <codex home on B>: the fake model m6_check_codex_claude
+# started there, stopped (nothing when it never started).
+m6_codex_stop_model() {
+  local pid
+  pid=$(m6_sh b "cat $(m6_q "$1/model.pid") 2> /dev/null" < /dev/null 2> /dev/null || true)
+  case $pid in '' | *[!0-9]*) return 0 ;; esac
+  m6_sh b "kill $pid" < /dev/null > /dev/null 2>&1 || true
 }
 
 # m6_codex_exec <dir> <codex home> <prompt> <steps json>: one codex exec turn

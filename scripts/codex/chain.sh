@@ -84,6 +84,19 @@ plain_turn() {
   prompt "$1" "$2" '[{"say":"ok"}]'
   codex exec -s workspace-write "$(cat "/tmp/prompts/$1")" < /dev/null > "$fx/$1.out" 2> "$fx/$1.err" || true
 }
+# end_tui: /exit in the TUI, as a user ends a session, then wait (a fixed
+# number of polls) for the codex process to be gone, so its SessionEnd hook
+# has run (and spawned its flush); only then is tmux killed.
+end_tui() {
+  local i
+  slash /exit
+  for i in $(seq 1 120); do
+    pgrep -x codex > /dev/null || break
+    sleep 0.5
+  done
+  ! pgrep -x codex > /dev/null || fail "codex still runs after /exit"
+  tmux kill-server 2> /dev/null || true
+}
 # calls <name>: the turn's MCP calls, one "<server>/<tool>=<status>" a line.
 calls() {
   jq -r 'select(.type=="item.completed" and .item.type=="mcp_tool_call") | .item | "\(.server)/\(.tool)=\(.status)"' "$fx/$1.jsonl"
@@ -138,7 +151,7 @@ plain_turn trust.untrusted "before trust"
 grep -q '^ok$' "$fx/trust.untrusted.out" || fail "the turn before trust did not run"
 ! grep -q '^hook: ' "$fx/trust.untrusted.err" || fail "a hook ran before the user trusted it: $(hooks trust.untrusted)"
 trust_all
-tmux kill-server 2> /dev/null || true
+end_tui
 cp "$CODEX_HOME/config.toml" "$fx/trust.config.toml"
 hooks_json=$BACKSIGHT_HOME/data/codex-marketplace/plugins/backsight-hooks/hooks/hooks.json
 want=$(jq '[.hooks[][] | .hooks[]] | length' "$hooks_json")
@@ -238,9 +251,7 @@ shot "$fx/credit.missing.screen.txt"
 # The TUI session, ended as a user ends it: SessionEnd sends it (flush).
 tsid=$(cat "$(backsight paths --json | jq -r .data.state)"/telemetry/events-*.jsonl |
   jq -r 'select(.client == "codex" and .event == "credit_check" and .outcome == "blocked") | .session' | head -n 1)
-slash /exit
-sleep 2
-tmux kill-server 2> /dev/null || true
+end_tui
 pass "credited $from: $(sed -n 2p <<< "$credit"); a session leaving a shown memory uncredited is held once by Stop"
 
 # --- flush -----------------------------------------------------------------

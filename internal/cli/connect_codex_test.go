@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // A PC may run Claude Code, Codex or both (issue 284): the restart a
@@ -196,5 +198,22 @@ func TestCodexHomeGoesWithSSH(t *testing.T) {
 	code, out, errOut := run(t, "server", "install", "--print-commands", "--private", "100.101.1.2", "--answer", "tools=codex", "--answer", "codex_memories=off")
 	if code != output.OK || !strings.Contains(out, "\nbacksight connect --token-file backsight-token --answer tools=codex --answer codex_memories=off\n") {
 		t.Errorf("exit %d, want the Codex answers on the connect line\n%s%s", code, out, errOut)
+	}
+}
+
+// The ssh install's resume line keeps --codex-home, a path with a space
+// whole: pasted in sh, backsight gets it as one argument.
+func TestSSHInstallResumeKeepsTheCodexHome(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a POSIX sh round trip (PowerShell's is in resume_quote_windows_test.go)")
+	dir := filepath.Join(t.TempDir(), "my codex")
+	cmd := sshInstallFlags{target: "u@h", configDir: "/c", codexHome: dir}.command()
+	out, err := exec.Command("sh", "-c", `backsight() { for a in "$@"; do printf '%s\n' "$a"; done; }; `+cmd).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", cmd, err, out)
+	}
+	args := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	i := slices.Index(args, "--codex-home")
+	if i < 0 || i+1 >= len(args) || args[i+1] != dir {
+		t.Errorf("%s\ngave %q, want --codex-home %q", cmd, args, dir)
 	}
 }
