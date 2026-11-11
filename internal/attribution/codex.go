@@ -61,9 +61,9 @@ func codexCall(tool string, input map[string]json.RawMessage, cwd, home string) 
 	raw, _ := json.Marshal(cmd)
 	in["command"] = raw
 	c := CallOf("Bash", in, cwd, home)
-	if files := patchPaths(cmd, cwd, home); len(files) > 0 {
-		c.Write = true
-		for _, f := range files {
+	if len(PatchFiles(cmd)) > 0 {
+		c.Write = true // a patch writes, whether or not its paths resolve here
+		for _, f := range patchPaths(cmd, cwd, home) {
 			if !slices.Contains(c.Paths, f) {
 				c.Paths = append(c.Paths, f)
 			}

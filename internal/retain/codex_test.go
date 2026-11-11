@@ -56,7 +56,7 @@ func (e *env) codexRollouts() map[string]string {
 			}
 			d.Close()
 		}
-		raw = bytes.ReplaceAll(raw, []byte("/home/tester/work"), []byte(e.cwd))
+		raw = bytes.ReplaceAll(raw, []byte("/home/tester/work"), jsonPath(e.cwd))
 		if strings.HasSuffix(fixture, ".zst") {
 			enc, _ := zstd.NewWriter(nil)
 			raw = enc.EncodeAll(raw, nil)
@@ -71,6 +71,13 @@ func (e *env) codexRollouts() map[string]string {
 	// The recorded threads settled long ago.
 	e.clock = time.Date(2026, 11, 10, 22, 0, 0, 0, time.UTC)
 	return paths
+}
+
+// jsonPath is p as it reads inside a JSON string (Windows' backslashes
+// escaped).
+func jsonPath(p string) []byte {
+	raw, _ := json.Marshal(p)
+	return raw[1 : len(raw)-1]
 }
 
 // segLines decodes a segment's content into role: content lines.
@@ -126,7 +133,7 @@ func TestCodexThreadsBecomeTheirDocuments(t *testing.T) {
 	}
 
 	// Resumed: Codex appends the new turn to the same file.
-	resume := `{"timestamp":"2026-11-10T21:00:00.000Z","type":"turn_context","payload":{"cwd":"` + e.cwd + `"}}` + "\n" +
+	resume := `{"timestamp":"2026-11-10T21:00:00.000Z","type":"turn_context","payload":{"cwd":"` + string(jsonPath(e.cwd)) + `"}}` + "\n" +
 		`{"timestamp":"2026-11-10T21:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"one more after the resume"}]}}` + "\n" +
 		`{"timestamp":"2026-11-10T21:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"MORE"}]}}` + "\n"
 	fh, _ := os.OpenFile(paths["root.jsonl"], os.O_WRONLY|os.O_APPEND, 0o600)

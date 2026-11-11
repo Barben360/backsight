@@ -14,6 +14,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/Barben360/backsight/internal/attribution"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -168,6 +169,7 @@ func dumpTurns(ts []turnLine) string {
 // Tool calls keep their call id and their input, an MCP tool under
 // Codex's own name for it (mcp__<server>__<tool>).
 func TestCodexToolCallsKeepTheirInput(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: the recorded rollout's POSIX paths")
 	_, paths := codexHome(t, "root.jsonl")
 	recs, _ := readAll(t, paths["root.jsonl"], 0)
 	var tools []transcript.ToolUse
