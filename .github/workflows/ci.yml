@@ -21,7 +21,8 @@ jobs:
   changes:
     # Whether a pull request changes more than documentation
     # (scripts/ci-docs-only.sh): docs alone skip the jobs the docs cannot
-    # reach (m6-chain, native-chain, native-chain-windows, test-windows).
+    # reach (m6-chain, codex-chain, native-chain, native-chain-windows,
+    # test-windows).
     # A push to main, or a listing that fails or may be cut (3000 files,
     # the API's limit), runs everything. The test job fails when this one
     # does, so a broken listing never skips a chain unseen.
@@ -530,6 +531,55 @@ jobs:
           path: ${{ runner.temp }}/hf-cache/hf_cache.tar
           key: hf-cache-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.digest }}
       - run: PROJECT="bs-m6-chain-${BACKSIGHT_CI_SLOT:?set it in the workflow env}" WORK="$RUNNER_TEMP" BACKSIGHT_HF_CACHE="$RUNNER_TEMP/hf-cache/hf_cache.tar" BACKSIGHT_HF_CACHE_DROP=1 scripts/m6-chain.sh
+      - name: Keep the model cache for the next runs
+        id: hf-saved
+        if: always() && steps.hf-cache.outputs.cache-hit != 'true'
+        run: test -s "$RUNNER_TEMP/hf-cache/hf_cache.tar" && echo "saved=true" >> "$GITHUB_OUTPUT" || true
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always() && steps.hf-saved.outputs.saved == 'true'
+        with:
+          path: ${{ runner.temp }}/hf-cache/hf_cache.tar
+          key: ${{ steps.hf-cache.outputs.cache-primary-key }}
+  codex-chain:
+    # Skipped for a docs-only pull request (the changes job).
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Codex's fresh-install chain (issue 284), on a real Codex CLI 0.167.0
+    # in a container with a deterministic fake model, no paid one: setup
+    # for Codex alone, the hooks trusted in Codex's own review screen, a
+    # session that stores a memory, its recall and credit, the flush into
+    # memory, an update, undo and uninstall (scripts/codex/chain.sh, in
+    # the harness of scripts/codex/run.sh), against the pinned Hindsight
+    # with its mock LLM.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A hosted runner's disk: the images, the model cache and the data need room
+      # (scripts/ci-free-disk.sh frees it only when short).
+      - name: Free the hosted runner's disk when it is short
+        run: scripts/ci-free-disk.sh
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
+          cache: true
+      # The server's model cache (scripts/hf-cache.sh), keyed on the
+      # pinned image: its start does not depend on huggingface.co. A miss
+      # only means the server downloads its models, and saves them.
+      - name: The pinned Hindsight image (the model cache's key)
+        id: pin
+        run: |
+          digest=$(sed -n 's/^const pinnedHindsight = ".*@\(sha256:[0-9a-f]\{64\}\)"$/\1/p' internal/server/render.go)
+          [ -n "$digest" ] || { echo "::error::no pinnedHindsight digest in internal/server/render.go"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: hf-cache
+        with:
+          path: ${{ runner.temp }}/hf-cache/hf_cache.tar
+          key: hf-cache-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.digest }}
+      - run: CODEX_PROJECT="bs-codex-chain-${BACKSIGHT_CI_SLOT:?set it in the workflow env}" OUT="$RUNNER_TEMP/codex-chain" HARNESS_CMD=/opt/harness/chain.sh BACKSIGHT_HF_CACHE="$RUNNER_TEMP/hf-cache/hf_cache.tar" BACKSIGHT_HF_CACHE_DROP=1 scripts/codex/run.sh
       - name: Keep the model cache for the next runs
         id: hf-saved
         if: always() && steps.hf-cache.outputs.cache-hit != 'true'

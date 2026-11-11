@@ -107,8 +107,8 @@ func notYet(what string) error { return fmt.Errorf("codex %s: %w", what, ErrNotI
 // .mcp.json. Codex names a plugin's MCP tools mcp__<server>__<tool>, the
 // plugin not in it: "memory" (Claude Code's, whose names carry the plugin)
 // would clash with any server of the user's named memory, so Codex's is
-// backsight (the user's decision, 2026-11-11; amends 0085 D1's
-// mcp__backsight__).
+// backsight (the user's decision, 2026-11-11; amends 0085 D1, which named
+// it memory: mcp__memory__).
 const CodexServer = plugin.Name
 
 // codexToolPrefix starts every memory tool's name under Codex:
