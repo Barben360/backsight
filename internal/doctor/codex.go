@@ -373,7 +373,7 @@ func checkCodexMemories(feats map[string]bool, err error) Check {
 // its hooks (0085 D3). The name is the adapter's.
 func checkCodexName(ctx context.Context, codex harness.Codex, env harness.Env, shim string) Check {
 	c := Check{ID: "codex-mcp-name"}
-	name := strings.TrimSuffix(strings.TrimPrefix(codex.ToolPrefix(), "mcp__"), "__")
+	name := harness.CodexServer
 	clash, err := codex.NameClash(ctx, env, shim)
 	switch {
 	case err != nil:

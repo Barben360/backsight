@@ -419,7 +419,10 @@ func TestCodexMemoriesCheck(t *testing.T) {
 // (running the shim) is no clash; a list that fails warns.
 func TestCodexNameCheck(t *testing.T) {
 	f := newCodexFix(t)
-	name := strings.TrimSuffix(strings.TrimPrefix(harness.Codex{}.ToolPrefix(), "mcp__"), "__")
+	name := harness.CodexServer
+	if name != "backsight" {
+		t.Fatalf("the Codex memory server is named %q", name)
+	}
 	expect(t, f.check("codex-mcp-name"), OK, "no other MCP server named "+name)
 	f.cli.mcp = `[{"name":"` + name + `","transport":{"type":"stdio","command":"` + filepath.ToSlash(f.shim) + `"}}]`
 	if runtime.GOOS != "windows" {
