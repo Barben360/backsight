@@ -1533,6 +1533,37 @@ func TestAnObservationsSourcesUseOneRetirementSlot(t *testing.T) {
 	}
 }
 
+// At the cap, a call naming an observation whose slot is already used
+// with a fact of it that no Sources answer listed is not refused before
+// the server is read: named together, the fact takes the observation's
+// slot.
+func TestAtTheCapAnObservationAlreadyCountedTakesItsFactNamedWithIt(t *testing.T) {
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 2\n")
+	observation(srcOne+"|proj|one", srcTwo+"|proj|two")
+	showIn(t, home, "S", obsO, srcTwo)
+	retireIn(t, home, "S", feedback.KindRetire, "44444444-0000-4000-8000-000000000004")
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: "S", Project: "proj"})
+	if err := j.Append(feedback.Event{Kind: feedback.KindRetire, Turn: "p-0", IDs: []string{srcOne}, Verdict: "wrong", Outcome: "invalidated", Of: obsO}); err != nil {
+		t.Fatal(err)
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "0f0f0f0f", "52525252")); isErr || !retiredRE.MatchString(out) {
+		t.Fatalf("the observation's other fact at the cap: %v %s", isErr, out)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], "/memories/"+srcTwo+" ") {
+		t.Errorf("patches %q", p)
+	}
+}
+
+// With memory_credit not offered, a store's answer never asks for it.
+func TestStoreWithoutFeedbackNamesNoMemoryCredit(t *testing.T) {
+	cs := mcpSessionWith(t, "\n[feedback]\nenabled = false\n")
+	recallAnswer = `[{"id":"65656565-0000-4000-8000-000000000002","text":"Billing uses PostgreSQL 15.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}}]`
+	out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "correction", "text": "Billing moved to PostgreSQL 16 on 2026-10-20."})
+	if isErr || !strings.Contains(out, "65656565") || strings.Contains(out, "memory_credit") {
+		t.Errorf("%v\n%s", isErr, out)
+	}
+}
+
 func TestObservationWithoutSourcesIsHidden(t *testing.T) {
 	cs, home := creditSession(t)
 	const empty = "0e0e0e0e-0000-4000-8000-00000000000e"

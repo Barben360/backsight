@@ -803,6 +803,25 @@ func TestSourcesShowsSkipBadLines(t *testing.T) {
 	}
 }
 
+// Each fact of a Sources answer carries the observation of the line above
+// it: a second observation takes over, a line that does not name a whole
+// id leaves its facts without one, as does a fact before any such line.
+func TestSourcesShowsNameTheObservationOfEachFact(t *testing.T) {
+	const (
+		o1, o2 = "0f0f0f0f-0000-4000-8000-00000000000f", "0e0e0e0e-0000-4000-8000-00000000000e"
+		a, b   = "61616161-0000-4000-8000-000000000061", "62626262-0000-4000-8000-000000000062"
+		c, e   = "63636363-0000-4000-8000-000000000063", "64646464-0000-4000-8000-000000000064"
+	)
+	fact := func(id string) string { return "- [billing · " + id[:8] + "] text. (" + id + ")\n" }
+	answer := "Sources: only raw facts are retired, and an observation is drawn from them; nothing was retired or stored.\n" +
+		fact(e) + o1 + " is drawn from:\n" + fact(a) + o2 + " is drawn from:\n" + fact(b) + "0d0d0d0d is drawn from:\n" + fact(c)
+	got := sourcesShows(answer)
+	want := []feedback.Item{{ID: e, Project: "billing"}, {ID: a, Project: "billing", Of: o1}, {ID: b, Project: "billing", Of: o2}, {ID: c, Project: "billing"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %+v", got)
+	}
+}
+
 // With feedback off nothing reaches the journal or the turn pointers; the
 // lines the agent reads keep their short ids.
 func TestFeedbackOffJournalsNothing(t *testing.T) {

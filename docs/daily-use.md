@@ -161,7 +161,7 @@ The plan lists the project's documents and memory counts, changing nothing. The 
 
 ## Memories Claude reports wrong
 
-When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note in the wrong memory's project and retires the wrong memory, at most 10 per session (`feedback.max_retirements`), whichever projects they belong to; an observation retired through several of the facts it is drawn from counts once. A memory of another project than the session's can be retired too: turn it off with `feedback.cross_project_retire = false` in `config.toml`. Nothing is deleted:
+When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note in the wrong memory's project and retires the wrong memory, at most 10 per session (`feedback.max_retirements`), whichever projects they belong to; an observation retired through several of the facts it is drawn from counts once, as does one hidden on this PC. A memory of another project than the session's can be retired too: turn it off with `feedback.cross_project_retire = false` in `config.toml`. Nothing is deleted:
 
 - a [raw fact](glossary.md#fact) is invalidated on the server: recall stops returning it;
 - for an [observation](glossary.md#observation), Claude is first shown the facts it is drawn from, then names the wrong ones, which are invalidated;

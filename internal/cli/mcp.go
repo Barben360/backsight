@@ -578,14 +578,16 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		return "", fmt.Errorf("%w: nothing was changed", joinedElsewhere(err))
 	}
 	// Each memory reported uses one slot, an observation one for all the
-	// source facts it takes (issue 317): a call whose memories would all
-	// need a new slot at the limit is refused before the server is asked
-	// anything; a fact listed for an observation already counted is not.
-	events, _ := sessionJournal(d.dirs, live.SessionID) // an unreadable journal counts what it could read
+	// source facts it takes (issue 317). At the limit, a call none of
+	// whose ids maps to a slot already used is refused before the server
+	// is asked anything; any other is judged once the plan is known (a
+	// fact named with its counted observation takes that slot). An
+	// unreadable journal counts what it could read: a journal failure
+	// never fails a tool call.
+	events, _ := sessionJournal(d.dirs, live.SessionID)
 	used, listed := feedback.RetiredSlots(events, live.SessionID), listedFor(feedback.Shows(events, live.SessionID))
 	done, limit := len(used), cfg.Feedback.MaxRetirements
-	early := retirePlan{}
-	if done >= limit && slices.ContainsFunc(ids, func(id string) bool { return !slices.Contains(used, early.slot(id, listed)) }) {
+	if done >= limit && !slices.ContainsFunc(ids, func(id string) bool { return slices.Contains(used, (retirePlan{}).slot(id, listed)) }) {
 		return "", capRefusal(limit, done, ids, owner)
 	}
 	plan := d.classify(ctx, key, ids, owner)
