@@ -43,8 +43,6 @@ func telLineFor(t *testing.T, ts time.Time, e telemetry.Event, session, project 
 	return string(out) + "\n"
 }
 
-// fixedStatsFixture writes a fixed telemetry and journal fixture and
-// freezes the clock.
 // seedIndex puts an empty index at the head where the command line will
 // look for it (indextest.Seed), for tests that read an index but do not
 // test its building or its migrations.
@@ -57,6 +55,8 @@ func seedIndex(t *testing.T) {
 	indextest.Seed(t, d)
 }
 
+// fixedStatsFixture writes a fixed telemetry and journal fixture and
+// freezes the clock.
 func fixedStatsFixture(t *testing.T) {
 	t.Helper()
 	home := devInstall(t, true)

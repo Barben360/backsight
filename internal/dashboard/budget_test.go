@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/testtool/speed"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -24,10 +25,16 @@ const (
 	firstByteLimit = 12 * time.Second
 )
 
-// pageLimit is basePageLimit, doubled on GitHub's Windows runner: its
-// pages take 1.1 to 1.6 s where the Windows test VM's slowest is 709 ms,
-// so the runner, not Windows, is slow; the VM keeps the base limit.
-var pageLimit = runnerLimit(basePageLimit, runtime.GOOS, os.Getenv("GITHUB_ACTIONS"))
+// pageLimitFor is the page budget on a machine: base times the larger of
+// the runner's measured speed factor (speed.Runner: 1 on a runner as fast
+// as GitHub's fast Ubuntu runners, at most 1.5 on a slower one) and
+// runnerLimit's fixed doubling on GitHub's Windows runner. Its pages took
+// 1.1 to 1.6 s there where the Windows test VM's slowest was 709 ms, so the
+// runner, not Windows, is slow; the VM keeps the base limit. The two are
+// not multiplied: both say how slow the runner is.
+func pageLimitFor(base time.Duration, goos, githubActions string, factor float64) time.Duration {
+	return speed.Scale(base, max(float64(runnerLimit(base, goos, githubActions))/float64(base), factor))
+}
 
 // runnerLimit is base, doubled on GitHub's Windows runner.
 func runnerLimit(base time.Duration, goos, githubActions string) time.Duration {
@@ -51,12 +58,75 @@ func TestRunnerLimitDoublesOnlyOnGitHubWindows(t *testing.T) {
 	}
 }
 
+func TestPageLimitTakesTheSlowerOfTheRunnerFactorAndWindows(t *testing.T) {
+	ms := time.Millisecond
+	for _, c := range []struct {
+		goos, ci string
+		factor   float64
+		want     time.Duration
+	}{
+		{"linux", "true", 1, 900 * ms},      // a fast runner: the base limit
+		{"linux", "true", 1.5, 1350 * ms},   // the slowest: half more
+		{"linux", "", 1.3, 1170 * ms},       // any machine is measured
+		{"windows", "true", 1, 1800 * ms},   // GitHub's Windows runner: doubled, as before
+		{"windows", "true", 1.4, 1800 * ms}, // its doubling already says it is slow
+		{"windows", "", 1.2, 1080 * ms},     // the Windows VM: measured like any machine
+	} {
+		if got := pageLimitFor(900*ms, c.goos, c.ci, c.factor); got != c.want {
+			t.Errorf("%s ci=%q factor %.1f: %v, want %v", c.goos, c.ci, c.factor, got, c.want)
+		}
+	}
+}
+
+// runnerClasses are the three speed classes of GitHub's Ubuntu runners in
+// 43 CI runs (2026-11-09 to 11-11, main and feat/codex alike): the slowest
+// /?machines=all best of 5 seen in each, and the reference speed.Runner
+// measured on a runner of that class.
+var runnerClasses = []struct {
+	name      string
+	page, ref time.Duration
+}{
+	{"fast", 567 * time.Millisecond, speed.Baseline},
+	{"middle", 691 * time.Millisecond, refMiddle},
+	{"slow", 929 * time.Millisecond, refSlow},
+}
+
+// The reference on the middle and slow runners (PROVISIONAL: replaced by
+// the CI measurements).
+const (
+	refMiddle = 75 * time.Millisecond
+	refSlow   = 110 * time.Millisecond
+)
+
+// TestADoubledPageFailsOnEveryRunner: on every runner class, today's
+// heaviest page passes its scaled limit and a change that doubles its cost
+// does not: the speed factor loosens the budget for the runner, never
+// enough to hide a regression.
+func TestADoubledPageFailsOnEveryRunner(t *testing.T) {
+	for _, c := range runnerClasses {
+		f := speed.FactorOf(c.ref, speed.Baseline)
+		limit := pageLimitFor(basePageLimit, "linux", "true", f)
+		if c.page > limit {
+			t.Errorf("%s runner: today's page %v over its limit %v (factor %.2f)", c.name, c.page, limit, f)
+		}
+		if 2*c.page <= limit {
+			t.Errorf("%s runner: a page twice as slow (%v) passes its limit %v (factor %.2f)", c.name, 2*c.page, limit, f)
+		}
+	}
+}
+
 // TestPageBudgets times the pages on 13 months of generated history with
 // every cache off, then the first byte of a page with the server down.
 func TestPageBudgets(t *testing.T) {
 	if raceEnabled || testing.Short() {
 		t.Skip("time budgets are measured without -race and -short")
 	}
+	m, err := speed.Runner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageLimit := pageLimitFor(basePageLimit, runtime.GOOS, os.Getenv("GITHUB_ACTIONS"), m.Factor)
+	t.Logf("runner speed: %v; page limit %v (base %v)", m, pageLimit, basePageLimit)
 	// Restored after the harness stops (cleanups run last in, first out).
 	oldSpec, oldResult, oldServer := dataSpec, resultTTL, serverTTL
 	t.Cleanup(func() { dataSpec, resultTTL, serverTTL = oldSpec, oldResult, oldServer })
