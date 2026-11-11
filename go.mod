@@ -2,7 +2,7 @@ module github.com/Barben360/backsight
 
 go 1.26.0
 
-toolchain go1.26.11
+toolchain go1.27.4
 
 require (
 	aead.dev/minisign v0.3.0

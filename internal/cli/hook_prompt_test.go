@@ -77,6 +77,9 @@ func TestFirstPromptRecallsAndReminds(t *testing.T) {
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"event":"prompt"`) || !strings.Contains(tel, `"decision":"recall"`) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
+	if len(recallMaxTokens) == 0 || slices.ContainsFunc(recallMaxTokens, func(m int) bool { return m != 1500 }) {
+		t.Errorf("prompt recall must keep 1500 tokens a call, sent %v", recallMaxTokens)
+	}
 }
 
 func TestMachineMessagesAreSkipped(t *testing.T) {

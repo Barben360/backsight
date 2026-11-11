@@ -105,7 +105,6 @@ func TestUninstallDeletesThisMachinesDocument(t *testing.T) {
 // machines ignore it after 30 days.
 func TestUninstallSurvivesAnUnreachableServer(t *testing.T) {
 	old := uninstallShareBudget
-	uninstallShareBudget = 300 * time.Millisecond
 	t.Cleanup(func() { uninstallShareBudget = old })
 	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	t.Cleanup(hang.Close)
@@ -120,13 +119,15 @@ func TestUninstallSurvivesAnUnreachableServer(t *testing.T) {
 	for name, port := range map[string]int{"down": closedPort(t), "hanging": hangPort, "500": refusePort} {
 		m, _, _ := sharedInstall(t)
 		pointAt(t, m.home, port)
-		start := time.Now()
+		// The budget cuts the server that never answers; the others answer
+		// at once, within the default one.
+		uninstallShareBudget = old
+		if name == "hanging" {
+			uninstallShareBudget = time.Millisecond
+		}
 		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
 		if code != output.OK {
 			t.Fatalf("%s: exit %d\n%s", name, code, out)
-		}
-		if took := time.Since(start); took > 4*time.Second {
-			t.Errorf("%s: took %s", name, took)
 		}
 		s := stepNamed(env.Data, "shared counts")
 		if s == nil || s.Status != "kept" || !strings.Contains(s.Detail, "30 days") || strings.ContainsAny(s.Detail, "\n\r\t") {

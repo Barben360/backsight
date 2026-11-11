@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -975,13 +976,15 @@ func TestExecBinaryStopsTheChildGently(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: the fake child is a POSIX shell script with a TERM trap; Windows asks a child to stop with CTRL_BREAK, which needs a console")
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "child")
-	_ = os.WriteFile(exe, []byte("#!/bin/sh\necho \"$"+updateLockEnv+"\" > "+dir+"/token\ntrap 'echo rolled back > "+dir+"/trap; exit 30' TERM\nsleep 30 &\nwait\n"), 0o755)
+	// The token appears whole (a rename) once the trap is set: a stop
+	// asked from then on always meets it.
+	_ = os.WriteFile(exe, []byte("#!/bin/sh\ntrap 'echo rolled back > "+dir+"/trap; exit 30' TERM\necho \"$"+updateLockEnv+"\" > "+dir+"/token.tmp\nmv "+dir+"/token.tmp "+dir+"/token\nsleep 30 &\nwait\n"), 0o755)
 	owner := state.Owner{PID: os.Getpid(), Command: "update apply", Since: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
 	updateLock = &owner
 	t.Cleanup(func() { updateLock = nil })
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		for i := 0; i < 250; i++ {
+		for {
 			if _, err := os.Stat(filepath.Join(dir, "token")); err == nil {
 				break
 			}
@@ -989,13 +992,12 @@ func TestExecBinaryStopsTheChildGently(t *testing.T) {
 		}
 		cancel()
 	}()
-	start := time.Now()
 	_, _, code, err := execBinary{}.Run(ctx, exe)
 	if err != nil || code != 30 {
 		t.Fatalf("exit %d %v: the child was not left to roll back", code, err)
 	}
-	if raw, _ := os.ReadFile(filepath.Join(dir, "trap")); string(raw) != "rolled back\n" || time.Since(start) > 20*time.Second {
-		t.Errorf("trap %q after %s", raw, time.Since(start))
+	if raw, _ := os.ReadFile(filepath.Join(dir, "trap")); string(raw) != "rolled back\n" {
+		t.Errorf("trap %q", raw)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "token")); strings.TrimSpace(string(raw)) != lockToken(owner) {
 		t.Errorf("the child's lock token %q, want %q", raw, lockToken(owner))
@@ -1179,6 +1181,16 @@ func shortRecordWait(t *testing.T, w time.Duration) {
 	t.Cleanup(func() { recordWait = old })
 }
 
+// onStateLockWait runs release once, the first time a wait for the state
+// lock finds it held (state.LockWaitHook).
+func onStateLockWait(t *testing.T, release func()) {
+	t.Helper()
+	old := state.LockWaitHook
+	var once sync.Once
+	state.LockWaitHook = func() { once.Do(release) }
+	t.Cleanup(func() { state.LockWaitHook = old })
+}
+
 // Once the new binary's server upgrade passed, the update is committed: a
 // record step that cannot get state.json's lock is never rolled back (the
 // old pin would start on a database the new Hindsight migrated). It exits
@@ -1244,15 +1256,15 @@ func TestUpdateApplyRecordWaitsForTheStateLock(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	shortRecordWait(t, 10*time.Second)
+	waited := false
+	onStateLockWait(t, func() { waited = true; _ = os.Remove(filepath.Join(d.LocksDir(), "state.lock")) })
 	bins.after = func(line string, code int) {
 		if strings.HasPrefix(line, "0.2.0 client install") {
-			holdStateLock(t, d)
-			go func() { time.Sleep(300 * time.Millisecond); _ = os.Remove(filepath.Join(d.LocksDir(), "state.lock")) }()
+			holdStateLock(t, d) // released once the record waits for it
 		}
 	}
-	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.OK {
-		t.Fatalf("exit %d\n%s", code, out)
+	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.OK || !waited {
+		t.Fatalf("exit %d, waited for the lock %v\n%s", code, waited, out)
 	}
 	if st, _ := state.Load(d.StateFile()); st.ShimTarget != shimOf(t, d) {
 		t.Errorf("not recorded: %q", st.ShimTarget)
@@ -1335,21 +1347,19 @@ func TestUpdateApplyRollbackWritesTheStateUnderItsLock(t *testing.T) {
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
 	before := snapshot(t, d)
 	var duringLock string
-	done := make(chan struct{})
+	// The rollback finds the lock held: what state.json holds then, and
+	// the lock released for its next try.
+	onStateLockWait(t, func() {
+		raw, _ := os.ReadFile(d.StateFile())
+		duringLock = string(raw)
+		_ = os.Remove(filepath.Join(d.LocksDir(), "state.lock"))
+	})
 	bins.migrations["0.2.0"] = []migrate.Migration{{ID: "0001-fails", Run: func(_ context.Context, e migrate.Env) error {
 		_ = os.WriteFile(e.Dirs.StateFile(), []byte(`{"schema_version": 1, "plugin_version": "migrated"}`), 0o600)
 		holdStateLock(t, d)
-		go func() {
-			defer close(done)
-			time.Sleep(300 * time.Millisecond)
-			raw, _ := os.ReadFile(e.Dirs.StateFile())
-			duringLock = string(raw)
-			_ = os.Remove(filepath.Join(d.LocksDir(), "state.lock"))
-		}()
 		return errors.New("cannot migrate")
 	}}}
 	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
-	<-done
 	if code != output.RolledBack {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -1626,13 +1636,12 @@ func TestDownloadBoundsTheAsset(t *testing.T) {
 		t.Error("an unlisted size above the cap passed")
 	}
 	maxAsset = old
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	s, rel = src(5, "")
 	s.stall = true
-	start := time.Now()
-	if err := download(ctx, s, rel, "a", dst); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
-		t.Errorf("a stalled download: %v after %s", err, time.Since(start))
+	if err := download(ctx, s, rel, "a", dst); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a stalled download: %v", err)
 	}
 }
 

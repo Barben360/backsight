@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -439,13 +438,8 @@ func TestStopDuringFirstBuild(t *testing.T) {
 	<-entered
 	cancel()
 	close(release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("Serve: %v", err)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("Serve did not return")
+	if err := <-done; err != nil {
+		t.Errorf("Serve: %v", err)
 	}
 	if _, err := os.Stat(dashboard.RuntimeFile(d)); !os.IsNotExist(err) {
 		t.Errorf("runtime file left: %v", err)

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
-	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -201,6 +201,17 @@ func failingSince(t *testing.T, home string, at time.Time) {
 	}
 }
 
+// callsSince is what reached the fake server since before (fakeCalls).
+func callsSince(before map[string]int) map[string]int {
+	out := map[string]int{}
+	for ep, n := range fakeCalls {
+		if d := n - before[ep]; d != 0 {
+			out[ep] = d
+		}
+	}
+	return out
+}
+
 // A server silent for over an hour gets a line of its own, read from the
 // reach record (no call of its own); a server answering this briefing, or
 // another server at the joined address, does not.
@@ -208,17 +219,23 @@ func TestSessionStartBannerAfterAnHourUnreachable(t *testing.T) {
 	home := hookHome(t)
 	noticeShown(t, home)
 	recentDown.Store(true)
+	at := time.Now().Truncate(time.Second)
+	old := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = old })
 	unavailable := "⚠️ backsight · 🗂️ billing · memory unavailable (server unreachable) · run `backsight doctor`"
-	failingSince(t, home, time.Now().Add(-59*time.Minute))
+	failingSince(t, home, at.Add(-59*time.Minute))
+	before := maps.Clone(fakeCalls)
 	if got := startBanner(t, home, "s1"); got != unavailable {
 		t.Errorf("59 min\n got %q\nwant %q", got, unavailable)
 	}
-	since := time.Now().Add(-61 * time.Minute)
+	quiet := callsSince(before)
+	since := at.Add(-61 * time.Minute)
 	failingSince(t, home, since)
-	start := time.Now()
+	before = maps.Clone(fakeCalls)
 	got := startBanner(t, home, "s2")
-	if took := time.Since(start); took > hook.ChildDeadline("session-start", []byte(`{"source":"startup"}`)) {
-		t.Errorf("the hook took %s", took)
+	if silent := callsSince(before); !maps.Equal(silent, quiet) {
+		t.Errorf("the silent line made calls of its own: %v, the banner without it %v", silent, quiet)
 	}
 	want := unavailable + "\n⚠️ memory server silent since " + since.UTC().Format("2006-01-02 15:04") + " UTC: notes and sessions wait on this PC · run `backsight doctor`"
 	if got != want {

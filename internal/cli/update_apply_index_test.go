@@ -391,20 +391,22 @@ func TestUpdateApplyIndexMigrationGetsTheBound(t *testing.T) {
 	old := indexMigrateWait
 	t.Cleanup(func() { indexMigrateWait = old })
 	indexMigrateWait = 7 * time.Second
-	var left time.Duration
+	var dl time.Time
 	var has bool
 	bins.before = func(ctx context.Context, line string) {
 		if strings.HasPrefix(line, "0.2.0 stats index migrate") {
-			var dl time.Time
 			dl, has = ctx.Deadline()
-			left = time.Until(dl)
 		}
 	}
+	// The deadline is set during the run: the bound after a time between
+	// its start and its end.
+	before := time.Now()
 	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	if !has || left <= 5*time.Second || left > 7*time.Second {
-		t.Errorf("deadline %v (set %v)", left, has)
+	after := time.Now()
+	if !has || dl.Before(before.Add(7*time.Second)) || dl.After(after.Add(7*time.Second)) {
+		t.Errorf("deadline %v after the start (set %v), want the 7 s bound from within the run (%v long)", dl.Sub(before), has, after.Sub(before))
 	}
 }
 

@@ -36,6 +36,10 @@ const (
 	lastReplyChars       = 1000 // the end of the last reply, for the detector and outcomes
 )
 
+// appendSubagentNote queues SubagentStop's note; tests read the outbox
+// (its lock deadline) it is handed.
+var appendSubagentNote = func(ob retain.Outbox, n retain.Note) (bool, error) { return ob.Append(n) }
+
 // spawnDetached starts `backsight <args>` outside the hook's process group,
 // so it outlives SessionEnd's 1.5 s budget; tests replace it.
 var spawnDetached = func(args ...string) error { return startDetachedTo(nil, args...) }
@@ -240,7 +244,7 @@ func (h *hookEnv) queueSubagentReport(lockDeadline time.Time) {
 	n.Attribution, n.HarnessTag = source, h.adapter.Tag()
 	ob := notesOutboxFor(h.dirs, h.cfg)
 	ob.LockDeadline = lockDeadline // a lock held past it refuses the note before the kill
-	if _, err := ob.Append(n); err != nil {
+	if _, err := appendSubagentNote(ob, n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})
 		return
 	}

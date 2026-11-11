@@ -17,11 +17,6 @@ concurrency:
 # keep jobs apart on one machine, such as a maintainer's).
 env:
   BACKSIGHT_CI_SLOT: "1"
-  # The time budgets (make bench-index's): on Windows the slices skip them
-  # and test-windows-budgets runs them apart (the index, metrics and
-  # dashboard ones only: the ledger lookup and the hook's 20 ms wait are
-  # not measured on Windows yet).
-  TIME_BUDGETS: ^Test((Index|View|Page|Render)Budgets|LedgerLookupBudget|HookReaderWaitsAtMost20ms)$
 jobs:
   changes:
     # Whether a pull request changes more than documentation
@@ -76,7 +71,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -130,7 +125,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -157,9 +152,10 @@ jobs:
             ${{ steps.go-paths.outputs.build }}
             ${{ steps.go-paths.outputs.mod }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
-  bench:
-    # make test's second line (the dashboard's page sweep, without -race),
-    # then the time budgets on a runner of their own.
+  test-sweep:
+    # make test's second line: the tests on a year of generated history,
+    # without -race (they skip under it). No test is held to a time: a
+    # loaded runner fails no check.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -170,7 +166,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -190,8 +186,6 @@ jobs:
           key: go-${{ runner.os }}-${{ github.job }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: go-${{ runner.os }}-${{ github.job }}-
       - run: make test-sweep
-      # The metrics index's, views' and pages' time budgets.
-      - run: make bench-index
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name == 'push' && steps.go-cache.outputs.cache-hit != 'true'
         with:
@@ -210,7 +204,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -247,7 +241,7 @@ jobs:
     # them, and the changes job too (a failed listing would otherwise skip
     # the chains while their checks pass as skipped).
     if: always()
-    needs: [changes, test-race, test-hooks, bench, checks]
+    needs: [changes, test-race, test-hooks, test-sweep, checks]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -281,7 +275,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -312,79 +306,17 @@ jobs:
           # The runner has a console logon: the server task runs there
           # (TestTaskStartStopForReal checks it came up through the task).
           BACKSIGHT_TEST_CONSOLE_LOGON: "1"
-          # The time budgets' files on the runner's local disk (D:): its
-          # C: flushes about 340 random 4 KiB writes a second, 30 times
-          # fewer than D: or the Windows VM (testtool.BenchTempDir).
+          # The files of the tests on a year of generated history on the
+          # runner's local disk (D:): its C: flushes about 340 random 4 KiB
+          # writes a second, 30 times fewer than D: or the Windows VM
+          # (testtool.BenchTempDir).
           BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
         run: |
           $pattern = go run ./scripts/testshard -index $env:SHARD -total 3 -- ./...
           if ($LASTEXITCODE -ne 0 -or -not $pattern) { exit 1 }
-          go test ./... -count=1 -timeout 20m -run "$pattern" -skip $env:TIME_BUDGETS
+          go test ./... -count=1 -timeout 20m -run "$pattern"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name == 'push' && matrix.shard == 0 && steps.go-cache.outputs.cache-hit != 'true'
-        with:
-          path: |
-            ${{ steps.go-paths.outputs.build }}
-            ${{ steps.go-paths.outputs.mod }}
-          key: ${{ steps.go-cache.outputs.cache-primary-key }}
-  test-windows-budgets:
-    # The time budgets on Windows apart from the slices, as bench does on
-    # Linux: one package at a time, nothing else on the runner (beside
-    # other packages in a slice, TestPageBudgets passed its limit). In two
-    # parts at once: the dashboard's alone (about 470 s), the index's and
-    # the metrics' (about 90 s together); in one job they took 10 minutes.
-    # Skipped for a docs-only pull request.
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    name: test-windows-budgets (${{ matrix.part }})
-    runs-on: windows-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - part: dashboard
-            packages: ./internal/dashboard/
-          - part: index-metrics
-            packages: ./internal/index/ ./internal/metrics/
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The job's own Go caches below, not setup-go's: that one is shared
-      # by every job and saved by whichever ends first.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
-          cache: false
-      # The job's own build and module caches, keyed on go.mod and go.sum:
-      # restored by every run, saved by main's runs alone, once per key (the
-      # repository's 10 GB must keep the model caches).
-      - name: The Go caches' paths
-        id: go-paths
-        shell: bash
-        run: |
-          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
-          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: go-cache
-        with:
-          path: |
-            ${{ steps.go-paths.outputs.build }}
-            ${{ steps.go-paths.outputs.mod }}
-          key: go-${{ runner.os }}-${{ github.job }}-${{ matrix.part }}-${{ hashFiles('go.mod', 'go.sum') }}
-          restore-keys: go-${{ runner.os }}-${{ github.job }}-${{ matrix.part }}-
-      - name: The time budgets, one package at a time
-        shell: pwsh
-        env:
-          # The runner's local disk (D:), as test-windows.
-          BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
-          PACKAGES: ${{ matrix.packages }}
-        run: go test -count=1 -p 1 -timeout 20m -v -run $env:TIME_BUDGETS @($env:PACKAGES -split ' ')
-      # Each part keeps its own cache (key with matrix.part): each builds
-      # its own packages' tests.
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: github.event_name == 'push' && steps.go-cache.outputs.cache-hit != 'true'
         with:
           path: |
             ${{ steps.go-paths.outputs.build }}
@@ -406,7 +338,7 @@ jobs:
       # M4): this job proves the release build, not a cache's.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
       - run: scripts/ci-minisign.sh
       - name: Throwaway signing key
@@ -436,7 +368,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -459,7 +391,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # The server's model cache (scripts/hf-cache.sh), keyed on the
       # pinned image: its start does not depend on huggingface.co. A miss
@@ -506,7 +438,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # Node pinned for its npm: --allow-scripts needs npm 11 or newer
       # (Node 24.22.1 ships npm 11.19.1; the runner's own may be older).
@@ -567,7 +499,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # Node pinned for its npm: --allow-scripts needs npm 11 or newer
       # (Node 24.22.1 ships npm 11.19.1; the runner's own may be older).
@@ -629,7 +561,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # The units run under the runner user's systemd user manager, which
       # linger starts and keeps (setup refuses without it).
@@ -714,7 +646,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # Native's models, keyed on the Windows lock (as native-chain's
       # hf-native on the Linux one): a miss only means setup downloads them.

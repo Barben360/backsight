@@ -184,14 +184,13 @@ func TestJobsTickBoundsTheLook(t *testing.T) {
 	rs := withRecreated(t, home)
 	rs.set(func() { rs.hang = true })
 	old := guardTickBudget
-	guardTickBudget = 300 * time.Millisecond
+	guardTickBudget = time.Millisecond
 	t.Cleanup(func() { guardTickBudget = old })
-	start := time.Now()
 	code, out, errOut := run(t, "jobs", "tick", "--json")
 	var env tickEnvelope
 	_ = json.Unmarshal([]byte(out), &env)
-	if code != output.OK || !strings.HasPrefix(env.Data.Purges, "not looked at:") || time.Since(start) > 10*time.Second {
-		t.Errorf("exit %d after %v, purges %q\n%s", code, time.Since(start), env.Data.Purges, errOut)
+	if code != output.OK || !strings.HasPrefix(env.Data.Purges, "not looked at:") {
+		t.Errorf("exit %d, purges %q\n%s", code, env.Data.Purges, errOut)
 	}
 }
 

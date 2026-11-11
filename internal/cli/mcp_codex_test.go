@@ -409,10 +409,10 @@ func TestParallelCodexSearchesInOneTurnBothSucceed(t *testing.T) {
 	_ = feedback.SetTurn(dir, codexChatB, feedback.Turn{ID: "p-b", N: 1, At: time.Now()})
 	recallAnswer = `[{"id":"m1","text":"fact","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}}]`
 	// Each search's recall waits until the other's has reached the bank:
-	// they overlap, or the wait runs out.
+	// they overlap, or both wait forever (go test's -timeout ends it).
 	var mu sync.Mutex
-	seen := map[string]bool{}
-	overlapped, active := true, true
+	reached := map[string]chan struct{}{"first": make(chan struct{}), "second": make(chan struct{})}
+	active := true
 	fakeHook = func(r *http.Request) {
 		mu.Lock()
 		on := active
@@ -427,22 +427,13 @@ func TestParallelCodexSearchesInOneTurnBothSucceed(t *testing.T) {
 			me, other = other, me
 		}
 		mu.Lock()
-		seen[me] = true
-		mu.Unlock()
-		for until := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-			mu.Lock()
-			ok := seen[other]
-			mu.Unlock()
-			if ok {
-				return
-			}
-			if time.Now().After(until) {
-				mu.Lock()
-				overlapped = false
-				mu.Unlock()
-				return
-			}
+		select {
+		case <-reached[me]:
+		default:
+			close(reached[me])
 		}
+		mu.Unlock()
+		<-reached[other]
 	}
 	a := codexMeta(codexChatA, codexChatA)
 	var wg sync.WaitGroup
@@ -453,15 +444,12 @@ func TestParallelCodexSearchesInOneTurnBothSucceed(t *testing.T) {
 	}
 	wg.Wait()
 	mu.Lock()
-	active, ov := false, overlapped
+	active = false
 	mu.Unlock()
 	for i := range outs {
 		if errs[i] || !strings.Contains(outs[i], "m1") {
 			t.Errorf("search %d: %v %s", i, errs[i], outs[i])
 		}
-	}
-	if !ov {
-		t.Error("the two searches did not run side by side")
 	}
 	if evs := recallEvents(t, home); len(evs) != 2 || evs[0].Session != codexChatA || evs[1].Session != codexChatA || evs[0].Turn != "p-a" || evs[1].Turn != "p-a" {
 		t.Errorf("recall lines %+v", evs)

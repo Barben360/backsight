@@ -532,6 +532,11 @@ func Update(d paths.Dirs, command string, fn func(*State) error) error {
 	return Save(d.StateFile(), s)
 }
 
+// LockWaitHook runs each time UpdateWithin or SaveWithin found the state
+// lock held, before it waits to try again; tests (of the callers too)
+// release the lock there.
+var LockWaitHook = func() {}
+
 // UpdateWithin is Update that waits for a held state lock, up to wait:
 // update apply's record and rollback must not fail on a tick or a hook
 // writing state.json at that moment. fn's own error is not retried.
@@ -543,6 +548,7 @@ func UpdateWithin(d paths.Dirs, command string, wait time.Duration, fn func(*Sta
 		if !errors.As(err, &held) || time.Now().After(deadline) {
 			return err
 		}
+		LockWaitHook()
 		time.Sleep(50 * time.Millisecond)
 	}
 }
@@ -555,6 +561,7 @@ func SaveWithin(d paths.Dirs, command string, wait time.Duration, raw []byte) er
 		l, _, err := Acquire(filepath.Join(d.LocksDir(), "state.lock"), command)
 		var held *HeldError
 		if errors.As(err, &held) && time.Now().Before(deadline) {
+			LockWaitHook()
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}

@@ -33,15 +33,16 @@ Optional:
 
 The first `make check` downloads the modules and builds the race runtime: count a few minutes; later runs take about a minute and a half.
 
+Every `make` target runs Go on 4 CPUs (`GOMAXPROCS`, and `golangci-lint --concurrency`), CI's runner size, so the machine stays usable while the race-detector tests run. `JOBS=<n>` changes it (`make check JOBS=8`); a `GOMAXPROCS` of your own does not.
+
 | Command | Does |
 |---|---|
 | `make check` | the whole gate below, in one command |
 | `make build` | builds `bin/backsight` |
-| `make test` | runs every test with the race detector, then the dashboard's page sweep without it |
+| `make test` | runs every test with the race detector, then without it the tests on a year of generated history, which skip under it (`make test-sweep`: the dashboard's page sweep and page reads, the metrics views) |
 | `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`), the slices balanced by the tests' recorded times |
 | `make test-durations [RUN=<id>]` | records those times (`scripts/testshard/durations.txt`) from the times each `test-race` slice of a CI run uploads (main's latest successful run by default; needs `gh`), refused if a slice is missing or a test failed; a test added since counts 0.05 s, so re-record when CI's slices drift apart |
 | `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag, and vets them with it for Linux and Windows |
-| `make bench-index` | runs the time budgets (the metrics index, the views, the dashboard's pages, the ledger lookup, the hook's 20 ms wait) without the race detector, as CI's `bench` job does |
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |
 | `make leaks` | scans the Git history for secrets |
@@ -86,14 +87,13 @@ Before every commit, `make check` must pass. It runs, and stops at the first fai
 
 - `gofmt -l .` (it must list nothing) and `go vet ./...`;
 - `make lint`, `make test` and `make test-hooks`;
-- `make bench-index` (the time budgets, without the race detector);
 - `scripts/third-party-licenses.sh --check` (the embedded licenses file is current);
 - `make cross`;
 - `gitleaks dir . --no-banner --redact`, when gitleaks is installed.
 
 Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) runs the tests, a signed snapshot release with a throwaway key, the sandbox tests and the fresh-install chain: setup from nothing, verify, store and search, backup and restore, update with rolled-back failures, undo and uninstall; and the M6 chain (`scripts/m6-chain.sh`): a server and two client homes, the dedup and key-rotation proofs.
 
-CI runs its jobs side by side: the race-detector tests in four slices (`make test-shard`), the Windows tests in three (in PowerShell: Git Bash would let Go read past a deny ACE) with their time budgets apart (the dashboard's in a job of its own), and the `testhooks` run, the time budgets and the cross-compilation in jobs of their own; the required check `test` passes once all of the Linux ones have. A pull request that changes only documentation (the Markdown of `docs/` and of the repository's root, `scripts/ci-docs-only.sh`) skips the Windows tests, the M6 chain and the native chains; the sandbox tests and the fresh-install chain still run, as they search the embedded docs. A newer push to a pull request cancels its older run.
+CI runs its jobs side by side: the race-detector tests in four slices (`make test-shard`), the Windows tests in three (in PowerShell: Git Bash would let Go read past a deny ACE), and the `testhooks` run, `make test-sweep` and the cross-compilation in jobs of their own; the required check `test` passes once all of the Linux ones have. A pull request that changes only documentation (the Markdown of `docs/` and of the repository's root, `scripts/ci-docs-only.sh`) skips the Windows tests, the M6 chain and the native chains; the sandbox tests and the fresh-install chain still run, as they search the embedded docs. A newer push to a pull request cancels its older run.
 
 Every Monday, `.github/workflows/price-drift.yml` compares the binary's price table (`internal/retain/estimate.go`) with LiteLLM's public list (`scripts/pricedrift`) and opens an issue, or updates the open one, when a price differs. Check the price on the provider's own pricing page before changing the table: LiteLLM is a community list, and its numbers never reach the binary on their own.
 
@@ -101,6 +101,7 @@ Every Monday, `.github/workflows/price-drift.yml` compares the binary's price ta
 
 - Each test must fail when the behaviour it guards is missing or wrong: assert the observable outcome (exit code, output, files written), not the implementation.
 - Cover the refusals and edge cases, not only the happy path.
+- No test may fail because of wall-clock time: no speed budget, no elapsed-time check of a deadline, no deadline of the test's own on a wait (`go test -timeout` is the only hang guard), no ordering by sleeps. Inject the clock or a tiny deadline and assert the outcome; wait on a channel, a file or a hook. Bound the work instead when it matters (the reads a page makes, the lines a catch-up reads, a query plan), and measure speed with benchmarks (`go test -bench`), outside the gate.
 - Write the test first and watch it fail.
 - A test that needs a metrics index but does not test its building or its migrations calls `indextest.Seed` (`internal/index/indextest`) on its directories before the first open: it gets a copy of an empty index already at the head, where a build from nothing runs every migration (close to a second under the race detector, paid once per test).
 - Build tags `testkey` and `testhooks` exist only for tests and CI; a release build refuses both (`make verify-keys`). Code that makes backsight fail on purpose (a failing migration or server smoke, the `BACKSIGHT_HOOK_CHAOS` switch of hook children) lives in `testhooks` files with a no-op twin, so no environment variable can trigger it in a release.

@@ -423,22 +423,28 @@ func TestTickImportCutByItsBudgetGoesOn(t *testing.T) {
 	home := devInstall(t, true)
 	fakeMemoryServer(t, home, nil)
 	history(t, home)
-	oldBudget := importTickBudget
-	importTickBudget = 300 * time.Millisecond
+	// The tick's bound ends after the first unit (the telemetry), as its
+	// budget running out there would.
+	oldCtx := importTickContext
+	var cut context.CancelFunc
+	importTickContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cut = context.WithCancel(ctx)
+		return ctx, cut
+	}
 	units := 0
 	afterImportUnit = func() {
 		if units++; units == 1 {
-			time.Sleep(400 * time.Millisecond) // past the budget, after the telemetry
+			cut()
 		}
 	}
-	t.Cleanup(func() { importTickBudget, afterImportUnit = oldBudget, nil })
+	t.Cleanup(func() { importTickContext, afterImportUnit = oldCtx, nil })
 	if r := tickOf(t); r.History != "earlier history: 4 shows and 1 credits imported, the rest at the next tick" {
 		t.Errorf("cut tick: %q", r.History)
 	}
 	if n := len(importEvents(t, home)); n != 1 || importMarks(t, home) != 0 {
 		t.Fatalf("after the cut: %d events, %d marks", n, importMarks(t, home))
 	}
-	importTickBudget = oldBudget
+	importTickContext, afterImportUnit = oldCtx, nil
 	if r := tickOf(t); r.History != "earlier history imported: 1 shows and 0 credits" {
 		t.Errorf("next tick: %q", r.History)
 	}
