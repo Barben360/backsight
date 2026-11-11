@@ -184,7 +184,7 @@ func TestMemoryNotesOnTheRealServer(t *testing.T) {
 		}
 		if n.Document == stored.Data.Document {
 			found = true
-			if n.Project != "billing" || n.Session != "sbx-notes" || n.Kind != "decision" || n.Text != text || time.Since(n.CreatedAt) > time.Hour || time.Since(n.CreatedAt) < -time.Minute {
+			if n.Project != "billing" || n.Session != "sbx-notes" || n.Kind != "decision" || n.Text != text || time.Since(n.CreatedAt) > time.Hour || time.Since(n.CreatedAt) < -time.Minute { //nolint:forbidigo // an hour of tolerance for the live server's clock, out of reach
 				t.Errorf("listed as %+v", n)
 			}
 		}

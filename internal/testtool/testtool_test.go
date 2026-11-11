@@ -158,7 +158,7 @@ func TestFakeWaitsForAFileAndRecordsItsPID(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("exited before its file appeared: %v", err)
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): //nolint:forbidigo // a negative wait: can only pass wrongly, never fail
 	}
 	if err := os.WriteFile(stop, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestFakeIgnoresSignals(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("exited on an interrupt: %v", err)
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): //nolint:forbidigo // a negative wait: can only pass wrongly, never fail
 	}
 	if err := os.WriteFile(stop, nil, 0o644); err != nil {
 		t.Fatal(err)

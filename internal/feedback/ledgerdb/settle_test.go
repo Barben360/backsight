@@ -374,7 +374,7 @@ func TestTwoDecidingProcesses(t *testing.T) {
 	if d, ok := t.Deadline(); ok {
 		// The deciders' barrier has no timer: a decider left waiting ends
 		// with this test's own -timeout instead of outliving it.
-		args = append(args, "-test.timeout="+time.Until(d).String())
+		args = append(args, "-test.timeout="+time.Until(d).String()) //nolint:forbidigo // hands the child go test's own remaining timeout
 	}
 	for i := range 2 {
 		cmd := exec.Command(os.Args[0], args...)

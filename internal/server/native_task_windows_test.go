@@ -143,7 +143,7 @@ func buildBacksight(t *testing.T, out string) {
 	if raw, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building backsight: %v\n%s", err, raw)
 	}
-	t.Logf("built backsight in %s", time.Since(start).Round(time.Second))
+	t.Logf("built backsight in %s", time.Since(start).Round(time.Second)) //nolint:forbidigo // logged, never asserted
 }
 
 // alive: pid runs.

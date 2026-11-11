@@ -678,7 +678,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			case r.Method == http.MethodGet:
 				if mentalGetDelay > 0 {
 					select {
-					case <-time.After(mentalGetDelay):
+					case <-time.After(mentalGetDelay): //nolint:forbidigo // the fake server's slowness is the stimulus, not a check
 					case <-r.Context().Done():
 						return
 					}

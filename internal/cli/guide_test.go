@@ -148,7 +148,7 @@ func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 				// hanging up (its context ends).
 				_, _ = io.Copy(io.Discard, r.Body)
 				select {
-				case <-time.After(f.delay):
+				case <-time.After(f.delay): //nolint:forbidigo // the fake server's slowness is the stimulus, not a check
 				case <-r.Context().Done():
 				}
 				f.mu.Lock()

@@ -75,7 +75,7 @@ func TestInstallScriptCleansUpWhenKilled(t *testing.T) {
 					select {
 					case err := <-done:
 						t.Fatalf("the script ended before tar started: %v", err)
-					case <-time.After(5 * time.Millisecond):
+					case <-time.After(5 * time.Millisecond): //nolint:forbidigo // a poll interval: the wait itself has no deadline
 					}
 				}
 				if ents, _ := os.ReadDir(tmp); len(ents) != 1 {
