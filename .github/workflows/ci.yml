@@ -76,7 +76,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -130,7 +130,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -170,7 +170,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -210,7 +210,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -281,7 +281,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -355,7 +355,7 @@ jobs:
       # by every job and saved by whichever ends first.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       # The job's own build and module caches, keyed on go.mod and go.sum:
       # restored by every run, saved by main's runs alone, once per key (the
@@ -406,7 +406,7 @@ jobs:
       # M4): this job proves the release build, not a cache's.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: false
       - run: scripts/ci-minisign.sh
       - name: Throwaway signing key
@@ -436,7 +436,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -459,7 +459,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # The server's model cache (scripts/hf-cache.sh), keyed on the
       # pinned image: its start does not depend on huggingface.co. A miss
@@ -506,7 +506,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # Node pinned for its npm: --allow-scripts needs npm 11 or newer
       # (Node 24.22.1 ships npm 11.19.1; the runner's own may be older).
@@ -567,7 +567,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # Node pinned for its npm: --allow-scripts needs npm 11 or newer
       # (Node 24.22.1 ships npm 11.19.1; the runner's own may be older).
@@ -629,7 +629,7 @@ jobs:
         run: scripts/ci-free-disk.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # The units run under the runner user's systemd user manager, which
       # linger starts and keeps (setup refuses without it).
@@ -714,7 +714,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          go-version: "1.26.11" # go.mod's toolchain line (workflows_test.go)
           cache: true
       # Native's models, keyed on the Windows lock (as native-chain's
       # hf-native on the Linux one): a miss only means setup downloads them.
