@@ -273,8 +273,8 @@ func lowerTimeouts(t *testing.T, server, doctor time.Duration) {
 	t.Cleanup(func() { ServerTimeout, doctorTimeout = oldS, oldD })
 }
 
-// shortRead gives the server read of key a 10 ms timeout and the others a
-// minute, for the test: only the read meant to time out does, however slow
+// shortRead gives the server read of key a 10 ms timeout and the others an
+// hour, for the test: only the read meant to time out does, however slow
 // the runner.
 func shortRead(t *testing.T, key string) {
 	t.Helper()

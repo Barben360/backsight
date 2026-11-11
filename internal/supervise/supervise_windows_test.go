@@ -16,7 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -53,15 +52,18 @@ func pids(t *testing.T, path string) []int {
 	return out
 }
 
-// gone waits up to within for pid to exit; true when it has (or no such
-// process remains).
-func gone(pid int, within time.Duration) bool {
+// gone: pid has exited (or no such process remains).
+func gone(pid int) bool { return waitGone(pid, 0) }
+
+// waitGone waits for pid to exit, up to ms milliseconds (windows.INFINITE:
+// no bound, go test's -timeout is the guard); true when it has.
+func waitGone(pid int, ms uint32) bool {
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
 		return true
 	}
 	defer func() { _ = windows.CloseHandle(h) }()
-	ev, _ := windows.WaitForSingleObject(h, uint32(max(within, 0)/time.Millisecond))
+	ev, _ := windows.WaitForSingleObject(h, ms)
 	return ev == windows.WAIT_OBJECT_0
 }
 
@@ -97,21 +99,17 @@ func TestKillingTheSupervisorKillsItsChildren(t *testing.T) {
 		t.Fatalf("children %v, want postgres' and the API's", children)
 	}
 	for _, pid := range children {
-		if gone(pid, 0) {
+		if gone(pid) {
 			t.Fatalf("child %d not running before the kill", pid)
 		}
 	}
 	if err := sup.Process.Kill(); err != nil { // TerminateProcess
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	// The children go with the supervisor's job, whatever the time it
+	// takes: a child the kill left runs on, and the test never ends.
 	for _, pid := range children {
-		if !gone(pid, time.Until(deadline)) {
-			t.Errorf("child %d still runs 2 s after the supervisor was killed", pid)
-			if p, err := os.FindProcess(pid); err == nil {
-				_ = p.Kill()
-			}
-		}
+		waitGone(pid, windows.INFINITE)
 	}
 }
 
@@ -274,9 +272,9 @@ func TestPipeSurvivesClientsThatComeAndGo(t *testing.T) {
 	opened := 0
 	for i := range 500 {
 		var h windows.Handle
-		for deadline := time.Now().Add(5 * time.Second); ; {
+		for {
 			h, err = windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
-			if !errors.Is(err, windows.ERROR_PIPE_BUSY) || time.Now().After(deadline) {
+			if !errors.Is(err, windows.ERROR_PIPE_BUSY) {
 				break
 			}
 			_, _, _ = procWaitNamedPipe.Call(uintptr(unsafe.Pointer(p)), 50) // every instance busy: wait for one
@@ -318,17 +316,12 @@ func TestKillEndsTheChildsTree(t *testing.T) {
 	if err := p.kill(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-p.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the child did not exit after kill")
+	// The child and its grandchild end with the kill, whatever the time
+	// it takes: one the kill left runs on, and the test never ends.
+	if err := <-p.done; err == nil {
+		t.Error("the child exited 0 after the kill: it was not killed")
 	}
-	if !gone(grandchild, 2*time.Second) {
-		t.Errorf("grandchild %d still runs after its parent's kill", grandchild)
-		if gp, err := os.FindProcess(grandchild); err == nil {
-			_ = gp.Kill()
-		}
-	}
+	waitGone(grandchild, windows.INFINITE)
 }
 
 type nopCloser struct{ io.Writer }
@@ -354,7 +347,8 @@ func TestUnresumableChildIsKilledAndRetried(t *testing.T) {
 		t.Fatalf("supervisor log: want the failed resume:\n%s", l)
 	}
 	pid, _ := strconv.Atoi(m[1])
-	if !gone(pid, 2*time.Second) {
+	// Killed and waited for before the log line: it is gone already.
+	if !gone(pid) {
 		t.Errorf("the unresumable postgres %d still exists", pid)
 	}
 	if got := testtool.Calls(t, x.pg); got != nil {
@@ -412,9 +406,7 @@ func TestAskTellsAPipeThatRefusesAccessFromNotRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = windows.CloseHandle(h) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err = Ask(ctx, p, opStatus)
+	_, err = Ask(context.Background(), p, opStatus)
 	if !errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrNotRunning) || !strings.Contains(err.Error(), "elevated") {
 		t.Errorf("Ask on a pipe that refuses access = %v, want ErrAccessDenied naming the elevated terminal", err)
 	}

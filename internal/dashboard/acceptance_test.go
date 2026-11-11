@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/chart"
 	"github.com/Barben360/backsight/internal/index/indexgen"
@@ -99,8 +98,8 @@ func allAcceptancePages(t *testing.T) []accPage {
 	accOnce.Do(func() {
 		oldSpec, oldTimeout := dataSpec, renderTimeout
 		t.Cleanup(func() { dataSpec, renderTimeout = oldSpec, oldTimeout })
-		// 13 months drawn over a year take seconds under -race: the sweep reads the pages, the budgets time them.
-		dataSpec, renderTimeout = acceptanceSpec, time.Minute
+		// 13 months drawn over a year take seconds: the sweep reads the pages, it does not time them.
+		dataSpec, renderTimeout = acceptanceSpec, servedRenderTimeout
 		h := dataHarness(t)
 		long := indexgen.AppendLongSession(t, h.dirs.State, longTurns)
 		hot := indexgen.AppendHotMemory(t, h.dirs.State, hotShows)
@@ -547,7 +546,7 @@ func TestPagesWithManyPCsStayUnderSizeCap(t *testing.T) {
 	}
 	old, oldTimeout := dataSpec, renderTimeout
 	t.Cleanup(func() { dataSpec, renderTimeout = old, oldTimeout })
-	dataSpec, renderTimeout = acceptanceSpec, time.Minute
+	dataSpec, renderTimeout = acceptanceSpec, servedRenderTimeout
 	dataSpec.OtherPCs = 63
 	h := dataHarness(t)
 	dataSpec = old

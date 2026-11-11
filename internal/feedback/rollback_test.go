@@ -277,11 +277,7 @@ func TestAppendFoldedStillTakesTheLock(t *testing.T) {
 	go func() {
 		done <- feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindHide, TS: early, IDs: []string{"m1"}, Verdict: "wrong"})
 	}()
-	select {
-	case err = <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("AppendFolded never returned")
-	}
+	err = <-done // one that never returns hangs until go test's -timeout
 	var held *state.HeldError
 	if !errors.As(err, &held) {
 		t.Errorf("AppendFolded with the lock held: %v, want the lock's error (it waited its whole wait)", err)
@@ -315,11 +311,7 @@ func TestAppendFoldedStillTakesTheLock(t *testing.T) {
 	go func() {
 		done <- feedback.NewJournal(dir, feedback.Common{}).AppendFolded(feedback.Event{Kind: feedback.KindHide, TS: early, IDs: []string{"m3"}, Verdict: "wrong"})
 	}()
-	select {
-	case err = <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("AppendFolded never returned")
-	}
+	err = <-done
 	if err != nil {
 		t.Errorf("AppendFolded with the lock released during its wait: %v, want nil", err)
 	}

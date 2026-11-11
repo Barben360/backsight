@@ -318,9 +318,9 @@ func TestCrashBetweenAppendAndFold(t *testing.T) {
 	exportMatches(t, "after the next settle", o)
 }
 
-// barrier is a seam two deciders meet at: each waits for the other, at
-// most 20 s (a decider that never comes leaves the race unproven, which
-// the journal check reports).
+// barrier is a seam two deciders meet at: each waits for the other, with
+// no timer (a decider that never comes, held back by the first, hangs
+// until go test's -timeout).
 func barrier() func() {
 	var n atomic.Int32
 	all := make(chan struct{})
@@ -328,10 +328,7 @@ func barrier() func() {
 		if n.Add(1) == 2 {
 			close(all)
 		}
-		select {
-		case <-all:
-		case <-time.After(20 * time.Second):
-		}
+		<-all
 	}
 }
 
@@ -373,8 +370,14 @@ func TestTwoDecidingProcesses(t *testing.T) {
 	var wg sync.WaitGroup
 	outs := make([]bytes.Buffer, 2)
 	errs := make([]error, 2)
+	args := []string{"-test.run=^TestDecidingProcess$", "-test.v"}
+	if d, ok := t.Deadline(); ok {
+		// The deciders' barrier has no timer: a decider left waiting ends
+		// with this test's own -timeout instead of outliving it.
+		args = append(args, "-test.timeout="+time.Until(d).String()) //nolint:forbidigo // hands the child go test's own remaining timeout
+	}
 	for i := range 2 {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestDecidingProcess$", "-test.v")
+		cmd := exec.Command(os.Args[0], args...)
 		cmd.Env = append(os.Environ(), deciderEnv+"="+o.Dirs.State+"|"+gate+"|"+fmt.Sprint(i))
 		cmd.Stdout, cmd.Stderr = &outs[i], &outs[i]
 		wg.Go(func() { errs[i] = cmd.Run() })
@@ -429,8 +432,9 @@ func TestDecidingProcess(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(gate, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		deadline := time.Now().Add(20 * time.Second)
-		for time.Now().Before(deadline) {
+		// No deadline: a decider that never comes hangs this one until its
+		// -test.timeout, the parent's remaining time.
+		for {
 			if names, _ := os.ReadDir(gate); len(names) == 2 {
 				return
 			}

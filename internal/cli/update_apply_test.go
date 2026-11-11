@@ -87,7 +87,7 @@ func withBinaries(t *testing.T, d paths.Dirs) *fakeBinaries {
 }
 
 func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]byte, []byte, int, error) {
-	if d, ok := ctx.Deadline(); ok && time.Until(d) <= time.Millisecond {
+	if d, ok := ctx.Deadline(); ok && time.Until(d) <= time.Millisecond { //nolint:forbidigo // the fake waits out a tiny deadline, as a real exec would
 		// A real exec takes longer: the deadline is reached before the
 		// child does anything (Windows' clock may not even have moved yet).
 		<-ctx.Done()

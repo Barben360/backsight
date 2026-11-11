@@ -195,13 +195,13 @@ func logTail(path string) string {
 // removeAllRetry is os.RemoveAll, retried for a few seconds on Windows:
 // the processes of a job just closed may still hold their files a moment.
 func removeAllRetry(path string) error {
-	deadline := time.Now().Add(removeRetryWait)
+	deadline := retryNow().Add(removeRetryWait)
 	for {
 		err := os.RemoveAll(path)
-		if err == nil || !time.Now().Before(deadline) || errors.Is(err, os.ErrNotExist) {
+		if err == nil || !retryNow().Before(deadline) || errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		time.Sleep(100 * time.Millisecond)
+		retrySleep(100 * time.Millisecond)
 	}
 }
 

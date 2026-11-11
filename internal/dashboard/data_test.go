@@ -362,11 +362,7 @@ func TestDoctorWarmedAtStart(t *testing.T) {
 			return []metrics.DoctorCheck{{ID: "server", Status: "ok"}}, nil
 		}
 	})
-	select {
-	case <-started:
-	case <-time.After(10 * time.Second): // a watchdog, not a synchronisation
-		t.Fatal("no doctor run after Start")
-	}
+	<-started // without the warm-up this hangs until go test's -timeout
 	if _, err := h.s.data.src.Doctor(context.Background()); err != nil {
 		t.Fatal(err)
 	}

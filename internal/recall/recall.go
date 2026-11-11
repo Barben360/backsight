@@ -329,6 +329,11 @@ func meta(answers []answer, name string) ScopeMeta {
 	return m
 }
 
+// afterCall, when set (tests), runs once each server call of a search has
+// returned, with its scope's name: a test ends the search's context only
+// after the calls it means to keep came back.
+var afterCall func(scope string)
+
 func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sources bool, maxTokens int) []answer {
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokens
@@ -365,6 +370,9 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 				}
 			}
 			answers[i] = answer{scope: j.scope.name, query: j.index, hits: hits, err: err, ms: int(time.Since(start).Milliseconds())}
+			if afterCall != nil {
+				afterCall(j.scope.name)
+			}
 		}()
 	}
 	wg.Wait()

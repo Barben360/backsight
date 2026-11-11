@@ -130,8 +130,9 @@ var prodRenderTimeout = renderTimeout
 
 // servedRenderTimeout bounds the requests of a test that means "it is
 // served", not "it is fast", as dashboard.SetRenderTimeout's other users
-// do (internal/cli's parity test).
-const servedRenderTimeout = 2 * time.Minute
+// do (internal/cli's parity test). An hour is out of reach: go test's
+// -timeout (20 min) ends a hang first, so a busy runner never sees 503.
+const servedRenderTimeout = time.Hour
 
 // servedBound raises the render bound to servedRenderTimeout for the
 // test, unless it set its own first (the tests of the "too slow" answer,
