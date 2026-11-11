@@ -125,11 +125,12 @@ func validThreadID(id string) bool {
 	return true
 }
 
-// localAbs: an absolute path on this machine's disks. A network path
+// localAbs: an absolute path on this machine's disks, or a rooted one
+// (/home/u/src: on Windows, the current drive's). A network path
 // (\\host\share, //host/share) is refused: looking at it would reach
 // another machine.
 func localAbs(p string) bool {
-	return p != "" && len(p) <= 4096 && filepath.IsAbs(p) && !strings.ContainsRune(p, 0) &&
+	return p != "" && len(p) <= 4096 && (filepath.IsAbs(p) || strings.HasPrefix(p, "/")) && !strings.ContainsRune(p, 0) &&
 		!strings.HasPrefix(p, `\\`) && !strings.HasPrefix(p, "//")
 }
 
