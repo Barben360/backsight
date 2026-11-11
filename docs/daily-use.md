@@ -1,6 +1,6 @@
 # Daily use
 
-What backsight does during your Claude Code sessions, and the commands you use day to day. The details of each step, with what it costs in time and context, are in [how-it-works.md](how-it-works.md); words you may not know are in the [glossary](glossary.md).
+What backsight does during your Claude Code sessions, and the commands you use day to day. Codex sessions work the same way; what differs is in [Codex](codex.md). The details of each step, with what it costs in time and context, are in [how-it-works.md](how-it-works.md); words you may not know are in the [glossary](glossary.md).
 
 ## What happens in a session
 
@@ -17,7 +17,7 @@ Hooks never block Claude Code: if the server is down, recall is skipped and writ
 
 ## The line at session start
 
-Each session starts with one line from backsight (Claude Code shows it after `SessionStart:startup says:`). Its first emoji tells the memory's state, and 🗂️ names the project. The word backsight is shown in rosewood; set `NO_COLOR=1` in the environment Claude Code starts from to turn the color off:
+Each session starts with one line from backsight (Claude Code shows it after `SessionStart:startup says:`; Codex shows it with your first prompt). Its first emoji tells the memory's state, and 🗂️ names the project. The word backsight is shown in rosewood; set `NO_COLOR=1` in the environment Claude Code starts from to turn the color off:
 
 | Line | Means |
 |---|---|
@@ -27,7 +27,7 @@ Each session starts with one line from backsight (Claude Code shows it after `Se
 | ⚠️ backsight · 🗂️ my-project · memory unavailable (server unreachable) · run `backsight doctor` | No recall in this session for now; sessions are sent later. See [the server is down](troubleshooting.md#the-server-is-down). |
 | 🛠️ backsight · 🗂️ my-project · memory unavailable (maintenance in progress), back when it ends | A backup, restore or update is running. |
 
-More lines may follow: ⬆️ a newer release ([update](update.md)), ⚠️ Claude Code's wiring drifted (run `backsight client install`), ⚠️ sessions quarantined (run `backsight doctor`). The first session after setup also starts with 👋 and says where sessions are stored. If memory fails later in a session, one ⚠️ or 🛠️ line says so, once.
+More lines may follow: ⬆️ a newer release ([update](update.md)), ⚠️ Claude Code's wiring drifted (run `backsight client install`; in Codex, Codex's wiring, `backsight client install --codex`), ⚠️ sessions quarantined (run `backsight doctor`). The first session after setup also starts with 👋 and says where sessions are stored. If memory fails later in a session, one ⚠️ or 🛠️ line says so, once.
 
 ## Recognizing a memory
 
@@ -109,6 +109,8 @@ The plugin adds six skills you can call in Claude Code:
 | `/backsight:update` | Install a newer release: Claude shows the installed and new versions and what changes, plans the update, runs it once you approve, then asks you to type `/reload-plugins`. The session line announcing a release names it. See [update.md](update.md#from-a-claude-code-session). |
 
 Claude also calls them on its own when you say "remember", "from now on" or "pause memory".
+
+In Codex the same skills are called with `$`: `$backsight:remember`, `$backsight:pause` and so on ([Codex](codex.md#skills)).
 
 ## Searching from the terminal
 
@@ -197,16 +199,16 @@ A hidden or reported memory that a session of another project retired shows both
 
 | Command | Effect |
 |---|---|
-| `backsight pause` | Nothing typed in this session from now on is sent to memory. Inside Claude Code, use `/backsight:pause`. |
+| `backsight pause` | Nothing typed in this session from now on is sent to memory. Inside Claude Code, use `/backsight:pause`; inside Codex, `$backsight:pause`. |
 | `backsight resume` | The session is recorded again. |
 | `backsight pause --project` | Adds this project's directory to `privacy.exclude_paths` in `config.toml`: no session in it is recorded. |
 | `backsight resume --project` | Removes it. |
 
-See [privacy.md](privacy.md) for the other opt-outs.
+See [privacy.md](privacy.md) for the other opt-outs. In a shell inside Codex, or one tool started from the other's shell: [pausing in Codex](codex.md#pausing-in-codex).
 
 ## Importing past sessions
 
-Setup offers to import the sessions Claude Code still keeps ([backfill](glossary.md#backfill)). You can also run it later:
+Setup offers to import the sessions Claude Code still keeps ([backfill](glossary.md#backfill)), and Codex's with Codex wired (`--tools` picks one tool: [Codex](codex.md#past-codex-sessions)). You can also run it later:
 
 ```sh
 backsight retain backfill --plan
@@ -228,7 +230,7 @@ To import a queue setup left to `jobs tick` in one go rather than three sessions
 ## Seeing what memory does
 
 - `backsight why` shows the last memories the hooks injected, with their scores and the rule that let them through.
-- `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, wrong or outdated, what those reports retired, how often the ranking by use changed which memories a prompt or a search showed, extraction cost (`backsight stats 30` for 30 days).
+- `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, wrong or outdated, what those reports retired, how often the ranking by use changed which memories a prompt or a search showed, extraction cost (`backsight stats 30` for 30 days). With Codex wired too, it adds a `By tool` line, and `--client codex` counts one tool alone ([Codex](codex.md#both-tools-on-one-memory)).
 - `backsight feedback log --id <id>` shows the timeline of one memory: each time it was shown to Claude, where and at which rank, each time Claude reported using it, and how each showing was settled (credited, a confident miss when it was near the top and unused, or unknown when the turn ended without a report), then its counts. `--session <id>` shows a whole session instead (its first 8 characters are enough).
 - `backsight doctor` checks the whole install.
 

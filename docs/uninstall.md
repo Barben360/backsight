@@ -7,6 +7,8 @@ How to remove backsight, and what stays afterwards.
 | | `backsight setup --undo` | `backsight uninstall` |
 |---|---|---|
 | Claude Code wiring (plugin, permission rule) | removed | removed |
+| Codex wiring (two plugins, their marketplace, the hook trust) | removed from each Codex home setup wired | removed from each Codex home backsight wired |
+| Codex's own memories, if backsight turned them off | back as they were | back on, unless you set them since |
 | Scheduler entries | removed | removed |
 | An old Hindsight integration setup unwired | put back | left unwired |
 | The server | stopped if setup started it, data kept | kept running (default), or stopped, or deleted |
@@ -14,7 +16,7 @@ How to remove backsight, and what stays afterwards.
 | Config, secrets, state | kept | kept, or deleted with `--purge-local` |
 | Backups | kept | kept |
 
-Use `setup --undo` to go back to how the machine was before setup, keeping backsight installed. Use `uninstall` to remove backsight itself.
+Use `setup --undo` to go back to how the machine was before setup, keeping backsight installed. Use `uninstall` to remove backsight itself. To unwire Codex alone, keeping Claude Code and the memory: `backsight client uninstall --codex` ([Codex](codex.md#uninstall-and-undo)).
 
 If setup replaced another Hindsight integration and you want it back, run `backsight setup --undo` before uninstalling: uninstall does not put it back.
 
@@ -30,7 +32,10 @@ backsight uninstall
 1. the scheduler entries, after waiting for a running job to finish (up to 2 minutes);
 2. the plugin and its marketplace from Claude Code;
 3. the permission rule; it also offers to put back the transcript retention setup raised;
-4. the shim, the `backsight` command on PATH and the binaries, last.
+4. with Codex wired: its two plugins and their marketplace, backsight's hook trust tables in Codex's `config.toml`, and Codex's own memories back on when backsight turned them off ([Codex](codex.md#uninstall-and-undo));
+5. the shim, the `backsight` command on PATH and the binaries, last.
+
+Then restart Codex if it is wired: its open sessions still run the removed plugins. When `codex` is no longer on your PATH, uninstall skips step 4 and names the commands to run by hand.
 
 The server keeps running with your memory; uninstall prints the command to stop it yourself. Config, secrets, state and backups stay, so a later install picks up where you left off.
 

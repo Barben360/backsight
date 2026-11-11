@@ -37,6 +37,10 @@ Type `/backsight:update` (or ask Claude to update backsight). Claude:
 
 Without the skill, `! backsight update apply` typed in the prompt runs the update in the session's shell.
 
+### From a Codex session
+
+Type `$backsight:update`: the same steps, ending with a request to restart Codex, and to review backsight's hooks again when the update changed them. Codex's sandbox may block the update, which writes outside the workspace and downloads the release: Codex then asks you to approve running it with escalated permissions ([Codex](codex.md#updates)).
+
 ### From a terminal
 
 ```sh
@@ -50,7 +54,7 @@ backsight update apply
 
 1. downloads the release archive with its `checksums.txt` and signature, and verifies both; if either fails, nothing changes (exit 20);
 2. takes the maintenance lock, installs the new binary next to the old one, and switches the shim, so `backsight` on your PATH runs the new version (on Windows, where running Claude Code sessions hold the shim, it renames the running copy aside: [Windows](windows.md#updates-and-uninstall-while-claude-code-runs));
-3. runs the new version's client migrations, its plugin update and its scheduler refresh;
+3. runs the new version's client migrations, its plugin update and its scheduler refresh, and with Codex wired, its `client install --codex`, which adds again the Codex plugins whose files changed;
 4. if the new release pins another Hindsight version, upgrades the server (below);
 5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`). From v0.1.4-m5 it first renames a bank still called `claude-memory` to `backsight` (`backsight bank rename`); when the server is busy, the daily job does it after its backup;
 6. indexes the new version's docs for `backsight guide search` (a failure there is only a warning);
@@ -59,7 +63,7 @@ backsight update apply
 9. on Windows, restarts the server's supervisor when it needs to ([Windows](windows.md#updates-and-uninstall-while-claude-code-runs));
 10. records the update.
 
-Then restart Claude Code (or run `/reload-plugins`) to load the new plugin.
+Then restart Claude Code (or run `/reload-plugins`) to load the new plugin, and restart Codex. When the update changed backsight's hooks, Codex asks you to review them again ([Codex](codex.md#trust-the-hooks)).
 
 After the upgrade that brings it, the maintenance run every 15 minutes (`jobs tick`) also adds earlier history to the per-memory counts: the memories shown and the clear credits that this machine's telemetry and the Claude Code transcripts still on disk recorded. It spends at most a minute per run and goes on at the next one until it is done; `backsight feedback import` does it at once.
 

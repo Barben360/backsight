@@ -101,6 +101,12 @@ func TestCompatibilityNamesTheMinimumClaudeCode(t *testing.T) {
 	}
 }
 
+func TestCompatibilityNamesTheMinimumCodex(t *testing.T) {
+	if got := mustDocValue(t, compatibilityDoc, "Current", "Codex"); got != codex.MinVersion() {
+		t.Errorf("docs/compatibility.md says Codex %q, client install --codex and setup refuse below %q", got, codex.MinVersion())
+	}
+}
+
 func TestSecurityListsTheTrustedReleaseKeys(t *testing.T) {
 	want := map[string]string{}
 	for _, k := range versionReport(t).SigningKeys {

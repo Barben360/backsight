@@ -1,6 +1,6 @@
 # Install
 
-How to install backsight and set it up for Claude Code. The short path is in the [README](../README.md#before-you-start); words you may not know are in the [glossary](glossary.md).
+How to install backsight and set it up for Claude Code, Codex or both. The short path is in the [README](../README.md#before-you-start); words you may not know are in the [glossary](glossary.md).
 
 ## Requirements
 
@@ -10,6 +10,7 @@ How to install backsight and set it up for Claude Code. The short path is in the
   - let your user run it: `sudo usermod -aG docker $USER`, then log out and back in ([Linux post-install steps](https://docs.docker.com/engine/install/linux-postinstall/)). Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) avoids that and works too;
   - check with `docker compose version`, without `sudo`.
 - **Claude Code** 2.1.309 or newer, with the `claude` command on your PATH: [install Claude Code](https://code.claude.com/docs/en/setup).
+- Or, instead or as well, **Codex** 0.167.0 or newer, with the `codex` command on your PATH: see [Codex](codex.md#requirements).
 - **An LLM provider for the memory server**, which extracts memories from your sessions ([cost](../README.md#what-it-costs), [terms and data location](privacy.md#your-llm-provider)):
   - an API key from a pay-as-you-go account: [DeepSeek](https://platform.deepseek.com/api_keys) (top up a few dollars first), [Anthropic](https://platform.claude.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys), or a compatible endpoint;
   - or [Ollama](https://ollama.com/download) on this machine, with no key (on Linux it must listen on an address the server container reaches: see [Local models with Ollama](#local-models-with-ollama));
@@ -69,16 +70,18 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 6. wires Claude Code: a plugin with the hooks, the memory tools and the skills, plus a permission rule for the memory tools;
 7. sets how long Claude Code keeps its transcripts, as you answered;
 8. installs the background jobs (a timer every 15 minutes and a daily one) and, with backups on, generates your backup identity, the key backups are encrypted to;
-9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
+9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip (with Codex, `backsight verify --codex` checks Codex's the same way);
 10. unwires an older Hindsight integration from Claude Code, if you chose to (see below);
 11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted, and starts the first `jobs tick` at once so the import begins before setup ends;
 12. queues the folder of notes you gave for import ([import](import.md)), if you accepted, and starts the first `jobs tick` if the backfill did not.
+
+With Codex installed, setup first asks which tools to wire. With Codex picked, it adds Codex's two plugins after step 7, verifies them in step 9, offers Codex's past sessions in step 11's backfill, and after step 12 queues the import of Codex's own memories and turns them off, each only as you answered ([Codex](codex.md#install)). With Codex alone, the steps that are Claude Code's alone (6, 7 and 10) are skipped: "Claude Code is not among the tools wired".
 
 The first run downloads about 2.4 GB: the server images (about 1.2 GB, with Docker's progress shown), then the embedding models at the server's first start (about 1.2 GB; setup prints the time spent while it waits). Expect several minutes on a home connection. Every step is journaled: if setup stops, `backsight setup --resume` continues where it stopped, the server it started included.
 
 A rerun of `backsight setup` reuses your earlier answers and lists them under the plan. To change them, run `backsight setup --reconfigure`: it asks every question again, your earlier answers as the defaults (Enter keeps one). Or give one answer with `--answer id=value`, for example `--answer provider=openai`. Once the server is installed, the provider, model and backups answers live in `config.toml`: edit them there.
 
-When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin loads.
+When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin loads. Restart Codex too, and trust backsight's hooks in the review it shows at start ([Codex](codex.md#trust-the-hooks)).
 
 ## Setup questions
 
@@ -88,12 +91,15 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 | `model` | depends on the provider | the provider's preset |
 | `base_url`, only with `anthropic`, `openai` or `ollama`: the provider's API address | a URL, or empty for the provider's own | the provider's own (`http://host.docker.internal:11434` with `ollama`) |
 | `ack_subscription`, only with `claude-code`: accept the subscription's terms | `yes` | none, you must answer |
-| `retention`: how long Claude Code keeps transcripts | a number of days (`3650` offered), or `keep` (leave Claude Code's setting) | `3650` |
+| `tools`, only when Codex is installed: which coding tools to wire | `claude-code`, `codex`, `both` | `both` when Claude Code is installed too, else `codex` |
+| `retention`, only with Claude Code: how long it keeps transcripts | a number of days (`3650` offered), or `keep` (leave Claude Code's setting) | `3650` |
 | `backups`: daily encrypted backups | `on`, `off` | `on` |
 | `reference`, only when another Hindsight integration is wired: unwire it | `retire`, `keep` | `retire` |
-| `backfill`, only when Claude Code keeps past sessions: import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
+| `backfill`, only when a tool picked keeps past sessions (Claude Code's transcripts, Codex's history): import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
 | `import`: import a folder of notes or another tool's memory files ([import](import.md)) | `yes`, `no` | `no` |
 | `import_path`, only after `import=yes`: the folder (`~` is your home folder) | a folder | none, you must answer; setup checks it holds files to import and shows their count and cost. A rerun leaves a folder already imported alone (`backsight import <folder>` sends its new files) |
+| `codex_import`, only with Codex, when its own memories hold files to send: import them in the background ([Codex](codex.md#codexs-own-memories)) | `yes`, `no` | `no` (`yes` recommended) |
+| `codex_memories`, only with Codex, when its own memories are on: turn them off | `off`, `keep` | `off` |
 | `consent`: go ahead with the plan | `yes`, `no` | none, you must answer |
 
 Notes on the choices:
@@ -168,7 +174,7 @@ A coding agent (Claude Code or another) can install backsight for you: point it 
 
 | What | Where |
 |---|---|
-| Binaries, the shim, the server's Compose files, backups | `~/.local/share/backsight` |
+| Binaries, the shim, the server's Compose files, backups, Codex's plugins (`codex-marketplace`) | `~/.local/share/backsight` |
 | `config.toml` and `secrets.toml` | `~/.config/backsight` |
 | State: cursors, outboxes, journals, logs | `~/.local/state/backsight` |
 | The command on PATH | `~/.local/bin/backsight` |
@@ -194,13 +200,13 @@ The old server and its data are left running and untouched: stop it yourself onc
 
 ## A server-only host
 
-A machine that only holds the shared memory for your other PCs, a home server or a NAS for example, needs Docker and an LLM provider, not Claude Code:
+A machine that only holds the shared memory for your other PCs, a home server or a NAS for example, needs Docker and an LLM provider, not Claude Code or Codex:
 
 ```sh
 backsight setup --role server
 ```
 
-Setup writes `role = "server"` under `[server]` in `config.toml`, installs the server, the documentation bank and the scheduler entries, and skips what wires Claude Code: its pre-flight does not look for the `claude` command, it skips the questions about retention, an older Hindsight install, backfill and import, and its `client`, `retention`, `verify`, `reference`, `backfill` and `import` steps read `skipped: server-only host`. Both scheduled jobs are installed: `jobs maintain` makes the daily backup, and `jobs tick` starts the server again once its private address is back after a reboot. `backsight doctor` reports the checks that look at Claude Code as `not a client: server-only host`. `backsight setup --undo` reverses what setup did there.
+Setup writes `role = "server"` under `[server]` in `config.toml`, installs the server, the documentation bank and the scheduler entries, and skips what wires Claude Code or Codex: its pre-flight does not look for the `claude` or `codex` command, it skips the questions about the tools, retention, an older Hindsight install, backfill and imports, and its `client`, `retention`, `codex`, `verify`, `reference`, `backfill`, `import`, `codex_import` and `codex_memories` steps read `skipped: server-only host`. Both scheduled jobs are installed: `jobs maintain` makes the daily backup, and `jobs tick` starts the server again once its private address is back after a reboot. `backsight doctor` reports the checks that look at Claude Code as `not a client: server-only host`. `backsight setup --undo` reverses what setup did there.
 
 Then open the server to your other PCs with `backsight server expose --private <address>` (a tailnet address keeps the API key encrypted), which hands out the connection token they join with; `backsight server token` writes it again. The token holds the API key: carry it to the other PC yourself. Joining, offline laptops and a lost laptop: [several-pcs.md](several-pcs.md).
 
@@ -214,4 +220,4 @@ On a machine already set up for Claude Code (`role = "both"`, the default), `--r
 backsight setup --undo
 ```
 
-This reverses what setup changed: Claude Code's files (from the copies setup kept), the scheduler entries, the plugin, the server it started, and any old integration it unwired. Config, secrets and the memory database are kept. Add `--plan` to see the list first. To remove backsight completely, see [uninstall.md](uninstall.md).
+This reverses what setup changed: Claude Code's files (from the copies setup kept), the scheduler entries, the plugin, Codex's plugins and its memories setting ([Codex](codex.md#uninstall-and-undo)), the server it started, and any old integration it unwired. Config, secrets and the memory database are kept. Add `--plan` to see the list first. To remove backsight completely, see [uninstall.md](uninstall.md).

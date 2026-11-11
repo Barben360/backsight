@@ -52,6 +52,10 @@ Older files keep this table under its former name, `[client]` (`client.retention
 
 Claude Code's directory is `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`. `--config-dir <dir>` on `setup`, `connect`, `verify` and the `client` commands picks another one (another Claude Code profile).
 
+## `[clients.codex]`: Codex's own settings
+
+No key yet. An empty `[clients.codex]` table is accepted, and any key in it refused, as an unknown key anywhere. Which Codex home backsight wired is not set here: `backsight client install --codex` records it in backsight's state (from `--codex-home`, else `$CODEX_HOME`, else `~/.codex`), and every later command uses that one ([Codex](codex.md#install)).
+
 ## `[projects]`
 
 | Key | Default | Effect |
@@ -65,7 +69,7 @@ Claude Code's directory is `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`. `--c
 | Key | Default | Effect |
 |---|---|---|
 | `privacy.exclude_paths` | `[]` | Directories whose sessions are never sent and get no briefing (their subdirectories and a project's worktrees too). `backsight pause --project` adds the current project, `backsight resume --project` removes it. |
-| `privacy.skip_entrypoints` | `["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"]` | Entrypoints (glob patterns) whose turns are never sent: Claude Code's entrypoint, or the front end a Codex thread was started from. The default skips headless runs: Claude Code's Agent SDK (`sdk-cli`, `sdk-ts`, `sdk-py`), `codex exec`, Codex's SDKs, and Codex run as another agent's tool (its MCP server); `[]` sends them too. A `config.toml` that sets this key keeps its own value, with one exception: the former default, exactly `["sdk-*"]` as setup wrote it, becomes today's when `backsight update apply` runs its client migrations (a config editor run: `backsight client config restore <run>` puts the line back). Any other value stays: add the Codex patterns to it yourself to skip those runs too. |
+| `privacy.skip_entrypoints` | `["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"]` | Entrypoints (glob patterns) whose turns are never sent: Claude Code's entrypoint, or the front end a Codex thread was started from. The default skips headless runs: Claude Code's Agent SDK (`sdk-cli`, `sdk-ts`, `sdk-py`), `codex exec`, Codex's SDKs, and Codex run as another agent's tool (its MCP server); `[]` sends them too ([headless Codex](codex.md#headless-codex)). A `config.toml` that sets this key keeps its own value, with one exception: the former default, exactly `["sdk-*"]` as setup wrote it, becomes today's when `backsight update apply` runs its client migrations (a config editor run: `backsight client config restore <run>` puts the line back). Any other value stays: add the Codex patterns to it yourself to skip those runs too. |
 
 ## `[components]`
 
@@ -98,7 +102,7 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | `recall.briefing` | `"model"` | The briefing at session start. `"model"`: a page the server keeps per project from its memories (one LLM call to refresh it after new memories). `"recent"`: the project's 5 most recent memories, no LLM call. |
 | `recall.briefing_refresh_interval` | `"6h"` | With `briefing = "model"`: the least time between two refreshes of a project's briefing page by the server (a duration such as `"6h"` or `"90m"`; `"0"` is no floor). New memories that come sooner wait for the next refresh, one at most per interval. Pages made by an earlier version get it at the next `jobs tick` after an update, a restore or a change of `server.bank`, and `jobs maintain` sets it again every day. Keep it the same on every PC sharing a server: each PC sets its own value on every page. Setting it replaces the page's whole refresh trigger, so a trigger field changed by hand on the server is reset. |
 | `recall.families` | `false` | Search the projects you work on together with the current one (worked out on this machine from your sessions, listed by `backsight projects`) in its project scope, like `related`, without its boost. Off until it is shown to improve recall. |
-| `recall.failure_pitfalls` | `false` | When a tool call fails (`Bash`, `Edit`, `Write`, `MultiEdit`, `WebFetch` or an MCP server's tool), search the memory for that failure and hand Claude up to 2 memories scoring at least 0.8, once per kind of error and session, within `recall.session_budget_chars`. Off until it is shown to help. After changing it, run `backsight client install`: the hook is wired only while this is `true`. **Needs v0.1.6-m5 or newer:** an older backsight refuses a `config.toml` with a key it does not know, so remove the line before installing an older version. A failed `backsight update apply` is not affected: its rollback puts back the `config.toml` you had before the update. backsight never writes this key. |
+| `recall.failure_pitfalls` | `false` | Claude Code only (Codex reports no failed tool call to its hooks). When a tool call fails (`Bash`, `Edit`, `Write`, `MultiEdit`, `WebFetch` or an MCP server's tool), search the memory for that failure and hand Claude up to 2 memories scoring at least 0.8, once per kind of error and session, within `recall.session_budget_chars`. Off until it is shown to help. After changing it, run `backsight client install`: the hook is wired only while this is `true`. **Needs v0.1.6-m5 or newer:** an older backsight refuses a `config.toml` with a key it does not know, so remove the line before installing an older version. A failed `backsight update apply` is not affected: its rollback puts back the `config.toml` you had before the update. backsight never writes this key. |
 
 ## `[llm]`: the model that extracts memories
 

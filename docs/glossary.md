@@ -114,6 +114,8 @@ The small program `~/.local/bin/backsight` points to. It always starts the curre
 
 How backsight plugs into Claude Code. The **plugin** `backsight` holds the **hooks** (commands Claude Code runs at session start, on each prompt, and so on), the four **memory tools** Claude calls (`memory_search`, `memory_read`, `memory_store`, `memory_credit`, served over MCP) and the **skills** (`/backsight:remember`, `/backsight:pause`, `/backsight:memory-retro`, `/backsight:memory`, `/backsight:doctor`, `/backsight:update`). See [how-it-works.md](how-it-works.md#hooks).
 
+In Codex, the same pieces come as two plugins: `backsight@backsight` (the memory tools, from a server Codex names `backsight`, and the skills, called `$backsight:remember` and so on) and `backsight-hooks@backsight` (the hooks). See [Codex](codex.md).
+
 ## Embedding model and reranker
 
 The two small models the server runs on your CPU to search: the **embedding model** (`multilingual-e5-small`) turns text into vectors to find candidates, the **reranker** (`mmarco-mMiniLMv2-L12-H384-v1`) scores each candidate against the query. Both are downloaded from Hugging Face on the server's first start and work across languages.
