@@ -43,7 +43,7 @@ func TestHeadlessSkipMigrationIsJournaledAndUndoable(t *testing.T) {
 	}
 	// The golden's two paths, as this platform writes them (setup writes
 	// absolute ones; /d/server is not one on Windows).
-	quote := func(p string) string { return strconv.Quote(p) }
+	quote := strconv.Quote
 	golden = []byte(strings.NewReplacer(`"/d/server"`, quote(filepath.Join(d.Data, "server")), `"/d/backups"`, quote(filepath.Join(d.Data, "backups"))).Replace(string(golden)))
 	old := strings.Replace(string(golden), today, `skip_entrypoints = ["sdk-*"] # as setup wrote it`, 1)
 	writeConfig(t, d, old)
