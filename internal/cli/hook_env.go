@@ -111,6 +111,23 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	return h, err == nil
 }
 
+// shellSession is the session a backsight command run from the agent's
+// shell belongs to: BACKSIGHT_SESSION, which Claude Code's shells get from
+// the SessionStart hook's env file, else CODEX_SESSION_ID, which Codex
+// gives every shell command it runs: the root session, also in a
+// subagent's shell, the session_id its hooks key their records on (0085
+// D4; never CODEX_THREAD_ID, a subagent's own thread). "" when neither is
+// set (an invalid CODEX_SESSION_ID counts as unset).
+func shellSession(getenv func(string) string) string {
+	if s := getenv("BACKSIGHT_SESSION"); s != "" {
+		return s
+	}
+	if s := getenv("CODEX_SESSION_ID"); session.ValidID(s) {
+		return s
+	}
+	return ""
+}
+
 // remote is the normalised git remote of the session's directory, recorded
 // with its project so doctor can tell two repositories sharing a name.
 func (h *hookEnv) remote() string { return h.resolver.Remote(h.cwd) }
