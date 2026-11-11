@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,7 +29,7 @@ func newWhyCmd(e *env) *cobra.Command {
 			}
 			store := session.Store{Dir: d.SessionsDir(), Locks: d.LocksDir()}
 			if id == "" {
-				id = shellSession(os.Getenv)
+				id = shellSessionHere()
 			}
 			if id == "" {
 				if id, err = store.Latest(); err != nil {

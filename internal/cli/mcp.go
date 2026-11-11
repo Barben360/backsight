@@ -724,7 +724,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	// Nor to the server this process loaded once connect moved this PC
 	// to another: the memories it would retire are not this PC's now.
 	if err := sendsGate(d.dirs, d.generation)(); err != nil {
-		return "", fmt.Errorf("%w: nothing was changed", joinedElsewhere(err))
+		return "", fmt.Errorf("%w: nothing was changed", d.joinedElsewhere(err))
 	}
 	// Every call retires at least one memory: a session at its limit is
 	// refused before the server is asked anything.

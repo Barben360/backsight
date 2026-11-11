@@ -205,8 +205,9 @@ func recordUpdateCheck(d paths.Dirs, res updateCheckResult, checkErr error) {
 // the running binary (SPEC §11.7), or "". It names the versions only: the
 // release notes are not signed, and the banner goes into every Claude
 // session. The count of newer releases is the checking binary's, so it is
-// shown only when that binary is the running one.
-func updateBanner(uc *state.UpdateCheck, running string) string {
+// shown only when that binary is the running one. client is the harness
+// the session runs in: it names the update skill its own way.
+func updateBanner(client string, uc *state.UpdateCheck, running string) string {
 	if uc == nil || !release.NewerThan(uc.Latest, running) {
 		return ""
 	}
@@ -214,7 +215,7 @@ func updateBanner(uc *state.UpdateCheck, running string) string {
 	if uc.Installed == running {
 		newer = uc.Newer
 	}
-	return instructions.UpdateLine(running, uc.Latest, newer)
+	return instructions.UpdateLineFor(client, running, uc.Latest, newer)
 }
 
 func updateCheckText(st termstyle.Style, res updateCheckResult, err error) string {

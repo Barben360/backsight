@@ -865,8 +865,20 @@ func (a *applyRun) steps(ctx context.Context) error {
 		return a.rb.run(ctx, fmt.Errorf("record: %w", err))
 	}
 	_ = state.ClearUpdateMarker(a.d)
-	add("done", "done", "backsight "+res.Target+" installed; restart Claude Code (or /reload-plugins) to load its plugin")
+	add("done", "done", "backsight "+res.Target+" installed; "+a.restartHint())
 	return nil
+}
+
+// restartHint is what loads the new plugins: Claude Code's reload, unless
+// Codex alone is wired (block 7, 0085 D1).
+func (a *applyRun) restartHint() string {
+	switch {
+	case a.codexWired && a.clientWired:
+		return "restart Claude Code (or /reload-plugins) and Codex to load their plugins"
+	case a.codexWired:
+		return "restart Codex to load its plugins"
+	}
+	return "restart Claude Code (or /reload-plugins) to load its plugin"
 }
 
 // docs runs the new binary's guide index: its docs into the server's docs

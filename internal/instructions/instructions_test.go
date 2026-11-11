@@ -10,6 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/metrics"
 )
 
@@ -67,7 +68,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v17" {
+	if Version != "v18" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -505,6 +506,7 @@ var wordings = map[string]string{
 	"v15": "1c8774365de706f728d5ffd77598677ea22f235b0b8654c6ded8b6c5540f69ec",
 	"v16": "7d9fc362643e3a5a571090cec52a9ea4d4f2e79853d878dea8f9cd1fa2735a05",
 	"v17": "ae3cdc1cacf8c2ab0ace8301af83ff728b9b6f3ff6e4c6c496fc49df2f4e0f50",
+	"v18": "e296c1752ba880d415fa7d665f96d8175f096b566cfe37e41de4125daeb3944e",
 }
 
 func wordingHash() string {
@@ -524,6 +526,11 @@ func wordingHash() string {
 	for _, s := range Skills("/s") {
 		// AllowedTools lists one entry per docs topic: a new docs page is
 		// not a change of wording.
+		texts = append(texts, s.Name, s.Description, s.ArgumentHint, s.Body)
+	}
+	// Codex's words, from v18 on (its skills carry no allowed tools).
+	texts = append(texts, FirstSessionNoticeFor(harnessid.Codex, "s", "p"))
+	for _, s := range SkillsFor(harnessid.Codex, "/s") {
 		texts = append(texts, s.Name, s.Description, s.ArgumentHint, s.Body)
 	}
 	for _, s := range texts {
