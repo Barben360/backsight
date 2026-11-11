@@ -72,6 +72,9 @@ func viewText(st termstyle.Style, r metrics.Result, dev bool) string {
 	if r.Scope.Project != "" {
 		fmt.Fprintf(&b, "Project: %s\n", clipText(r.Scope.Project))
 	}
+	if r.Scope.Client != "" {
+		fmt.Fprintf(&b, "Coding tool: %s (this PC; the server's figures count every tool)\n", views.ClientName(r.Scope.Client))
+	}
 	if s := r.Server; s != nil && !s.OK {
 		why := serverErrorWords[s.Error]
 		if why == "" {
@@ -374,6 +377,18 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 	}
 	if r.View == "overview" {
 		section(b, "Lately", sessionHead, sessionRows(t.Lately, loc))
+	}
+	if len(t.ByClient) > 0 {
+		var rows [][]string
+		for _, c := range t.ByClient {
+			row := []string{views.ClientName(c.Client), n64(c.Sessions), n64(c.Prompts), n64(c.Recalls)}
+			for _, id := range []string{"recall.hit_rate", "used.turn_rate", "context.per_session"} {
+				d, _ := metrics.DefOf(id)
+				row = append(row, views.FormatValue(d, c.Metrics[id]))
+			}
+			rows = append(rows, row)
+		}
+		section(b, "By coding tool (this PC)", []string{"Tool", "Sessions", "Prompts", "Recalls", "Got memory", "Memory used", "Context per session"}, rows)
 	}
 	if t.Helped != nil {
 		var rows [][]string

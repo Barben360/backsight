@@ -29,7 +29,7 @@ func newStatsIndexCmd(e *env) *cobra.Command {
 		Args:  usageArgs(cobra.NoArgs),
 		// Every command beneath it refuses the flags of a view.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			return refuseViewFlags(cmd, append([]string{"days", "since", "until"}, viewFlagNames...)...)
+			return refuseViewFlags(cmd, append([]string{"days", "since", "until", "client"}, viewFlagNames...)...)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, home, err := machine()

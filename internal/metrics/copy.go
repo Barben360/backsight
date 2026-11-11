@@ -87,7 +87,9 @@ func clock(t, now time.Time, loc *time.Location) string {
 var doctorNames = map[string]string{
 	"attribution": "project tags", "backfill": "past-session import", "backsight-toml": "project settings file",
 	"backup": "backup", "bank": "memory", "bank-config": "memory settings", "binary": "backsight program",
-	"client": "Claude Code setup", "compose-owner": "server ownership", "config": "settings", "disk": "disk space", "docker": "Docker",
+	"client": "Claude Code setup", "codex": "Codex version", "codex-plugins": "Codex plugins", "codex-drift": "Codex setup",
+	"codex-hooks": "Codex trust review", "codex-tools": "Codex tool approvals", "codex-rollouts": "Codex conversations", "codex-memories": "Codex's own memories",
+	"codex-mcp-name": "Codex server name", "codex-shim": "program run by Codex", "compose-owner": "server ownership", "config": "settings", "disk": "disk space", "docker": "Docker",
 	"feedback-journal": "feedback log", "feedback-ledger": "feedback counts", "feedback-shared": "shared feedback",
 	"gpu": "graphics card", "jobs": "background jobs", "latency": "speed", "learning": "learned ranking",
 	"locks": "locks", "machines-share": "activity sharing", "maintenance": "maintenance", "metrics-index": "activity index", "native-fsync": "native disk safety",
