@@ -1,0 +1,1 @@
+[{"name":"multi_agent_v1","tools":["close_agent","resume_agent","send_input","spawn_agent","wait_agent"]},{"name":"mcp__backsight","tools":["memory_credit","memory_read","memory_search","memory_store"]},{"name":"mcp__probe","tools":["closed","destructive","plain","readonly"]}]

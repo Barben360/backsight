@@ -2,7 +2,7 @@
 • Calling memory.memory_store
     + Show details
   Field 1/1
-  Allow the memory MCP server to run tool "memory_store"?
+  Allow the backsight MCP server to run tool "memory_store"?
   kind: decision
   text: Decision (2026-11-10): the Codex harness records fixtures...
   › 1. Allow                   Run the tool and continue

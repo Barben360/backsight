@@ -146,7 +146,7 @@ func codexTree(shim, binary string, skills map[string][]byte) (map[string][]byte
 			"description": "Long-term memory for Codex on your own Hindsight server: the memory tools and skills",
 		},
 		main + ".mcp.json": map[string]any{"mcpServers": map[string]any{
-			plugin.Server: map[string]any{"command": shim, "args": Codex{}.MCPArgs(), "env_vars": Codex{}.MCPEnvVars()},
+			CodexServer: map[string]any{"command": shim, "args": Codex{}.MCPArgs(), "env_vars": Codex{}.MCPEnvVars()},
 		}},
 		hooks + ".claude-plugin/plugin.json": map[string]any{
 			"name": CodexHooksPlugin, "version": codexHooksVersion(hooksJSON), "author": map[string]string{"name": "backsight"},

@@ -60,7 +60,7 @@ func TestCodexHeadlessSessionsSubagentIsLeftOut(t *testing.T) {
 			parent := cxRollout(t, originator)
 			cxHook(t, harness.EventUserPromptSubmit, cxPayload(t, home, "UserPromptSubmit", map[string]any{"transcript_path": parent}))
 			sub := recall.Result{Hits: []recall.Hit{{ID: stopIDB, Text: "Billing moved in October.", Project: "billing", Age: "3d", Score: 0.8}}}
-			cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.subagent.mcp__memory__memory_search", map[string]any{"transcript_path": parent, "tool_response": cxSearchResponse(mcpSearchText(sub, true))}))
+			cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.subagent.mcp__backsight__memory_search", map[string]any{"transcript_path": parent, "tool_response": cxSearchResponse(mcpSearchText(sub, true))}))
 			rollout := filepath.Join(filepath.Dir(parent), "rollout-2026-11-10T20-34-51-"+cxAgent+".jsonl")
 			_ = os.WriteFile(rollout, []byte(`{"type":"session_meta","payload":{"id":"`+cxAgent+`","parent_thread_id":"`+cxRoot+`"}}`+"\n"), 0o600)
 			out := cxHook(t, harness.EventSubagentStop, cxPayload(t, home, "SubagentStop.subagent", map[string]any{

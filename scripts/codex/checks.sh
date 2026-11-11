@@ -137,7 +137,7 @@ prompt h "hints" '[{"call":"memory_store","args":{"kind":"decision","text":"Deci
 paste /tmp/prompts/h
 asked=no
 for _ in $(seq 1 60); do
-  screen | grep -qF "Allow the memory MCP server" && { asked=yes; break; }
+  screen | grep -qF "Allow the backsight MCP server" && { asked=yes; break; }
   screen | grep -qF "• H-DONE" && break
   sleep 0.5
 done
@@ -181,7 +181,7 @@ for f in $(find /out/tap -name '*-mcp.in.jsonl' -newer "$mark"); do
 done > /tmp/meta.jsonl
 for p in /out/probe/*-PostToolUse.json; do
   [ "$p" -nt "$mark" ] || continue
-  jq -c 'select(.tool_name=="mcp__memory__memory_search") | {tool_use_id, session_id, turn_id}' "$p"
+  jq -c 'select(.tool_name=="mcp__backsight__memory_search") | {tool_use_id, session_id, turn_id}' "$p"
 done > /tmp/hooks.jsonl
 for p in /out/probe/*-UserPromptSubmit.json; do
   [ "$p" -nt "$mark" ] || continue

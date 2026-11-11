@@ -107,7 +107,7 @@ trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f
 trusted_hash = "sha256:270919f2294f12b8a49883ca17de7e721278f65fbacccca28fb78a076fbaeea8"
 trusted_content_hash = "sha256:4586f9808f474ba7b9fdf93c16194ace46740ad333a9e622f32b13f9542c88d4"
 
-[plugins."backsight@backsight".mcp_servers.memory.tools.memory_store]
+[plugins."backsight@backsight".mcp_servers.backsight.tools.memory_store]
 approval_mode = "approve"
 
 [mcp_servers.probe.tools.plain]

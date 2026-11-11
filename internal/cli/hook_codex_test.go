@@ -195,7 +195,7 @@ func TestCodexOwnMessagesAreSkipped(t *testing.T) {
 func TestCodexPostToolUseJournalsShowsAndCredits(t *testing.T) {
 	home := hookHome(t)
 	cxHook(t, harness.EventUserPromptSubmit, cxPayload(t, home, "UserPromptSubmit", nil))
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__memory__memory_search", nil))
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__backsight__memory_search", nil))
 	if st, _ := sessions(home).Load(cxRoot); st.SearchedPromptID != 1 {
 		t.Errorf("the recorded search is not this prompt's: %+v", st)
 	}
@@ -204,8 +204,8 @@ func TestCodexPostToolUseJournalsShowsAndCredits(t *testing.T) {
 	}
 	root := recall.Result{Hits: []recall.Hit{{ID: stopIDA, Text: "Billing keeps PostgreSQL 16.", Project: "billing", Age: "2d", Score: 0.9}}}
 	sub := recall.Result{Hits: []recall.Hit{{ID: stopIDB, Text: "Billing moved in October.", Project: "billing", Age: "3d", Score: 0.8}}}
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__memory__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(root, true))}))
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.subagent.mcp__memory__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(sub, true))}))
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__backsight__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(root, true))}))
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.subagent.mcp__backsight__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(sub, true))}))
 	shows := eventsOf(journalEvents(t, home), "shows")
 	if len(shows) != 2 {
 		t.Fatalf("shows %+v", shows)
@@ -220,8 +220,8 @@ func TestCodexPostToolUseJournalsShowsAndCredits(t *testing.T) {
 	if len(st.Seen) != 1 || st.Seen[0] != stopIDA {
 		t.Errorf("seen %v: the root search only", st.Seen)
 	}
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__memory__memory_search", map[string]any{
-		"tool_name": "mcp__memory__memory_credit", "tool_use_id": "call_fake_7_0", "tool_input": map[string]any{"ids": []string{stopIDA[:8]}},
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__backsight__memory_search", map[string]any{
+		"tool_name": "mcp__backsight__memory_credit", "tool_use_id": "call_fake_7_0", "tool_input": map[string]any{"ids": []string{stopIDA[:8]}},
 		"tool_response": cxSearchResponse("Credited. Print this line in your final message:\n> 🧠 **From memory (billing · 0b4c2a52)** — x")}))
 	credits := eventsOf(journalEvents(t, home), "credit")
 	if len(credits) != 1 || credits[0].Verdict != "used" || strings.Join(credits[0].IDs, ",") != stopIDA || credits[0].Turn != cxRootTurn ||
@@ -238,7 +238,7 @@ func TestCodexStopBlocksOnceAndHonoursStopHookActive(t *testing.T) {
 	home := hookHome(t)
 	cxHook(t, harness.EventUserPromptSubmit, cxPayload(t, home, "UserPromptSubmit", nil))
 	res := recall.Result{Hits: []recall.Hit{{ID: stopIDA, Text: "Billing keeps PostgreSQL 16.", Project: "billing", Age: "2d", Score: 0.9}}}
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__memory__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(res, true))}))
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__backsight__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(res, true))}))
 	out := cxHook(t, harness.EventStop, cxPayload(t, home, "Stop", nil))
 	var block map[string]string
 	if json.Unmarshal(out, &block) != nil || len(block) != 2 || block["decision"] != "block" || !strings.Contains(block["reason"], "0b4c2a52") ||
@@ -254,7 +254,7 @@ func TestCodexStopBlocksOnceAndHonoursStopHookActive(t *testing.T) {
 
 	// A fresh turn whose stop is active from the start.
 	cxHook(t, harness.EventUserPromptSubmit, cxPayload(t, home, "UserPromptSubmit", map[string]any{"turn_id": "01a1c72b-b000-7000-8000-000000000002", "prompt": longPrompt}))
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__memory__memory_search", map[string]any{"turn_id": "01a1c72b-b000-7000-8000-000000000002", "tool_response": cxSearchResponse(mcpSearchText(res, true))}))
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.mcp__backsight__memory_search", map[string]any{"turn_id": "01a1c72b-b000-7000-8000-000000000002", "tool_response": cxSearchResponse(mcpSearchText(res, true))}))
 	if out := cxHook(t, harness.EventStop, cxPayload(t, home, "Stop", map[string]any{"turn_id": "01a1c72b-b000-7000-8000-000000000002", "stop_hook_active": true})); out != nil {
 		t.Errorf("an active first stop answered %s", out)
 	}
@@ -267,7 +267,7 @@ func TestCodexSubagentStopReportsAndChecks(t *testing.T) {
 	home := hookHome(t)
 	cxHook(t, harness.EventUserPromptSubmit, cxPayload(t, home, "UserPromptSubmit", nil))
 	sub := recall.Result{Hits: []recall.Hit{{ID: stopIDB, Text: "Billing moved in October.", Project: "billing", Age: "3d", Score: 0.8}}}
-	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.subagent.mcp__memory__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(sub, true))}))
+	cxHook(t, harness.EventPostToolUse, cxPayload(t, home, "PostToolUse.subagent.mcp__backsight__memory_search", map[string]any{"tool_response": cxSearchResponse(mcpSearchText(sub, true))}))
 	rollout := filepath.Join(t.TempDir(), "rollout-2026-11-10T20-34-51-"+cxAgent+".jsonl")
 	_ = os.WriteFile(rollout, []byte(`{"type":"session_meta","payload":{"id":"`+cxAgent+`"}}`+"\n"), 0o600)
 	out := cxHook(t, harness.EventSubagentStop, cxPayload(t, home, "SubagentStop.subagent", map[string]any{
