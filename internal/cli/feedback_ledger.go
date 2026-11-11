@@ -192,11 +192,14 @@ func (c ledgerChain) StampedAll() (l feedback.Ledger, st feedback.Stamp, stamped
 	return l, st, serr == nil, nil
 }
 
+// readLedgerDB is ledgerdb.Read; a test records the busy wait it is handed.
+var readLedgerDB = ledgerdb.Read
+
 // read runs fn on the database reader, opened and closed around it, its
 // file checked in fn's read transaction (one busy window): ledger.db, or
 // for a command the side file beside a newer one.
 func (c ledgerChain) read(fn func(*ledgerdb.Reader) error) error {
-	err := ledgerdb.Read(c.o, c.busy, fn)
+	err := readLedgerDB(c.o, c.busy, fn)
 	if c.side && errors.Is(err, ledgerdb.ErrSchema) {
 		if serr := ledgerdb.ReadSide(c.o, c.busy, fn); serr == nil {
 			return nil

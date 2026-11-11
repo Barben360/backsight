@@ -213,27 +213,20 @@ func TestHookLedgerFallbackChain(t *testing.T) {
 
 // TestHookReaderWaitsAtMost20ms: a writer holding ledger.db costs the
 // hook its 20 ms wait, not the 5 s of a command: recall then reads
-// ledger.json.
+// ledger.json. The wait handed to ledgerdb.Read is checked, not timed.
 func TestHookReaderWaitsAtMost20ms(t *testing.T) {
-	if raceEnabled || testing.Short() {
-		t.Skip("a time budget: not under -race or -short")
-	}
 	home, cfg := chainHome(t)
 	holdLedgerDB(t, home)
-	limit := 3 * 20 * time.Millisecond // hookLedgerBusy's 20 ms, ×3 (a literal, so a longer wait fails)
-	if os.Getenv("CI") != "" {
-		limit *= 3 // a slower runner (G-tests)
+	var busy []time.Duration
+	t.Cleanup(func() { readLedgerDB = ledgerdb.Read })
+	readLedgerDB = func(o ledgerdb.Options, d time.Duration, fn func(*ledgerdb.Reader) error) error {
+		busy = append(busy, d)
+		return ledgerdb.Read(o, d, fn)
 	}
-	best := time.Duration(1<<63 - 1)
-	for range 3 {
-		start := time.Now()
-		got := adjustOf(t, home, cfg)
-		best = min(best, time.Since(start))
-		fromFile(t, got, "json")
-	}
-	t.Logf("ledgerAdjust with ledger.db held: %v, best of 3 (limit %v)", best, limit)
-	if best > limit {
-		t.Errorf("ledgerAdjust took %v at best with ledger.db held, limit %v", best, limit)
+	fromFile(t, adjustOf(t, home, cfg), "json")
+	// a literal, so a longer hookLedgerBusy fails too
+	if len(busy) == 0 || slices.ContainsFunc(busy, func(d time.Duration) bool { return d != 20*time.Millisecond }) {
+		t.Errorf("ledger.db read with busy waits %v, want each 20 ms (hookLedgerBusy %v)", busy, hookLedgerBusy)
 	}
 }
 
