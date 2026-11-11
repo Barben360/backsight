@@ -16,7 +16,6 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/session"
-	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // Re-attribution (decision 0072): the documents already sent are judged
@@ -160,10 +159,7 @@ func retagged(tags []string, to string) []string {
 // nothing.
 func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts []string, prices Prices) ReattributionPlan {
 	plan := ReattributionPlan{Documents: len(docs), Held: []HeldSession{}, Retags: []Retag{}, Resends: []Resend{}}
-	paths := map[string]string{}
-	for _, p := range transcripts {
-		paths[strings.TrimSuffix(filepath.Base(p), ".jsonl")] = p
-	}
+	paths := f.sessionPaths(transcripts)
 	sessions := map[string][]hindsight.DocumentItem{}
 	var order []string
 	for _, d := range docs {
@@ -245,13 +241,13 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 		case paths[sid] == "":
 			continue // not this machine's session
 		default:
-			agentPath := filepath.Join(strings.TrimSuffix(paths[sid], ".jsonl"), "subagents", "agent-"+agent+".jsonl")
+			agentPath := agentPathOf(f.harnessFor(paths[sid]), paths[sid], agent)
 			if _, err := os.Stat(agentPath); err != nil {
 				continue
 			}
 			c := cache[sid]
 			if c == nil {
-				c = &sessionRepos{launch: launchDir(paths[sid])}
+				c = &sessionRepos{launch: launchDir(f.harnessFor(paths[sid]), paths[sid])}
 				cache[sid] = c
 			}
 			repos := func() (*attribution.Repos, bool) {
@@ -283,12 +279,7 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 // planSession judges the conversation documents of one session: judged is
 // how many it could read against the transcript.
 func (f *Flusher) planSession(sid, path string, docs []hindsight.DocumentItem, prices Prices) (retags []Retag, resend *Resend, unchanged, judged int, held string) {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil, nil, 0, 0, ""
-	}
-	recs, _, err := transcript.Read(fh, 0)
-	_ = fh.Close()
+	recs, _, err := readConversation(f.harnessFor(path), path)
 	if err != nil || len(recs) == 0 {
 		return nil, nil, 0, 0, ""
 	}
@@ -564,12 +555,7 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 		return err
 	}
 	defer unlock()
-	fh, err := os.Open(r.Transcript)
-	if err != nil {
-		return err
-	}
-	recs, _, err := transcript.Read(fh, 0)
-	_ = fh.Close()
+	recs, _, err := readConversation(f.harnessFor(r.Transcript), r.Transcript)
 	if err != nil {
 		return err
 	}

@@ -4,19 +4,166 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
-// SetClientRetention returns raw with [client] retention_days set to days
-// (0 removes the key), editing lines in place so the user's comments,
-// layout and line endings stay (decision 0052).
+// Claude Code's table, and its name in a file written before the per-tool
+// tables.
+const (
+	claudeCodeTable   = "clients.claude_code"
+	legacyClientTable = "client"
+)
+
+// SetClientRetention returns raw with [clients.claude_code] retention_days
+// set to days (0 removes the key), editing lines in place so the user's
+// comments, layout and line endings stay (decision 0052). An older file's
+// [client] table moves first (MigrateClientTable).
 func SetClientRetention(raw []byte, days int) ([]byte, error) {
+	out, _, err := MigrateClientTable(raw)
+	if err != nil {
+		return nil, err
+	}
 	value := ""
 	if days > 0 {
 		value = strconv.Itoa(days)
 	}
-	return setKey(raw, "client", "retention_days", value)
+	return setKey(out, claudeCodeTable, "retention_days", value)
+}
+
+// MigrateClientTable returns raw with the [client] table of an older file
+// moved to [clients.claude_code], line by line so the user's comments,
+// layout and line endings stay. Without a [clients.claude_code] table, the
+// [client] header is renamed in place; with one, retention_days moves into
+// it (a second, different value is refused) and the [client] header goes
+// once only blank lines are left under it. changed is false for a file
+// without a [client] table. Forms a line edit cannot change safely are
+// refused: a dotted key, an inline table, a multi-line string.
+func MigrateClientTable(raw []byte) (out []byte, changed bool, err error) {
+	refused := errors.New("config.toml sets [" + legacyClientTable + "] in a form backsight cannot edit (dotted key, inline table or multi-line string): move it to [" + claudeCodeTable + "] by hand")
+	if regexp.MustCompile(`(?m)^\s*` + legacyClientTable + `\s*[.=]`).Match(raw) {
+		return nil, false, refused
+	}
+	lines := splitLines(string(raw))
+	legacy, current := -1, -1
+	for i, l := range lines {
+		switch headerName(l) {
+		case legacyClientTable:
+			legacy = i
+		case claudeCodeTable:
+			current = i
+		}
+	}
+	if legacy < 0 {
+		return raw, false, nil
+	}
+	if regexp.MustCompile(`"""|'''`).Match(raw) {
+		return nil, false, refused
+	}
+	if current < 0 {
+		l := lines[legacy]
+		open := strings.Index(l, "[")
+		end := open + strings.Index(l[open:], "]")
+		lines[legacy] = l[:open+1] + claudeCodeTable + l[end:]
+		return []byte(strings.Join(lines, "")), true, nil
+	}
+
+	// Both tables: retention_days, the only key [client] ever held, moves.
+	sectionEnd := func(h int) int {
+		for i := h + 1; i < len(lines); i++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
+				return i
+			}
+		}
+		return len(lines)
+	}
+	keyLine := func(h int) (int, string) {
+		for i := h + 1; i < sectionEnd(h); i++ {
+			t := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(t, "retention_days ") || strings.HasPrefix(t, "retention_days=") {
+				_, rest, _ := strings.Cut(t, "=")
+				rest = strings.TrimSpace(rest)
+				end, _ := valueEnd(rest)
+				return i, strings.TrimSpace(rest[:end])
+			}
+		}
+		return -1, ""
+	}
+	oldAt, oldValue := keyLine(legacy)
+	newAt, newValue := keyLine(current)
+	var moved []string
+	drop := map[int]bool{}
+	if oldAt >= 0 {
+		drop[oldAt] = true
+		switch {
+		case newAt < 0:
+			moved = append(moved, strings.TrimLeft(lines[oldAt], " \t"))
+			if !strings.HasSuffix(moved[0], "\n") {
+				moved[0] += lineEnding(string(raw))
+			}
+		case !sameInt(oldValue, newValue):
+			return nil, false, errors.New("config.toml sets " + LegacyRetentionKey + " = " + oldValue + " and " + RetentionKey + " = " + newValue + ": keep " + RetentionKey + " only, by hand")
+		}
+	}
+	empty := true
+	for i := legacy + 1; i < sectionEnd(legacy); i++ {
+		if !drop[i] && strings.TrimSpace(lines[i]) != "" {
+			empty = false
+		}
+	}
+	if empty {
+		drop[legacy] = true
+	}
+	var res []string
+	for i, l := range lines {
+		if !drop[i] {
+			res = append(res, l)
+		}
+		if i == current {
+			res = append(res, moved...)
+		}
+	}
+	return []byte(strings.Join(res, "")), true, nil
+}
+
+// splitLines splits s after each "\n", without an empty last line.
+func splitLines(s string) []string {
+	lines := strings.SplitAfter(s, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// headerName is the table a "[table]" header line opens, "" for any other
+// line (an array of tables included).
+func headerName(l string) string {
+	t := strings.TrimSpace(l)
+	if !strings.HasPrefix(t, "[") || strings.HasPrefix(t, "[[") {
+		return ""
+	}
+	return strings.TrimSpace(strings.Trim(strings.SplitN(t, "#", 2)[0], " []"))
+}
+
+func lineEnding(s string) string {
+	if strings.Contains(s, "\r\n") {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// sameInt reports whether two TOML integer literals are one number.
+func sameInt(a, b string) bool {
+	var x, y struct {
+		V int `toml:"v"`
+	}
+	if toml.Unmarshal([]byte("v = "+a), &x) != nil || toml.Unmarshal([]byte("v = "+b), &y) != nil {
+		return a == b
+	}
+	return x.V == y.V
 }
 
 // SetExcludePaths returns raw with [privacy] exclude_paths set to paths,
@@ -226,4 +373,42 @@ func setKey(raw []byte, table, key, value string) ([]byte, error) {
 		s += nl
 	}
 	return []byte(s + "[" + table + "]" + nl + entry + nl), nil
+}
+
+// LegacySkipEntrypoints is privacy.skip_entrypoints' default before
+// Codex's headless runs joined it, as setup wrote it in full into every
+// config.toml.
+var legacySkipEntrypoints = []string{"sdk-*"}
+
+// MigrateSkipEntrypoints returns raw with privacy.skip_entrypoints set to
+// today's default (DefaultSkipEntrypoints) when the file sets exactly the
+// former default, ["sdk-*"], editing that one line in place (its comment
+// kept). Any other value is the user's own choice and stays, as does a
+// file without the key; changed is false then. A form a line edit cannot
+// change safely (a dotted key, an inline table, a value over several
+// lines) is left as it is, changed false, err nil: the user's value still
+// holds.
+func MigrateSkipEntrypoints(raw []byte) (out []byte, changed bool, err error) {
+	var doc struct {
+		Privacy struct {
+			SkipEntrypoints *[]string `toml:"skip_entrypoints"`
+		} `toml:"privacy"`
+	}
+	if toml.Unmarshal(raw, &doc) != nil || doc.Privacy.SkipEntrypoints == nil || !slices.Equal(*doc.Privacy.SkipEntrypoints, legacySkipEntrypoints) {
+		return raw, false, nil
+	}
+	out, err = setKey(raw, "privacy", "skip_entrypoints", tomlStrings(DefaultSkipEntrypoints()))
+	if err != nil {
+		return raw, false, nil
+	}
+	return out, true, nil
+}
+
+// tomlStrings is list as a one-line TOML array of strings.
+func tomlStrings(list []string) string {
+	quoted := make([]string, len(list))
+	for i, s := range list {
+		quoted[i] = strconv.Quote(s)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }

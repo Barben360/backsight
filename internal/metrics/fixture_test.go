@@ -20,8 +20,10 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/index/indextest"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
@@ -65,6 +67,7 @@ type fx struct {
 	home   string
 	dirs   paths.Dirs
 	binary string // binary_version of the lines and events written next
+	client string // the client of the lines written next ("" Claude Code's)
 
 	ledgerSet *feedback.Ledger     // nil: the ledger the journal folds to
 	localSet  *index.LocalStatus   // nil: an empty local status
@@ -130,6 +133,7 @@ func (x *fx) tel(ts time.Time, ev telemetry.Event, session, project string) {
 	fields["session"] = session
 	fields["project"] = project
 	fields["binary_version"] = x.binary
+	fields["client"] = harnessid.Or(x.client)
 	line, err := json.Marshal(fields)
 	if err != nil {
 		x.t.Fatal(err)
@@ -187,6 +191,7 @@ func (x *fx) source() Source {
 	x.t.Helper()
 	ctx := context.Background()
 	if x.ix == nil {
+		indextest.Seed(x.t, x.dirs) // at the head: the migrations are not what these tests read
 		ix, err := index.Open(ctx, index.Options{
 			Dirs: x.dirs, Home: x.home, Getenv: func(string) string { return "" },
 			Now: func() time.Time { return x.now }, Ledger: fxLedger{x},

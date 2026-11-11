@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
@@ -115,6 +116,9 @@ func TestMain(m *testing.M) {
 	if _, goraceSet = os.LookupEnv("GORACE"); !goraceSet {
 		_ = os.Setenv("GORACE", "atexit_sleep_ms=0")
 	}
+	if os.Getenv(fakeToolEnv) == "1" { // a second harness, as its test registered it (harness_test.go)
+		harness.Register(fakeTool{})
+	}
 	if os.Getenv("BACKSIGHT_TEST_HOOK_CHILD") == "1" { // the supervisor's child (hook_test.go)
 		args := os.Args[1:]
 		for len(args) > 0 && strings.HasPrefix(args[0], "-test.") {
@@ -129,6 +133,7 @@ func TestMain(m *testing.M) {
 	}
 	// Tests run from a Claude Code session: its id must not name their notes.
 	_ = os.Unsetenv("CLAUDE_CODE_SESSION_ID")
+	_ = os.Unsetenv("CODEX_SESSION_ID") // nor a Codex session's, which its shell commands get
 	composeRunner = refuseDocker{}
 	nativeSys, nativeTools, nativeAsk, nativeDetach = refuseSys{}, refuseTools{}, refuseAsk, refuseDetach
 	// A Native built without Ask (setup's, doctor's) asks server's own

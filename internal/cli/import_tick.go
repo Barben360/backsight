@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
@@ -142,7 +143,7 @@ func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg
 			continue
 		}
 		before := r
-		sent, err := sendImport(ctx, f.Client, d, m, bank, tombs, machineID, prices, &budget, &r)
+		sent, err := sendImport(ctx, f.Client, d, m, bank, tombs, machineID, prices, importKeptOut(f), &budget, &r)
 		r.Left += left - sent
 		emitImportTick(tw.For(m.Project), m, r.Sent-before.Sent, len(r.Paused) > len(before.Paused))
 		if err != nil {
@@ -152,13 +153,37 @@ func filesImportInTick(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg
 	return r, nil
 }
 
+// importKeptOut reports whether a working folder is kept out of memory, as for
+// a session (privacy.exclude_paths, .backsight.toml); nil without a
+// resolver.
+func importKeptOut(f *retain.Flusher) func(cwd string) bool {
+	if f == nil || f.Resolver == nil {
+		return nil
+	}
+	return func(cwd string) bool {
+		out, _ := f.Resolver.OptedOut(cwd, f.Exclude)
+		return out
+	}
+}
+
 // sendImport sends m's unsent files until budget runs out, the cap is
 // reached or the server stays busy; it saves the manifest after each file
-// and returns the files it finished (sent or gone).
+// and returns the files it finished (sent or gone). optedOut checks a
+// preset's file mapped to a working folder again just before its send.
 func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *fileimport.Manifest, bank string, tombs []state.Tombstone,
-	machineID string, prices retain.Prices, budget *int, r *importTickResult) (int, error) {
+	machineID string, prices retain.Prices, optedOut func(string) bool, budget *int, r *importTickResult) (int, error) {
 	done := 0
 	save := func() error { return fileimport.SaveManifest(d.ImportDir(), *m) }
+	// Whether the Codex home names a kept-out folder now: read once per
+	// send run, for its first consolidated file.
+	var keptOutOnce *bool
+	homeKeptOut := func() bool {
+		if keptOutOnce == nil {
+			v := len(fileimport.CodexKeptOut(m.Root, optedOut)) > 0
+			keptOutOnce = &v
+		}
+		return *keptOutOnce
+	}
 	for i := range m.Entries {
 		e := &m.Entries[i]
 		if e.Sent || e.Gone {
@@ -193,6 +218,13 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 		}
 		abs := filepath.Join(m.Root, filepath.FromSlash(e.Rel))
 		raw, redacted, reason := fileimport.ReadForSend(abs)
+		var codexDate time.Time
+		codexDated := false
+		if reason == "" && m.Preset == fileimport.PresetCodex {
+			// Its header is Codex's, read again: a folder kept out since the
+			// import is not sent.
+			codexDate, codexDated, reason = fileimport.CodexRecheck(e.Rel, raw, optedOut, homeKeptOut)
+		}
 		if reason != "" {
 			// Gone, a link, too large, empty or no longer text: nothing is
 			// sent, what an earlier send stored stays.
@@ -206,7 +238,9 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 		}
 		if sha := sha256Hex(string(raw)); sha != e.SHA256 {
 			e.SHA256 = sha
-			if t, ok := fileimport.FrontmatterDate(raw, now()); ok {
+			if codexDated {
+				e.Date = codexDate
+			} else if t, ok := fileimport.FrontmatterDate(raw, now()); ok {
 				e.Date = t
 			} else if info, err := os.Stat(abs); err == nil {
 				e.Date = info.ModTime().UTC()
@@ -215,12 +249,22 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 		if slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == e.Document }) {
 			e.Document = fileimport.DocumentID(m.Source, e.Rel, tombs)
 		}
+		project, movedFrom := m.ProjectOf(*e), ""
+		if e.SentProject != "" && e.SentProject != project {
+			// The file now belongs to another project: what the old one drew
+			// from its document is cleared before the document is replaced
+			// with its new tags, so none of it stays in the old project.
+			movedFrom = e.SentProject
+			if err := clearDocumentObservations(ctx, c, bank, e.Document); err != nil {
+				return done, errors.Join(err, save())
+			}
+		}
 		item, op := retain.ImportItem(bank, retain.ImportFile{Source: m.Source, Rel: e.Rel, DocumentID: e.Document, Content: redacted,
-			SHA256: e.SHA256, Project: m.Project, MachineID: machineID, Version: buildinfo.Version, Date: e.Date})
+			SHA256: e.SHA256, Project: project, MovedFrom: movedFrom, MachineID: machineID, Version: buildinfo.Version, Date: e.Date})
 		if err := c.Retain(ctx, bank, []hindsight.RetainItem{item}, op); err != nil {
 			return done, errors.Join(err, save())
 		}
-		e.Sent = true
+		e.Sent, e.SentProject = true, project
 		r.Sent++
 		done++
 		*budget--
@@ -229,4 +273,26 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 		}
 	}
 	return done, nil
+}
+
+// clearDocumentObservations clears the observations drawn from each live
+// fact of document doc, as a purge does (retain.PurgeWrites), leaving the
+// facts to the replacement of their document. A fact gone already is done.
+func clearDocumentObservations(ctx context.Context, c *hindsight.Client, bank, doc string) error {
+	var facts []string
+	if err := c.ListMemories(ctx, bank, hindsight.MemoryQuery{DocumentID: doc}, func(mem hindsight.Memory) error {
+		if mem.DocumentID == doc && mem.FactType != "observation" && mem.State != "invalidated" {
+			facts = append(facts, mem.ID)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("the facts of %s: %w", doc, err)
+	}
+	for _, id := range facts {
+		var apiErr *hindsight.APIError
+		if err := c.ClearObservations(ctx, bank, id); err != nil && (!errors.As(err, &apiErr) || apiErr.Kind != hindsight.NotFound) {
+			return fmt.Errorf("clearing the observations of %s: %w", id, err)
+		}
+	}
+	return nil
 }

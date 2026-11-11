@@ -31,7 +31,7 @@ import (
 // the host's server expose.
 var (
 	hostAnswers   = []string{"provider", "model", "base_url", "api_port", "ui_port", "project", "backups", "scheduler"}
-	clientAnswers = []string{"retention", "backfill", "reference"}
+	clientAnswers = []string{"tools", "retention", "backfill", "reference", "codex_memories", "codex_import"}
 )
 
 // sshInstallFlags is server install --ssh.
@@ -41,6 +41,7 @@ type sshInstallFlags struct {
 	answers                 []string
 	plan, nonInteractive    bool
 	configDir               string
+	codexHome               string            // this PC's Codex home, for connect's setup
 	install                 installFlags      // --provider --model --base-url --api-port --ui-port
 	changed                 func(string) bool // cmd.Flags().Changed
 }
@@ -110,6 +111,9 @@ func (f sshInstallFlags) command() string {
 	}
 	if f.configDir != "" {
 		cmd += " --config-dir " + resumeWord(abs(f.configDir))
+	}
+	if f.codexHome != "" {
+		cmd += " --codex-home " + resumeWord(abs(f.codexHome))
 	}
 	return cmd
 }
@@ -407,7 +411,7 @@ func refuseTokenArgs(f sshInstallFlags, others ...string) error {
 
 // sshInstallAnswers checks the run's flags and answers, here only.
 func sshInstallAnswers(f sshInstallFlags) (map[string]string, error) {
-	if err := refuseTokenArgs(f, f.target, f.source, f.keyFile, f.configDir); err != nil {
+	if err := refuseTokenArgs(f, f.target, f.source, f.keyFile, f.configDir, f.codexHome); err != nil {
 		return nil, err
 	}
 	if err := checkTarget(f.target); err != nil {
@@ -547,7 +551,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	case h.Config && h.Mode == "remote":
 		return refuse(&output.Error{Code: output.Blocked, Message: t + " is a client of another memory server: install the server on that server's host instead, or join it from this PC with a token from there (backsight server token --out FILE there)"})
 	case h.Config && h.Role != config.RoleServer:
-		return refuse(&output.Error{Code: output.Blocked, Message: t + " is set up as a PC with Claude Code: open its server there (backsight server expose --private <ip>, then backsight server token --out FILE) and run backsight connect --token-file FILE here"})
+		return refuse(&output.Error{Code: output.Blocked, Message: t + " is set up as a PC that uses the memory (with Claude Code, Codex or both): open its server there (backsight server expose --private <ip>, then backsight server token --out FILE) and run backsight connect --token-file FILE here"})
 	case h.Config:
 		hostDetail = "backsight " + h.Version + ", server role"
 	case h.Version != "":
@@ -824,7 +828,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		}
 	}
 	start("connect")
-	cres, err := runConnect(ctx, e, connectFlags{preread: &tok, resume: resume, answers: cargs, nonInteractive: f.nonInteractive, configDir: f.configDir})
+	cres, err := runConnect(ctx, e, connectFlags{preread: &tok, resume: resume, answers: cargs, nonInteractive: f.nonInteractive, configDir: f.configDir, codexHome: f.codexHome})
 	if cres.URL != "" {
 		res.Connect = &cres
 	}

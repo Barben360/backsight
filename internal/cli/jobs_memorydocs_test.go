@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/index/indextest"
 	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -47,6 +48,7 @@ func newMDEnv(t *testing.T) *mdEnv {
 	port := fakeHindsight(t)
 	fakeCreated = []fakeMem{}
 	e := &mdEnv{t: t, d: paths.Dirs{State: filepath.Join(t.TempDir(), "state")}, at: mdAt}
+	indextest.Seed(t, e.d) // at the head: the migrations are not what these tests read
 	ix, err := index.Open(context.Background(), index.Options{Dirs: e.d, Home: t.TempDir(), Getenv: func(string) string { return "" },
 		Migrations: indexRegistry(), Now: func() time.Time { return e.at }})
 	if err != nil {

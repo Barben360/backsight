@@ -8,7 +8,9 @@
 // snapshots both and puts them back on a rollback. Files of the config
 // editor (Claude Code's settings) are off limits until the rollback replays
 // their pre-images (decision 0067 block 2 review), so Env carries no home
-// directory. A migration must be safe to run again on files it already
+// directory. A migration may still write config.toml through the config
+// editor's runner, for its backup copy and journal line (an undo by
+// `client config restore`): the rollback's snapshot covers it either way. A migration must be safe to run again on files it already
 // migrated, and on a fresh install's files, which need no migration: setup
 // does not mark them applied.
 package migrate
@@ -39,7 +41,10 @@ type Migration struct {
 
 // registry is append-only: a released migration is never removed,
 // renumbered or edited (an install may already have recorded it).
-var registry []Migration
+var registry = []Migration{
+	{ID: ClientsTableID, Summary: "config.toml: Claude Code's [client] table becomes [clients.claude_code]", Run: clientsTable},
+	{ID: HeadlessSkipID, Summary: "config.toml: privacy.skip_entrypoints' former default (sdk-* only) also skips Codex's headless runs", Run: headlessSkip},
+}
 
 // All is the registry of this binary, in order.
 func All() []Migration { return slices.Clone(registry) }

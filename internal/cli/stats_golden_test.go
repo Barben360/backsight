@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/index/indextest"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -43,9 +45,22 @@ func telLineFor(t *testing.T, ts time.Time, e telemetry.Event, session, project 
 
 // fixedStatsFixture writes a fixed telemetry and journal fixture and
 // freezes the clock.
+// seedIndex puts an empty index at the head where the command line will
+// look for it (indextest.Seed), for tests that read an index but do not
+// test its building or its migrations.
+func seedIndex(t *testing.T) {
+	t.Helper()
+	d, err := paths.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	indextest.Seed(t, d)
+}
+
 func fixedStatsFixture(t *testing.T) {
 	t.Helper()
 	home := devInstall(t, true)
+	seedIndex(t)
 	pointAt(t, home, fakeHindsight(t))
 	llmInput.Store(2_000_000)
 	statsDown.Store(true)

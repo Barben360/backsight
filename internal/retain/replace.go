@@ -251,7 +251,7 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 		}
 	}()
 	drop := func(p string) { delete(cur.Replaces, p); changed = true }
-	tr := &transcriptOnce{path: path, now: now}
+	tr := &transcriptOnce{path: path, now: now, harness: f.harnessFor(path)}
 	projects := make([]string, 0, len(cur.Replaces))
 	for p := range cur.Replaces {
 		projects = append(projects, p)
@@ -306,10 +306,11 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 
 // transcriptOnce reads a transcript's records once, on first need.
 type transcriptOnce struct {
-	path string
-	now  time.Time
-	read bool
-	recs []transcript.Record
+	harness Harness // the conversation's reader
+	path    string
+	now     time.Time
+	read    bool
+	recs    []transcript.Record
 	// raw: the records' times as read, before clampRecords.
 	raw []time.Time
 	err error
@@ -320,18 +321,12 @@ func (t *transcriptOnce) records() ([]transcript.Record, []time.Time, error) {
 		return t.recs, t.raw, t.err
 	}
 	t.read = true
-	fh, err := os.Open(t.path)
+	fi, err := os.Stat(t.path)
 	if err != nil {
 		t.err = err
 		return nil, nil, err
 	}
-	defer func() { _ = fh.Close() }()
-	fi, err := fh.Stat()
-	if err != nil {
-		t.err = err
-		return nil, nil, err
-	}
-	if t.recs, _, t.err = transcript.Read(fh, 0); t.err != nil {
+	if t.recs, _, t.err = readConversation(t.harness, t.path); t.err != nil {
 		return nil, nil, t.err
 	}
 	t.raw = make([]time.Time, len(t.recs))

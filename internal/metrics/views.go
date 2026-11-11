@@ -128,7 +128,14 @@ func Overview(ctx context.Context, s Source, q Query) (Result, error) {
 		if r.Tables.Lately, err = lately(e, e.q.Window); err != nil {
 			return err
 		}
-		r.Tables.Helped, err = helped(e, e.q.Window)
+		if r.Tables.Helped, err = helped(e, e.q.Window); err != nil {
+			return err
+		}
+		// The split by coding tool, of this PC's activity, when the
+		// figures are of every tool on it.
+		if e.q.Client == "" && e.q.Machines != "all" {
+			r.Tables.ByClient, err = byClient(e, e.q.Window)
+		}
 		return err
 	})
 }
@@ -280,8 +287,9 @@ func System(ctx context.Context, s Source, q Query) (Result, error) {
 func runView(ctx context.Context, src Source, q Query, name string, need []string, fill func(e env, r *Result) error) (Result, error) {
 	// Sharing off answers this PC's figures, and the browse views always
 	// do: the scope says so.
+	// A client filter counts this PC's activity: other PCs send no client.
 	machines := "this"
-	if q.Machines == "all" && sharingOn(src.Config) && !slices.Contains(thisOnlyViews, name) {
+	if q.Machines == "all" && q.Client == "" && sharingOn(src.Config) && !slices.Contains(thisOnlyViews, name) {
 		machines = "all"
 	}
 	q.Machines = machines
@@ -289,7 +297,7 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 	// build is the view's answer for one switch, in the transaction's env.
 	build := func(e env, machines string) (Result, error) {
 		r := Result{View: name, ViewSchema: ViewSchema, Window: q.Window, Previous: Span{Since: prev.Since, Until: prev.Until},
-			Scope: Scope{Machines: machines, Server: src.ServerHost, Project: q.Project}, Index: src.Fresh}
+			Scope: Scope{Machines: machines, Server: src.ServerHost, Project: q.Project, Client: q.Client}, Index: src.Fresh}
 		e.view = name
 		r.GeneratedAt = e.now.In(viewLoc(e))
 		if !r.Index.IngestedAt.IsZero() {
@@ -311,6 +319,9 @@ func runView(ctx context.Context, src Source, q Query, name string, need []strin
 		}
 		r.Scope.PCs = pcs
 		r.Scope.OthersUnfiltered = machines == "all" && q.Project != "" && others
+		if r.Scope.Clients, err = scopeClients(e, q.Window); err != nil {
+			return Result{}, err
+		}
 		if err := fill(e, &r); err != nil {
 			return Result{}, err
 		}

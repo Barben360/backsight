@@ -270,5 +270,9 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		r.add("kind", shapeValue(e.Kind))
 		out = append(out, r)
 	}
+	client := clientValue(e.Client)
+	for i := range out {
+		out[i].add("client", client)
+	}
 	return out, ts, ""
 }

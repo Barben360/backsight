@@ -231,7 +231,7 @@ func TestValidate(t *testing.T) {
 		{"no transverse alias", func(c *Config) { c.Projects.Transverse = nil }, "projects.transverse"},
 		{"outbox order", func(c *Config) { c.Hooks.OutboxWarnMB = 600 }, "hooks.outbox_warn_mb"},
 		{"backup keep", func(c *Config) { c.Backup.KeepDaily = -1 }, "backup.keep_daily"},
-		{"retention", func(c *Config) { c.Client.RetentionDays = -1 }, "client.retention_days"},
+		{"retention", func(c *Config) { c.Clients.ClaudeCode.RetentionDays = -1 }, "clients.claude_code.retention_days"},
 		{"relative update source", func(c *Config) { c.Update.Source = "dist" }, "update.source"},
 		{"relative compose dir", func(c *Config) { c.Server.ComposeDir = "server" }, "server.compose_dir"},
 		{"empty compose dir", func(c *Config) { c.Server.ComposeDir = "" }, "server.compose_dir"},
@@ -278,19 +278,19 @@ func TestValidateIntegerBoundaries(t *testing.T) {
 		min int
 		set func(*Config, int)
 	}{
-		"recall.prompt_hits":          {1, func(c *Config, v int) { c.Recall.PromptHits = v }},
-		"recall.query_chars":          {1, func(c *Config, v int) { c.Recall.QueryChars = v }},
-		"recall.prompt_chars":         {1, func(c *Config, v int) { c.Recall.PromptChars = v }},
-		"recall.sticky_max":           {1, func(c *Config, v int) { c.Recall.StickyMax = v }},
-		"recall.sticky_window_h":      {1, func(c *Config, v int) { c.Recall.StickyWindowH = v }},
-		"recall.session_budget_chars": {1, func(c *Config, v int) { c.Recall.SessionBudgetChars = v }},
-		"recall.min_gap":              {0, func(c *Config, v int) { c.Recall.MinGap = v }},
-		"recall.recall_min_chars":     {0, func(c *Config, v int) { c.Recall.RecallMinChars = v }},
-		"recall.reminder_min_chars":   {0, func(c *Config, v int) { c.Recall.ReminderMinChars = v }},
-		"recall.quiet_prompts":        {0, func(c *Config, v int) { c.Recall.QuietPrompts = v }},
-		"backup.keep_daily":           {1, func(c *Config, v int) { c.Backup.KeepDaily = v }}, // 0 would prune the backup just written
-		"client.retention_days":       {0, func(c *Config, v int) { c.Client.RetentionDays = v }},
-		"backup.keep_weekly":          {0, func(c *Config, v int) { c.Backup.KeepWeekly = v }},
+		"recall.prompt_hits":                 {1, func(c *Config, v int) { c.Recall.PromptHits = v }},
+		"recall.query_chars":                 {1, func(c *Config, v int) { c.Recall.QueryChars = v }},
+		"recall.prompt_chars":                {1, func(c *Config, v int) { c.Recall.PromptChars = v }},
+		"recall.sticky_max":                  {1, func(c *Config, v int) { c.Recall.StickyMax = v }},
+		"recall.sticky_window_h":             {1, func(c *Config, v int) { c.Recall.StickyWindowH = v }},
+		"recall.session_budget_chars":        {1, func(c *Config, v int) { c.Recall.SessionBudgetChars = v }},
+		"recall.min_gap":                     {0, func(c *Config, v int) { c.Recall.MinGap = v }},
+		"recall.recall_min_chars":            {0, func(c *Config, v int) { c.Recall.RecallMinChars = v }},
+		"recall.reminder_min_chars":          {0, func(c *Config, v int) { c.Recall.ReminderMinChars = v }},
+		"recall.quiet_prompts":               {0, func(c *Config, v int) { c.Recall.QuietPrompts = v }},
+		"backup.keep_daily":                  {1, func(c *Config, v int) { c.Backup.KeepDaily = v }}, // 0 would prune the backup just written
+		"clients.claude_code.retention_days": {0, func(c *Config, v int) { c.Clients.ClaudeCode.RetentionDays = v }},
+		"backup.keep_weekly":                 {0, func(c *Config, v int) { c.Backup.KeepWeekly = v }},
 	}
 	for key, k := range keys {
 		cfg := Default(dirs, "/home/u")
@@ -354,16 +354,16 @@ func TestSetClientRetentionKeepsTheRestOfTheFile(t *testing.T) {
 		name, in, want string
 		days           int
 	}{
-		{"no section", "schema_version = 1\n# mine\n[server]\nbank = \"b\"\n", "schema_version = 1\n# mine\n[server]\nbank = \"b\"\n\n[client]\nretention_days = 3650\n", 3650},
-		{"section without key", "[client]\n# note\n[server]\nbank = \"b\"\n", "[client]\nretention_days = 90\n# note\n[server]\nbank = \"b\"\n", 90},
-		{"replace keeps the comment", "[client]\nretention_days = 30 # legal hold\n\n[llm]\nmodel = \"m\"\n", "[client]\nretention_days = 3650 # legal hold\n\n[llm]\nmodel = \"m\"\n", 3650},
-		{"remove", "[client]\nretention_days = 30\n[llm]\n", "[client]\n[llm]\n", 0},
+		{"no section", "schema_version = 1\n# mine\n[server]\nbank = \"b\"\n", "schema_version = 1\n# mine\n[server]\nbank = \"b\"\n\n[clients.claude_code]\nretention_days = 3650\n", 3650},
+		{"section without key", "[client]\n# note\n[server]\nbank = \"b\"\n", "[clients.claude_code]\nretention_days = 90\n# note\n[server]\nbank = \"b\"\n", 90},
+		{"replace keeps the comment", "[client]\nretention_days = 30 # legal hold\n\n[llm]\nmodel = \"m\"\n", "[clients.claude_code]\nretention_days = 3650 # legal hold\n\n[llm]\nmodel = \"m\"\n", 3650},
+		{"remove", "[client]\nretention_days = 30\n[llm]\n", "[clients.claude_code]\n[llm]\n", 0},
 		{"remove absent", "[llm]\n", "[llm]\n", 0},
-		{"empty file", "", "[client]\nretention_days = 3650\n", 3650},
-		{"no trailing newline", "[server]\nbank = \"b\"", "[server]\nbank = \"b\"\n\n[client]\nretention_days = 7\n", 7},
-		{"other table's same key", "[other]\nretention_days = 1\n", "[other]\nretention_days = 1\n\n[client]\nretention_days = 5\n", 5},
-		{"CRLF", "[server]\r\nbank = \"b\"\r\n", "[server]\r\nbank = \"b\"\r\n\r\n[client]\r\nretention_days = 5\r\n", 5},
-		{"CRLF replace", "[client]\r\nretention_days = 1\r\n", "[client]\r\nretention_days = 5\r\n", 5},
+		{"empty file", "", "[clients.claude_code]\nretention_days = 3650\n", 3650},
+		{"no trailing newline", "[server]\nbank = \"b\"", "[server]\nbank = \"b\"\n\n[clients.claude_code]\nretention_days = 7\n", 7},
+		{"other table's same key", "[other]\nretention_days = 1\n", "[other]\nretention_days = 1\n\n[clients.claude_code]\nretention_days = 5\n", 5},
+		{"CRLF", "[server]\r\nbank = \"b\"\r\n", "[server]\r\nbank = \"b\"\r\n\r\n[clients.claude_code]\r\nretention_days = 5\r\n", 5},
+		{"CRLF replace", "[client]\r\nretention_days = 1\r\n", "[clients.claude_code]\r\nretention_days = 5\r\n", 5},
 	}
 	for _, c := range cases {
 		got, err := SetClientRetention([]byte(c.in), c.days)
@@ -797,5 +797,22 @@ func TestSetRuntime(t *testing.T) {
 	}
 	if _, err := SetRuntime([]byte(in), "podman"); err == nil {
 		t.Error("podman written")
+	}
+}
+
+// Headless runs stay out of memory by default, Claude Code's and Codex's
+// (decision 0071 C1): Claude Code's Agent SDK entrypoints, codex exec,
+// Codex's SDKs and Codex as another agent's MCP tool (their originators in
+// Codex 0.167's source); interactive front ends are sent.
+func TestHeadlessEntrypointsAreSkippedByDefault(t *testing.T) {
+	p := Default(dirs, "/home/u").Privacy
+	for ep, skip := range map[string]bool{
+		"sdk-cli": true, "sdk-ts": true, "sdk-py": true,
+		"codex_exec": true, "codex_sdk_ts": true, "codex-app-server-sdk": true, "codex_mcp_server": true,
+		"cli": false, "claude-desktop": false, "codex-tui": false, "codex_vscode": false, "codex_cli_rs": false, "codex_desktop": false, "": false,
+	} {
+		if got := p.SkipsEntrypoint(ep); got != skip {
+			t.Errorf("%q skipped: %v, want %v", ep, got, skip)
+		}
 	}
 }

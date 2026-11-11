@@ -26,6 +26,15 @@
 {{$none := nopcactivity $r $days $.Frame.Window $.Frame.Windows}}{{if $none.Text}}<section class="card" aria-label="Activity on all PCs">{{template "nodata" $none}}</section>
 {{end}}{{template "tilegroups" tiles $r $.P $.L $.Loc $d $.Own}}
 
+{{/* widget: by coding tool. Reads .V.overview.Tables.ByClient through byclient (ByClient: Head, Rows; ByClientRow: Name, Href, Sessions, Recalls, GotMemory, Used, PerSession). Only on a window more than one tool was active in. */}}
+{{with byclient $r $.Frame.Path}}{{template "card-open" .Head}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Tool</th><th class="r">Sessions</th><th class="r">Recalls</th><th class="r">Got memory</th><th class="r">Memory used</th><th class="r">Context per session</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td><a href="{{.Href}}" data-client="{{.Name}}">{{.Name}}</a></td><td class="r">{{n .Sessions}}</td><td class="r">{{n .Recalls}}</td><td class="r">{{.GotMemory}}</td><td class="r">{{.Used}}</td><td class="r">{{.PerSession}}</td></tr>
+{{end}}</tbody></table></div>
+<p class="xs muted">This PC’s activity, each tool’s figures computed as the tiles are. A tool’s name shows the pages for it alone.</p>
+{{template "card-close" .Head}}{{end}}
+
 {{/* widget: What should I do?. Reads .V.overview.Attention and .AttentionMore through attention (AttentionCard: Head, Count, Items, Whys, Calm, More, MoreHref). */}}
 <div class="grid-main">
 {{with attention $r $.L $.CLI}}{{template "card-open" .Head}}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harnessid"
 )
 
 // Schema is the journal line format this binary writes and reads.
@@ -81,16 +82,19 @@ type Settled struct {
 // its text). Source is where an import event's shows were found
 // (telemetry, transcripts).
 type Event struct {
-	Schema    int                `json:"schema"`
-	Seq       int64              `json:"seq"`
-	TS        time.Time          `json:"ts"`
-	Kind      string             `json:"kind"`
-	Session   string             `json:"session,omitempty"`
-	Turn      string             `json:"turn,omitempty"`
-	Agent     string             `json:"agent,omitempty"`
-	Project   string             `json:"project,omitempty"`
-	Binary    string             `json:"binary_version,omitempty"`
-	V         string             `json:"v,omitempty"`
+	Schema  int       `json:"schema"`
+	Seq     int64     `json:"seq"`
+	TS      time.Time `json:"ts"`
+	Kind    string    `json:"kind"`
+	Session string    `json:"session,omitempty"`
+	Turn    string    `json:"turn,omitempty"`
+	Agent   string    `json:"agent,omitempty"`
+	Project string    `json:"project,omitempty"`
+	Binary  string    `json:"binary_version,omitempty"`
+	V       string    `json:"v,omitempty"`
+	// Client: the coding tool (harnessid ids) the line comes from. Lines
+	// written before the field have none and read as Claude Code (decodeLine).
+	Client    string             `json:"client,omitempty"`
 	N         int                `json:"n,omitempty"`
 	Machine   bool               `json:"machine,omitempty"`
 	Path      string             `json:"path,omitempty"`
@@ -147,6 +151,9 @@ const (
 // Common fields Append puts on every event that leaves them empty.
 type Common struct {
 	Session, Project, Binary, V string
+	// Client is the coding tool the events come from (harnessid ids); empty
+	// is Claude Code.
+	Client string
 }
 
 // seq numbers the lines of this process: (session, seq) is unique even when
@@ -189,6 +196,7 @@ func (j *Journal) Append(e Event) error {
 	fill(&e.Project, j.common.Project)
 	fill(&e.Binary, j.common.Binary)
 	fill(&e.V, j.common.V)
+	fill(&e.Client, harnessid.Or(j.common.Client))
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -361,6 +369,7 @@ func decodeLine(line []byte) (e Event, ok, empty bool) {
 	if json.Unmarshal(line, &e) != nil || e.Schema != Schema {
 		return Event{}, false, false
 	}
+	e.Client = harnessid.Or(e.Client)
 	return e, true, false
 }
 

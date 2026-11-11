@@ -174,7 +174,7 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 // (scripts/ci-free-disk.sh, ci_free_disk_test.go). A restored model cache
 // tar is dropped once seeded (it is never saved again).
 func TestStackJobsFreeTheDiskFirst(t *testing.T) {
-	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install|m6-chain|native-chain)\.sh`)
+	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install|m6-chain|native-chain|codex/run)\.sh`)
 	jobs := 0
 	for _, w := range workflows(t) {
 		for _, j := range w.jobs {
@@ -753,7 +753,7 @@ func withoutDocsOnlyGate(header string) string {
 // those: the sandbox tests and fresh-install search the embedded docs
 // (guide search), the required checks must run.
 func TestCIDocsOnlySkipsOnlyWhatDocsCannotReach(t *testing.T) {
-	want := map[string]bool{"test-windows": true, "m6-chain": true, "native-chain": true, "native-chain-windows": true}
+	want := map[string]bool{"test-windows": true, "m6-chain": true, "codex-chain": true, "native-chain": true, "native-chain-windows": true}
 	for name, j := range ciJobs(t) {
 		gated := docsOnlyGate.MatchString(j.raw)
 		if gated != want[name] {

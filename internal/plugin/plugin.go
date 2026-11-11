@@ -19,6 +19,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/instructions"
 )
 
@@ -31,6 +32,10 @@ const (
 	// builds get a new plugin version.
 	layout = "6"
 )
+
+// QuestionTool is Claude Code's tool for asking the user a question, which
+// the question gate's PreToolUse hook matches.
+const QuestionTool = "AskUserQuestion"
 
 // ToolNames are the four memory tools as Claude Code names them.
 var ToolNames = []string{
@@ -69,7 +74,7 @@ var events = []event{
 	{"SessionStart", "startup", "session-start", 10, false},
 	{"SessionStart", "resume|clear|compact|fork", "session-start", 5, false},
 	{"UserPromptSubmit", "", "user-prompt-submit", 25, false},
-	{"PreToolUse", "AskUserQuestion", "pre-tool-use", 10, false},
+	{"PreToolUse", QuestionTool, "pre-tool-use", 10, false},
 	{"PostToolUse", "mcp__plugin_" + Name + "_" + Server + "__.*", "post-tool-use", 2, false},
 	// A failed tool call: the pitfalls memory knows about it. Wired only
 	// with the [recall] failure switch (off by default, see docs/configuration.md).
@@ -169,8 +174,8 @@ func files(shim, version string, w Wiring) (map[string][]byte, error) {
 		}},
 	}
 	out := map[string][]byte{}
-	for _, sk := range instructions.Skills(skillShim(targetOS, shim)) {
-		out["plugins/"+Name+"/skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
+	for p, raw := range SkillFiles(shim) {
+		out["plugins/"+Name+"/"+p] = raw
 	}
 	for p, d := range docs {
 		raw, err := json.MarshalIndent(d, "", "  ")
@@ -180,6 +185,31 @@ func files(shim, version string, w Wiring) (map[string][]byte, error) {
 		out[p] = append(raw, '\n')
 	}
 	return out, nil
+}
+
+// SkillFiles are backsight's skills for shim, by path relative to the
+// plugin's root (skills/<name>/SKILL.md), as Claude Code reads them.
+func SkillFiles(shim string) map[string][]byte { return SkillFilesFor(harnessid.ClaudeCode, shim) }
+
+// SkillFilesFor are SkillFiles as client (a harness id) reads them
+// (instructions.SkillsFor).
+func SkillFilesFor(client, shim string) map[string][]byte {
+	out := map[string][]byte{}
+	for _, sk := range instructions.SkillsFor(client, skillShim(targetOS, shim)) {
+		out["skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
+	}
+	return out
+}
+
+// EventName is Claude Code's name of backsight's hook event arg (the
+// argument of `backsight hook`), "" for an event the plugin never wires.
+func EventName(arg string) string {
+	for _, e := range events {
+		if e.arg == arg {
+			return e.name
+		}
+	}
+	return ""
 }
 
 // skillShim is the shim as the skills' commands name it: on Windows with

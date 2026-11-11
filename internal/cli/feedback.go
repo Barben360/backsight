@@ -111,7 +111,7 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			if id == "" && sess == "" {
-				sess = os.Getenv("BACKSIGHT_SESSION")
+				sess = shellSessionHere()
 			}
 			if id == "" && sess == "" {
 				return &output.Error{Code: output.Usage, Message: "give --id <memory id> or --session <session id>"}
@@ -162,7 +162,7 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&id, "id", "", "memory id, or its first 8 characters or more")
-	cmd.Flags().StringVar(&sess, "session", "", "session id, or its first 8 characters or more (default without --id: $BACKSIGHT_SESSION)")
+	cmd.Flags().StringVar(&sess, "session", "", "session id, or its first 8 characters or more (default without --id: $BACKSIGHT_SESSION, else Codex's $CODEX_SESSION_ID)")
 	cmd.Flags().StringVar(&since, "since", "", "only events from then on (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD, UTC)")
 	return cmd
 }

@@ -16,7 +16,6 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
-	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -74,7 +73,7 @@ func (c clientEnv) ownedEdits() (edits []claudecfg.Edit, notes []string, err err
 	if st, err := state.Load(c.dirs.StateFile()); err == nil && st.PluginVersion != "" {
 		edits = append(edits, claudecfg.Edit{Target: c.loc.Settings, Apply: permissionRule})
 	}
-	if days := c.cfg.Client.RetentionDays; days > 0 {
+	if days := c.cfg.Clients.ClaudeCode.RetentionDays; days > 0 {
 		ret, err := claudecode.ReadRetention(c.loc, c.managed)
 		if err != nil {
 			return nil, nil, &output.Error{Code: output.Blocked, Message: err.Error() + ": fix the file by hand first, backsight never overwrites it"}
@@ -91,7 +90,7 @@ func (c clientEnv) ownedEdits() (edits []claudecfg.Edit, notes []string, err err
 // permissionRule allows the four memory tools (SPEC §5).
 func permissionRule(doc []byte) ([]byte, []claudecfg.Change, error) {
 	var changes []claudecfg.Change
-	for _, tool := range plugin.ToolNames {
+	for _, tool := range claudeCode.ToolNames() {
 		out, ch, err := claudecfg.EnsureInArray(doc, []string{"permissions", "allow"}, tool)
 		if err != nil {
 			return nil, nil, err
@@ -181,11 +180,11 @@ type clientConfigResult struct {
 
 func newClientCmd(e *env) *cobra.Command {
 	var configDir string
-	cmd := &cobra.Command{Use: "client", Short: "Wire backsight into Claude Code"}
-	cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	cmd := &cobra.Command{Use: "client", Short: "Wire backsight into Claude Code and Codex"}
+	cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
 	cfgCmd := &cobra.Command{Use: "config", Short: "Plan, apply or undo backsight's edits to Claude Code's files"}
 	cfgCmd.AddCommand(newClientConfigApplyCmd(e, &configDir, true), newClientConfigApplyCmd(e, &configDir, false), newClientConfigRestoreCmd(e, &configDir))
-	cmd.AddCommand(cfgCmd, newClientRetentionCmd(e, &configDir), newClientInstallCmd(e, &configDir), newClientRetireCmd(e, &configDir))
+	cmd.AddCommand(cfgCmd, newClientRetentionCmd(e, &configDir), newClientInstallCmd(e, &configDir), newClientRetireCmd(e, &configDir), newClientCodexMemoriesCmd(e), newClientUninstallCmd(e, &configDir))
 	return cmd
 }
 

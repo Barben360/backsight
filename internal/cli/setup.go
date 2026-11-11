@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/fileimport"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -42,6 +43,12 @@ import (
 
 const setupResume = "backsight setup --resume"
 
+// The next steps of a setup that installed or changed a tool's plugin.
+const (
+	claudeRestartStep = "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin"
+	codexRestartStep  = "restart Codex so it loads backsight's plugins"
+)
+
 type setupFlags struct {
 	answers                      []string
 	answersFile                  string
@@ -49,6 +56,7 @@ type setupFlags struct {
 	questions, undo, force       bool
 	reconfigure                  bool
 	configDir                    string
+	codexHome                    string // --codex-home: Codex's home
 	role                         string // --role: the answer role
 	runtime                      string // --runtime: the answer runtime
 }
@@ -128,8 +136,9 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.reconfigure, "reconfigure", false, "at a terminal, ask every question again, the last run's answers as defaults")
 	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
-	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
-	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without Claude Code that only holds the memory for your other PCs (default both)")
+	cmd.Flags().StringVar(&f.configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
+	cmd.Flags().StringVar(&f.codexHome, "codex-home", "", codexHomeFlag)
+	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without a coding tool (Claude Code or Codex) that only holds the memory for your other PCs (default both: this PC runs one)")
 	cmd.Flags().StringVar(&f.runtime, "runtime", "", "native: run the server from PyPI instead of Docker, under two systemd user units (Linux x86_64) or a scheduled task (Windows x86_64, where it is the default); this PC only; default docker elsewhere")
 	return cmd
 }
@@ -200,6 +209,19 @@ type setupEnv struct {
 	// importEsts: the import folder estimates of this run, by folder and
 	// model.
 	importEsts map[string]importEst
+	// codexImportEsts: the estimates of importing Codex's own memories,
+	// by model.
+	codexImportEsts map[string]importEst
+	// Codex (decision 0085): codexDir is its home (absolute) when the codex
+	// command answers there, "" when it does not (setup then wires Claude
+	// Code alone, as before Codex); claudeFound, the claude command answers;
+	// codexMemories, Codex's own memories are on. codexTrust is what the
+	// codex step leaves the user to do, codexAdded that it added a plugin.
+	codexDir      string
+	claudeFound   bool
+	codexMemories bool
+	codexTrust    string
+	codexAdded    bool
 }
 
 // setupGOOS and setupGOARCH are the machine setup chooses defaults for
@@ -280,6 +302,9 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	}
 	s.loc = claudecode.Locate(home, getenv)
 	s.refs = referenceCount(ctx, s.loc)
+	if err := s.detectCodex(ctx); err != nil {
+		return res, err
+	}
 
 	interactive := !e.json && !f.nonInteractive && !f.plan && !f.questions && stdinIsTerminal() && stdoutIsTerminal()
 	if f.reconfigure {
@@ -322,6 +347,14 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	probes := preflightProbes(ctx, s, extra)
 	probes.SchedulerOff = extra["scheduler"] == "off"
 	probes.ServerOnly = extra["role"] == config.RoleServer
+	if claude, codexOn := setup.Tools(res.Answers); s.codexDir != "" {
+		probes.NoClaude = !claude
+		if codexOn {
+			env := harnessEnv(codex, s.home, codexProfile(s.home, s.codexDir))
+			probes.Codex = func(ctx context.Context) (string, error) { return codex.Detect(ctx, env) }
+			probes.MinCodex = codex.MinVersion()
+		}
+	}
 	if schedulerGOOS == "linux" && !s.schedulerSettled(extra) {
 		probes.UserScheduler = userSession
 	}
@@ -437,6 +470,9 @@ func (s *setupEnv) rerunWith(answer string) string {
 	if s.f.configDir != "" {
 		parts = append(parts, "--config-dir", resumeWord(s.f.configDir))
 	}
+	if s.f.codexHome != "" {
+		parts = append(parts, "--codex-home", resumeWord(s.f.codexHome))
+	}
 	if s.f.role != "" {
 		parts = append(parts, "--role", resumeWord(s.f.role))
 	}
@@ -468,7 +504,8 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			}
 		}
 	}
-	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime()}
+	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime(),
+		Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories, CodexImport: s.codexImportFor()}
 	// --reconfigure: the questions the last run answered are asked again,
 	// their answers the defaults; the hidden answers (ports, project) stay.
 	prev := map[string]string{}
@@ -525,7 +562,8 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			trial[k] = val
 		}
 		trial[next.ID] = v
-		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs, Import: s.importEstimate}); errors.As(err, &ue) {
+		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs, Import: s.importEstimate,
+			Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories, CodexImport: s.codexImportFor()}); errors.As(err, &ue) {
 			fmt.Fprintln(s.e.stdout, "  "+ue.Msg)
 			continue
 		}
@@ -617,12 +655,32 @@ func estimateFlusher(d paths.Dirs, home string, cfg config.Config, since time.Ti
 	return &retain.Flusher{Bank: cfg.Server.Bank, Dirs: d, Resolver: project.New(home, cfg.Projects.Transverse),
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, Now: now, RetainSince: since, Index: idx, Outbox: notesOutboxFor(d, cfg),
 		ReportMinChars: cfg.Hooks.SubagentReportMinChars,
-		Attribution:    retain.Attributor{Transverse: cfg.Projects.Transverse}}
+		Attribution:    retain.Attributor{Transverse: cfg.Projects.Transverse, Harnesses: conversationReaders()}, Harnesses: conversationReaders()}
 }
 
-// backfillEstimate counts the sessions backfill would send and prices
-// them for model; it reads the transcripts only, never the server.
-func (s *setupEnv) backfillEstimate(model string) (int, string) {
+// backfillTools are the coding tools setup's backfill covers, given the
+// ones this run wires: Claude Code when picked, Codex when picked or
+// wired already (an earlier run, client install --codex). The estimate
+// and the step both read it, so the question counts what the step queues.
+func (s *setupEnv) backfillTools(claude, codexPicked bool) (bool, bool) {
+	if codexPicked {
+		return claude, true
+	}
+	st, err := state.Load(s.dirs.StateFile())
+	if err != nil {
+		return claude, false
+	}
+	_, wired := codexWired(s.home, st)
+	return claude, wired
+}
+
+// backfillEstimate counts, per coding tool, the sessions setup's backfill
+// step would queue (backfillTools: Claude Code's transcripts of the
+// profile setup wires, Codex's rollouts of the home it wires or wired)
+// and prices them all for model; it reads the conversations only, never
+// the server.
+func (s *setupEnv) backfillEstimate(model string, claudePicked, codexPicked bool) setup.Backlog {
+	claude, withCodex := s.backfillTools(claudePicked, codexPicked)
 	cfg := config.Default(s.dirs, s.home)
 	if s.cfg != nil {
 		cfg = *s.cfg
@@ -630,7 +688,7 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	// A survey only: no client, no machine id written before the go.
 	idx, err := retain.LoadSentIndex(s.dirs.SentIndexDir())
 	if err != nil {
-		return 0, ""
+		return setup.Backlog{}
 	}
 	since := now().UTC()
 	if st, err := state.Load(s.dirs.StateFile()); err == nil && st.RetainSince != nil {
@@ -639,7 +697,61 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	if model != cfg.LLM.Model { // the configured prices are another model's
 		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
 	}
-	return backfillSurvey(s.dirs, s.home, s.loc.Projects, cfg, since, idx, false)
+	var files []string
+	if claude {
+		files, _ = filepath.Glob(filepath.Join(s.loc.Projects, "*", "*.jsonl"))
+	}
+	fromCodex := map[string]bool{}
+	if withCodex {
+		// The home this run wires is not recorded yet: read it as the step
+		// will once it is; else the one recorded.
+		rollouts := conversations(s.home, codex)
+		if codexPicked && s.codexDir != "" {
+			rollouts = codex.Conversations(harness.Env{Home: s.home, Profile: codexProfile(s.home, s.codexDir)})
+		}
+		for _, f := range rollouts {
+			fromCodex[f] = true
+		}
+		files = append(files, rollouts...)
+	}
+	fl := estimateFlusher(s.dirs, s.home, cfg, since, idx)
+	prices := retain.PricesForLLM(cfg.LLM)
+	cands, plan, err := surveyAll(fl, files, backfillFlags{}, prices)
+	if err != nil {
+		return setup.Backlog{}
+	}
+	var b setup.Backlog
+	if claude {
+		b.Tools = append(b.Tools, setup.ToolSessions{Tool: setup.ToolsClaude})
+	}
+	if withCodex {
+		b.Tools = append(b.Tools, setup.ToolSessions{Tool: setup.ToolsCodex})
+	}
+	for _, c := range cands {
+		i := 0
+		if fromCodex[c.Path] && claude {
+			i = 1
+		}
+		b.Tools[i].Sessions++
+	}
+	b.Cost = backfillCost(plan, prices, cfg.LLM.Model)
+	return b
+}
+
+// backfillStepArgs are setup's backfill step: the queue of the tools
+// backfillTools covers, Claude Code's from the profile setup wires.
+func (s *setupEnv) backfillStepArgs(answers map[string]string) []string {
+	claude, withCodex := s.backfillTools(setup.Tools(answers))
+	args := []string{"retain", "backfill", "--queue"}
+	switch {
+	case claude && withCodex:
+		args = append(args, "--tools", setup.ToolsBoth, "--projects-dir", s.loc.Projects)
+	case withCodex:
+		args = append(args, "--tools", setup.ToolsCodex)
+	default: // Claude Code's, as before Codex
+		args = append(args, "--projects-dir", s.loc.Projects)
+	}
+	return args
 }
 
 // backfillSurvey counts the sessions of projectsDir a backfill would send
@@ -653,16 +765,21 @@ func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, s
 	model := cfg.LLM.Model
 	prices := retain.PricesForLLM(cfg.LLM)
 	files, _ := filepath.Glob(filepath.Join(projectsDir, "*", "*.jsonl"))
+	files = append(files, otherConversations(home)...)
 	_, plan, err := surveyAll(fl, files, backfillFlags{}, prices)
 	if err != nil {
 		return 0, ""
 	}
-	n := plan.Send + plan.NotesOnly
+	return plan.Send + plan.NotesOnly, backfillCost(plan, prices, model)
+}
+
+// backfillCost is plan's cost to show, with its cap and duration.
+func backfillCost(plan backfillPlan, prices retain.Prices, model string) string {
 	about := plan.Estimate.Duration.Round(time.Minute)
 	if prices.Known() {
-		return n, fmt.Sprintf("≈ %.2f %s, capped at %.2f %s, about %s", plan.Estimate.Cost, prices.Currency, plan.MaxCost, prices.Currency, about)
+		return fmt.Sprintf("≈ %.2f %s, capped at %.2f %s, about %s", plan.Estimate.Cost, prices.Currency, plan.MaxCost, prices.Currency, about)
 	}
-	return n, fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Estimate.InputTokens+plan.Estimate.OutputTokens)/1000, model, plan.MaxTokens/1000, about)
+	return fmt.Sprintf("≈ %dk tokens (no price known for %s), capped at %dk, about %s", (plan.Estimate.InputTokens+plan.Estimate.OutputTokens)/1000, model, plan.MaxTokens/1000, about)
 }
 
 // expandHome is p with a leading ~ read as the home folder: a setup
@@ -720,8 +837,14 @@ func (s *setupEnv) scanImport(path, model string) importEst {
 	if len(scan.Files) == 0 {
 		return importEst{err: fmt.Errorf("no Markdown or text file to import in it (backsight import %s --plan lists what it skips)", scan.Root)}
 	}
+	return importEstOf(scan, nil, cfg, model)
+}
+
+// importEstOf prices the files of scan that toSend accepts (all when nil)
+// for model, with the cap the import would set.
+func importEstOf(scan fileimport.Scan, toSend func(fileimport.File) bool, cfg config.Config, model string) importEst {
 	prices := retain.PricesForLLM(cfg.LLM)
-	plan := fileimport.BuildPlan(scan, nil, "", "", prices)
+	plan := fileimport.BuildPlan(scan, toSend, "", "", prices)
 	maxCost, maxTokens := importCap(filesImportFlags{}, plan.Total, prices)
 	work := importDuration(plan.Total.Duration) + " of extraction"
 	if maxTokens == 0 {
@@ -1080,7 +1203,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		{"client", 20, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			// Undo removes the plugin only from a profile it was not in before.
-			if known, err := pluginIDs(ctx, profileEnv(s.home, s.loc.Dir)); err != nil || !known[plugin.PluginID()] {
+			if known, err := pluginIDs(ctx, s.home, s.loc.Dir); err != nil || !known[plugin.PluginID()] {
 				r.Undo.ClientProfiles = appendNew(r.Undo.ClientProfiles, filepath.Clean(s.loc.Dir))
 				s.persist(r)
 			}
@@ -1167,24 +1290,46 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "scheduler", Status: "done", Detail: jr.Kind + ": jobs tick every 15 min, jobs maintain daily" + identity}, nil
 		}},
 		{"verify", 20, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
-			out := subcommand(ctx, clientArgs("verify")...)
-			var vr verifyResult
-			_ = json.Unmarshal(out.Data, &vr)
-			if out.Err != nil {
-				var failed []string
-				for _, c := range vr.Checks {
-					if c.Status == "fail" {
-						failed = append(failed, c.ID+": "+c.Summary)
-					}
-				}
-				if len(failed) > 0 {
-					e := *out.Err
-					e.Message = strings.Join(failed, "; ")
-					return setup.Step{}, &e
-				}
-				return setup.Step{}, out.Err
+			// Each tool wired, as it runs backsight: Claude Code's verify, then
+			// Codex's (one round trip: both reach the same server).
+			claude, codexOn := setup.Tools(answers)
+			var runs [][]string
+			if claude {
+				runs = append(runs, clientArgs("verify"))
 			}
-			return setup.Step{Name: "verify", Status: "done", Detail: fmt.Sprintf("%d checks passed: every hook, the MCP server, a retain/recall round trip", len(vr.Checks))}, nil
+			if codexOn {
+				args := []string{"verify", "--codex"}
+				if claude {
+					args = append(args, "--no-round-trip")
+				}
+				runs = append(runs, args)
+			}
+			checks := 0
+			for _, args := range runs {
+				out := subcommand(ctx, args...)
+				var vr verifyResult
+				_ = json.Unmarshal(out.Data, &vr)
+				if out.Err != nil {
+					var failed []string
+					for _, c := range vr.Checks {
+						if c.Status == "fail" {
+							failed = append(failed, verifyToolPrefix(vr, claude)+c.ID+": "+c.Summary)
+						}
+					}
+					if len(failed) > 0 {
+						e := *out.Err
+						e.Message = strings.Join(failed, "; ")
+						return setup.Step{}, &e
+					}
+					return setup.Step{}, out.Err
+				}
+				checks += len(vr.Checks)
+			}
+			detail := fmt.Sprintf("%d checks passed: every hook, the MCP server, a retain/recall round trip", checks)
+			if codexOn {
+				detail = fmt.Sprintf("%d checks passed: every hook and the MCP server of %s, a retain/recall round trip", checks, map[bool]string{true: "Claude Code and Codex", false: "Codex"}[claude])
+			}
+			return setup.Step{Name: "verify", Status: "done", Detail: detail}, nil
 		}},
 		{"reference", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			if answers["reference"] != "retire" {
@@ -1209,7 +1354,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if answers["backfill"] != "yes" {
 				return setup.Step{Name: "backfill", Status: "skipped", Detail: "not asked for"}, nil
 			}
-			args := []string{"retain", "backfill", "--queue", "--projects-dir", s.loc.Projects}
+			args := s.backfillStepArgs(answers)
 			if answers["provider"] == "claude-code" {
 				args = append(args, "--allow-subscription") // answered yes past the caveat
 			}
@@ -1283,6 +1428,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "import", Status: "done", Detail: detail}, nil
 		}},
 	}
+	steps = s.withTools(steps, answers, withRuns)
 	if answers["role"] == config.RoleServer {
 		for i, st := range steps {
 			if slices.Contains(clientSteps, st.name) {
@@ -1295,7 +1441,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 
 // clientSteps wire Claude Code: a server-only host has none, they are
 // skipped there.
-var clientSteps = []string{"client", "retention", "verify", "reference", "backfill", "import"}
+var clientSteps = []string{"client", "retention", "codex", "verify", "reference", "backfill", "import", "codex_import", "codex_memories"}
 
 func serverOnlyStep(name string) setup.Step {
 	return setup.Step{Name: name, Status: "skipped", Detail: "server-only host"}
@@ -1572,7 +1718,11 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	res.Steps = rec.Steps
 	res.RestartRequired = restart
 	if restart {
-		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin")
+		res.NextSteps = append(res.NextSteps, claudeRestartStep)
+	}
+	if next := s.codexNextSteps(); len(next) > 0 {
+		res.RestartRequired = res.RestartRequired || s.codexAdded
+		res.NextSteps = append(res.NextSteps, next...)
 	}
 	if answers["backfill"] == "yes" {
 		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
@@ -1581,6 +1731,11 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		return st.Name == "import" && st.Status == "done" && !strings.HasPrefix(st.Detail, "0 ")
 	}) {
 		res.NextSteps = append(res.NextSteps, "your folder is being imported in the background: backsight import list shows its progress")
+	}
+	if slices.ContainsFunc(rec.Steps, func(st setup.Step) bool {
+		return st.Name == "codex_import" && st.Status == "done" && !strings.HasPrefix(st.Detail, "0 ")
+	}) {
+		res.NextSteps = append(res.NextSteps, "Codex's own memories are being imported in the background: backsight import list shows their progress")
 	}
 	if answers["role"] == config.RoleServer {
 		res.NextSteps = append(res.NextSteps, "open the server to your other PCs: backsight server expose --private <this host's LAN or tailnet address> --out <file> "+
@@ -1595,6 +1750,9 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""
+	if claude, _ := setup.Tools(answers); !claude {
+		res.TryFirst = "In a new Codex session, ask: \"What do you remember about this project?\""
+	}
 	if answers["role"] == config.RoleServer {
 		res.TryFirst = "backsight doctor: the server's own checks (the client ones read \"not a client: server-only host\")"
 	}
@@ -1781,6 +1939,12 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	backfill := "start empty"
 	if a["backfill"] == "yes" {
 		backfill = "queue past sessions for jobs tick"
+		switch claude, withCodex := s.backfillTools(setup.Tools(a)); {
+		case claude && withCodex:
+			backfill = "queue past sessions of Claude Code and Codex for jobs tick"
+		case withCodex:
+			backfill = "queue past Codex sessions for jobs tick"
+		}
 	}
 	importDetail := "no import"
 	if a["import"] == "yes" {
@@ -1820,6 +1984,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "backfill", Status: "planned", Detail: backfill},
 		{Name: "import", Status: "planned", Detail: importDetail},
 	}
+	steps = s.planTools(steps, a)
 	if a["role"] == config.RoleServer {
 		for i, st := range steps {
 			if slices.Contains(clientSteps, st.Name) {

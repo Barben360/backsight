@@ -47,6 +47,9 @@ var (
 // $HOME, or relative to cwd when a path key gives it; a relative path in a
 // command is no evidence (the shell may have moved before it).
 func CallOf(tool string, input map[string]json.RawMessage, cwd, home string) Call {
+	if c, ok := codexCall(tool, input, cwd, home); ok {
+		return c
+	}
 	c := Call{CWD: cwd, Bash: tool == "Bash", Write: writeTools[tool]}
 	str := func(k string) (string, bool) {
 		var v string

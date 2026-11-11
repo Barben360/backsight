@@ -1,0 +1,5 @@
+memories
+memories.lock
+memories_1.sqlite
+memories_1.sqlite-shm
+memories_1.sqlite-wal

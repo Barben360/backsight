@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"runtime"
@@ -14,6 +13,8 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
@@ -23,31 +24,13 @@ import (
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
-// hookInput is the event JSON Claude Code sends (C06 §2, §4).
-type hookInput struct {
-	SessionID            string          `json:"session_id"`
-	PromptID             string          `json:"prompt_id"`
-	TranscriptPath       string          `json:"transcript_path"`
-	Cwd                  string          `json:"cwd"`
-	Source               string          `json:"source"`
-	Prompt               string          `json:"prompt"`
-	ToolName             string          `json:"tool_name"`
-	ToolInput            json.RawMessage `json:"tool_input"`
-	ToolResponse         json.RawMessage `json:"tool_response"`
-	AgentID              string          `json:"agent_id"`
-	AgentType            string          `json:"agent_type"`
-	AgentTranscriptPath  string          `json:"agent_transcript_path"`
-	LastAssistantMessage string          `json:"last_assistant_message"`
-	Reason               string          `json:"reason"`
-	Error                string          `json:"error"`            // PostToolUseFailure
-	IsInterrupt          bool            `json:"is_interrupt"`     // PostToolUseFailure
-	StopHookActive       bool            `json:"stop_hook_active"` // Stop, SubagentStop: the turn goes on from a Stop hook's block
-}
-
 // hookEnv is what every handler needs, resolved once per event.
 type hookEnv struct {
-	ctx     context.Context
-	in      hookInput
+	ctx context.Context
+	// adapter is the harness the event came from (the context's, Claude
+	// Code's by default): it decoded in and encodes the answer.
+	adapter harness.Adapter
+	in      harness.HookInput
 	dirs    paths.Dirs
 	home    string
 	cfg     config.Config
@@ -81,11 +64,11 @@ const (
 // newHookEnv parses the event; ok false means print nothing: no config yet,
 // an unreadable event, or the event's component turned off.
 func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool) {
-	h := &hookEnv{ctx: ctx}
-	if json.Unmarshal(input, &h.in) != nil {
+	h := &hookEnv{ctx: ctx, adapter: harness.FromContext(ctx)}
+	var err error
+	if h.in, err = h.adapter.DecodeHook(hookEvent(ctx), input); err != nil {
 		return nil, false
 	}
-	var err error
 	if h.dirs, h.home, err = machine(); err != nil {
 		return nil, false
 	}
@@ -105,14 +88,20 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// session: written whatever the components (0056).
 	live := session.Live{SessionID: h.in.SessionID, Cwd: cwd, Project: h.project, At: now()}
 	pid, err := strconv.Atoi(os.Getenv(claudePIDEnv))
-	if err == nil {
+	if err == nil && h.adapter.PairsByPID() {
 		_ = session.WriteLive(h.dirs.SessionsDir(), pid, live)
 	}
-	// Under the session id too where the pid may not pair (0080): on
-	// Windows, whose Claude Code process tree may differ, or without a
-	// Claude Code pid. Elsewhere the pid record is enough.
-	if runtime.GOOS == "windows" || err != nil {
+	// Under the session id too where the pid may not pair (0080): where
+	// the harness's process tree may differ (Claude Code on Windows), or
+	// without the harness's pid. Elsewhere the pid record is enough.
+	if h.adapter.PairsBySession(runtime.GOOS) || err != nil {
 		_ = session.WriteLiveSession(h.dirs.SessionsDir(), live)
+	}
+	// The hooks' heartbeat, whatever the components: doctor compares it
+	// with the tool's newest conversation (0085 D5). Codex's only: Claude
+	// Code's hooks are checked by their wiring.
+	if hookEvent(ctx) == harness.EventSessionStart && h.adapter.ID() != harness.ClaudeCode && h.in.AgentID == "" {
+		state.RecordHookRun(h.dirs, h.adapter.ID(), h.in.SessionID, now())
 	}
 	c := h.cfg.Components
 	if (side == readSide && !c.Read) || (side == writeSide && !c.Write) || (side == "" && !c.Read && !c.Write) {
@@ -121,12 +110,97 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// Hooks of one session can run in parallel: a short bounded retry
 	// instead of losing their updates (0054 amendment).
 	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir(), Retry: 100 * time.Millisecond}
-	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version})
-	h.journal = feedback.NewJournal(h.dirs.FeedbackDir(), feedback.Common{Session: h.in.SessionID, Project: h.project, Binary: buildinfo.Version, V: instructions.Version})
+	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version, Client: h.adapter.ID()})
+	h.journal = feedback.NewJournal(h.dirs.FeedbackDir(), feedback.Common{Session: h.in.SessionID, Project: h.project, Binary: buildinfo.Version, V: instructions.Version, Client: h.adapter.ID()})
 	// One deadline for every call of a hook: the supervisor's own is the
 	// hard stop, this one lets the handler finish with what it has.
 	h.client, err = hindsight.New(h.cfg.Server.URL, h.sec.APIKey, 30*time.Second)
 	return h, err == nil
+}
+
+// shellSession is the session a backsight command run from the agent's
+// shell belongs to: BACKSIGHT_SESSION, which Claude Code's shells get from
+// the SessionStart hook's env file, else CODEX_SESSION_ID, which Codex
+// gives every shell command it runs: the root session, also in a
+// subagent's shell, the session_id its hooks key their records on (0085
+// D4; never CODEX_THREAD_ID, a subagent's own thread). "" when neither is
+// set (an invalid CODEX_SESSION_ID counts as unset), and "" too when
+// CLAUDE_CODE_SESSION_ID is set: the command runs under Claude Code (one
+// started from a Codex shell inherits its CODEX_SESSION_ID), which keeps
+// the session each command takes without this variable (store's
+// CLAUDE_CODE_SESSION_ID, why's latest session, none for pause). The
+// commands ask shellSessionIn, which also knows a Codex started from
+// Claude Code's shell (which inherits BACKSIGHT_SESSION and
+// CLAUDE_CODE_SESSION_ID).
+func shellSession(getenv func(string) string) string {
+	if s := getenv("BACKSIGHT_SESSION"); s != "" {
+		return s
+	}
+	if getenv("CLAUDE_CODE_SESSION_ID") != "" {
+		return ""
+	}
+	if s := getenv("CODEX_SESSION_ID"); session.ValidID(s) {
+		return s
+	}
+	return ""
+}
+
+// claudeShellSession is the Claude Code session a shell's variables name
+// (BACKSIGHT_SESSION from its env file, else CLAUDE_CODE_SESSION_ID), ""
+// when none is a valid id.
+func claudeShellSession(getenv func(string) string) string {
+	for _, k := range []string{"BACKSIGHT_SESSION", "CLAUDE_CODE_SESSION_ID"} {
+		if s := getenv(k); session.ValidID(s) {
+			return s
+		}
+	}
+	return ""
+}
+
+// shellSessionIn is shellSession, sessions (the sessions directory) told
+// which tool a shell holding both Claude Code's and Codex's variables runs
+// in: one tool started from the other's shell inherits the outer one's
+// variables. A Codex started from Claude Code finds that session in its
+// hooks' environment and records it on its own (StartedIn); a shell whose
+// Claude Code session is the one CODEX_SESSION_ID's session was started
+// from runs in that Codex. Otherwise (Claude Code started from Codex, or
+// nothing recorded) shellSession decides.
+func shellSessionIn(sessions string, getenv func(string) string) string {
+	if cx := getenv("CODEX_SESSION_ID"); sessions != "" && session.ValidID(cx) {
+		if outer := claudeShellSession(getenv); outer != "" {
+			if st, err := (session.Store{Dir: sessions}).Load(cx); err == nil && st.StartedIn == outer {
+				return cx
+			}
+		}
+	}
+	return shellSession(getenv)
+}
+
+// shellSessionHere is shellSessionIn on this machine's sessions.
+func shellSessionHere() string {
+	sessions := ""
+	if d, _, err := machine(); err == nil {
+		sessions = d.SessionsDir()
+	}
+	return shellSessionIn(sessions, os.Getenv)
+}
+
+// recordStartedIn records, at each start of a Codex session, the Claude
+// Code session its hooks' environment names (Codex started from Claude
+// Code's shell; none, a session resumed elsewhere forgets it), which
+// shellSessionIn reads.
+func (h *hookEnv) recordStartedIn() {
+	if h.adapter.ID() != harnessid.Codex {
+		return
+	}
+	outer := claudeShellSession(os.Getenv)
+	if st, err := h.store.Load(h.in.SessionID); err == nil && st.StartedIn == outer {
+		return // nothing to write: most starts
+	}
+	h.updateSession(func(st *session.State) error {
+		st.StartedIn = outer
+		return nil
+	})
 }
 
 // remote is the normalised git remote of the session's directory, recorded
@@ -162,24 +236,25 @@ func safeProject(p string) string {
 	return clip(p, 60)
 }
 
-// contextOutput is a hook answer: text for Claude, a banner for the user,
-// its brand word in color unless NO_COLOR is set (no-color.org).
-func contextOutput(event, text, banner string) []byte {
-	out := map[string]any{}
-	if text != "" {
-		out["hookSpecificOutput"] = map[string]string{"hookEventName": event, "additionalContext": text}
-	}
-	if banner != "" {
-		if os.Getenv("NO_COLOR") == "" {
-			banner = instructions.Colored(banner)
-		}
-		out["systemMessage"] = banner
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	raw, _ := json.Marshal(out)
-	return raw
+// answer is a hook answer to backsight's event, as the harness reads it:
+// text for the agent, a banner for the user.
+func (h *hookEnv) answer(event, text, banner string) []byte {
+	return h.adapter.EncodeHook(harness.HookOutput{Event: event, Context: text, Banner: banner})
+}
+
+// hookEventKey carries backsight's event id to the handler's decoder.
+type hookEventKey struct{}
+
+// withHookEvent is ctx for a handler of event.
+func withHookEvent(ctx context.Context, event string) context.Context {
+	return context.WithValue(ctx, hookEventKey{}, event)
+}
+
+// hookEvent is the event withHookEvent set, "" when none (a command that
+// builds its own input, such as recall-prompt).
+func hookEvent(ctx context.Context) string {
+	ev, _ := ctx.Value(hookEventKey{}).(string)
+	return ev
 }
 
 // shellQuote quotes s for a POSIX shell (the env file is sourced by bash).

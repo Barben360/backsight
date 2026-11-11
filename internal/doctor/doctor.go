@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -127,6 +128,7 @@ type Env struct {
 	// terminal (issue 270).
 	OnCheck func(Check)
 	InstallProbes
+	CodexProbes
 }
 
 const (
@@ -252,12 +254,12 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
 	if !serverOnly { // it asks Claude Code
-		var wiring *plugin.Wiring // nil: the config is unreadable (its own check says so)
+		var wiring *config.Config // nil: the config is unreadable (its own check says so)
 		if cfgErr == nil {
-			w := plugin.WiringOf(cfg)
-			wiring = &w
+			wiring = &cfg
 		}
 		add(checkClient(env, loc, wiring))
+		add(codexChecks(ctx, env, nowFn())...)
 		if env.GitBash != nil {
 			add(checkGitBash(*env.GitBash))
 		}
@@ -1217,7 +1219,7 @@ func checkRetention(loc claudecode.Location, managedDir string) Check {
 // checkClient compares Claude Code's wiring with what client install
 // recorded (SPEC §5 drift, §15), for the wiring w the config asks for
 // (nil when the config is unreadable: the wiring installed is accepted).
-func checkClient(env Env, loc claudecode.Location, w *plugin.Wiring) Check {
+func checkClient(env Env, loc claudecode.Location, cfg *config.Config) Check {
 	c := Check{ID: "client"}
 	st, err := state.Load(env.Dirs.StateFile())
 	if err != nil || st.PluginVersion == "" {
@@ -1227,23 +1229,16 @@ func checkClient(env Env, loc claudecode.Location, w *plugin.Wiring) Check {
 	}
 	// The profile client install wired, not the shell's (0048: the dev
 	// install lives in its own profile).
-	profile, fix := "", "backsight client install"
-	if st.Client != nil && st.Client.Profile != "" {
-		profile = st.Client.Profile
+	claude := harness.Claude{}
+	hen := harness.Env{Home: env.Home, Profile: env.Getenv(claude.ProfileVar())}
+	profile, fix := st.ProfileOf(claude.ID()), "backsight client install"
+	if profile != "" {
 		fix += " --config-dir " + profile
-		loc = claudecode.Locate(env.Home, func(k string) string {
-			if k == "CLAUDE_CONFIG_DIR" {
-				return profile
-			}
-			return env.Getenv(k)
-		})
+		hen.Profile = profile
+		loc = claude.Location(hen)
 	}
-	installed := plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}
-	wiring := plugin.InstalledWiring(env.Dirs.Data, installed, buildinfo.Version) // switch unknown: no drift
-	if w != nil {
-		wiring = *w
-	}
-	drift := plugin.Drift(env.Dirs.Data, loc.Settings, installed, buildinfo.Version, wiring)
+	rec := harness.Recorded{Version: st.PluginVersion, ShimTarget: st.ShimTarget, Data: env.Dirs.Data, BinaryVersion: buildinfo.Version}
+	drift := claude.Drift(hen, rec, cfg) // cfg nil: the installed switch is accepted, no drift
 	if env.ClaudePlugins != nil {
 		if raw, err := env.ClaudePlugins(profile); err == nil {
 			var items []struct {

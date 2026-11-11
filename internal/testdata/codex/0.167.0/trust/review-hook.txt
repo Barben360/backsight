@@ -1,0 +1,13 @@
+  >_ OpenAI Codex (v0.167.0)
+     ~/work
+  PreToolUse hooks
+  2 hooks need review before they can run.
+› [!]  1  Unnamed hook · new
+  [!]  2  Unnamed hook · new
+  Event     PreToolUse
+  Source    User config - ~/.codex/hooks.json
+  Command   /opt/harness/probe.sh PreToolUse
+  Mode      Sync
+  Timeout   10s
+  Trust     New hook - review required
+  t trust · esc back

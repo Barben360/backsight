@@ -1,0 +1,13 @@
+1 as-generated: trusted hooks ran the shim with no arguments: 4 times (before: 0); backsight hook runs: 0
+2a one plugin, trusted: hooks run: yes
+2b binary behind the shim replaced (dccc56e47f99 -> 1d6cfb40eea0): hooks run: yes
+2c a skill changed, plugin added again: hooks run: no
+2d version bumped, plugin added again: hooks run: no
+3a two plugins, trusted: hooks run: yes
+3b a skill changed in the main plugin, added again: hooks run: yes
+3c the hooks plugin's version bumped, added again: hooks run: no
+4a TUI, memory_store and memory_credit with destructiveHint/openWorldHint false: approval asked: no
+4b codex exec (workspace-write): memory_store=completed memory_credit=failed (memory session not ready: call memory_credit again) 
+5 identity: identity forked: true;identity resumed: true;identity after clear: true;identity first: true;
+6 removal: hooks.state tables left for backsight: 18;plugins/cache/backsight left: plugins/cache/backsight ;.hook-trust files: 2;
+7 the container cannot reach the internet: yes

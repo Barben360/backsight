@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"math"
@@ -134,7 +135,9 @@ func (h *hookEnv) beginTurn(n int, machine bool) {
 		return
 	}
 	prev, had := h.turnPointer()
-	id := h.in.PromptID
+	// Claude Code's prompt id, else Codex's turn id (a prompt of the root
+	// thread: a subagent's never begins a turn), else one of its own.
+	id := cmp.Or(h.in.PromptID, h.in.TurnID)
 	if id == "" {
 		id = randomHex(16)
 	}
@@ -172,12 +175,14 @@ func (h *hookEnv) creditedSinceTurn() bool {
 }
 
 // journalShows records items shown to the agent on path (prompt, gate,
-// briefing, search, read), with flags (a prompt's set_changed).
+// briefing, search, read), with flags (a prompt's set_changed), and the
+// tool call's id when the harness gives one (Codex's tool_use_id, the
+// memory call's _meta.callId; Claude Code's hooks get none).
 func (h *hookEnv) journalShows(path string, items []feedback.Item, flags ...string) {
 	if !h.feedbackOn() || len(items) == 0 {
 		return
 	}
-	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items, Flags: flags}))
+	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Call: h.in.ToolUseID, Path: path, Items: items, Flags: flags}))
 }
 
 // itemsFromHits ranks hits from 1 in the order shown, each with its boost,
@@ -435,7 +440,7 @@ func (h *hookEnv) journalCredit(text string) {
 			return // a credit naming nothing shown credits nothing
 		}
 	}
-	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, IDs: ids, Verdict: verdict}))
+	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, Call: h.in.ToolUseID, IDs: ids, Verdict: verdict}))
 }
 
 // sourceLineRE: a fact line of a Sources answer, whole: its project and

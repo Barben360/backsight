@@ -15,7 +15,6 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
-	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // EpochDocument holds the bank's restore epoch, in its control bank:
@@ -420,15 +419,10 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	if err != nil {
 		return false, nil, errors.New(errSummary(err))
 	}
-	fh, err := os.Open(cur.Transcript)
+	recs, _, err := readConversation(f.harnessFor(cur.Transcript), cur.Transcript)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil, nil // nothing left to resend from
 	}
-	if err != nil {
-		return false, nil, err
-	}
-	recs, _, err := transcript.Read(fh, 0)
-	_ = fh.Close()
 	if err != nil {
 		return false, nil, err
 	}

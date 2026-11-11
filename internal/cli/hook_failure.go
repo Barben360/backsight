@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/instructions"
-	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -101,7 +101,7 @@ func (h *hookEnv) toolFailure() []byte {
 		return skip("interrupt")
 	case len([]rune(body)) < failureMinError:
 		return skip("short_error")
-	case strings.HasPrefix(tool, "mcp__plugin_"+plugin.Name+"_"):
+	case strings.HasPrefix(tool, h.adapter.ToolPrefix()):
 		return skip("own_tool") // backsight's own tools failing is not a pitfall to look up
 	}
 	if paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID); paused {
@@ -185,5 +185,5 @@ func (h *hookEnv) toolFailure() []byte {
 		return nil
 	}
 	h.journalShows("failure", itemsFromHits(chosen))
-	return contextOutput("PostToolUseFailure", text, "")
+	return h.answer(harness.EventPostToolUseFailure, text, "")
 }

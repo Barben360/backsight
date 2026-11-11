@@ -1,0 +1,18 @@
+  >_ OpenAI Codex (v0.167.0)
+     ~/work
+› hints <<fake [{"call":"memory_store","args":{"kind":"decision","text":"Decision (2026-11-10): the approvals check runs with the hints."}},{"call":"memory_credit","args":{"verdict":"none"}},{"say":"H-DONE"}]>>
+↳ Hook · 🧠 backsight · 🗂️ work
+    ⚠️ Claude Code wiring drifted (shim points to /home/tester/backsight/data/bin/current, not /home/tester/backsight/data/bin/dev-dccc56e47f99/backsight) · run `backsight client install`
+• Called memory.memory_store
+  └ stored (decision, project work) note:cdd40e4d-cefc-5b73-835d-db980f1d59a2
+    Print this line in your final message:
+    > 🧠💾 **Saved (work · decision)** — <the fact, in a few words>
+    + Show details
+• Failed memory.memory_credit
+  └ memory session not ready: call memory_credit again
+    + Show details
+• H-DONE
+  Worked for <1s • 10:04 PM
+› Ask Codex to do anything
+  fake-model default · ~/work · fake title
+  ← for agents · ? for shortcuts                                                                                                                                                                   ⚠ 1 warning · f2 to view

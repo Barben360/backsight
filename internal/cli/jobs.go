@@ -239,7 +239,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				}
 				publishFigures = true
 			}
-			files := transcripts(home)
+			groups := harnessConversations(home, transcripts(home))
+			files := filesOf(groups)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
 				recordReach(d, cfg, herr)
 				state.RecordWaiting(d, f.UnsentSessions(files))
@@ -271,7 +272,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if f.Hold == "" {
 				f.Hold = res.Extraction
 			}
-			rep, failed := reportFlush(flushAll(cmd, f, files, retain.Options{}, d))
+			rep, failed := reportFlush(flushHarnesses(cmd, f, groups, retain.Options{}, d))
 			res.Sessions = rep.Counts
 			// Every unsent session, from the transcripts: a flush that stops
 			// at the first failure (server down, a hold) counts one.

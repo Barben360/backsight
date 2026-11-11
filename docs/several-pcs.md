@@ -3,15 +3,15 @@
 How to share one memory between your PCs. One machine holds the server: the [**host**](glossary.md#host). The other PCs join it with `backsight connect`: the [**clients**](glossary.md#client). Words you may not know are in the [glossary](glossary.md).
 
 - **Shared**: the memory itself, so a decision stored on one PC is recalled on the others, and which memories Claude used or hid on each PC (memory ids, numbers and times only; `feedback.share_ledger` in [configuration.md](configuration.md#feedback-which-memories-claude-used)).
-- **Kept on each PC**: Claude Code's transcripts, the queue of notes waiting for the server, `config.toml` and `secrets.toml`.
+- **Kept on each PC**: Claude Code's transcripts and Codex's sessions, the queue of notes waiting for the server, `config.toml` and `secrets.toml`.
 - **The host's job**: the server, its backups, its updates and restores. A purge (`backsight forget <id> --purge --yes`) can be run from any PC and holds on all of them ([below](#restore-and-purge-with-several-pcs)).
 
 ## Choose the host
 
 Pick a machine that is on whenever you work:
 
-- **A PC that already runs backsight** for Claude Code: nothing to install, go on with [Open the server to your other PCs](#open-the-server-to-your-other-pcs).
-- **A home server or a NAS** without Claude Code: `backsight setup --role server` there installs the server only ([A server-only host](install.md#a-server-only-host)). It needs Docker and an LLM provider. On Linux, user timers stop while you are logged out unless lingering is on (`sudo loginctl enable-linger <user>`), and with them the daily backup.
+- **A PC that already runs backsight** for Claude Code or Codex: nothing to install, go on with [Open the server to your other PCs](#open-the-server-to-your-other-pcs).
+- **A home server or a NAS** without Claude Code or Codex: `backsight setup --role server` there installs the server only ([A server-only host](install.md#a-server-only-host)). It needs Docker and an LLM provider. On Linux, user timers stop while you are logged out unless lingering is on (`sudo loginctl enable-linger <user>`), and with them the daily backup.
 
 While the host is off or out of reach, clients do not lose anything: sessions stay in their transcripts and notes in their queue, sent once the server answers ([Away from home](#away-from-home)).
 
@@ -54,7 +54,7 @@ The file is readable by you only (mode 0600; on Windows an access list: you, SYS
 
 ## Join from another PC
 
-1. [Install the binary](install.md#install-the-binary). A client needs Claude Code, not Docker.
+1. [Install the binary](install.md#install-the-binary). A client needs Claude Code, Codex or both, not Docker: all the PCs share one memory, whatever tool each runs.
 2. Copy the token file over, then check what connect would do:
 
    ```sh
@@ -77,11 +77,11 @@ It then shows its plan and asks (`--answer consent=yes` without a terminal), and
 - the API key in `secrets.toml`;
 - the server's id in `state.json`, so this PC notices if another server ever answers at that address.
 
-Last, it runs setup's client steps: Claude Code's wiring, transcript retention, the background jobs, `backsight verify`, and the offer to import your past sessions ([backfill](glossary.md#backfill)), priced with the host's LLM. Nothing about the provider or backups: those are the host's. If the host extracts with a Claude subscription (the `claude-code` provider), your sessions are extracted on it too, so connect asks you to accept its terms first (`--answer ack_subscription=yes` without a terminal). If a setup step stops, `backsight setup --resume` goes on. Every flag is in [commands.md](commands.md#install-and-wiring).
+Last, it runs setup's client steps: the wiring of Claude Code, Codex or both (with Codex installed, setup asks which: `--answer tools=claude-code`, `codex` or `both`; `--codex-home <dir>` names a Codex home other than `$CODEX_HOME` or `~/.codex`), Claude Code's transcript retention, the background jobs, `backsight verify`, and the offer to import your past sessions ([backfill](glossary.md#backfill)), priced with the host's LLM. Nothing about the provider or backups: those are the host's. If the host extracts with a Claude subscription (the `claude-code` provider), your sessions are extracted on it too, so connect asks you to accept its terms first (`--answer ack_subscription=yes` without a terminal). If a setup step stops, `backsight setup --resume` goes on. Every flag is in [commands.md](commands.md#install-and-wiring).
 
-Restart Claude Code (or run `/reload-plugins`). Until then, a session open while you ran connect recalls from the new server at once (each hook reads the config when it runs), but its memory tools keep the old one: their searches and reads still go there, and they write nothing to it (a note Claude stores waits in this PC's queue for the new server).
+Restart Claude Code (or run `/reload-plugins`), and Codex if it is wired. Until then, a session open while you ran connect recalls from the new server at once (each hook reads the config when it runs), but its memory tools keep the old one: their searches and reads still go there, and they write nothing to it (a note Claude stores waits in this PC's queue for the new server).
 
-Such a session started before this PC joined. The 15-minute job leaves it to the backfill, but when Claude Code ends it, it is sent whole to the new server, its turns from before the connect included, whatever you answered to the backfill offer: declining the backfill keeps out only the sessions that ended before. To keep a session off the shared server, end it before you run connect, and decline the backfill.
+Such a session started before this PC joined. The 15-minute job leaves it to the backfill, but when Claude Code or Codex ends it, it is sent whole to the new server, its turns from before the connect included, whatever you answered to the backfill offer: declining the backfill keeps out only the sessions that ended before. To keep a session off the shared server, end it before you run connect, and decline the backfill.
 
 ## A PC that already has its own server
 
@@ -107,6 +107,7 @@ backsight server install --ssh user@host
 - It opens the server on the address your ssh reached. `--private <ip>` picks another: a tailnet address, or a LAN one with `--answer cleartext_lan=yes`, as for `server expose`.
 - `--json` prints one progress line per step on stderr. `--non-interactive` never prompts: give `--answer consent=yes` and the LLM key with `--llm-key-from-file <file>`.
 - After a failure, run the same command again: every step can run again, so it goes on from where it stopped. The host is never rolled back; `backsight setup --undo` there undoes its setup.
+- Then it joins from this PC as `connect` does, wiring Claude Code, Codex or both: this PC's answers `tools`, `codex_import` and `codex_memories` go with `--answer`, and `--codex-home <dir>` names a Codex home other than `$CODEX_HOME` or `~/.codex` (kept for a rerun; `--print-commands` puts the answers on its `connect` line, and refuses `--codex-home`: give it to that `connect` yourself).
 
 No ssh access to the host? `backsight server install --print-commands` prints the same steps as commands to run yourself, on the host then on this PC. Every refusal and its fix: [server install --ssh stopped](troubleshooting.md#server-install---ssh-stopped).
 
@@ -133,7 +134,7 @@ backsight stats cost --machines all --days 30
 With a tailnet address, a laptop reaches the host from anywhere Tailscale is up; with a LAN address, only at home. A laptop that cannot reach the host, or a host that is off, costs you recall, not data:
 
 - **Prompts.** backsight gives the server 3 s to accept a connection. Each prompt then costs at most about 3 s, until 3 prompts in a row failed: recall pauses for 5 minutes and prompts are no longer delayed (`network.breaker_*` in [configuration.md](configuration.md#network)). Hooks keep their time limits.
-- **Notes** Claude stores wait in this PC's queue, and **sessions** in Claude Code's transcripts.
+- **Notes** Claude stores wait in this PC's queue, and **sessions** in Claude Code's transcripts or Codex's sessions.
 - **After an hour** without an answer, the next session's start line adds "⚠️ memory server silent since …", and doctor's `server-reach` check warns: when the server last answered, whether recall is paused, how many notes are queued and how many sessions wait. The `Server` line of `backsight stats` shows the same record, read on this PC without asking the server.
 - **Back home**, the next `backsight jobs tick` (every 15 minutes) sends everything that waited.
 

@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
@@ -24,6 +27,8 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
@@ -100,6 +105,52 @@ func realProbes(e *doctor.Env) {
 		defer cancel()
 		return schedulerEntries(ctx, e.Dirs)
 	}
+	e.CodexRun = toolRunner(harnessid.Codex)
+	e.CodexTools = func(ctx context.Context) (map[string]map[string]any, error) {
+		return servedAnnotations(ctx, e.Dirs, e.Home)
+	}
+}
+
+// servedAnnotations are the annotations of the tools the memory server
+// serves Codex, by tool, from this binary's server built with this
+// machine's config (the tools it serves depend on it), listed over an
+// in-memory connection: nothing is started, nothing is called.
+func servedAnnotations(ctx context.Context, d paths.Dirs, home string) (map[string]map[string]any, error) {
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, adapter: harness.Codex{}})
+	ct, st := mcp.NewInMemoryTransports()
+	ss, err := srv.Connect(ctx, st, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = ss.Close() }()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "backsight-doctor"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cs.Close() }()
+	list, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]any{}
+	for _, t := range list.Tools {
+		m := map[string]any{}
+		if t.Annotations != nil {
+			raw, err := json.Marshal(t.Annotations)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return nil, err
+			}
+		}
+		out[t.Name] = m
+	}
+	return out, nil
 }
 
 // hindsightTimeout bounds each Hindsight call of doctor and report.

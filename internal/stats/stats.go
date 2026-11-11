@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -27,6 +28,9 @@ type Event struct {
 	TS      time.Time
 	Event   string
 	Session string
+	// Client is the coding tool the event came from ("" before the field
+	// existed: Claude Code's; ClientOf reads it).
+	Client string
 
 	N        int
 	Decision string
@@ -74,6 +78,25 @@ type Event struct {
 	Base     string
 	Applied  string
 	PathRule string `json:"path_rule"`
+}
+
+// ClientOf is the coding tool e came from: its client field, Claude
+// Code's when it names none (harnessid.Or).
+func ClientOf(e Event) string { return harnessid.Or(e.Client) }
+
+// ForClient are the events of events that came from client (a harnessid
+// id); "" keeps them all.
+func ForClient(events []Event, client string) []Event {
+	if client == "" {
+		return events
+	}
+	out := make([]Event, 0, len(events))
+	for _, e := range events {
+		if ClientOf(e) == client {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // line decodes "ids", an array in most events and a count in tool_use.

@@ -1,0 +1,11 @@
+17,26d16
+< [marketplaces.backsight]
+< source_type = "local"
+< source = "/home/tester/backsight/data/marketplace"
+< 
+< [plugins."backsight@backsight"]
+< enabled = true
+< 
+< [plugins."backsight-hooks@backsight"]
+< enabled = true
+< 

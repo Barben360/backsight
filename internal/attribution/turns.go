@@ -1,7 +1,6 @@
 package attribution
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/transcript"
@@ -53,8 +52,7 @@ func (r *Repos) LearnAll(recs []transcript.Record, fallback string) {
 			cwd = fallback
 		}
 		for _, t := range rec.Tools {
-			var cmd string
-			if t.Name == "Bash" && json.Unmarshal(t.Input["command"], &cmd) == nil {
+			if cmd, ok := shellCommand(t.Name, t.Input); ok {
 				r.Learn(cmd, cwd)
 			}
 		}

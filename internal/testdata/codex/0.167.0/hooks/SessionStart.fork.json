@@ -1,0 +1,9 @@
+{
+  "session_id": "01a1c72b-cd0a-7550-ae7a-76acc8d479c6",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-58-01a1c72b-cd0a-7550-ae7a-76acc8d479c6.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "SessionStart",
+  "model": "fake-model",
+  "permission_mode": "bypassPermissions",
+  "source": "fork"
+}

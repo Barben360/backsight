@@ -110,10 +110,10 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 				return e.emit(name, res, func() string { return pauseText(res) })
 			}
 			if sid == "" {
-				sid = os.Getenv("BACKSIGHT_SESSION")
+				sid = shellSessionHere()
 			}
 			if sid == "" {
-				return &output.Error{Code: output.Usage, Message: "no session: run it inside a Claude Code session (the /backsight:pause skill), or give --session"}
+				return &output.Error{Code: output.Usage, Message: noShellSession(os.Getenv)}
 			}
 			if !session.ValidID(sid) {
 				return &output.Error{Code: output.Usage, Message: "invalid session id " + sid}
@@ -130,7 +130,7 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 			return e.emit(name, res, func() string { return pauseText(res) })
 		},
 	}
-	cmd.Flags().StringVar(&sid, "session", "", "session id (default: $BACKSIGHT_SESSION)")
+	cmd.Flags().StringVar(&sid, "session", "", "session id (default: $BACKSIGHT_SESSION, else Codex's $CODEX_SESSION_ID)")
 	cmd.Flags().BoolVar(&proj, "project", false, "the whole project: add (pause) or remove (resume) its directory in privacy.exclude_paths")
 	cmd.Flags().BoolVar(&plan, "plan", false, "with --project: show the config change without writing it")
 	return cmd
@@ -167,4 +167,16 @@ func pauseStart(st session.State, pause bool, at time.Time) time.Time {
 		return st.LastPromptAt.Add(-5 * time.Second)
 	}
 	return at
+}
+
+// noShellSession says why pause found no session in this shell, and what
+// to do. Claude Code started from a Codex shell inherits CODEX_SESSION_ID,
+// which is not this shell's session: without Claude Code's own (backsight
+// not wired there), the Codex one is only taken when named.
+func noShellSession(getenv func(string) string) string {
+	if getenv("CLAUDE_CODE_SESSION_ID") != "" && session.ValidID(getenv("CODEX_SESSION_ID")) {
+		return "no session: this shell runs in Claude Code, which named no backsight session (is backsight wired in Claude Code?); " +
+			"to pause the Codex session Claude Code was started from, give --session " + getenv("CODEX_SESSION_ID")
+	}
+	return "no session: run it inside a Claude Code or Codex session (backsight's pause skill), or give --session <id>"
 }

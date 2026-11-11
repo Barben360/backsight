@@ -34,7 +34,7 @@ func TestRetentionDefaultRaisesTo3650AndRemembersIt(t *testing.T) {
 	if !strings.Contains(readFile(t, settings), `"cleanupPeriodDays": 3650`) {
 		t.Error("settings not raised")
 	}
-	if got := readFile(t, cfgFile(home)); got != "# my config\n[server]\nbank = \"claude-memory\"\n\n[client]\nretention_days = 3650\n" {
+	if got := readFile(t, cfgFile(home)); got != "# my config\n[server]\nbank = \"claude-memory\"\n\n[clients.claude_code]\nretention_days = 3650\n" {
 		t.Errorf("config:\n%s", got)
 	}
 	st, _ := state.Load(pathsOf(home).StateFile())
@@ -95,7 +95,7 @@ func TestRetentionCreatesAMinimalConfig(t *testing.T) {
 	if code, _, out := retentionRun(t); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	if got := readFile(t, cfgFile(home)); got != "schema_version = 1\n\n[client]\nretention_days = 3650\n" {
+	if got := readFile(t, cfgFile(home)); got != "schema_version = 1\n\n[clients.claude_code]\nretention_days = 3650\n" {
 		t.Errorf("config:\n%s", got)
 	}
 	testtool.RequirePrivate(t, cfgFile(home))
@@ -145,7 +145,7 @@ func TestRetentionRefusesAConfigItCannotRead(t *testing.T) {
 func TestRetentionDaysIsWrittenToTheConfig(t *testing.T) {
 	home, _ := clientHome(t, userSettings, 3650)
 	retentionRun(t, "--days", "90")
-	if got := readFile(t, cfgFile(home)); got != "[client]\nretention_days = 90\n" {
+	if got := readFile(t, cfgFile(home)); got != "[clients.claude_code]\nretention_days = 90\n" {
 		t.Errorf("config %q", got)
 	}
 }

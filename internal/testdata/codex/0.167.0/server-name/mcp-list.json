@@ -1,0 +1,43 @@
+[
+  {
+    "name": "backsight",
+    "enabled": true,
+    "disabled_reason": null,
+    "transport": {
+      "type": "stdio",
+      "command": "/home/tester/backsight/data/bin/current",
+      "args": [
+        "mcp",
+        "--harness",
+        "codex"
+      ],
+      "env": null,
+      "env_vars": [
+        "BACKSIGHT_HOME"
+      ],
+      "cwd": null
+    },
+    "startup_timeout_sec": null,
+    "tool_timeout_sec": null,
+    "auth_status": "unsupported"
+  },
+  {
+    "name": "probe",
+    "enabled": true,
+    "disabled_reason": null,
+    "transport": {
+      "type": "stdio",
+      "command": "/opt/bs-build/probemcp",
+      "args": [
+        "-log",
+        "/out/probemcp"
+      ],
+      "env": null,
+      "env_vars": [],
+      "cwd": null
+    },
+    "startup_timeout_sec": null,
+    "tool_timeout_sec": null,
+    "auth_status": "unsupported"
+  }
+]

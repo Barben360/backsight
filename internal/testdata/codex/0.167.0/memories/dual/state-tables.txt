@@ -1,0 +1,14 @@
+_sqlx_migrations                    rollout_migration_skipped_rollouts
+backfill_state                      rollout_migration_state           
+external_agent_config_imports       thread_attachments                
+guardian_review_feedback            thread_dynamic_tools              
+project_idempotency_keys            thread_read_receipts              
+project_roots                       thread_sections                   
+projects                            thread_spawn_edges                
+remote_control_enrollments          threads                           
+== memories_1.sqlite
+_sqlx_migrations        jobs                  
+consolidation_progress  stage1_outputs        
+== memories_v2_1.sqlite
+_sqlx_migrations        jobs                  
+consolidation_progress  stage1_outputs        

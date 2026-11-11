@@ -4,7 +4,7 @@ What backsight stores, where it goes, and how to keep things out of memory. Word
 
 ## What is stored
 
-- **Your sessions**: the text of your prompts and Claude's replies, with one line per tool call (`Edit src/main.go`, for example). Tool results, thinking and file contents Claude read are not sent.
+- **Your sessions**: the text of your prompts and Claude's replies, with one line per tool call (`Edit src/main.go`, for example). Tool results, thinking and file contents Claude read are not sent. The same for Codex sessions, read from Codex's history in the Codex home backsight wired, and only once you wired it ([Codex](codex.md#what-is-recorded)).
 - **Subagent reports**: the final message of each subagent Claude starts, cut at 4,000 characters; a report under `hooks.subagent_report_min_chars` characters (400 by default) with no URL, no issue or pull request reference and no commit hash is not sent.
 - **Facts Claude stores** with `memory_store`, and those you store with `backsight store` or `/backsight:remember`.
 
@@ -108,10 +108,10 @@ Redaction can miss a secret in an unusual format. `backsight memory scan` re-che
 
 | Scope | How |
 |---|---|
-| This session, from now on | `/backsight:pause` in Claude Code (or `backsight pause`); `/backsight:pause` again with "resume", or `backsight resume`, to record again. Turns typed while paused are never sent, and leave nothing in the feedback journal. |
+| This session, from now on | `/backsight:pause` in Claude Code, `$backsight:pause` in Codex (or `backsight pause`); `/backsight:pause` again with "resume", or `backsight resume`, to record again. Turns typed while paused are never sent, and leave nothing in the feedback journal. |
 | A project, on this machine | `backsight pause --project` in its directory: adds it to `privacy.exclude_paths` in `config.toml`. `backsight resume --project` removes it. |
 | A repository, for everyone who clones it | commit a `.backsight.toml` with `retain = false` at its root. |
-| Headless runs, on this machine | `privacy.skip_entrypoints` in `config.toml`: turns Claude Code recorded under one of these entrypoints (glob patterns) are never sent. The default, `["sdk-*"]`, skips Agent SDK runs (`sdk-cli`, `sdk-ts`, `sdk-py`); `[]` sends them too. |
+| Headless runs, on this machine ([headless Codex](codex.md#headless-codex)) | `privacy.skip_entrypoints` in `config.toml`: turns Claude Code recorded under one of these entrypoints (glob patterns) are never sent. The default, `["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"]`, skips headless runs: Claude Code's Agent SDK (`sdk-cli`, `sdk-ts`, `sdk-py`), `codex exec`, Codex's SDKs, and Codex run as another agent's tool (its MCP server); `[]` sends them too. A `config.toml` that sets the key keeps its own value; only the former default, exactly `["sdk-*"]`, becomes today's on `backsight update apply`. |
 
 An excluded project gets no briefing either.
 

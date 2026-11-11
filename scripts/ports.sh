@@ -19,6 +19,7 @@
 #   28600  m6-chain.sh     28600-28630     29711-29741
 #   28700  native-chain.sh 28700-28730     29811-29841
 #   28750  native-chain-windows.ps1 28750-28780 29861-29891 (its own Get-NcSlotPort)
+#   28800  codex/run.sh    28800-28830     29911-29941
 
 # slot_port base [port]: the port given, else base + slot x 10; refuses a
 # slot outside 0-3, no slot on CI, and an API or UI port of the live

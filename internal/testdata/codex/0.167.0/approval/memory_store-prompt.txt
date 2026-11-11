@@ -1,0 +1,12 @@
+    + Show details
+• Calling memory.memory_store
+    + Show details
+  Field 1/1
+  Allow the backsight MCP server to run tool "memory_store"?
+  kind: decision
+  text: Decision (2026-11-10): the Codex harness records fixtures...
+  › 1. Allow                   Run the tool and continue
+    2. Allow for this session  Run the tool and remember this choice for this session
+    3. Always allow            Run the tool and remember this choice for future tool calls
+    4. Cancel                  Cancel this tool call
+  enter to submit | esc to cancel

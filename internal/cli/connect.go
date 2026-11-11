@@ -55,6 +55,7 @@ type connectFlags struct {
 	answersFile      string
 	nonInteractive   bool
 	configDir        string
+	codexHome        string // --codex-home: Codex's home, for setup's Codex steps
 	// Not flags: server install --ssh brought the token back over ssh
 	// (preread: not read again) and resumes with its own command line.
 	preread *token.Token
@@ -133,7 +134,8 @@ func newConnectCmd(e *env) *cobra.Command {
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "consent=yes to go ahead without a terminal; setup's answers (id=value, repeatable)")
 	cmd.Flags().StringVar(&f.answersFile, "answers-file", "", "answers as a JSON object or id=value lines (no secrets)")
 	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: exit 10 when the consent or another answer is missing")
-	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	cmd.Flags().StringVar(&f.configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
+	cmd.Flags().StringVar(&f.codexHome, "codex-home", "", codexHomeFlag)
 	return cmd
 }
 
@@ -185,10 +187,46 @@ func publicAddress(tok token.Token) error {
 }
 
 // openSessionStep is what a session open across connect (or connect
-// --undo) does until Claude Code restarts: hooks read the config on each
-// run, the memory server only at its start.
-const openSessionStep = "restart Claude Code (or run /reload-plugins): until then an open session's memory tools keep the old server (they write nothing to it); " +
-	"its prompt recall already uses the new one, and when the session ends it is sent whole to the new one"
+// --undo) does until its tool restarts: hooks read the config on each run,
+// the memory server only at its start. claude and codex are the tools to
+// restart (wiredTools).
+func openSessionStep(claude, codex bool) string {
+	restart := "restart Claude Code (or run /reload-plugins)"
+	switch {
+	case claude && codex:
+		restart = "restart Claude Code (or run /reload-plugins) and Codex"
+	case codex:
+		restart = "restart Codex"
+	}
+	return restart + ": until then an open session's memory tools keep the old server (they write nothing to it); " +
+		"its prompt recall already uses the new one, and when the session ends it is sent whole to the new one"
+}
+
+// wiredTools are the tools client install wired on this PC: a PC may run
+// Claude Code, Codex or both. With neither recorded (state unreadable, a
+// setup that stopped before its client steps) it is Claude Code, as
+// before Codex.
+func wiredTools(d paths.Dirs, home string) (claude, codex bool) {
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		return true, false
+	}
+	_, codex = codexWired(home, st)
+	claude = st.PluginVersion != ""
+	return claude || !codex, codex
+}
+
+// openSessionSteps is openSessionStep for the tools wired here, but those
+// whose restart setup already asked for (next: setup's next steps).
+func openSessionSteps(d paths.Dirs, home string, next []string) []string {
+	claude, codexOn := wiredTools(d, home)
+	claude = claude && !slices.Contains(next, claudeRestartStep)
+	codexOn = codexOn && !slices.Contains(next, codexRestartStep)
+	if !claude && !codexOn {
+		return nil
+	}
+	return []string{openSessionStep(claude, codexOn)}
+}
 
 // probe is what connect learnt from the server, read-only.
 type probe struct {
@@ -551,7 +589,7 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 			fmt.Fprint(e.stdout, stepLine(termstyle.StyleOf(e.stdout), res.Steps[i]))
 		}
 	}
-	res.NextSteps = append(res.NextSteps, openSessionStep)
+	res.NextSteps = append(res.NextSteps, openSessionSteps(d, home, nil)...)
 	if sr := subcommand(ctx, "server", "start"); sr.Err != nil {
 		res.Steps[3].Status = "failed"
 		return res, &output.Error{Code: output.Partial, Resume: "backsight server start",
@@ -735,7 +773,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	res := connectResult{Plan: f.plan, Steps: []step{}}
 	// A token in any other value would be quoted by an error, or kept in
 	// setup's saved answers.
-	values := []string{f.answersFile, f.configDir}
+	values := []string{f.answersFile, f.configDir, f.codexHome}
 	for _, a := range f.answers {
 		_, v, _ := strings.Cut(a, "=")
 		values = append(values, a, v)
@@ -940,10 +978,10 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	if answers["ack_subscription"] == "yes" && !slices.ContainsFunc(setupAnswers, func(a string) bool { k, _, _ := strings.Cut(a, "="); return strings.TrimSpace(k) == "ack_subscription" }) {
 		setupAnswers = append(setupAnswers, "ack_subscription=yes") // given at the prompt
 	}
-	sr, err := runSetup(ctx, e, setupFlags{answers: append(setupAnswers, "consent=yes"), answersFile: f.answersFile, nonInteractive: f.nonInteractive, configDir: f.configDir})
+	sr, err := runSetup(ctx, e, setupFlags{answers: append(setupAnswers, "consent=yes"), answersFile: f.answersFile, nonInteractive: f.nonInteractive, configDir: f.configDir, codexHome: f.codexHome})
 	res.Setup = &sr
-	if res.RestartRequired && !sr.RestartRequired { // else setup says it
-		res.NextSteps = append(res.NextSteps, openSessionStep)
+	if res.RestartRequired { // but for a tool setup already asks to restart
+		res.NextSteps = append(res.NextSteps, openSessionSteps(d, home, sr.NextSteps)...)
 	}
 	for i := range res.Steps {
 		if res.Steps[i].Name == "setup" {
@@ -1039,7 +1077,7 @@ func projectsDir(home, configDir string) string {
 // transcriptFiles are the session transcripts a backfill reads.
 func transcriptFiles(home, configDir string) []string {
 	files, _ := filepath.Glob(filepath.Join(projectsDir(home, configDir), "*", "*.jsonl"))
-	return files
+	return append(files, otherConversations(home)...)
 }
 
 // ownServerPlan is what joining another server does to this PC's own
@@ -1057,7 +1095,7 @@ func ownServerPlan(ctx context.Context, cfg config.Config, sec config.Secrets, s
 	if err != nil {
 		return own, server.Redact("the saved notes of this PC's server could not be counted: "+err.Error(), sec)
 	}
-	orphans, total, err := retain.CountOrphanNotes(ctx, cl, cfg.Server.Bank, transcripts)
+	orphans, total, err := retain.CountOrphanNotes(ctx, cl, cfg.Server.Bank, transcripts, conversationReaders()...)
 	if err != nil {
 		return own, server.Redact("the saved notes of this PC's server could not be counted ("+err.Error()+"): start it (backsight server start) and run the plan again to see them", sec)
 	}

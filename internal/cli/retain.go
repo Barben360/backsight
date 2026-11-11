@@ -4,17 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
-	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -91,13 +88,13 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 		Append: retain.AppendGate{MinChars: cfg.Retain.AppendMinChars, MaxWait: cfg.Retain.AppendMaxWaitDuration()},
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
 		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportMinChars: cfg.Hooks.SubagentReportMinChars, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
-		Attribution: attributor(d, cfg, res)}, nil
+		Attribution: attributor(d, cfg, res), Harnesses: conversationReaders()}, nil
 }
 
 // attributor applies the path rule with this configuration (decision 0072).
 func attributor(d paths.Dirs, cfg config.Config, res *project.Resolver) retain.Attributor {
 	return retain.Attributor{Resolver: res, Transverse: cfg.Projects.Transverse, Owners: cfg.Projects.OwnOwners, Deny: cfg.Projects.DenyOwners,
-		Exclude: cfg.Privacy.ExcludePaths, Dir: d.AttributionDir()}
+		Exclude: cfg.Privacy.ExcludePaths, Dir: d.AttributionDir(), Harnesses: conversationReaders()}
 }
 
 // attributionEvent is the telemetry of one recorded turn.
@@ -105,30 +102,11 @@ func attributionEvent(e retain.TurnEntry) telemetry.Attribution {
 	return telemetry.Attribution{Turn: e.Turn, Subagent: e.Subagent(), Base: e.Base, Applied: e.Applied, PathRule: e.PathRule, Source: e.Source}
 }
 
-// transcripts lists the session transcripts of this machine's Claude Code.
-// transcripts are the sessions of the Claude Code profile backsight is wired
-// to: CLAUDE_CONFIG_DIR when set (a hook, or the user's shell), else the
-// profile client install recorded, else ~/.claude. A scheduled job has no
-// CLAUDE_CONFIG_DIR: the recorded profile is how it reads the right one.
-func transcripts(home string) []string {
-	getenv := os.Getenv
-	if os.Getenv("CLAUDE_CONFIG_DIR") == "" {
-		if d, _, err := machine(); err == nil {
-			if st, err := state.Load(d.StateFile()); err == nil && st.Client != nil && st.Client.Profile != "" {
-				getenv = func(k string) string {
-					if k == "CLAUDE_CONFIG_DIR" {
-						return st.Client.Profile
-					}
-					return os.Getenv(k)
-				}
-			}
-		}
-	}
-	loc := claudecode.Locate(home, getenv)
-	files, _ := filepath.Glob(filepath.Join(loc.Projects, "*", "*.jsonl"))
-	sort.Strings(files)
-	return files
-}
+// transcripts lists the session transcripts of this machine's Claude Code,
+// in the profile backsight is wired to (wiredProfile): CLAUDE_CONFIG_DIR
+// when set (a hook, or the user's shell), else the profile client install
+// recorded, else ~/.claude.
+func transcripts(home string) []string { return conversations(home, claudeCode) }
 
 // A flush to retry is "retry": "queued" is a note or report put in the
 // outbox, which is the normal path.
@@ -142,7 +120,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 	if f.Hold == "" {
 		f.Hold = extractionHold(d, f.Bank)
 	}
-	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
+	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version, Client: flusherHarness(f).ID()})
 	var out []retain.Result
 	for _, file := range files {
 		start := time.Now()
@@ -164,7 +142,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		}
 		reportUnconfirmed(d.State, cmd.ErrOrStderr(), r)
 		if len(r.Turns) > 0 {
-			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
+			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version, Client: flusherHarness(f).ID()})
 			for _, t := range r.Turns {
 				sw.Emit(attributionEvent(t))
 			}
@@ -173,6 +151,49 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		if r.Stop {
 			break // the server or setup is failing: the next run retries
 		}
+	}
+	return out
+}
+
+// harnessFiles are the conversations of one harness.
+type harnessFiles struct {
+	adapter harness.Adapter
+	files   []string
+}
+
+// harnessConversations are claude, the Claude Code conversations the
+// caller listed, then the conversations of every other registered
+// harness, in registration order.
+func harnessConversations(home string, claude []string) []harnessFiles {
+	out := []harnessFiles{{claudeCode, claude}}
+	for _, a := range harness.All() {
+		if a.ID() != harness.ClaudeCode {
+			out = append(out, harnessFiles{a, conversations(home, a)})
+		}
+	}
+	return out
+}
+
+// flusherHarness is the harness whose conversations f reads (Claude
+// Code's when it names none).
+func flusherHarness(f *retain.Flusher) retain.Identity {
+	if f.Harness == nil {
+		return retain.DefaultHarness()
+	}
+	return f.Harness
+}
+
+// flushHarnesses is flushAll over each harness's conversations, read with
+// its adapter, until a flush stops the run.
+func flushHarnesses(cmd *cobra.Command, f *retain.Flusher, groups []harnessFiles, opt retain.Options, d paths.Dirs) []retain.Result {
+	defer func(h retain.Harness) { f.Harness = h }(f.Harness)
+	var out []retain.Result
+	for _, g := range groups {
+		if len(out) > 0 && out[len(out)-1].Stop {
+			break
+		}
+		f.Harness = g.adapter
+		out = append(out, flushAll(cmd, f, g.files, opt, d)...)
 	}
 	return out
 }
@@ -341,22 +362,26 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			files := transcripts(home)
+			groups := harnessConversations(home, transcripts(home))
 			opt := retain.Options{Force: true}
 			if session != "" {
-				var match []string
-				for _, file := range files {
-					if strings.TrimSuffix(filepath.Base(file), ".jsonl") == session {
-						match = append(match, file)
+				found := false
+				for i, g := range groups {
+					var match []string
+					for _, file := range g.files {
+						if g.adapter.SessionOf(file) == session {
+							match = append(match, file)
+						}
 					}
+					groups[i].files, found = match, found || len(match) > 0
 				}
-				if len(match) == 0 {
+				if !found {
 					return &output.Error{Code: output.Usage, Message: "no transcript for session " + session}
 				}
-				files, opt.IgnoreSince = match, true
+				opt.IgnoreSince = true
 			}
 			epoch := reconcile(cmd.Context(), f)
-			rep, failed := reportFlush(flushAll(cmd, f, files, opt, d))
+			rep, failed := reportFlush(flushHarnesses(cmd, f, groups, opt, d))
 			rep.Epoch = epoch
 			return e.report("retain flush", rep, func() string { return flushText(rep) }, failed)
 		},
@@ -417,7 +442,7 @@ func newRetainWaitingCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rep := waitingReport{Sessions: f.Waiting(transcripts(home))}
+			rep := waitingReport{Sessions: f.Waiting(allConversations(home))}
 			if rep.Sessions == nil {
 				rep.Sessions = []retain.Waiter{}
 			}

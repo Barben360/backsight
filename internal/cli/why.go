@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,7 +29,7 @@ func newWhyCmd(e *env) *cobra.Command {
 			}
 			store := session.Store{Dir: d.SessionsDir(), Locks: d.LocksDir()}
 			if id == "" {
-				id = os.Getenv("BACKSIGHT_SESSION")
+				id = shellSessionHere()
 			}
 			if id == "" {
 				if id, err = store.Latest(); err != nil {
@@ -54,7 +53,7 @@ func newWhyCmd(e *env) *cobra.Command {
 			return e.emit("why", res, func() string { return whyText(res) })
 		},
 	}
-	cmd.Flags().StringVar(&id, "session", "", "session id (default: $BACKSIGHT_SESSION, else the latest session)")
+	cmd.Flags().StringVar(&id, "session", "", "session id (default: $BACKSIGHT_SESSION, else Codex's $CODEX_SESSION_ID, else the latest session)")
 	cmd.Flags().IntVar(&last, "last", 5, "injections shown")
 	return cmd
 }

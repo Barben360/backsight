@@ -1,0 +1,10 @@
+memories
+memories.lock
+memories_1.sqlite
+memories_1.sqlite-shm
+memories_1.sqlite-wal
+memories_v2
+memories_v2.lock
+memories_v2_1.sqlite
+memories_v2_1.sqlite-shm
+memories_v2_1.sqlite-wal

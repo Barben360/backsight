@@ -655,6 +655,7 @@ func configEventHoldsNoString(t *testing.T, home string) {
 				case !isString, k == "event", k == "ts", k == "sha256":
 				case (k == "session" || k == "project" || k == "v") && str == "":
 				case k == "binary_version" && str == buildinfo.Version:
+				case k == "client" && str == "claude-code":
 				default:
 					t.Errorf("config event: string value under %q: %q", k, str)
 				}

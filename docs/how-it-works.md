@@ -1,6 +1,6 @@
 # How it works
 
-What backsight does at each step of a Claude Code session, what it adds to Claude's context, and what it costs in time. Words in **bold** are in the [glossary](glossary.md).
+What backsight does at each step of a Claude Code session, what it adds to Claude's context, and what it costs in time. A Codex session goes through the same steps, with the differences [Codex](codex.md#how-codex-differs-from-claude-code) lists. Words in **bold** are in the [glossary](glossary.md).
 
 ## The data flow
 
@@ -81,7 +81,7 @@ With several machines on one server, each shares its counts with the others (`fe
 
 ## Before Claude asks you a question
 
-When Claude is about to ask you a question with its `AskUserQuestion` tool and has not searched the memory during this prompt, the first attempt is refused with a reason: search the memory first, then ask again with the line `🧠🔍 Nothing in memory — <topic>` if it has no answer. Up to 2 memories that match the question, found within 6 seconds, come with the reason. This happens at most once per prompt, and never while the memory is unavailable, so a question is delayed, never blocked.
+When Claude is about to ask you a question with its `AskUserQuestion` tool (Codex's `request_user_input`) and has not searched the memory during this prompt, the first attempt is refused with a reason: search the memory first, then ask again with the line `🧠🔍 Nothing in memory — <topic>` if it has no answer. Up to 2 memories that match the question, found within 6 seconds, come with the reason. This happens at most once per prompt, and never while the memory is unavailable, so a question is delayed, never blocked.
 
 The point: many questions Claude would ask you ("which server?", "what did we decide for X?") are already answered in memory.
 
@@ -102,7 +102,7 @@ Claude has four tools, served by `backsight mcp` through the plugin:
 | `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. When the closest memory scores at least `recall.store_similar_min_score` (0.8 by default), it shows that one, its text cut at 200 characters, so Claude can tell whether the fact updates or repeats it. A fact of kind `correction` shows up to 2, from `recall.store_correction_min_score` (0.6): the memory a correction replaces is often worded otherwise. It returns the line Claude prints: `🧠💾 Saved`, or `🧠🔄 Updated` naming the memory shown when the fact updates it ([the lines from memory](daily-use.md#the-lines-from-memory)). The memories shown count as shown in the session: Claude can credit them, or report them wrong or outdated, with `memory_credit`; the answer asks Claude to report outdated the memory the fact replaces, since `Updated` alone retires nothing. Claude is told not to store merges, releases or CI status, which the conversation already records, and to store a dated fact that names the old claim when a recalled open item is settled or a recalled memory proves wrong. |
 | `memory_credit` | Claude names the memories shown to it in this session that informed its answer (their full ids or the 8-character short ids shown next to them), and gets back the line to print in its reply: `> 🧠 **From memory (<project> · <id8>)** — <the facts used>`. When none did, it says so with `verdict: none`; when the session independently established what a memory says without using it, `verdict: confirmed` (its own line, `> 🧠✔ **Confirmed by memory (<project> · <id8>)** — <what the session confirmed>`; same boost as used, counted apart). A memory the session shows false or no longer true: `verdict: wrong` or `outdated`, with the right fact as `correction` and what shows it as `evidence`, stored as a correction note, and the memory is retired ([which memories helped](#which-memories-helped)). Every id must have been shown in this session, or the call is refused and nothing is recorded; a memory found by a search sent in the same message counts once that search has returned, and so does the similar memory a `memory_store` answer shows. Offered only while `feedback.enabled` is on (see [configuration](configuration.md#feedback-which-memories-claude-used)). |
 
-Setup adds a permission rule that lets Claude call these four tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
+Setup adds a permission rule that lets Claude call these four tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back. Codex needs no rule: the tools declare what they do, and Codex runs them without asking ([Codex](codex.md#approvals)).
 
 ## When a session is sent
 
@@ -148,3 +148,5 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | `SessionEnd` | The session ends | Starts sending it, in the background. | 1 s |
 
 `backsight verify` runs every hook as Claude Code does. `backsight why` shows what the hooks added in the latest session, and why.
+
+Codex runs the same hooks from its own plugin, `backsight-hooks@backsight`, with the same time limits, once you trust them ([Codex](codex.md#trust-the-hooks)). Its session-start hooks come with the first prompt, the question gate is on `request_user_input`, `PostToolUseFailure` is not wired, and each hook's added text is cut at 9,000 bytes ([what differs](codex.md#how-codex-differs-from-claude-code)).

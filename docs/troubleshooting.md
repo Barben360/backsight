@@ -10,7 +10,7 @@ backsight doctor
 
 doctor checks the whole install and changes nothing: the server, the bank, Claude Code's wiring, the jobs, the queues, backups, updates, disk and recent usage. Each line is `ok`, `info`, `WARN` or `ERROR`, and every problem comes with a `fix:` line, usually a command to run. `backsight doctor --json` gives the same report as JSON.
 
-`backsight verify` goes further: it runs every hook and the memory tools as Claude Code does, then a store-and-recall round trip (`--no-round-trip` skips the round trip and its LLM call). `backsight verify --live` checks real use, read-only: this PC's latest settled session (30 minutes after its last turn) reached the server whole and its facts were consolidated, with an observation from it or, failing that, from one of this PC's 5 previous sessions. "pending" means not yet, with how long to wait; "fail" comes with a fix.
+`backsight verify` goes further: it runs every hook and the memory tools as Claude Code does, then a store-and-recall round trip (`--no-round-trip` skips the round trip and its LLM call); `backsight verify --codex` does the same for Codex. `backsight verify --live` checks real use, read-only: this PC's latest settled session (30 minutes after its last turn) reached the server whole and its facts were consolidated, with an observation from it or, failing that, from one of this PC's 5 previous sessions. "pending" means not yet, with how long to wait; "fail" comes with a fix.
 
 ## Setup stopped
 
@@ -90,6 +90,8 @@ Setup pulls each image up to 3 times before it stops, and says what Docker's las
 ### Claude Code is missing or too old
 
 Setup's `claude` check needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup). A host that only serves the memory for your other PCs needs no Claude Code: run `backsight setup --role server` there, and setup does not look for `claude`.
+
+Setup's `codex` check runs when you wire Codex: it needs Codex 0.167.0 or newer, with `codex` on your PATH (`npm install -g @openai/codex@latest`). Setup wires Claude Code only when you pick it, and skips its `claude` check otherwise.
 
 ## The server is down
 
@@ -272,7 +274,7 @@ Then run `backsight connect` again; a PC that joined sends what waited at its ne
 - **"on user@host: backsight … gave no answer backsight can read"**, **"… exited with code …"** or **"… answered something backsight here cannot read"** (exit 20): backsight on the host answered with something else than its JSON, or failed without one (its last stderr line is quoted). Check that `ssh user@host` runs a login shell that prints nothing extra, and that backsight there works (`backsight version` there).
 - **"release … has no archive for linux/…"** (exit 20): the release matching this PC carries no build for the host's machine; nothing was changed there. Install by hand there, or use `backsight server install --print-commands` once a release covers it.
 - **"… runs backsight x and this PC y"**: an install over ssh never replaces the backsight of an existing install (its updates migrate data). Run `backsight update apply` on the older one so both run the same release, then run the command again.
-- **"is set up as a PC with Claude Code"**: the host already uses the memory itself. Open its server there instead (`backsight server expose --private <ip>`, then `backsight server token --out <file>`), carry the file here and run `backsight connect --token-file <file>`. **"is a client of another memory server"**: install the server on that server's host instead.
+- **"is set up as a PC that uses the memory"**: the host already uses the memory itself (with Claude Code, Codex or both). Open its server there instead (`backsight server expose --private <ip>`, then `backsight server token --out <file>`), carry the file here and run `backsight connect --token-file <file>`. **"is a client of another memory server"**: install the server on that server's host instead.
 - **"the ssh connection reached … at …, which other PCs cannot use"** (exit 10): your ssh went through a loopback, a public address or a tunnel, so that address is no good for your other PCs. Rerun with `--private <ip>`, a LAN or tailnet address of the host (`tailscale ip -4` or `ip addr` there). **"is not a tailnet address"**: as for `backsight server expose`, a LAN address carries the API key in clear; rerun with `--answer cleartext_lan=yes` on a network you trust, or give a tailnet address.
 - **"this backsight is a development build"**: no release matches it, so there is nothing to copy. Run the command from a released backsight (`backsight server install --print-commands` refuses a development build too). **"the release source has no version"**: the release of this PC's version cannot be found; with `--source <dir>`, point it at a directory holding that release.
 - **"no terminal and nothing on stdin"**, or **"--non-interactive asks no key at a prompt"** (exit 10): the LLM key has nowhere to come from. Pass it with `--llm-key-from-file <file>` (first line), `--llm-key-from-env <var>` or piped on stdin (first line), never as an answer.
@@ -290,12 +292,57 @@ Declining connect's own question once the host is installed leaves the host inst
 
 To undo the install on the host, run `backsight setup --undo` there; on this PC, `backsight connect --undo` goes back to its own server when it had one.
 
+## Codex runs no backsight hook
+
+Symptoms, in Codex: no `🧠 backsight` line at your first prompt, no memories added to prompts, while `memory_search` works. `backsight doctor`'s `codex-hooks` and `codex-plugins` checks say which case it is ([the Codex checks](#other-doctor-warnings)).
+
+1. **The hooks are not trusted yet.** Codex runs a plugin's hooks only once you have reviewed them: open Codex and trust backsight's hooks in the list it shows at start, or under `/hooks` (in the desktop app, its Settings). Codex asks again after an update that changed the hooks, and after backsight's data directory moved ([Codex](codex.md#trust-the-hooks)).
+2. **The plugins are missing or disabled.** `codex plugin list` should show `backsight@backsight` and `backsight-hooks@backsight`, installed and enabled. If not, `backsight client install --codex` adds them again (Codex then asks you to review the hooks).
+3. **A session opened before setup or an update** has the old plugins, or none: restart Codex.
+4. **Another Codex home.** backsight wired the Codex home it recorded at install. A Codex started with another `CODEX_HOME` does not have its plugins: run Codex with the home backsight wired, or wire the other one ([Codex](codex.md#install)).
+
+Codex runs each hook through your login shell (`$SHELL -lc`): a profile that prints, prompts or takes seconds slows every prompt, and a hook past its time limit is cut.
+
+## verify --codex fails
+
+`backsight verify --codex` (setup runs it when it wires Codex) runs each of backsight's hooks as Codex does, then its memory server, then a store-and-recall round trip. What a failure means:
+
+- **Exit 10, Codex is not wired**: run `backsight client install --codex` first. **"Codex has nothing to run"**: the shim is missing; `backsight client install --codex` puts it back.
+- **A hook fails**: the line names the event and what the hook printed. Run `backsight doctor`: its `codex-drift` check says when the plugins or the shim are not this binary's (`backsight client install --codex` fixes it).
+- **The MCP check: "a call naming its session in _meta was not taken as that session's"**, or "a call naming no session was not refused": the memory server did not read each call's session from what Codex sends with it, so pause, privacy and `memory_credit` would not work in Codex. The shim most likely runs an older backsight: `backsight client install --codex`, then `backsight verify --codex` again.
+- **The round trip fails**: as for Claude Code's `verify` ([the server is down](#the-server-is-down), [extraction fails](#extraction-fails-or-costs-too-much)).
+
+It does not check that Codex trusts the hooks: doctor's `codex-hooks` check does ([Codex runs no backsight hook](#codex-runs-no-backsight-hook)).
+
+## A backsight command fails inside Codex
+
+A `backsight` command a skill ran in Codex fails with a permission error (writing under your home) or a network error (reaching the memory server): Codex's sandbox blocked it. The skills tell Codex to run that same command again with escalated permissions, which Codex asks you to approve; approve it, or run the command in a terminal of your own ([the sandbox](codex.md#the-sandbox)). The hooks and the memory tools are not affected.
+
+## Codex has an MCP server named backsight
+
+`backsight client install --codex`, or setup at its `codex` step, stops with "Codex already has an MCP server named backsight": a server of yours, in Codex's `config.toml` (`[mcp_servers.backsight]`) or `codex mcp list`, has the name backsight's memory server takes in Codex, so both would share their tool names. Rename yours in `config.toml`, or remove it with `codex mcp remove backsight`, then run the command again (`backsight setup --resume` for setup) ([the server's name](codex.md#the-memory-servers-name)). A server of yours named `memory` is no clash.
+
+## Codex's own memories are on
+
+Codex's own memories (`[features] memories = true` in its `config.toml`) answer the same questions as backsight's, and add their context to every session. Import what they hold first if you want it (`backsight import --from codex --plan`), then turn them off:
+
+```sh
+backsight client codex-memories off
+```
+
+It removes the line, keeping a copy first; `backsight client codex-memories on` puts it back ([Codex's own memories](codex.md#codexs-own-memories)).
+
+## An older backsight refuses config.toml
+
+After installing an older backsight by hand, every command stops on `config.toml`, naming an unknown key under `clients`: this version wrote Claude Code's table under its new name, `[clients.claude_code]`, which older versions do not know. Rename the header line back to `[client]` (the keys under it stay as they are), or run `backsight client config restore <run>` with the run that renamed it, before installing the older version. A failed `backsight update apply` is not affected: its rollback puts the file back ([configuration](configuration.md#clientsclaude_code-claude-codes-own-settings)).
+
 ## Memories are not recalled
 
 1. Restart Claude Code, or run `/reload-plugins`: a session started before setup or an update has no plugin, or the old one.
 2. Run `backsight doctor`. A `client` warning ("Claude Code wiring drifted") means the plugin, the permission rule or the shim changed, or the plugin was disabled in Claude Code: run `backsight client install`, which also enables it again.
 3. Check that this project is not paused or excluded: `backsight resume` in the session, or `backsight resume --project` in its directory (see [privacy.md](privacy.md)).
 4. A new project has no memories yet: they appear after its first sessions are sent and processed.
+5. In Codex: see [Codex runs no backsight hook](#codex-runs-no-backsight-hook).
 
 `backsight why` shows what the hooks injected in the latest session, and why.
 
@@ -378,6 +425,11 @@ What it exposes: for every call made meanwhile, the first 20,000 characters of w
   - On a client, the import waits while another server answers at the joined address (`backsight doctor` warns).
 - `backsight import` stops with exit 20, "the server's memory settings do not know imported files yet": the server's backsight is older than this PC's. Update backsight on the server's computer, then run the import again.
 - A file you expected is not sent: `backsight import ~/notes --plan` lists the skipped files by reason (too large, not text, empty, hidden, excluded, a link, unreadable, another extension, or already sent by another import).
+- With `--from codex` ([Codex's own memories](codex.md#codexs-own-memories)), `backsight import --from codex --plan` names more reasons:
+  - `rollout_on_disk`: a conversation's summary whose conversation is still in Codex's history. The conversation itself is sent instead, by the backfill setup offers, or `backsight retain backfill --tools codex` ([past Codex sessions](codex.md#past-codex-sessions)).
+  - `opted_out`: the summary of a folder kept out of memory.
+  - `mixes_excluded`: `memory_summary.md` or `MEMORY.md`, which mix every project's work, while Codex's memories hold the work of a folder kept out of memory, or name a folder that cannot be checked from this PC (a network or relative path). The plan names those folders (`mixes_excluded_by` in `--json`). Nothing sends these files while such a folder is in Codex's memories.
+  - `bad_header`: a summary whose header cannot be read; `duplicate`: a file the other store holds too, sent once; `codex_working`, `codex_skills`, `codex_notes`, `codex_unknown`: Codex's own working files, skills, notes and unknown names, never sent.
 
 ## The metrics index
 
@@ -504,6 +556,15 @@ The daily job (`backsight jobs maintain`) writes the server's counts to `metrics
 | `native-dlls`: the VC++ runtime DLLs differ from `dlls.json` | Windows. Postgres and the API load the VC++ runtime from copies backsight made in three places (the copied Postgres's `bin\`, pg0's `bin\` and onnxruntime's `capi\`), checked against `dlls.json` under the native directory. One missing or changed: `backsight server stop`, delete the venv's `.backsight-complete` mark doctor names, then `backsight server install` builds the venv again and copies them. |
 | `native-private`: another account can read the data, the config or a secret file | Windows. backsight's data directory, its config directory, `secrets.toml` and `server.env` must be readable by you, SYSTEM and Administrators only. Run the `icacls` command doctor gives, in PowerShell, on the path it names: it removes the inherited entries and the other readers' own, and grants those three alone, by SID. A warning when doctor could not read a DACL. |
 | `git-bash`: Claude Code may not find Git Bash | Windows. Claude Code on Windows uses PowerShell as its main shell and runs hooks in Git Bash only when it finds one; otherwise backsight's hooks run in PowerShell, where SessionStart gets no environment file, so the commands Claude runs get no `BACKSIGHT_PROJECT` or `BACKSIGHT_SESSION` (the CLI then names the project from the directory it runs in). Doctor counts Git Bash as found only when `CLAUDE_CODE_GIT_BASH_PATH` names an existing `bash.exe` (Git's `bin\bash.exe`; `git-bash.exe`, the terminal launcher, is a warning) or Git for Windows is in `%ProgramFiles%\Git` or `%LOCALAPPDATA%\Programs\Git`. Run the PowerShell command its fix gives (`[Environment]::SetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', '<Git>\bin\bash.exe', 'User')`, with the `bash.exe` beside the `git.exe` on your `PATH` when there is one), or install Git for Windows, then restart Claude Code from a new terminal. |
+| `codex`: Codex is missing or older than 0.167.0 | Shown once backsight is wired into Codex (`backsight client install --codex`), like every `codex-…` check below. backsight needs Codex 0.167.0 or newer, with `codex` on your `PATH`: `npm install -g @openai/codex@latest`. While the command cannot run, the checks that ask it say they were skipped. |
+| `codex-plugins`: backsight's plugins are not installed, or are disabled, in Codex | backsight wires Codex with two plugins, `backsight@backsight` (the memory tools and the skills) and `backsight-hooks@backsight` (the hooks); `codex plugin list` shows both. Run `backsight client install --codex`: it adds the missing or disabled one again. |
+| `codex-drift`: Codex wiring drifted | The plugins Codex has are not this binary's (an update that did not finish, files edited in `<data>/codex-marketplace/`), or the shim points elsewhere. Run `backsight client install --codex`. A missing shim is an error: nothing of backsight's can start in Codex. |
+| `codex-hooks`: Codex runs none of backsight's hooks | Codex runs a hook only once you trust it: open Codex and trust backsight's hooks in the review it shows at start (or `/hooks`, or the app's Settings); an update that changes them asks again. doctor warns while a hook has no trust recorded in Codex's `config.toml`, and fails when the latest Codex session (started at least 10 minutes ago, since Codex was wired) ran no SessionStart hook, trusted or not, or when Codex's hooks are turned off (`hooks = false` under `[features]`). Fix it in `/hooks`, then start a new session. When Codex was wired by an earlier version, which recorded no wiring time, whether the hooks run is not judged (information): `backsight client install --codex` records it. |
+| `codex-tools`: the memory server does not declare what Codex needs | Codex runs `memory_store` and `memory_credit` without asking only when they declare they destroy nothing and reach nothing outside; without that it asks each time, and `codex exec` refuses them. Update backsight (`backsight update apply`), then run `backsight client install --codex`. |
+| `codex-rollouts`: unknown Codex rollout records | Information while the same record types come back week after week; a warning when a new type appears or their number doubles: Codex's conversation format may have changed. Those records are left out of what is sent, the rest of each conversation is sent. Check that they carry no conversation, then report it (`backsight report`). |
+| `codex-memories`: Codex's own memories are on | Two memories would answer the same questions, both costing tokens at each session. `backsight client codex-memories off` turns Codex's off (a copy of its `config.toml` is kept; `backsight client codex-memories on` turns them on again). When a profile or a command-line flag turns them on, turn them off there. |
+| `codex-mcp-name`: Codex has another MCP server named `backsight` | Under Codex, backsight's memory server is named `backsight` (its tools are `mcp__backsight__memory_search` and the like). Another server of that name would have tools named as backsight's, and backsight's hooks would take its calls for memory calls. Rename or remove that server (`codex mcp remove backsight`, or its `[mcp_servers.backsight]` table in `config.toml`). |
+| `codex-shim`: the program behind the shim is not the one recorded | Codex trusts backsight's hooks by their declaration, not by the program the shim runs: one replaced since runs at every hook without a new review. If you replaced it yourself (an update, a build of your own), `backsight client install --codex` records it; otherwise find out what changed it. Information when nothing was recorded yet (wired by an earlier version). |
 | `shim-copies`: earlier copies of the shim still run | Windows, info. An update renamed the running `current.exe` to `current.exe.old-<n>` (Windows cannot replace a program that runs); Claude Code sessions or the supervisor started before the update still run those copies. Nothing to do: the next `backsight update apply` or `backsight client install` deletes the copies nothing runs any more. Restarting Claude Code releases them sooner. |
 | `path-length`: the venv path is too long | Windows. As setup's `path-length` check: the server's Python environment sits too deep for Windows' path limit. Move backsight to a short `BACKSIGHT_HOME` (back up first: `backsight backup create`). |
 | `native-refused` (info): a database a restore refused is kept | `backsight restore` moved the database a start refused aside, to `hindsight.refused-<Unix time>`, and never deletes it. doctor lists each one (one line per directory) with the command that deletes it in its detail, never as its fix: run it yourself once you no longer need that database. |

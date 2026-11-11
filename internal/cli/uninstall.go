@@ -20,6 +20,8 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/output"
@@ -405,8 +407,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	}
 	for _, prof := range profiles {
 		name := "client " + prof
-		env := profileEnv(home, prof)
-		there, err := pluginPresent(ctx, env)
+		there, err := claudeCode.Installed(ctx, harnessEnv(claudeCode, home, prof))
 		switch {
 		case errors.Is(err, errClaudeMissing):
 			add(undoAction{Name: name, Status: "skipped", Detail: "the claude command was not found"})
@@ -420,7 +421,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}
 		detail := "plugin " + plugin.PluginID() + " and its marketplace removed"
 		if !f.plan {
-			restored, err := removePlugin(ctx, d, home, env, "uninstall")
+			restored, err := removePlugin(ctx, d, home, prof, "uninstall")
 			if err != nil {
 				return fail(name, err)
 			}
@@ -482,6 +483,40 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}
 	}
 	saveRecord(func(u *setup.Undo) { u.ClientProfiles = nil })
+
+	// 3b. Codex, where backsight wired it: its plugins and marketplace, the
+	// hook trust Codex leaves behind, and Codex's own memories on again when
+	// backsight turned them off.
+	codexRemoved := false
+	for _, dir := range codexHomes(home, st, rec) {
+		name := "codex " + dir
+		memories := st.ClientOf(harnessid.Codex) != nil && st.ClientOf(harnessid.Codex).MemoriesOff
+		if f.plan {
+			detail := "plugins " + strings.Join(harness.CodexPluginIDs(), " and ") + ", their marketplace and their hook trust removed"
+			if memories {
+				detail += "; Codex's own memories turned on again"
+			}
+			add(undoAction{Name: name, Status: "planned", Detail: detail})
+			continue
+		}
+		detail, warnings, err := removeCodex(ctx, d, home, dir, "uninstall", memories)
+		switch {
+		case errors.Is(err, harness.ErrMissing):
+			add(undoAction{Name: name, Status: "skipped", Detail: "the codex command was not found"})
+			res.Warnings = append(res.Warnings, "codex was not found: remove the plugins by hand once it is back (codex plugin remove "+
+				strings.Join(harness.CodexPluginIDs(), "; codex plugin remove ")+"; codex plugin marketplace remove "+harness.CodexMarketplace+")")
+			continue
+		case err != nil:
+			return fail(name, err)
+		}
+		res.Warnings = append(res.Warnings, warnings...)
+		if err := forgetCodex(d, home, dir, "uninstall"); err != nil {
+			return fail(name, err)
+		}
+		add(undoAction{Name: name, Status: "done", Detail: codexRemovedDetail(detail)})
+		codexRemoved = true
+	}
+	saveRecord(func(u *setup.Undo) { u.CodexHomes = nil })
 
 	// This machine's shared counts, with the machine id they are named
 	// after: before the server stops.
@@ -604,6 +639,9 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	if len(profiles) > 0 {
 		res.NextSteps = append(res.NextSteps, "restart Claude Code (or /reload-plugins): its sessions still run the removed plugin")
 	}
+	if codexRemoved {
+		res.NextSteps = append(res.NextSteps, "restart Codex: its open sessions still run the removed plugins")
+	}
 	return res, nil
 }
 
@@ -625,8 +663,8 @@ func wiredProfiles(home string, st state.State, rec *setup.Record) []string {
 	}
 	if st.PluginVersion != "" {
 		p := filepath.Join(home, ".claude")
-		if st.Client != nil && st.Client.Profile != "" {
-			p = st.Client.Profile
+		if rp := st.ProfileOf(harness.ClaudeCode); rp != "" {
+			p = rp
 		}
 		addOne(p)
 	}
@@ -655,8 +693,8 @@ func retentionOfferFor(home string, st state.State, rec *setup.Record, cfg confi
 		return nil
 	}
 	prof := filepath.Join(home, ".claude")
-	if st.Client.Profile != "" {
-		prof = st.Client.Profile
+	if p := st.ProfileOf(harness.ClaudeCode); p != "" {
+		prof = p
 	}
 	settings := claudecode.Locate(home, profileGetenv(home, prof)).Settings
 	raw, err := os.ReadFile(settings)
@@ -677,8 +715,8 @@ func retentionOfferFor(home string, st state.State, rec *setup.Record, cfg confi
 	}
 	o := &retentionOffer{Settings: settings, Before: before, Current: string(now), Action: "changed_since"}
 	var wrote []string
-	if cfg.Client.RetentionDays > 0 {
-		wrote = append(wrote, fmt.Sprint(cfg.Client.RetentionDays))
+	if cfg.Clients.ClaudeCode.RetentionDays > 0 {
+		wrote = append(wrote, fmt.Sprint(cfg.Clients.ClaudeCode.RetentionDays))
 	}
 	if rec != nil {
 		for _, v := range rec.Undo.Retention {
@@ -706,7 +744,7 @@ func removeRules(doc []byte) ([]byte, []claudecfg.Change, error) {
 	}
 	return claudecfg.RemoveWhere(doc, []string{"permissions", "allow"}, func(_ string, v any) bool {
 		s, _ := v.(string)
-		return slices.Contains(plugin.ToolNames, s)
+		return slices.Contains(claudeCode.ToolNames(), s)
 	})
 }
 
@@ -717,20 +755,6 @@ func hasChanges(fr []claudecfg.FileResult) bool {
 		}
 	}
 	return false
-}
-
-// pluginPresent reports whether backsight's plugin or marketplace is
-// registered with the profile env points at (read only).
-func pluginPresent(ctx context.Context, env []string) (bool, error) {
-	known, err := pluginIDs(ctx, env)
-	if err != nil {
-		return false, err
-	}
-	path, err := marketplacePath(ctx, env)
-	if err != nil {
-		return false, err
-	}
-	return known[plugin.PluginID()] || path != "", nil
 }
 
 // uninstallScheduler removes the jobs entries through jobs uninstall,

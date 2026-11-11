@@ -41,6 +41,19 @@ type Versions struct {
 	OSRelease         string `json:"os_release,omitempty"`
 }
 
+// Codex is what the diagnostic says about Codex, once backsight is wired
+// into it: its version ("not found", "unknown"), the integration's, and
+// where Codex keeps the files backsight reads and adds, scrubbed like every
+// path (a home outside the user's shows as <codex>).
+type Codex struct {
+	Version     string `json:"version"`
+	Plugin      string `json:"plugin"`
+	Home        string `json:"home"`
+	Config      string `json:"config"`
+	Sessions    string `json:"sessions"`
+	Marketplace string `json:"marketplace"`
+}
+
 // Server is what the diagnostic says about the server: never its URL's
 // host when it is not loopback, never the bank name or the key.
 type Server struct {
@@ -80,6 +93,7 @@ type ErrorEvent struct {
 type Diagnostic struct {
 	GeneratedAt  time.Time    `json:"generated_at"`
 	Versions     Versions     `json:"versions"`
+	Codex        *Codex       `json:"codex,omitempty"`
 	Doctor       Doctor       `json:"doctor"`
 	Counts       Counts       `json:"counts"`
 	RecentErrors []ErrorEvent `json:"recent_errors"`
@@ -186,8 +200,8 @@ func issueURL(title string, d Diagnostic, class string) (string, int) {
 		head = append(head, "**Error class**: `"+class+"`", "")
 	}
 	head = append(head,
-		fmt.Sprintf("**Versions**: backsight %s (%s), plugin %s, Hindsight pin %s, deployed %s, Claude Code %s, %s/%s %s",
-			v.Binary, v.Commit, orNone(v.Plugin), orNone(v.HindsightPin), orNone(v.HindsightDeployed), orNone(v.ClaudeCode), v.OS, v.Arch, v.OSRelease),
+		fmt.Sprintf("**Versions**: backsight %s (%s), plugin %s, Hindsight pin %s, deployed %s, Claude Code %s%s, %s/%s %s",
+			v.Binary, v.Commit, orNone(v.Plugin), orNone(v.HindsightPin), orNone(v.HindsightDeployed), orNone(v.ClaudeCode), codexVersions(d.Codex), v.OS, v.Arch, v.OSRelease),
 		"",
 		fmt.Sprintf("**Doctor**: %d error(s), %d warning(s)", d.Doctor.Errors, d.Doctor.Warnings))
 	tail := []string{"", "**Full diagnostic**", "", pastePlaceholder}
@@ -275,4 +289,12 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// codexVersions is the summary's Codex part, "" when Codex is not wired.
+func codexVersions(c *Codex) string {
+	if c == nil {
+		return ""
+	}
+	return fmt.Sprintf(", Codex %s (plugin %s)", orNone(c.Version), orNone(c.Plugin))
 }

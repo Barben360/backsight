@@ -57,6 +57,18 @@ type Note struct {
 	// document's metadata.
 	Replaces []string `json:"replaces,omitempty"`
 	Evidence string   `json:"evidence,omitempty"`
+	// HarnessTag: the harness: tag of the harness the note came from, as
+	// its adapter gave it; "" (a note queued before harnesses had tags, or
+	// from a shell) is Claude Code's.
+	HarnessTag string `json:"harness_tag,omitempty"`
+}
+
+// harnessTag is the harness: tag the note's memories carry.
+func (n Note) harnessTag() string {
+	if n.HarnessTag != "" {
+		return n.HarnessTag
+	}
+	return claudeCode{}.Tag()
 }
 
 // NewNote builds a note with its document and operation ids.
@@ -82,7 +94,7 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 	if n.Source == "subagent" {
 		item := hindsight.RetainItem{
 			Content: n.Content, Context: "final report of a subagent", DocumentID: n.DocumentID, Strategy: "subagent",
-			Tags:              []string{"project:" + n.Project, "source:subagent", "harness:claude-code"},
+			Tags:              []string{"project:" + n.Project, "source:subagent", n.harnessTag()},
 			ObservationScopes: [][]string{{"project:" + n.Project}},
 			Timestamp:         &ts,
 			Metadata:          map[string]string{"source": "subagent", "machine_id": machineID},
@@ -102,7 +114,7 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 	}
 	item := hindsight.RetainItem{
 		Content: n.Content, Context: "note stored by the user or the agent", DocumentID: n.DocumentID, Strategy: "document",
-		Tags:              []string{"project:" + n.Project, "source:note", "kind:" + n.Kind, "harness:claude-code"},
+		Tags:              []string{"project:" + n.Project, "source:note", "kind:" + n.Kind, n.harnessTag()},
 		ObservationScopes: [][]string{{"project:" + n.Project}},
 		Timestamp:         &ts,
 		Metadata:          map[string]string{"source": "note", "kind": n.Kind, "machine_id": machineID},

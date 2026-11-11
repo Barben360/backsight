@@ -199,7 +199,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 			// Each retirement checks the sends generation: a connect
 			// meanwhile moved this PC to another server.
 			if failure = sendsGate(d.dirs, d.generation)(); failure != nil {
-				failure, local = joinedElsewhere(failure), true
+				failure, local = d.joinedElsewhere(failure), true
 			} else {
 				failure = onServer(key, func(cl *hindsight.Client) error {
 					return cl.Invalidate(ctx, d.cfg.Server.Bank, id, reason, false)
@@ -224,7 +224,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 			break
 		}
 	}
-	moved := errors.Is(failure, errJoinedElsewhere)
+	moved := errors.As(failure, new(joinedElsewhereError))
 	if failure != nil && moved && len(retired)+len(hidden) == 0 {
 		return "", fmt.Errorf("%w: nothing retired. The correction is queued as %s: do not call memory_credit again for these memories", failure, note)
 	}
@@ -254,7 +254,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	case local && !moved:
 		fmt.Fprintf(&b, "%s The rest was not sent: %v. Correction stored: %s.\n", creditPartlyPrefix, failure, note)
 	case moved:
-		fmt.Fprintf(&b, "%s This PC joined another server since this session started (restart Claude Code: its memory tools then use that server). Correction stored: %s.\n", creditPartlyPrefix, note)
+		fmt.Fprintf(&b, "%s This PC joined another server since this session started (restart %s: its memory tools then use that server). Correction stored: %s.\n", creditPartlyPrefix, d.harnessOf().Name(), note)
 	case failure != nil:
 		fmt.Fprintf(&b, "%s The server refused a retirement (%v). Correction stored: %s.\n", creditPartlyPrefix, failure, note)
 	case len(retired) > 0:
@@ -321,15 +321,19 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	return b.String(), nil
 }
 
-// errJoinedElsewhere: connect moved this PC to another server since this
+// joinedElsewhereError: connect moved this PC to another server since this
 // memory server loaded its config (retain.ErrStartedOver, said for the
-// agent).
-var errJoinedElsewhere = errors.New("this PC joined another server since this session started (restart Claude Code: its memory tools then use that server)")
+// agent); tool is the coding tool to restart, by its name.
+type joinedElsewhereError struct{ tool string }
+
+func (e joinedElsewhereError) Error() string {
+	return "this PC joined another server since this session started (restart " + e.tool + ": its memory tools then use that server)"
+}
 
 // joinedElsewhere is a failed sends gate, as a memory tool says it.
-func joinedElsewhere(err error) error {
+func (d mcpDeps) joinedElsewhere(err error) error {
 	if errors.Is(err, retain.ErrStartedOver) {
-		return errJoinedElsewhere
+		return joinedElsewhereError{tool: d.harnessOf().Name()}
 	}
 	return fmt.Errorf("cannot read this PC's sends generation (%w)", err)
 }
@@ -360,7 +364,7 @@ func (d mcpDeps) journal(live session.Live, e feedback.Event) {
 	if t, ok := feedback.CurrentTurn(dir, live.SessionID); ok {
 		e.Turn = t.ID
 	}
-	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version})
+	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version, Client: d.harnessOf().ID()})
 	if err := j.AppendFolded(e); err != nil {
 		d.tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonJournalWrite))
 	}

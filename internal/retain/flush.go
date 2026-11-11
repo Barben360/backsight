@@ -110,6 +110,15 @@ type Flusher struct {
 	// applied one, and decides rebuilt reports' projects as SubagentStop
 	// does (decision 0072); a zero Dir records nothing.
 	Attribution Attributor
+	// Harness is the harness whose conversations FlushFile reads: its
+	// parser reads them and its tag marks what is sent. nil: Claude
+	// Code's.
+	Harness Harness
+	// Harnesses are the harnesses whose conversations the other readers
+	// (backfill, a re-attribution, a resend, a reconcile) may be handed:
+	// each conversation is read with the one that recognises its path
+	// (harnessFor). nil: Harness, else Claude Code's.
+	Harnesses []Harness
 	// replaceReads counts the documents this run read to confirm a
 	// replacing part (maxReplaceReads); queue is the bank's queue as this
 	// run first read it (checkReplaces). A Flusher is one run.
@@ -157,7 +166,12 @@ type Result struct {
 
 // FlushFile sends what is settled and unsent in one transcript.
 func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res Result) {
-	sid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	// The conversation is read, and its segments tagged, by its own
+	// harness (a backfill queue may hold several harnesses' sessions).
+	defer func(h Harness) { f.Harness = h }(f.Harness)
+	f.Harness = f.harnessFor(path)
+	path = currentOf(f.Harness, path) // a queued or recorded path its harness moved since
+	sid := f.harness().SessionOf(path)
 	res = Result{Session: sid, Transcript: path}
 	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }
 
@@ -224,7 +238,11 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 	}
 	resync := resyncFirst || !haveCursor
 	if haveCursor && !resync {
-		if resync, err = f.cursorStale(cur, sid, path, fi.Size(), tombs); err != nil {
+		size, err := f.harness().Size(path)
+		if err != nil {
+			return fail(Retry, err.Error())
+		}
+		if resync, err = f.cursorStale(cur, sid, path, size, tombs); err != nil {
 			return fail(Retry, err.Error())
 		}
 	}
@@ -232,15 +250,11 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 	if resync {
 		from = 0
 	}
-	fh, err := os.Open(path)
+	fh, err := f.harness().Open(path, from)
 	if err != nil {
 		return fail(Retry, err.Error())
 	}
-	if _, err := fh.Seek(from, 0); err != nil {
-		_ = fh.Close()
-		return fail(Retry, err.Error())
-	}
-	recs, st, err := transcript.Read(fh, from)
+	recs, st, err := f.harness().ReadConversation(fh, from)
 	_ = fh.Close()
 	if err != nil {
 		return fail(Retry, err.Error())
@@ -333,7 +347,7 @@ func (f *Flusher) cursorStale(cur Cursor, sid, path string, size int64, tombs []
 	if !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || size < cur.Offset {
 		return true, nil
 	}
-	fp, err := Fingerprint(path, cur.Offset)
+	fp, err := f.fingerprint(path, cur.Offset)
 	if err != nil {
 		return false, err
 	}
@@ -714,7 +728,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 // segment builds segment segNo of project's document doc from run, its
 // operation id salted by the cursor's generation.
 func (f *Flusher) segment(cur Cursor, sid, doc string, run []transcript.Record, segNo int, project string) Segment {
-	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
+	seg := BuildSegmentOf(f.harness(), f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
 	if cur.Generation > 0 {
 		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
 	}
@@ -731,7 +745,7 @@ func (f *Flusher) segment(cur Cursor, sid, doc string, run []transcript.Record, 
 // ids. A cursor that cannot be saved is removed: the next flush then
 // resyncs from the server and the sent index instead of trusting it.
 func (f *Flusher) checkpoint(sid string, cur *Cursor) {
-	if fp, err := Fingerprint(cur.Transcript, cur.Offset); err == nil {
+	if fp, err := f.fingerprint(cur.Transcript, cur.Offset); err == nil {
 		cur.Fingerprint = fp
 	}
 	cur.Segment = cur.Segments[cur.Home]
@@ -751,7 +765,7 @@ func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 		_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), res.Session)) // the document exists now
 		f.pruneDropped(res.Session)
 	}
-	if fp, err := Fingerprint(cur.Transcript, cur.Offset); err == nil {
+	if fp, err := f.fingerprint(cur.Transcript, cur.Offset); err == nil {
 		cur.Fingerprint = fp
 	}
 	if cur.Segments != nil {
@@ -996,4 +1010,18 @@ func errSummary(err error) string {
 		return fmt.Sprintf("%s %s: HTTP %d (%s)", apiErr.Method, apiErr.Path, apiErr.Status, apiErr.Kind)
 	}
 	return err.Error()
+}
+
+// harness is the adapter of the conversations this flusher reads.
+func (f *Flusher) harness() Harness {
+	if f.Harness == nil {
+		return claudeCode{}
+	}
+	return f.Harness
+}
+
+// fingerprint is Fingerprint over the content stream of this flusher's
+// harness (a compressed conversation's decompressed bytes).
+func (f *Flusher) fingerprint(path string, consumed int64) (string, error) {
+	return fingerprintOf(f.harness(), path, consumed)
 }

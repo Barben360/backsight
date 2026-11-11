@@ -551,7 +551,7 @@ vb_status() {
 # and purge run before the offline and latency checks, which leave
 # sessions on A for its timer to send while the restore check counts what
 # each tick re-sends.
-VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients several-pcs timers
+VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients several-pcs codex-claude timers
   dedup-copied dedup-concurrent dedup-split key-rotation restore-across-clients purge-across-clients
   offline-laptop offline-hung unsent-cost latency-0ms latency-20ms latency-80ms)
 
@@ -588,6 +588,17 @@ vb_b_claude() {
     *) vb_fail "client B's claude is not $VB_CLAUDE ($dir)" ;;
   esac
 }
+
+# vb_b_codex: B's Codex for codex-claude, the harness's pin, and the fake
+# model, under cache/ (scripts/codex/fetch.sh).
+vb_b_codex() {
+  M6_CODEX_DIR=$VB_DIR/cache/codex
+  "$VB_ROOT/scripts/codex/fetch.sh" "$M6_CODEX_DIR" >> "$VB_DIR/logs/run.log" 2>&1 ||
+    vb_fail "fetching Codex for client B failed (see $VB_DIR/logs/run.log)"
+}
+
+# m6_codex_on <backsight words…>: B's backsight with Codex on its PATH.
+m6_codex_on() { vb_b env PATH="$M6_CODEX_DIR:$(vb_b_claude_dir)/bin:/usr/local/bin:/usr/bin:/bin" "$VB_DIR/bin/backsight" "$@"; }
 
 m6_home() {
   case $1 in
@@ -1358,6 +1369,7 @@ vb_run() {
   vb_build
   vb_push_a
   vb_b_claude
+  [[ " ${order[*]} " != *" codex-claude "* ]] || vb_b_codex
   # shellcheck source=scripts/m6-proofs.sh
   . "$VB_ROOT/scripts/m6-proofs.sh"
   stamp=$(date -u +%Y%m%dT%H%M%SZ)

@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/retain"
@@ -315,7 +317,7 @@ func checkNoiseHeadless(ctx context.Context, env Env, cfg config.Config, cl *hin
 		if err != nil || !ok || cur.Records == 0 || (cur.Bank != "" && cur.Bank != cfg.Server.Bank) {
 			continue
 		}
-		ep, cwd := headlessStart(cur.Transcript)
+		ep, cwd := headlessStart(conversationReaders(), cur.Transcript)
 		if !cfg.Privacy.SkipsEntrypoint(ep) {
 			continue
 		}
@@ -452,11 +454,48 @@ func liveRawFact(ctx context.Context, cl *hindsight.Client, bank, doc string) (s
 	return found, err
 }
 
-// headlessStart reads a transcript's entrypoint and its first record's
-// directory from its first MiB; empty when the file is gone.
-func headlessStart(path string) (entrypoint, cwd string) {
+// conversationReaders are the conversation readers of every harness that
+// is on, and Codex's, on or not (as retain's flush reads them): a Codex
+// rollout a cursor names is never read as a Claude Code transcript.
+func conversationReaders() []retain.Harness {
+	var out []retain.Harness
+	codex := false
+	for _, a := range harness.All() {
+		out, codex = append(out, a), codex || a.ID() == harnessid.Codex
+	}
+	if a, ok := harness.ByID(harnessid.Codex); ok && !codex {
+		out = append(out, a)
+	}
+	return out
+}
+
+// headlessStart reads a conversation's entrypoint and its first record's
+// directory, by the harness among readers that recognises its path (block
+// 6 found it read Claude Code's transcripts only): from a Claude Code
+// transcript's first MiB, from what another harness keeps at a
+// conversation's head (Codex's session_meta: originator and cwd), else
+// from its records. Empty when the file is gone.
+func headlessStart(readers []retain.Harness, path string) (entrypoint, cwd string) {
 	if path == "" {
 		return "", ""
+	}
+	if h := retain.HarnessOf(readers, path); h.ID() != harnessid.ClaudeCode {
+		if sr, ok := h.(harness.StartReader); ok {
+			return sr.ConversationStart(path)
+		}
+		recs, _, _ := retain.ReadConversation(h, path)
+		for _, r := range recs {
+			if r.Entrypoint != "" {
+				entrypoint = r.Entrypoint
+			}
+			if cwd == "" && r.CWD != "" {
+				cwd = r.CWD
+			}
+			if entrypoint != "" && cwd != "" {
+				break
+			}
+		}
+		return entrypoint, cwd
 	}
 	fh, err := os.Open(path)
 	if err != nil {

@@ -1,0 +1,11 @@
+{
+  "session_id": "01a1c72b-d3c6-7b21-a3cb-e883f4b44c24",
+  "turn_id": "01a1c72b-d5e1-7633-86fe-49dbfe3ddd80",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-35-00-01a1c72b-d3c6-7b21-a3cb-e883f4b44c24.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "Stop",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "stop_hook_active": false,
+  "last_assistant_message": "C1-DONE"
+}

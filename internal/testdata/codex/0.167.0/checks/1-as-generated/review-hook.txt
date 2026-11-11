@@ -1,0 +1,14 @@
+  >_ OpenAI Codex (v0.167.0)
+     ~/work
+  PreToolUse hooks
+  2 hooks need review before they can run.
+  [!]  1  Unnamed hook · new
+› [!]  2  Unnamed hook · new
+  Event     PreToolUse
+  Matcher   AskUserQuestion
+  Source    Plugin - backsight@backsight
+  Command   /home/tester/backsight/data/bin/current
+  Mode      Sync
+  Timeout   10s
+  Trust     New hook - review required
+  t trust · esc back

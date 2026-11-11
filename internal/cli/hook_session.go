@@ -12,11 +12,10 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
-	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
-	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
@@ -113,6 +112,7 @@ func (h *hookEnv) startOnSession() {
 // briefing only once it changed (compactStart).
 func (h *hookEnv) sessionStart() []byte {
 	h.startSessionTurn()
+	h.recordStartedIn()
 	switch h.in.Source {
 	case "startup", "":
 	case "compact":
@@ -123,7 +123,7 @@ func (h *hookEnv) sessionStart() []byte {
 		if h.in.Source == "clear" { // its context starts empty; resume and fork keep theirs
 			guide = withLine(guide, h.projectsLine())
 		}
-		return contextOutput("SessionStart", guide, "")
+		return h.answer(harness.EventSessionStart, guide, "")
 	}
 	h.writeEnvFile()
 	name := safeProject(h.project)
@@ -157,11 +157,13 @@ func (h *hookEnv) sessionStart() []byte {
 		}
 	}
 	if st, err := state.Load(h.dirs.StateFile()); err == nil {
-		settings := claudecode.Locate(h.home, os.Getenv).Settings
-		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version, plugin.WiringOf(h.cfg)); len(drift) > 0 {
-			banner += "\n" + instructions.DriftLine(drift[0])
+		// The session's own profile for Claude Code (it runs its hooks with
+		// it); another tool's recorded one, and what install recorded there.
+		env, rec := wiredRecord(h.adapter, h.home, h.dirs.Data, st)
+		if drift := h.adapter.Drift(env, rec, &h.cfg); len(drift) > 0 {
+			banner += "\n" + instructions.DriftLineFor(h.adapter.ID(), drift[0])
 		}
-		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
+		if line := updateBanner(h.adapter.ID(), st.UpdateCheck, buildinfo.Version); line != "" {
 			banner += "\n" + line
 		}
 		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" && h.cfg.Server.Mode == "remote" {
@@ -181,7 +183,7 @@ func (h *hookEnv) sessionStart() []byte {
 		banner += "\n" + instructions.QuarantineLine(len(held))
 	}
 	if h.firstSession() {
-		banner = instructions.FirstSessionNotice(h.cfg.Server.URL, h.cfg.LLM.Provider) + "\n" + banner
+		banner = instructions.FirstSessionNoticeFor(h.adapter.ID(), h.cfg.Server.URL, h.cfg.LLM.Provider) + "\n" + banner
 	}
 	ids := make([]string, 0, len(items))
 	for _, it := range items {
@@ -212,7 +214,7 @@ func (h *hookEnv) sessionStart() []byte {
 	if text != "" {
 		context += "\n\n" + text
 	}
-	return contextOutput("SessionStart", context, banner)
+	return h.answer(harness.EventSessionStart, context, banner)
 }
 
 // briefing: the project's most recently updated observations, else its
@@ -440,7 +442,7 @@ func (h *hookEnv) compactStart() []byte {
 		}
 		return nil
 	})
-	return contextOutput("SessionStart", withLine(h.texts().Guide, h.projectsLine())+strings.TrimRight(b.String(), "\n"), "")
+	return h.answer(harness.EventSessionStart, withLine(h.texts().Guide, h.projectsLine())+strings.TrimRight(b.String(), "\n"), "")
 }
 
 // projectsLine names the projects in memory (#271): this one, those
@@ -522,5 +524,5 @@ func (h *hookEnv) subagentStart() []byte {
 		}
 		h.journalShows("briefing", itemsFromInjections(shown))
 	}
-	return contextOutput("SubagentStart", text, "")
+	return h.answer(harness.EventSubagentStart, text, "")
 }

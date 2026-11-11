@@ -91,6 +91,11 @@ type Scope struct {
 	// server, whose answer is as of generated_at.
 	ServerOKAt *time.Time `json:"server_ok_at,omitempty"`
 	Project    string     `json:"project,omitempty"`
+	// Client is the coding tool the figures count ("" every one); Clients
+	// the tools active in the window, when more than one was or a filter
+	// names one (what the client switch offers).
+	Client  string   `json:"client,omitempty"`
+	Clients []string `json:"clients,omitempty"`
 	// PCs says which PCs the figures count (every view, both modes).
 	PCs *PCs `json:"pcs,omitempty"`
 	// OthersUnfiltered: machines "all" under a project filter with at least

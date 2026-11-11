@@ -1,0 +1,18 @@
+{
+  "session_id": "01a1c72b-9533-7bb0-9002-52dca295a387",
+  "turn_id": "01a1c72b-ad42-7012-b779-9d8f40f6affd",
+  "transcript_path": "/home/tester/.codex/sessions/2026/11/10/rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl",
+  "cwd": "/home/tester/work",
+  "hook_event_name": "PostToolUse",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "tool_name": "multi_agent_v1wait_agent",
+  "tool_input": {
+    "targets": [
+      "01a1c72b-ae08-75b3-a4db-8a06f93c0c83"
+    ],
+    "timeout_ms": 30000
+  },
+  "tool_response": "{\"status\":{\"01a1c72b-ae08-75b3-a4db-8a06f93c0c83\":{\"completed\":\"SUB-DONE\"}},\"timed_out\":false}",
+  "tool_use_id": "call_fake_20_1"
+}
