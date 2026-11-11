@@ -170,6 +170,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	// harness (a backfill queue may hold several harnesses' sessions).
 	defer func(h Harness) { f.Harness = h }(f.Harness)
 	f.Harness = f.harnessFor(path)
+	path = currentOf(f.Harness, path) // a queued or recorded path its harness moved since
 	sid := f.harness().SessionOf(path)
 	res = Result{Session: sid, Transcript: path}
 	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }

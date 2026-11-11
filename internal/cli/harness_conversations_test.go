@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // Codex's reader is always among the readers, on or not: a rollout a
@@ -77,5 +79,28 @@ func TestEveryHarnessesSessionsAreWaitingAndSurveyed(t *testing.T) {
 	}
 	if code != output.OK || json.Unmarshal([]byte(out), &plan) != nil || plan.Data.Plan.Send != 2 {
 		t.Errorf("backfill's plan does not count both harnesses' sessions: exit %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+// A queued Codex rollout that Codex compressed in place since is still
+// to send: only a session whose conversation is gone leaves the backfill
+// queue.
+func TestBackfillKeepsACompressedRollout(t *testing.T) {
+	home := devInstall(t, true)
+	day := filepath.Join(home, ".codex", "sessions", "2026", "11", "10")
+	_ = os.MkdirAll(day, 0o700)
+	packed := filepath.Join(day, "rollout-2026-11-10T20-34-44-01a1c72b-9533-7bb0-9002-52dca295a387.jsonl")
+	if err := os.WriteFile(packed+".zst", []byte("compressed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(day, "rollout-2026-11-10T20-34-58-01a1c72b-cd0a-7550-ae7a-76acc8d479c6.jsonl")
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Total: 2, MaxCost: 10, Currency: "USD", Sessions: []string{packed, gone}}
+		return nil
+	})
+	n, err := dropSettled(pathsOf(home))
+	st, _ := state.Load(pathsOf(home).StateFile())
+	if err != nil || n != 1 || st.Backfill == nil || !slices.Equal(st.Backfill.Sessions, []string{packed}) {
+		t.Errorf("dropped %d (%v), queue %+v: want the gone one dropped, the compressed one kept", n, err, st.Backfill)
 	}
 }

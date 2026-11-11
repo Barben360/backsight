@@ -25,6 +25,7 @@ type Candidate struct {
 // Survey reads a transcript and says what backfill would send from it.
 func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	h := f.harnessFor(path)
+	path = currentOf(h, path)
 	sid := h.SessionOf(path)
 	c := Candidate{Path: path, Session: sid}
 	fh, err := h.Open(path, 0)

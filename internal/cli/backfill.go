@@ -498,7 +498,7 @@ func dropSettled(d paths.Dirs) (int, error) {
 		var keep []string
 		allNotes := true
 		for _, p := range b.Sessions {
-			if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+			if _, err := os.Stat(retain.CurrentPath(conversationReaders(), p)); errors.Is(err, fs.ErrNotExist) {
 				n++
 				continue
 			}

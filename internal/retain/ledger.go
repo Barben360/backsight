@@ -480,11 +480,12 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 	if err != nil {
 		return nil
 	}
-	if st.Transcript != path || size < st.Offset || (st.Offset > 0 && !sameFingerprint(h, path, st.Offset, st.Fingerprint)) {
+	if !samePlace(h, st.Transcript, path) || size < st.Offset || (st.Offset > 0 && !sameFingerprint(h, path, st.Offset, st.Fingerprint)) {
 		// a new or rewritten transcript: recorded again from its start
 		st = mainLedger{Transcript: path}
 		_ = os.Remove(turnsPath)
 	}
+	st.Transcript = path // where it is now (Codex compresses a rollout in place)
 	if size == st.Offset {
 		return nil
 	}

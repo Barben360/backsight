@@ -21,7 +21,7 @@ import (
 // codex_rollout.go's ledger: block 6, https://github.com/Barben360/backsight/issues/281.
 func init() {
 	codexOwns("codex_rollout.go", codexPart{over: true,
-		done: []string{"Conversations", "SessionOf", "Size", "Open", "ReadConversation", "Subagents", "AgentType"}})
+		done: []string{"Conversations", "SessionOf", "Size", "Open", "ReadConversation", "Subagents", "AgentType", "Current"}})
 }
 
 // The recorded threads (internal/testdata/codex/0.167.0/rollouts) and the
@@ -275,6 +275,12 @@ func TestCodexCompressionInPlace(t *testing.T) {
 	}
 	if got := (Codex{}).Conversations(Env{Profile: home}); !slices.Equal(got, []string{packed}) {
 		t.Errorf("compressed alone lists %v", got)
+	}
+	if got := (Codex{}).Current(plain); got != packed {
+		t.Errorf("Current(plain) = %s, want its compressed twin", got)
+	}
+	if got := (Codex{}).Current(packed); got != packed {
+		t.Errorf("Current(packed) = %s", got)
 	}
 	n, err := Codex{}.Size(plain)
 	if err != nil || n != int64(len(content)) {
@@ -589,4 +595,150 @@ func FuzzCodexReadConversation(f *testing.F) {
 			}
 		}
 	})
+}
+
+// rawZstd is content as one zstd frame with no declared size (raw
+// blocks), as a streaming encoder may write it.
+func rawZstd(content []byte) []byte {
+	b := bytes.NewBuffer([]byte{0x28, 0xb5, 0x2f, 0xfd, 0x00, 7 << 3})
+	for rest := content; len(rest) > 0; {
+		n := min(len(rest), 16<<10)
+		h := uint32(n) << 3
+		if n == len(rest) {
+			h |= 1
+		}
+		b.Write([]byte{byte(h), byte(h >> 8), byte(h >> 16)})
+		b.Write(rest[:n])
+		rest = rest[n:]
+	}
+	return b.Bytes()
+}
+
+// A .zst that declares no size is decompressed once to learn it: the
+// next Size, and an Open at its end, of the unchanged file decompress
+// nothing; a changed file is measured again.
+func TestCodexUndeclaredSizeIsLearntOnce(t *testing.T) {
+	_, paths := codexHome(t, "compressed.jsonl.zst")
+	content := decompress(t, paths["compressed.jsonl.zst"])
+	p := filepath.Join(t.TempDir(), "rollout-x-"+packedID+".jsonl.zst")
+	_ = os.WriteFile(p, rawZstd(content), 0o600)
+	before := sizeDecompressions.Load()
+	for range 3 {
+		if n, err := (Codex{}).Size(p); err != nil || n != int64(len(content)) {
+			t.Fatalf("Size %d %v", n, err)
+		}
+	}
+	if recs, _ := readAll(t, p, int64(len(content))); len(recs) != 0 {
+		t.Errorf("at the end: %d records", len(recs))
+	}
+	if got := sizeDecompressions.Load() - before; got != 1 {
+		t.Errorf("%d decompressions to size the unchanged file, want 1", got)
+	}
+	longer := append(slices.Clone(content), content...)
+	_ = os.WriteFile(p, rawZstd(longer), 0o600)
+	if n, err := (Codex{}).Size(p); err != nil || n != int64(len(longer)) {
+		t.Errorf("the changed file's size %d %v, want %d", n, err, len(longer))
+	}
+}
+
+// A symbolic link where a rollout would be is not followed: Conversations
+// and Subagents list only the files Codex wrote. (Claude Code's
+// Conversations, a glob, lists a link to a transcript; Codex never writes
+// one.)
+func TestCodexRolloutLinksAreNotFollowed(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: symbolic links need privileges on Windows")
+	home, paths := codexHome(t, "root.jsonl", "subagent.jsonl")
+	day := filepath.Dir(paths["root.jsonl"])
+	outside := filepath.Join(t.TempDir(), "elsewhere.jsonl")
+	_ = os.WriteFile(outside, fixtureRollout(t, "fork.jsonl"), 0o600)
+	link := filepath.Join(day, codexFixtureNames["fork.jsonl"])
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	sublink := filepath.Join(day, "rollout-2026-11-10T20-34-52-01a1c72b-ae08-75b3-a4db-8a06f93c0c84.jsonl")
+	if err := os.Symlink(paths["subagent.jsonl"], sublink); err != nil {
+		t.Fatal(err)
+	}
+	if got := (Codex{}).Conversations(Env{Profile: home}); !slices.Equal(got, []string{paths["root.jsonl"]}) {
+		t.Errorf("conversations %v, want the root rollout alone", got)
+	}
+	if got := (Codex{}).Subagents(paths["root.jsonl"]); !slices.Equal(got, []string{paths["subagent.jsonl"]}) {
+		t.Errorf("subagents %v, want the subagent's own file alone", got)
+	}
+}
+
+// Any bytes as a .zst rollout never panic or hang Size, Open, the reader
+// or ReadRolloutMeta, from its start or from mid-stream.
+func FuzzCodexCompressedRollout(f *testing.F) {
+	raw, _ := os.ReadFile(filepath.Join("..", "testdata", "codex", "0.167.0", "rollouts", "compressed.jsonl.zst"))
+	f.Add(raw, int64(0))
+	f.Add(raw, int64(500))
+	f.Add(rawZstd([]byte(`{"type":"session_meta","payload":{"id":"x"}}`+"\n")), int64(3))
+	f.Add([]byte{0x28, 0xb5, 0x2f, 0xfd}, int64(1))
+	f.Fuzz(func(t *testing.T, in []byte, from int64) {
+		old := rolloutMax
+		rolloutMax = 1 << 20 // a decompression bomb stops early
+		defer func() { rolloutMax = old }()
+		p := filepath.Join(t.TempDir(), "rollout-x-"+packedID+".jsonl.zst")
+		if err := os.WriteFile(p, in, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		n, _ := Codex{}.Size(p)
+		_, _ = ReadRolloutMeta(p)
+		for _, at := range []int64{0, max(from%(n+1), 0)} {
+			rc, err := Codex{}.Open(p, at)
+			if err != nil {
+				continue
+			}
+			recs, st, _ := Codex{}.ReadConversation(rc, at)
+			_ = rc.Close()
+			if st.Consumed < at || st.Consumed > max(n, at) {
+				t.Fatalf("consumed %d from %d of %d", st.Consumed, at, n)
+			}
+			for _, r := range recs {
+				if r.Start < at || r.End > st.Consumed || r.Start >= r.End {
+					t.Fatalf("record %+v", r)
+				}
+			}
+		}
+	})
+}
+
+// Any plain rollout read from any offset through Open (the context of a
+// mid-file read loaded from the lines before it) never panics, and its
+// records stay within what it read.
+func FuzzCodexMidFileRead(f *testing.F) {
+	f.Add(fixtureRolloutBytes("root.jsonl"), int64(20000))
+	f.Add(fixtureRolloutBytes("fork.jsonl"), int64(1))
+	f.Add([]byte(`{"type":"session_meta","payload":{"id":"x","cwd":"/w"}}`+"\n"+`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}`+"\n"), int64(56))
+	f.Fuzz(func(t *testing.T, in []byte, from int64) {
+		p := filepath.Join(t.TempDir(), "rollout-x-"+rootID+".jsonl")
+		if err := os.WriteFile(p, in, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		from = max(from%int64(len(in)+1), 0)
+		_, _ = ReadRolloutMeta(p)
+		rc, err := Codex{}.Open(p, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rc.Close() }()
+		recs, st, err := Codex{}.ReadConversation(rc, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Consumed < from || st.Consumed > int64(len(in)) {
+			t.Fatalf("consumed %d from %d of %d", st.Consumed, from, len(in))
+		}
+		for _, r := range recs {
+			if r.Start < from || r.End > st.Consumed || r.Start >= r.End || len(r.Turns) == 0 {
+				t.Fatalf("record %+v", r)
+			}
+		}
+	})
+}
+
+func fixtureRolloutBytes(name string) []byte {
+	raw, _ := os.ReadFile(filepath.Join("..", "testdata", "codex", "0.167.0", "rollouts", name))
+	return raw
 }

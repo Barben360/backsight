@@ -269,3 +269,57 @@ func TestCodexEntrypointIsTheOriginator(t *testing.T) {
 		t.Errorf("entrypoint %q, want codex-tui", got)
 	}
 }
+
+// Codex compresses a week-old rollout in place (the same name plus .zst,
+// the plain file removed): its session goes on where it was. The tail the
+// earlier flush had not reached goes out once, as an append; nothing sent
+// is sent again, from the old path or the new one; the turns recorded for
+// the path rule stay as they were, only the new ones are added.
+func TestCodexCompressionInPlaceContinuesTheSession(t *testing.T) {
+	e := newEnv(t)
+	e.f.Harnesses = []Harness{harness.Codex{}}
+	e.f.Attribution = Attributor{Resolver: e.f.Resolver, Dir: filepath.Join(e.t.TempDir(), "attribution"), Harnesses: e.f.Harnesses}
+	paths := e.codexRollouts()
+	plain := paths["root.jsonl"]
+	full, _ := os.ReadFile(plain)
+	cut := bytes.Index(full, []byte(`"text":"T2-DONE"}],"internal_chat`))
+	cut += bytes.IndexByte(full[cut:], '\n') + 1
+	_ = os.WriteFile(plain, full[:cut], 0o600)
+	ctx := context.Background()
+
+	r := e.f.FlushFile(ctx, plain, Options{})
+	expect(t, r, Sent, 11, 1)
+	if len(r.Turns) != 2 {
+		t.Fatalf("first flush recorded %d turns, want the 2 prompts", len(r.Turns))
+	}
+	_, turnsPath := e.f.Attribution.mainPaths(codexRoot)
+	recorded, _ := os.ReadFile(turnsPath)
+
+	// Compressed in place, its tail written meanwhile.
+	enc, _ := zstd.NewWriter(nil)
+	packed := plain + ".zst"
+	_ = os.WriteFile(packed, enc.EncodeAll(full, nil), 0o600)
+	_ = enc.Close()
+	_ = os.Remove(plain)
+
+	r = e.f.FlushFile(ctx, plain, Options{}) // a queue or a cursor still names the plain file
+	expect(t, r, Sent, 4, 2)
+	items := e.hs.itemsOf("conversation:" + codexRoot)
+	if last := items[len(items)-1]; len(items) != 2 || last.UpdateMode != "append" ||
+		!slices.Equal(segLines(t, last), []string{`user: third turn after compaction <<fake [{"say":"T3-DONE"}]>>`, "assistant: T3-DONE", `user: resumed turn <<fake [{"say":"RESUMED"}]>>`, "assistant: RESUMED"}) {
+		t.Errorf("the tail's segment %+v", items[len(items)-1])
+	}
+	if len(r.Turns) != 2 || r.Transcript != packed {
+		t.Errorf("after compression: %d turns recorded (want the 2 new ones), transcript %s", len(r.Turns), r.Transcript)
+	}
+	now, _ := os.ReadFile(turnsPath)
+	if !bytes.HasPrefix(now, recorded) || len(now) == len(recorded) {
+		t.Errorf("the recorded turns were not kept and added to:\nbefore %s\nafter %s", recorded, now)
+	}
+	retains := len(e.hs.retains)
+	for _, p := range []string{packed, plain} {
+		if r := e.f.FlushFile(ctx, p, Options{}); r.Status != Nothing || len(r.Turns) != 0 || len(e.hs.retains) != retains {
+			t.Errorf("again from %s: %s (%s), %d turns, %d new items", filepath.Base(p), r.Status, r.Detail, len(r.Turns), len(e.hs.retains)-retains)
+		}
+	}
+}

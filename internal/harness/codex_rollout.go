@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -114,7 +116,9 @@ func (c Codex) Conversations(env Env) []string {
 		if c.SessionOf(f) == "" || isRolloutDuplicate(f) {
 			continue
 		}
-		if fi, err := os.Stat(f); err != nil || !fi.Mode().IsRegular() {
+		// A rollout is a file Codex wrote: a symbolic link (or anything
+		// else) in its place is not followed.
+		if fi, err := os.Lstat(f); err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
 		if m, ok := ReadRolloutMeta(f); ok && m.Subagent() {
@@ -146,6 +150,11 @@ func (Codex) SessionOf(path string) string {
 	return m[1]
 }
 
+// Current is where the rollout path names is now: path, or its
+// compressed twin once Codex compressed it in place (retain compares a
+// cursor's or a ledger's path with it).
+func (Codex) Current(path string) string { return rolloutPath(path) }
+
 // rolloutPath is where path's rollout is now: path, or its compressed or
 // plain twin once Codex compressed it (a cursor names the file it read).
 func rolloutPath(path string) string {
@@ -176,7 +185,7 @@ func (Codex) Size(path string) (int64, error) {
 		}
 		return fi.Size(), nil
 	}
-	if n, ok := zstdDeclaredSize(path); ok {
+	if n, ok := knownContentSize(path); ok {
 		return n, nil
 	}
 	rc, err := openRolloutContent(path)
@@ -184,7 +193,54 @@ func (Codex) Size(path string) (int64, error) {
 		return 0, err
 	}
 	defer func() { _ = rc.Close() }()
-	return io.Copy(io.Discard, rc)
+	sizeDecompressions.Add(1)
+	n, err := io.Copy(io.Discard, rc)
+	if err == nil {
+		rememberContentSize(path, n)
+	}
+	return n, err
+}
+
+// sizeDecompressions counts the compressed rollouts Size decompressed to
+// learn their length (a test seam: a second Size of an unchanged file
+// decompresses nothing).
+var sizeDecompressions atomic.Int64
+
+// contentSizes are the content lengths Size learnt by decompressing a
+// .zst that declares none, by file, for as long as the file's size and
+// modification time stay the same (a process runs Size and Open on the
+// same file several times per flush).
+var contentSizes sync.Map // path -> sizedFile
+
+type sizedFile struct {
+	size    int64
+	mtime   time.Time
+	content int64
+}
+
+// knownContentSize is a .zst rollout's content length without
+// decompressing it: what its frames declare, else what Size learnt of the
+// same unchanged file.
+func knownContentSize(path string) (int64, bool) {
+	if n, ok := zstdDeclaredSize(path); ok {
+		return n, true
+	}
+	v, ok := contentSizes.Load(path)
+	if !ok {
+		return 0, false
+	}
+	fi, err := os.Stat(path)
+	if c := v.(sizedFile); err == nil && fi.Size() == c.size && fi.ModTime().Equal(c.mtime) {
+		return c.content, true
+	}
+	contentSizes.Delete(path)
+	return 0, false
+}
+
+func rememberContentSize(path string, n int64) {
+	if fi, err := os.Stat(path); err == nil {
+		contentSizes.Store(path, sizedFile{size: fi.Size(), mtime: fi.ModTime(), content: n})
+	}
 }
 
 // Open is the rollout's content from offset from on, decompressed for
@@ -199,7 +255,7 @@ func (c Codex) Open(path string, from int64) (io.ReadCloser, error) {
 	if compressed(path) && from > 0 {
 		// A compressed rollout read up to its end (the usual case: Codex
 		// compresses only week-old threads) decompresses nothing.
-		if n, ok := zstdDeclaredSize(path); ok && from >= n {
+		if n, ok := knownContentSize(path); ok && from >= n {
 			return &rolloutStream{Reader: bytes.NewReader(nil), closer: io.NopCloser(nil), path: path, from: from}, nil
 		}
 	}
@@ -497,6 +553,9 @@ func (c Codex) Subagents(path string) []string {
 	for _, f := range files {
 		id := c.SessionOf(f)
 		if id == "" || id == root || isRolloutDuplicate(f) {
+			continue
+		}
+		if fi, err := os.Lstat(f); err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
 		if m, ok := ReadRolloutMeta(f); ok && m.Subagent() && strings.EqualFold(m.SessionID, root) {

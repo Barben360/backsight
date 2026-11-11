@@ -240,3 +240,29 @@ func agentPathOf(h Harness, path, agent string) string {
 	}
 	return ""
 }
+
+// Mover is a harness whose conversation files move in place (Codex
+// compresses a rollout to the same name plus .zst): Current is where the
+// conversation path names is now.
+type Mover interface {
+	Current(path string) string
+}
+
+// currentOf is where h's conversation at path is now: path for a harness
+// whose files never move.
+func currentOf(h Harness, path string) string {
+	if m, ok := h.(Mover); ok {
+		return m.Current(path)
+	}
+	return path
+}
+
+// CurrentPath is where the conversation at path is now, among hs's
+// harnesses (HarnessOf).
+func CurrentPath(hs []Harness, path string) string { return currentOf(HarnessOf(hs, path), path) }
+
+// samePlace says whether paths a and b name the same conversation of h:
+// equal, or one is where the other moved to.
+func samePlace(h Harness, a, b string) bool {
+	return a == b || currentOf(h, a) == currentOf(h, b)
+}
