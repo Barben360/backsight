@@ -117,7 +117,7 @@ func (p *proc) stop(wait time.Duration) (stopOutcome, error) {
 	select {
 	case err := <-p.done:
 		return stopExited, err
-	case <-time.After(wait):
+	case <-tm.after(wait):
 	}
 	_ = p.kill()
 	return stopKilled, <-p.done

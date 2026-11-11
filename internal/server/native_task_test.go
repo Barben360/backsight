@@ -346,7 +346,10 @@ func (f *fakeTask) ask(_ context.Context, project, op string) (supervise.Status,
 }
 
 // taskFixture is the task host on this host's own paths (files written
-// for real), Task Scheduler and the pipe faked; waits are short.
+// for real), Task Scheduler and the pipe faked; the polls are short. The
+// fakes answer at once or never: taskRunWait only ends a wait for one
+// that never does, and superviseStopWait is out of reach (a test of a
+// stop that never ends sets its own).
 func taskFixture(t *testing.T) (taskHost, *fakeTask) {
 	t.Helper()
 	withSID(t)
@@ -380,7 +383,7 @@ func taskFixture(t *testing.T) (taskHost, *fakeTask) {
 		f.start()
 		return nil
 	}
-	taskRunWait, superviseStopWait, supervisePoll = 300*time.Millisecond, time.Second, 5*time.Millisecond
+	taskRunWait, superviseStopWait, supervisePoll = 300*time.Millisecond, time.Hour, 5*time.Millisecond
 	t.Cleanup(func() {
 		superviseAsk = old[0].(func(context.Context, string, string) (supervise.Status, error))
 		startSupervisor = old[1].(func(...string) error)
@@ -594,6 +597,7 @@ func TestStopEdges(t *testing.T) {
 	f.registered = true
 	f.start()
 	f.stopPolls = 1 << 30
+	superviseStopWait = time.Millisecond
 	err := h.Stop(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "still runs") || !strings.Contains(err.Error(), "bs-supervisor.log") {
 		t.Errorf("Stop of a supervisor that never stops = %v", err)
@@ -669,6 +673,7 @@ func TestUnregisterDeletesTheTaskAfterTheStop(t *testing.T) {
 	}
 
 	f.registered, f.stopPolls = true, 1000 // never gone within superviseStopWait
+	superviseStopWait = time.Millisecond
 	f.start()
 	f.ev = &events{}
 	if err := h.n.Unregister(context.Background()); err == nil || !f.registered {
@@ -1269,6 +1274,7 @@ func TestStopOnPurposeMarksTheServerBeforeTheStop(t *testing.T) {
 	n.clearStopped()
 	f.start()
 	f.stopPolls = 1000 // never gone within superviseStopWait
+	superviseStopWait = time.Millisecond
 	if err := n.StopOnPurpose(ctx); err == nil || n.Stopped() {
 		t.Errorf("a stop that fails: %v, marker %v; want the error and the marker taken back", err, n.Stopped())
 	}
