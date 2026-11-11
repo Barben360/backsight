@@ -123,7 +123,7 @@ It works like a folder import ([import](import.md#codexs-own-memories)): queued,
 
 A summary whose conversation is still on disk waits for that conversation: backsight sends the conversation itself, which holds more than its summary, through `backsight retain backfill` ([past Codex sessions](#past-codex-sessions)). Sending both would store the same work twice.
 
-**Folders kept out of memory stay out.** A summary of a folder excluded from memory (`privacy.exclude_paths`, `backsight pause --project`, a `.backsight.toml` with `retain = false`) is skipped. Codex merges every project's work into `memory_summary.md` and `MEMORY.md`, so when its memories hold such a folder's work, or name a folder backsight cannot check from this PC (a network path, a relative one), those two files are skipped as well: they may quote it. The plan names the folders (`mixes_excluded`). There is no flag to send them anyway.
+**Folders kept out of memory stay out.** A summary of a folder excluded from memory (`privacy.exclude_paths`, `backsight pause --project`, a `.backsight.toml` with `retain = false`) is skipped. Codex merges every project's work into `memory_summary.md` and `MEMORY.md`, so when its memories hold such a folder's work, or name a folder backsight cannot check from this PC (a network path, a relative one), those two files are skipped as well: they may quote it. The plan names the folders (`mixes_excluded_by`). There is no flag to send them anyway.
 
 While Codex's own memories are on, `backsight doctor`'s `codex-memories` check says so, with the command that turns them off.
 
@@ -176,7 +176,7 @@ skip_entrypoints = ["sdk-*", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_s
 | `/clear` | Ends the old session, which is sent at once | Codex sends no end: the old session is sent by the background job, 30 minutes after its last turn |
 | Session end | Detached send, 1 s | The same; Codex allows its end hook 1 to 3 s |
 | Text a hook adds | As written | Cut at 9,000 bytes per hook, at a line's end: Codex spills longer text to a file and keeps only its head and tail |
-| Before a question | The gate on `AskUserQuestion` | The same gate on `request_user_input`, Codex's question tool, which works in Plan mode only |
+| Before a question | The gate on `AskUserQuestion` | The same gate on `request_user_input`, Codex's question tool (with Codex 0.167.0, offered in Plan mode only) |
 | Pitfalls after a failed tool call (`recall.failure_pitfalls`) | Available | Not wired: Codex reports no failed tool call to hooks |
 | Tool permissions | A permission rule setup adds | None needed ([approvals](#approvals)) |
 | History retention | `clients.claude_code.retention_days` | Not managed by backsight |
