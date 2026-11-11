@@ -47,13 +47,13 @@ New words (bank, observation, transverse…) are in the [glossary](docs/glossary
 
 ## What your coding agent gets
 
-Setup wires the tools it finds: Claude Code, Codex or both. For Claude Code it installs a plugin, `backsight`; for Codex, two plugins, `backsight@backsight` (the memory tools and the skills) and `backsight-hooks@backsight` (the hooks alone). The binary generates all three from one source, so both tools get the same things:
+Setup wires Claude Code, Codex or both (it asks when it finds Codex). For Claude Code it installs a plugin, `backsight`; for Codex, two plugins, `backsight@backsight` (the memory tools and the skills) and `backsight-hooks@backsight` (the hooks alone). The binary generates all three from one source, so both tools get the same things:
 
 | Kind | Claude Code | Codex | What it brings |
 |---|---|---|---|
 | Hook | `SessionStart` | `SessionStart` | The memory guide (read a linked issue first, answer in your language, never ask you for a key), the project's briefing, the status line. After `/clear`, a resume or a fork: the guide again; after a compaction: the guide, and the briefing again only if the server rewrote it. Codex runs it with your first prompt. |
 | Hook | `UserPromptSubmit` | `UserPromptSubmit` | Up to 3 relevant memories added to the prompt, plus a reminder, a nudge to search, or a save prompt when one fits. |
-| Hook | `PreToolUse` (`AskUserQuestion`) | `PreToolUse` (`request_user_input`) | The question gate: the agent searches the memory before asking you something it may already know. |
+| Hook | `PreToolUse` (`AskUserQuestion`) | `PreToolUse` (`request_user_input`) | The question gate: the agent searches the memory before asking you something it may already know. Codex 0.167.0 offers its question tool in Plan mode only. |
 | Hook | `PostToolUse` (memory tools) | `PostToolUse` (memory tools) | Notes that memory was searched, for the gate and the nudge; records which memories were shown and which the agent credited. |
 | Hook | `PostToolUseFailure` | — | Off by default: when a tool call fails, the pitfalls memory knows about that failure. Codex reports no failed tool call to hooks. |
 | Hook | `SubagentStart`, `SubagentStop` | `SubagentStart`, `SubagentStop` | A short memory guide and the top of the briefing for each subagent; its final report kept as a note; the same end-of-turn check as `Stop`. |
@@ -210,7 +210,7 @@ The agent never sees your LLM key: you type it yourself. Or install by hand:
    backsight setup
    ```
 
-   Setup checks the machine, asks a few questions (which tools to wire: Claude Code, Codex or both; the LLM provider, how long Claude Code keeps transcripts, backups, importing past sessions, importing a folder of notes, and for Codex: turning off Codex's own memories, importing them), shows its plan and asks for your consent. It then asks for your provider key at a hidden prompt: keys are never passed as arguments. The first run downloads the server: several minutes on a home connection. If setup stops, fix what it says and run `backsight setup --resume`; [troubleshooting.md](docs/troubleshooting.md#setup-stopped) covers the usual causes.
+   Setup checks the machine, asks a few questions (which tools to wire, when Codex is installed; the LLM provider; how long Claude Code keeps transcripts; backups; importing past sessions; importing a folder of notes; and, with Codex, whether to turn off Codex's own memories and import them), shows its plan and asks for your consent. It then asks for your provider key at a hidden prompt: keys are never passed as arguments. The first run downloads the server: several minutes on a home connection. If setup stops, fix what it says and run `backsight setup --resume`; [troubleshooting.md](docs/troubleshooting.md#setup-stopped) covers the usual causes.
 
 3. Restart Claude Code (or run `/reload-plugins` in it). For Codex: restart it, then trust backsight's hooks in the review it shows at start ([Codex](docs/codex.md#trust-the-hooks)).
 
