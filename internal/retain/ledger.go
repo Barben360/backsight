@@ -60,6 +60,9 @@ type Attributor struct {
 	// Deadline, when set, bounds a decision's reading (SubagentStop has
 	// 3 s): past it, the report keeps its session's project.
 	Deadline time.Time
+	// Harnesses read the transcripts handed over, each with the one that
+	// recognises its path (Flusher.Harnesses); nil: Claude Code's.
+	Harnesses []Harness
 }
 
 // Sources a subagent's decision can also have.
@@ -164,20 +167,23 @@ func (a Attributor) repos(launchDir, sessionTranscript string) (*attribution.Rep
 	r.Deny(a.Deny)
 	r.Deadline = a.Deadline
 	files := []string{sessionTranscript}
-	agents, _ := filepath.Glob(filepath.Join(strings.TrimSuffix(sessionTranscript, ".jsonl"), "subagents", "agent-*.jsonl"))
+	h := a.harnessFor(sessionTranscript)
+	var agents []string
+	if isClaude(h) {
+		agents, _ = filepath.Glob(filepath.Join(strings.TrimSuffix(sessionTranscript, ".jsonl"), "subagents", "agent-*.jsonl"))
+	} else {
+		for _, f := range subagentsOf(h, sessionTranscript) {
+			agents = append(agents, f.path)
+		}
+	}
 	for _, p := range append(files, agents...) {
 		if a.late() {
 			return r, false
 		}
-		fh, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		transcript.Scan(fh, attribution.LearnWords, func(rec transcript.Record) bool {
+		scanConversation(h, p, attribution.LearnWords, func(rec transcript.Record) bool {
 			r.LearnAll([]transcript.Record{rec}, launchDir)
 			return !a.late()
 		})
-		_ = fh.Close()
 	}
 	return r, !a.late()
 }
@@ -229,7 +235,7 @@ func (a Attributor) Subagent(sid, agentID, sessionTranscript, agentTranscript, b
 	if found && !stored.Provisional {
 		return a.honour(stored), nil
 	}
-	launch := launchDir(sessionTranscript)
+	launch := launchDir(a.harnessFor(sessionTranscript), sessionTranscript)
 	var repos *attribution.Repos
 	e := a.computeSubagent(sid, agentID, launch, func() (*attribution.Repos, bool) {
 		if repos == nil {
@@ -271,12 +277,7 @@ func (a Attributor) computeSubagent(sid, agentID, launch string, repos func() (*
 	if a.late() {
 		return fallback(SourceTimeout) // the hook's budget is spent: not even read
 	}
-	fh, err := os.Open(agentTranscript)
-	if err != nil {
-		return fallback(SourceUnread)
-	}
-	recs, _, err := transcript.ReadAgent(fh)
-	_ = fh.Close()
+	recs, _, err := readAgent(a.harnessFor(agentTranscript), agentTranscript)
 	if err != nil {
 		return fallback(SourceUnread)
 	}
@@ -427,13 +428,8 @@ func (a Attributor) replaceAgent(e TurnEntry) error {
 
 // launchDir is the directory a session started in: its first main record
 // with one.
-func launchDir(sessionTranscript string) string {
-	fh, err := os.Open(sessionTranscript)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = fh.Close() }()
-	return transcript.FirstCWD(fh)
+func launchDir(h Harness, sessionTranscript string) string {
+	return firstCWD(h, sessionTranscript)
 }
 
 // mainLedger is where the ledger of a session's main turns stands.
@@ -479,23 +475,24 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 	if err != nil {
 		return nil
 	}
-	if st.Transcript != path || fi.Size() < st.Offset || (st.Offset > 0 && !sameFingerprint(path, st.Offset, st.Fingerprint)) {
+	h := f.harnessFor(path)
+	size, err := h.Size(path)
+	if err != nil {
+		return nil
+	}
+	if st.Transcript != path || size < st.Offset || (st.Offset > 0 && !sameFingerprint(h, path, st.Offset, st.Fingerprint)) {
 		// a new or rewritten transcript: recorded again from its start
 		st = mainLedger{Transcript: path}
 		_ = os.Remove(turnsPath)
 	}
-	if fi.Size() == st.Offset {
+	if size == st.Offset {
 		return nil
 	}
-	fh, err := os.Open(path)
+	fh, err := h.Open(path, st.Offset)
 	if err != nil {
 		return nil
 	}
-	if _, err := fh.Seek(st.Offset, 0); err != nil {
-		_ = fh.Close()
-		return nil
-	}
-	recs, _, err := transcript.Read(fh, st.Offset)
+	recs, _, err := h.ReadConversation(fh, st.Offset)
 	_ = fh.Close()
 	if err != nil || len(recs) == 0 {
 		return nil
@@ -571,7 +568,7 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 			return nil // the state is not moved: recorded next time
 		}
 	}
-	if fp, err := Fingerprint(path, st.Offset); err == nil {
+	if fp, err := fingerprintOf(h, path, st.Offset); err == nil {
 		st.Fingerprint = fp
 	}
 	raw, _ := json.Marshal(st)
@@ -579,8 +576,8 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 	return out
 }
 
-func sameFingerprint(path string, offset int64, fp string) bool {
-	got, err := Fingerprint(path, offset)
+func sameFingerprint(h Harness, path string, offset int64, fp string) bool {
+	got, err := fingerprintOf(h, path, offset)
 	return err == nil && got == fp
 }
 

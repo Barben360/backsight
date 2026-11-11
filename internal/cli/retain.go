@@ -88,13 +88,13 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 		Append: retain.AppendGate{MinChars: cfg.Retain.AppendMinChars, MaxWait: cfg.Retain.AppendMaxWaitDuration()},
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
 		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportMinChars: cfg.Hooks.SubagentReportMinChars, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
-		Attribution: attributor(d, cfg, res)}, nil
+		Attribution: attributor(d, cfg, res), Harnesses: conversationReaders()}, nil
 }
 
 // attributor applies the path rule with this configuration (decision 0072).
 func attributor(d paths.Dirs, cfg config.Config, res *project.Resolver) retain.Attributor {
 	return retain.Attributor{Resolver: res, Transverse: cfg.Projects.Transverse, Owners: cfg.Projects.OwnOwners, Deny: cfg.Projects.DenyOwners,
-		Exclude: cfg.Privacy.ExcludePaths, Dir: d.AttributionDir()}
+		Exclude: cfg.Privacy.ExcludePaths, Dir: d.AttributionDir(), Harnesses: conversationReaders()}
 }
 
 // attributionEvent is the telemetry of one recorded turn.
@@ -442,7 +442,7 @@ func newRetainWaitingCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rep := waitingReport{Sessions: f.Waiting(transcripts(home))}
+			rep := waitingReport{Sessions: f.Waiting(allConversations(home))}
 			if rep.Sessions == nil {
 				rep.Sessions = []retain.Waiter{}
 			}

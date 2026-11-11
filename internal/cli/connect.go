@@ -1039,7 +1039,7 @@ func projectsDir(home, configDir string) string {
 // transcriptFiles are the session transcripts a backfill reads.
 func transcriptFiles(home, configDir string) []string {
 	files, _ := filepath.Glob(filepath.Join(projectsDir(home, configDir), "*", "*.jsonl"))
-	return files
+	return append(files, otherConversations(home)...)
 }
 
 // ownServerPlan is what joining another server does to this PC's own
@@ -1057,7 +1057,7 @@ func ownServerPlan(ctx context.Context, cfg config.Config, sec config.Secrets, s
 	if err != nil {
 		return own, server.Redact("the saved notes of this PC's server could not be counted: "+err.Error(), sec)
 	}
-	orphans, total, err := retain.CountOrphanNotes(ctx, cl, cfg.Server.Bank, transcripts)
+	orphans, total, err := retain.CountOrphanNotes(ctx, cl, cfg.Server.Bank, transcripts, conversationReaders()...)
 	if err != nil {
 		return own, server.Redact("the saved notes of this PC's server could not be counted ("+err.Error()+"): start it (backsight server start) and run the plan again to see them", sec)
 	}

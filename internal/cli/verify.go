@@ -350,7 +350,7 @@ func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, err
 	if err != nil {
 		return livecheck.Result{}, blocked(err)
 	}
-	files := transcripts(home)
+	files := allConversations(home)
 	if configDir != "" {
 		loc := claudecode.Locate(home, func(k string) string {
 			if k == "CLAUDE_CONFIG_DIR" {
@@ -359,8 +359,9 @@ func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, err
 			return os.Getenv(k)
 		})
 		files, _ = filepath.Glob(filepath.Join(loc.Projects, "*", "*.jsonl"))
+		files = append(files, otherConversations(home)...)
 	}
-	in := livecheck.Input{Server: srv, Bank: cfg.Server.Bank, Transcripts: files, CursorsDir: d.CursorsDir(), Now: now()}
+	in := livecheck.Input{Server: srv, Bank: cfg.Server.Bank, Transcripts: files, Harnesses: conversationReaders(), CursorsDir: d.CursorsDir(), Now: now()}
 	// Read, never created (verify only reads): none leaves it empty, and
 	// then no segment counts as another PC's.
 	in.MachineID = retain.ReadMachineID(d.State)

@@ -168,7 +168,7 @@ func runResendFailed(ctx context.Context, f resendFailedFlags) (resendFailedResu
 		if err != nil {
 			return retain.FailedPlan{}, blocked(err)
 		}
-		return fl.PlanFailedResends(named, resent, docs, transcripts(home), prices), nil
+		return fl.PlanFailedResends(named, resent, docs, allConversations(home), prices), nil
 	}
 	p, err := plan()
 	res.Plan = p

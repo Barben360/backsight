@@ -168,7 +168,7 @@ func reattribute(ctx context.Context, f reattributeFlags, opt reattributeOptions
 		for _, doc := range docs {
 			tags[doc.ID] = doc.Tags
 		}
-		return fl.PlanReattribution(docs, transcripts(home), prices), tags, nil
+		return fl.PlanReattribution(docs, allConversations(home), prices), tags, nil
 	}
 	p, _, err := plan()
 	res.Plan = p

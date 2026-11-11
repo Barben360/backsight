@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/retain"
-	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // Server is what the check reads; *hindsight.Client is one.
@@ -39,6 +37,9 @@ type Input struct {
 	// document sent by another machine id is that PC's continuation of
 	// the session, not a loss. Empty, no segment counts as another PC's.
 	MachineID string
+	// Harnesses read the transcripts, each with the one that recognises
+	// its path (retain.HarnessOf); nil: Claude Code's.
+	Harnesses []retain.Harness
 }
 
 // Statuses.
@@ -93,6 +94,7 @@ type session struct {
 	written   time.Time
 	size      int64
 	cur       retain.Cursor
+	h         retain.Harness
 }
 
 func (s session) settledAt() time.Time { return s.written.Add(retain.SettleAfter) }
@@ -105,7 +107,11 @@ func Check(ctx context.Context, in Input) Result {
 		if err != nil || fi.IsDir() {
 			continue
 		}
-		s := session{sid: strings.TrimSuffix(filepath.Base(p), ".jsonl"), path: p, written: fi.ModTime(), size: fi.Size()}
+		h := retain.HarnessOf(in.Harnesses, p)
+		s := session{sid: h.SessionOf(p), path: p, written: fi.ModTime(), size: fi.Size(), h: h}
+		if n, err := h.Size(p); err == nil {
+			s.size = n // a compressed conversation's content length, not its file's
+		}
 		if !in.RetainSince.IsZero() && s.written.Before(in.RetainSince) {
 			continue // backfill's
 		}
@@ -122,7 +128,7 @@ func Check(ctx context.Context, in Input) Result {
 	newestFirst(unsettled)
 	var live *session
 	for i := range unsettled {
-		if sendable(unsettled[i].path) {
+		if sendable(unsettled[i].h, unsettled[i].path) {
 			live = &unsettled[i]
 			break
 		}
@@ -157,7 +163,7 @@ func Check(ctx context.Context, in Input) Result {
 			continue // only sent sessions help an earlier proof
 		case ok && cur.Bank == in.Bank && cur.Offset >= s.size:
 			continue // handled without sending: opted out or paused
-		case !ok && !sendable(s.path):
+		case !ok && !sendable(s.h, s.path):
 			continue // only slash or ! commands: nothing for jobs tick to send
 		default:
 			return notSent(s, in.Now)
@@ -182,13 +188,8 @@ func Check(ctx context.Context, in Input) Result {
 // sendable reports whether a transcript holds a record jobs tick would
 // send: a session of only slash or ! commands has none, and flush saves no
 // cursor for it. An unreadable transcript counts as sendable: it is judged.
-func sendable(path string) bool {
-	fh, err := os.Open(path)
-	if err != nil {
-		return true
-	}
-	defer func() { _ = fh.Close() }()
-	recs, _, err := transcript.Read(fh, 0)
+func sendable(h retain.Harness, path string) bool {
+	recs, _, err := retain.ReadConversation(h, path)
 	return err != nil || len(recs) > 0
 }
 

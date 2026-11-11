@@ -105,7 +105,7 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				}
 			}
 			prices := retain.PricesForLLM(cfg.LLM)
-			files := transcripts(home)
+			files := allConversations(home)
 			if fl.dir != "" {
 				files, _ = filepath.Glob(filepath.Join(fl.dir, "*", "*.jsonl"))
 			}
@@ -421,7 +421,7 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			return res, &output.Error{Code: output.Partial, Message: "backfill stopped at " + r.Session + " (" + r.Status + ": " + r.Detail + "); rerun to continue"}
 		}
 		if _, recs := f.Survey(path); len(recs) > 0 {
-			sid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+			sid := f.SessionOf(path)
 			for _, n := range f.Notes(sid, recs) {
 				if _, err := ob.Append(n); err != nil {
 					return res, blocked(err)
@@ -476,7 +476,7 @@ func backfillUpdate(d paths.Dirs, f *retain.Flusher, fn func(*state.State)) erro
 // notesOnly: live retain took the session over (a live cursor), so all a
 // backfill still sends is its explicit saves.
 func notesOnly(d paths.Dirs, path string) (only, replayed bool) {
-	cur, ok, _ := retain.LoadCursor(d.CursorsDir(), strings.TrimSuffix(filepath.Base(path), ".jsonl"))
+	cur, ok, _ := retain.LoadCursor(d.CursorsDir(), retain.HarnessOf(conversationReaders(), path).SessionOf(path))
 	return ok && !cur.Backfill && !cur.Quarantined, cur.NotesReplayed
 }
 

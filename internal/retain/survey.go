@@ -2,9 +2,7 @@ package retain
 
 import (
 	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/state"
@@ -26,14 +24,15 @@ type Candidate struct {
 
 // Survey reads a transcript and says what backfill would send from it.
 func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
-	sid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	h := f.harnessFor(path)
+	sid := h.SessionOf(path)
 	c := Candidate{Path: path, Session: sid}
-	fh, err := os.Open(path)
+	fh, err := h.Open(path, 0)
 	if err != nil {
 		c.Status, c.Reason = "empty", err.Error()
 		return c, nil
 	}
-	recs, _, _ := transcript.Read(fh, 0)
+	recs, _, _ := h.ReadConversation(fh, 0)
 	_ = fh.Close()
 	if len(recs) == 0 {
 		c.Status = "empty"
@@ -152,15 +151,22 @@ func (f *Flusher) Waiting(files []string) []Waiter {
 		if err != nil {
 			continue
 		}
-		sid := strings.TrimSuffix(filepath.Base(file), ".jsonl")
+		h := f.harnessFor(file)
+		sid := h.SessionOf(file)
 		cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), sid)
+		size := fi.Size()
+		if ok && !isClaude(h) {
+			if size, err = h.Size(file); err != nil {
+				continue
+			}
+		}
 		switch {
 		case err != nil:
 			continue
 		case ok && cur.Quarantined:
 			out = append(out, Waiter{Session: sid, Transcript: file, Reason: WaitQuarantined})
 			continue
-		case ok && (cur.Backfill || cur.Offset >= fi.Size()):
+		case ok && (cur.Backfill || cur.Offset >= size):
 			continue
 		case !ok && !f.RetainSince.IsZero() && fi.ModTime().Before(f.RetainSince):
 			continue // last written before retain_since: backfill's
