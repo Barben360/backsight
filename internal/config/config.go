@@ -172,6 +172,19 @@ type Privacy struct {
 	SkipEntrypoints []string `toml:"skip_entrypoints" json:"skip_entrypoints"`
 }
 
+// DefaultSkipEntrypoints are the headless entrypoints kept out of memory
+// by default (decision 0071 C1): Claude Code's Agent SDK runs (sdk-cli,
+// sdk-ts, sdk-py), codex exec, and Codex's SDKs. Codex's are its
+// originators at openai/codex 0d37c06 (0.167.0): codex exec sets
+// codex_exec (codex-rs/exec/src/lib.rs), the TypeScript SDK codex_sdk_ts
+// (sdk/typescript/src/exec.ts), codex-app-server-sdk is the app server's
+// SDK, and codex_mcp_server is Codex run as a tool by another agent, whose
+// own conversation already holds the work (both in the known originators
+// of codex-rs/otel/src/metrics/tags.rs).
+func DefaultSkipEntrypoints() []string {
+	return []string{"sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"}
+}
+
 // SkipsEntrypoint reports whether records written under entrypoint ep stay
 // out of memory. Records with no entrypoint (older transcripts) are kept.
 func (p Privacy) SkipsEntrypoint(ep string) bool {
@@ -369,7 +382,7 @@ func Default(d paths.Dirs, home string) Config {
 		Server: Server{URL: "http://127.0.0.1:8888", Bank: LegacyBank, Mode: "local", Role: RoleBoth,
 			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server"), Project: "backsight"},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
-		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: []string{"sdk-*"}},
+		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: DefaultSkipEntrypoints()},
 		Components: Components{Read: true, Write: true},
 		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,

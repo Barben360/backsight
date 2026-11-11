@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/retain"
 )
@@ -653,5 +654,27 @@ func TestLiveCheckEarlierProofNamesADocumentAnotherPCContinued(t *testing.T) {
 	want(t, r, Pass, "consolidation works; continued on another PC: conversation:s")
 	if r.Session != "s" || r.ObservedIn != "s0" || len(r.ContinuedElsewhere) != 1 || r.ContinuedElsewhere[0] != "conversation:s" {
 		t.Errorf("%+v", r)
+	}
+}
+
+// A Codex thread is checked under its thread id, read by Codex's reader:
+// a settled thread with a prompt and no cursor was never sent.
+func TestACodexThreadIsCheckedUnderItsThreadID(t *testing.T) {
+	w := newWorld(t)
+	const id = "01a1c72b-9533-7bb0-9002-52dca295a387"
+	p := filepath.Join(w.dir, "codex", "sessions", "2026", "10", "25", "rollout-2026-10-25T08-00-00-"+id+".jsonl")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	body := `{"timestamp":"2026-10-25T08:00:00Z","type":"session_meta","payload":{"id":"` + id + `","cwd":"/work/api"}}` + "\n" +
+		`{"timestamp":"2026-10-25T08:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"why does the export job stall?"}]}}` + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-3 * time.Hour)
+	_ = os.Chtimes(p, old, old)
+	r := Check(context.Background(), Input{Server: w.srv, Bank: "b", Transcripts: []string{p}, CursorsDir: w.cursors, Now: now,
+		Harnesses: []retain.Harness{harness.Claude{}, harness.Codex{}}})
+	want(t, r, Fail, "was not sent")
+	if r.Session != id {
+		t.Errorf("session %q, want the thread id", r.Session)
 	}
 }

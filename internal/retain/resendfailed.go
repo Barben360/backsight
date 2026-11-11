@@ -54,10 +54,7 @@ type FailedPlan struct {
 // deleted before its records go again. It writes nothing.
 func (f *Flusher) PlanFailedResends(named map[string]time.Time, resent map[string]time.Time, docs []hindsight.DocumentItem, transcripts []string, prices Prices) FailedPlan {
 	plan := FailedPlan{Named: len(named), Held: []HeldSession{}, Resends: []Resend{}}
-	paths := map[string]string{}
-	for _, p := range transcripts {
-		paths[strings.TrimSuffix(filepath.Base(p), ".jsonl")] = p
-	}
+	paths := f.sessionPaths(transcripts)
 	byDoc := map[string][]hindsight.DocumentItem{}
 	for _, d := range docs {
 		if sid, _, ok := conversationDoc(d.ID); ok {
@@ -101,12 +98,7 @@ func (f *Flusher) PlanFailedResends(named map[string]time.Time, resent map[strin
 // transcript holds that is not kept out, under today's projects. nil when
 // it holds none.
 func (f *Flusher) planFailedSession(sid, path string, docs []hindsight.DocumentItem, prices Prices) (*Resend, string) {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil, "its transcript cannot be read: " + err.Error()
-	}
-	recs, _, err := transcript.Read(fh, 0)
-	_ = fh.Close()
+	recs, _, err := readConversation(f.harnessFor(path), path)
 	if err != nil {
 		return nil, "its transcript cannot be read: " + err.Error()
 	}

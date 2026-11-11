@@ -15,7 +15,6 @@ import (
 	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
-	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // ReportChars caps a subagent's report (SPEC §6.2).
@@ -50,10 +49,12 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 	if f.NoReports {
 		return nil, nil
 	}
-	files, err := filepath.Glob(filepath.Join(strings.TrimSuffix(transcriptPath, ".jsonl"), "subagents", "agent-*.jsonl"))
-	if err != nil || len(files) == 0 {
-		return nil, err
+	conv := f.harnessFor(transcriptPath)
+	files := subagentsOf(conv, transcriptPath)
+	if len(files) == 0 {
+		return nil, nil
 	}
+	var err error
 	if tombs == nil {
 		if tombs, err = f.tombstones(); err != nil {
 			return nil, err
@@ -73,15 +74,12 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 	if wholePause(paused, spans) {
 		return nil, nil
 	}
-	if f.headless(parentEntrypoint(transcriptPath)) {
+	if f.headless(entrypointOf(conv, transcriptPath)) {
 		return nil, nil
 	}
 	var queued []string
-	for _, p := range files {
-		agent := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "agent-"), ".jsonl")
-		if !session.ValidID(agent) {
-			continue
-		}
+	for _, af := range files {
+		p, agent := af.path, af.id
 		doc := "subagent:" + sid + ":" + agent
 		if slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == doc }) ||
 			slices.ContainsFunc(pending, func(n Note) bool { return n.DocumentID == doc }) {
@@ -95,12 +93,10 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 		case !errors.As(err, &apiErr) || apiErr.Kind != hindsight.NotFound:
 			return queued, errors.New(errSummary(err))
 		}
-		fh, err := os.Open(p)
-		if err != nil {
+		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		reply := transcript.LastReply(fh)
-		_ = fh.Close()
+		reply := lastReply(conv, p)
 		text := SubagentReport(reply.Text)
 		if !KeepsSubagentReport(text, f.ReportMinChars) || !reply.At.After(since) || session.InSpans(spans, reply.At) {
 			continue
@@ -122,8 +118,8 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 			e, _ := f.Attribution.Subagent(sid, agent, transcriptPath, p, project, reply.Text, reply.At)
 			project, source = f.Attribution.ReportProject(e), e.Source
 		}
-		n := NewSubagentNote(f.Bank, sid, agent, agentTypeOf(p), project, text, reply.At)
-		n.Attribution, n.HarnessTag = source, f.harness().Tag()
+		n := NewSubagentNote(f.Bank, sid, agent, af.agentType, project, text, reply.At)
+		n.Attribution, n.HarnessTag = source, conv.Tag()
 		if _, err := ob.Append(n); err != nil {
 			return queued, err
 		}
@@ -152,15 +148,4 @@ func agentTypeOf(transcriptPath string) string {
 	}
 	_ = json.Unmarshal(raw, &m)
 	return m.AgentType
-}
-
-// parentEntrypoint is how session transcript path was started, read from
-// its head; "" when unknown.
-func parentEntrypoint(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	return transcript.Entrypoint(f)
 }

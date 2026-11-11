@@ -111,7 +111,7 @@ Redaction can miss a secret in an unusual format. `backsight memory scan` re-che
 | This session, from now on | `/backsight:pause` in Claude Code (or `backsight pause`); `/backsight:pause` again with "resume", or `backsight resume`, to record again. Turns typed while paused are never sent, and leave nothing in the feedback journal. |
 | A project, on this machine | `backsight pause --project` in its directory: adds it to `privacy.exclude_paths` in `config.toml`. `backsight resume --project` removes it. |
 | A repository, for everyone who clones it | commit a `.backsight.toml` with `retain = false` at its root. |
-| Headless runs, on this machine | `privacy.skip_entrypoints` in `config.toml`: turns Claude Code recorded under one of these entrypoints (glob patterns) are never sent. The default, `["sdk-*"]`, skips Agent SDK runs (`sdk-cli`, `sdk-ts`, `sdk-py`); `[]` sends them too. |
+| Headless runs, on this machine | `privacy.skip_entrypoints` in `config.toml`: turns Claude Code recorded under one of these entrypoints (glob patterns) are never sent. The default, `["sdk-*", "codex_exec", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_server"]`, skips headless runs: Claude Code's Agent SDK (`sdk-cli`, `sdk-ts`, `sdk-py`), `codex exec`, Codex's SDKs, and Codex run as another agent's tool (its MCP server); `[]` sends them too. A `config.toml` that sets the key keeps its own value. |
 
 An excluded project gets no briefing either.
 

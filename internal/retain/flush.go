@@ -114,6 +114,11 @@ type Flusher struct {
 	// parser reads them and its tag marks what is sent. nil: Claude
 	// Code's.
 	Harness Harness
+	// Harnesses are the harnesses whose conversations the other readers
+	// (backfill, a re-attribution, a resend, a reconcile) may be handed:
+	// each conversation is read with the one that recognises its path
+	// (harnessFor). nil: Harness, else Claude Code's.
+	Harnesses []Harness
 	// replaceReads counts the documents this run read to confirm a
 	// replacing part (maxReplaceReads); queue is the bank's queue as this
 	// run first read it (checkReplaces). A Flusher is one run.
@@ -161,6 +166,11 @@ type Result struct {
 
 // FlushFile sends what is settled and unsent in one transcript.
 func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res Result) {
+	// The conversation is read, and its segments tagged, by its own
+	// harness (a backfill queue may hold several harnesses' sessions).
+	defer func(h Harness) { f.Harness = h }(f.Harness)
+	f.Harness = f.harnessFor(path)
+	path = currentOf(f.Harness, path) // a queued or recorded path its harness moved since
 	sid := f.harness().SessionOf(path)
 	res = Result{Session: sid, Transcript: path}
 	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }

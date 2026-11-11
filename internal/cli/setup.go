@@ -617,7 +617,7 @@ func estimateFlusher(d paths.Dirs, home string, cfg config.Config, since time.Ti
 	return &retain.Flusher{Bank: cfg.Server.Bank, Dirs: d, Resolver: project.New(home, cfg.Projects.Transverse),
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, Now: now, RetainSince: since, Index: idx, Outbox: notesOutboxFor(d, cfg),
 		ReportMinChars: cfg.Hooks.SubagentReportMinChars,
-		Attribution:    retain.Attributor{Transverse: cfg.Projects.Transverse}}
+		Attribution:    retain.Attributor{Transverse: cfg.Projects.Transverse, Harnesses: conversationReaders()}, Harnesses: conversationReaders()}
 }
 
 // backfillEstimate counts the sessions backfill would send and prices
@@ -653,6 +653,7 @@ func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, s
 	model := cfg.LLM.Model
 	prices := retain.PricesForLLM(cfg.LLM)
 	files, _ := filepath.Glob(filepath.Join(projectsDir, "*", "*.jsonl"))
+	files = append(files, otherConversations(home)...)
 	_, plan, err := surveyAll(fl, files, backfillFlags{}, prices)
 	if err != nil {
 		return 0, ""

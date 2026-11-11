@@ -6,6 +6,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/harnessid"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -57,4 +58,47 @@ func wiredProfile(a harness.Adapter) string {
 // to (wiredProfile).
 func conversations(home string, a harness.Adapter) []string {
 	return a.Conversations(harness.Env{Home: home, Profile: wiredProfile(a)})
+}
+
+// conversationReaders are the conversation readers of every harness that
+// is on, and Codex's, on or not: retain reads each conversation it is handed
+// with the one that recognises its path, so a Codex rollout a hook or a
+// cursor names is never read as a Claude Code transcript.
+func conversationReaders() []retain.Harness {
+	var out []retain.Harness
+	codex := false
+	for _, a := range harness.All() {
+		out, codex = append(out, a), codex || a.ID() == harnessid.Codex
+	}
+	if a, ok := harness.ByID(harnessid.Codex); ok && !codex {
+		out = append(out, a)
+	}
+	return out
+}
+
+// otherConversations lists the conversations of every harness that is on
+// besides Claude Code's, in the profiles backsight is wired to.
+func otherConversations(home string) []string {
+	var out []string
+	for _, a := range harness.All() {
+		if a.ID() != harness.ClaudeCode {
+			out = append(out, conversations(home, a)...)
+		}
+	}
+	return out
+}
+
+// allConversations lists the conversations of every harness that is on:
+// Claude Code's (transcripts), then the others'.
+func allConversations(home string) []string {
+	return append(transcripts(home), otherConversations(home)...)
+}
+
+// filesOf are the conversations of groups, in order.
+func filesOf(groups []harnessFiles) []string {
+	var out []string
+	for _, g := range groups {
+		out = append(out, g.files...)
+	}
+	return out
 }
