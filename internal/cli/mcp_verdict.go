@@ -325,7 +325,7 @@ func (d mcpDeps) journal(live session.Live, e feedback.Event) {
 	if t, ok := feedback.CurrentTurn(dir, live.SessionID); ok {
 		e.Turn = t.ID
 	}
-	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version})
+	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version, Client: d.harnessOf().ID()})
 	if err := j.AppendFolded(e); err != nil {
 		d.tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonJournalWrite))
 	}

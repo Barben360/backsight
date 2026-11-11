@@ -19,8 +19,10 @@ import (
 // never fails the search.
 func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Result) {
 	// Not under a session found by its id: after a /clear it is the
-	// previous session, whose audit this search is not part of.
-	if !d.cfg.Feedback.Enabled || found != "record" || len(res.Hits) == 0 {
+	// previous session, whose audit this search is not part of. Under a
+	// harness naming each call's session (Codex), the record of that
+	// session, the call's own (0085 D4).
+	if !d.cfg.Feedback.Enabled || !hookRecorded(found) || len(res.Hits) == 0 {
 		return
 	}
 	if paused, _ := session.Paused(d.dirs.SessionsDir(), live.SessionID); paused {
@@ -49,7 +51,7 @@ func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Resul
 	if t, ok := feedback.CurrentTurn(dir, live.SessionID); ok {
 		e.Turn = t.ID
 	}
-	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version})
+	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version, Client: d.harnessOf().ID()})
 	if err := j.Append(e); err != nil {
 		d.tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonJournalWrite))
 	}

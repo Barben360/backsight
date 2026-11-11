@@ -35,8 +35,9 @@ import (
 // loop and every per-harness pass iterate), it is never Default, and no
 // command detects or wires it on a user's machine. A command line that
 // names it (`backsight hook --harness codex …`, `backsight mcp --harness
-// codex`) reaches its stubs, which answer nothing: a hook prints nothing,
-// a memory call has no session. It is turned on by moving it from known to
+// codex`) reaches its parts, a stub answering nothing (a hook prints
+// nothing until block 4); the memory server takes each call's session from
+// its _meta (codex_mcp.go, block 5). It is turned on by moving it from known to
 // adapters in registry.go, once blocks 3 (install records a Codex home)
 // and 6 (rollouts read) have landed; setup and doctor offer it from block
 // 3 on, through their own code.
