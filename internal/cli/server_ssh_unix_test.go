@@ -68,25 +68,22 @@ func TestInstallScriptCleansUpWhenKilled(t *testing.T) {
 					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 					t.Fatalf("%s (killed: %v)", why, <-done)
 				}
-				for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+				for {
 					if _, err := os.Stat(started); err == nil {
 						break
 					}
-					if time.Now().After(deadline) {
-						kill("tar never started")
+					select {
+					case err := <-done:
+						t.Fatalf("the script ended before tar started: %v", err)
+					case <-time.After(5 * time.Millisecond):
 					}
 				}
 				if ents, _ := os.ReadDir(tmp); len(ents) != 1 {
 					kill("tar started without the script's temp directory")
 				}
 				_ = syscall.Kill(-cmd.Process.Pid, sig)
-				select {
-				case err := <-done:
-					if err == nil {
-						t.Error("the script exited 0 after a signal")
-					}
-				case <-time.After(10 * time.Second):
-					kill("the script outlived SIG" + name + " by 10s")
+				if err := <-done; err == nil {
+					t.Error("the script exited 0 after a signal")
 				}
 				if ents, _ := os.ReadDir(tmp); len(ents) != 0 {
 					t.Errorf("the temp directory survived SIG%s", name)
@@ -151,8 +148,7 @@ func TestRemoteStepsUnderEveryLoginShell(t *testing.T) {
 				}
 				t.Skipf("no %s", shell)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
+			ctx := context.Background() // go test's -timeout ends a hang
 			home, tmp := t.TempDir(), t.TempDir()
 			var env []string
 			for _, e := range os.Environ() {

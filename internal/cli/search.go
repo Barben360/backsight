@@ -23,9 +23,16 @@ import (
 
 const (
 	searchMinScore = 0.4 // memory_search default, below the prompt-recall floor
-	searchLimit    = 8
-	maxQueries     = 4
-	recallTimeout  = 17 * time.Second // the recall budget (SPEC §6.2)
+	// searchLimit only caps a long answer: the floor picks the hits.
+	// Memories are short (about 120 tokens a hit), so 20 hits cost about
+	// 2,500 tokens.
+	searchLimit = 20
+	// searchMaxTokens: each server call of a search a reader sees brings up
+	// to this much memory text, about 25 memories, so one query in one scope
+	// can fill the limit. The prompt hook keeps recall's default.
+	searchMaxTokens = 3000
+	maxQueries      = 4
+	recallTimeout   = 17 * time.Second // the recall budget (SPEC §6.2)
 )
 
 // currentProject: BACKSIGHT_PROJECT (written by SessionStart for the CLI
@@ -63,7 +70,7 @@ func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
 	linked := linkedProjects(d, cfg, project.New(home, cfg.Projects.Transverse), cwd, current)
-	return adjusted.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore, Kinds: true})
+	return adjusted.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MaxTokens: searchMaxTokens, MinScore: minScore, Kinds: true})
 }
 
 func newSearchCmd(e *env) *cobra.Command {

@@ -415,18 +415,14 @@ func runSupervise(t *testing.T, p string, args ...string) <-chan int {
 	return done
 }
 
+// superviseStatus asks p's supervisor until its database is db (no
+// deadline of its own: go test's -timeout ends a hang).
 func superviseStatus(t *testing.T, p, db string) supervise.Status {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		st, err := supervise.Ask(ctx, p, "status")
-		cancel()
+		st, err := supervise.Ask(context.Background(), p, "status")
 		if err == nil && st.DB == db {
 			return st
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("supervisor of %s: %+v %v, want db %s", p, st, err, db)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -434,18 +430,11 @@ func superviseStatus(t *testing.T, p, db string) supervise.Status {
 
 func stopSupervise(t *testing.T, p string, done <-chan int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := supervise.Ask(ctx, p, "stop"); err != nil {
+	if _, err := supervise.Ask(context.Background(), p, "stop"); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case code := <-done:
-		if code != output.OK {
-			t.Errorf("server supervise exited %d after stop, want 0", code)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("server supervise did not exit after stop")
+	if code := <-done; code != output.OK {
+		t.Errorf("server supervise exited %d after stop, want 0", code)
 	}
 }
 

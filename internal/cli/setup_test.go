@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 
 // fakeSteps stands in for the commands setup chains.
 type fakeSteps struct {
-	slow  time.Duration // how long server install takes
+	beats int // heartbeat ticks server install sends (fastBeats)
 	calls [][]string
 	fail  map[string]*output.Error // by command ("client install")
 	real  map[string]bool          // commands run for real (config-editor runs to undo)
@@ -48,7 +49,7 @@ func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 		key = args[0]
 	}
 	if key == "server install" {
-		time.Sleep(f.slow)
+		sendBeats(f.beats)
 	}
 	if e := f.fail[key]; e != nil {
 		return subResult{Err: e}
@@ -1356,13 +1357,27 @@ func TestSetupResumeRefusesPortsBacksightDoesNotHold(t *testing.T) {
 	}
 }
 
+// testBeats is the heartbeat's ticker under fastBeats: the fakes tick it
+// while their step runs (sendBeats).
+var testBeats = make(chan time.Time)
+
+// sendBeats ticks the running heartbeat n times; each tick is taken (and
+// its line written before the heartbeat stops) before the next is sent.
+func sendBeats(n int) {
+	for range n {
+		testBeats <- time.Time{}
+	}
+}
+
+// fastBeats has the fakes tick the heartbeat (testBeats), each tick 25 s
+// more of the step's time.
 func fastBeats(t *testing.T) {
 	t.Helper()
-	oldJ, oldT, oldE := jsonBeat, textBeat, stepElapsed
-	jsonBeat, textBeat = 5*time.Millisecond, 5*time.Millisecond
-	// A millisecond of the test is about five seconds of a real download.
-	stepElapsed = func(t0 time.Time) time.Duration { return time.Since(t0) * 5000 }
-	t.Cleanup(func() { jsonBeat, textBeat, stepElapsed = oldJ, oldT, oldE })
+	oldTicks, oldE := beatTicks, stepElapsed
+	beatTicks = func(time.Duration) (<-chan time.Time, func()) { return testBeats, func() {} }
+	var beats atomic.Int64
+	stepElapsed = func(time.Time) time.Duration { return time.Duration(beats.Add(1)) * 25 * time.Second }
+	t.Cleanup(func() { beatTicks, stepElapsed = oldTicks, oldE })
 }
 
 // On a machine that never ran the server, setup says what it downloads
@@ -1374,7 +1389,7 @@ func TestSetupShowsTheDownloadAndTheFirstStart(t *testing.T) {
 	fastBeats(t)
 	engine := &engineDocker{info: "28.1.1\n", fresh: true}
 	withEngine(t, engine)
-	f.slow = 60 * time.Millisecond
+	f.beats = 2
 	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
@@ -1427,8 +1442,8 @@ func TestSetupJSONProgressMovesDuringTheDownload(t *testing.T) {
 	home, f := setupMachine(t)
 	withLLMKey(t, home)
 	fastBeats(t)
-	withEngine(t, &engineDocker{info: "28.1.1\n", fresh: true, pullTime: 40 * time.Millisecond})
-	f.slow = 40 * time.Millisecond
+	withEngine(t, &engineDocker{info: "28.1.1\n", fresh: true, pullBeats: 2})
+	f.beats = 2
 	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)

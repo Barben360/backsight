@@ -108,6 +108,24 @@ func TestSearchQueriesTimesScopesAndLimit(t *testing.T) {
 	}
 }
 
+// MaxTokens reaches every call, the raw-fact retry included; 0 keeps the
+// default.
+func TestSearchSendsItsTokenBudgetOnEveryCall(t *testing.T) {
+	for _, c := range []struct{ asked, want int }{{0, DefaultMaxTokens}, {3000, 3000}} {
+		f := &fakeBank{scopes: map[string][]hit{"": {{"a", "a", "x", 0.9}}}}
+		engine(t, f).Search(context.Background(), Query{Queries: []string{"q1", "q2"}, Current: "billing", MaxTokens: c.asked})
+		// 2 queries × 2 scopes, then the empty project scope again for raw facts
+		if len(f.requests) != 6 {
+			t.Fatalf("asked %d: %d requests", c.asked, len(f.requests))
+		}
+		for _, r := range f.requests {
+			if r.MaxTokens != c.want {
+				t.Errorf("asked %d: request %v sent max_tokens %d, want %d", c.asked, r.Types, r.MaxTokens, c.want)
+			}
+		}
+	}
+}
+
 func TestSearchAllIsTheWholeBankOnly(t *testing.T) {
 	f := &fakeBank{scopes: map[string][]hit{"": {{"a", "a", "billing", 0.5}}}}
 	res := engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", All: true, MinScore: 0.4})

@@ -68,11 +68,17 @@ func newMDEnv(t *testing.T) *mdEnv {
 // query log starts empty.
 func (e *mdEnv) run(at time.Time) string {
 	e.t.Helper()
+	return e.runWithin(context.Background(), at)
+}
+
+// runWithin is run under ctx, the step's caller's context.
+func (e *mdEnv) runWithin(ctx context.Context, at time.Time) string {
+	e.t.Helper()
 	e.at = at
 	fakeListLog = nil
 	w := metricsfile.New(e.d.MetricsDir(), "test")
 	w.Now = func() time.Time { return at }
-	return collectMemoryDocs(context.Background(), w, e.ix, e.ro, at)
+	return collectMemoryDocs(ctx, w, e.ix, e.ro, at)
 }
 
 // write appends records as an earlier run at at.
@@ -838,6 +844,21 @@ func (blockingMD) DocumentUnits(ctx context.Context, _ string) (int, bool, error
 	return 0, false, ctx.Err()
 }
 
+// timeoutMD is a reader whose every call answers a timeout at once.
+type timeoutMD struct{}
+
+func (timeoutMD) ListCreatedMemories(context.Context, time.Time, time.Time, int, int) ([]hindsight.ListedMemory, int, error) {
+	return nil, 0, hindsight.ErrTimeout
+}
+
+func (timeoutMD) RetainOperations(context.Context, string, int) ([]hindsight.Operation, error) {
+	return nil, hindsight.ErrTimeout
+}
+
+func (timeoutMD) DocumentUnits(context.Context, string) (int, bool, error) {
+	return 0, false, hindsight.ErrTimeout
+}
+
 func TestMemoryDocsSurvivesOddServers(t *testing.T) {
 	withOp := func(e *mdEnv, units bool) {
 		e.sent("conversation:s1", mdAt.Add(-24*time.Hour))
@@ -929,28 +950,26 @@ func TestMemoryDocsSurvivesOddServers(t *testing.T) {
 		}
 	})
 	t.Run("every call times out", func(t *testing.T) {
+		// Every server call hangs until the step's deadline (1 ms) cuts
+		// it; the index's catch-up and listed days are kept out of that
+		// deadline, so only the server's calls time out.
 		old := memoryDocsStepTimeout
-		memoryDocsStepTimeout = 300 * time.Millisecond
+		memoryDocsStepTimeout = time.Millisecond
 		t.Cleanup(func() { memoryDocsStepTimeout = old })
 		e := newMDEnv(t)
 		e.sent("conversation:s1", mdAt.Add(-24*time.Hour))
 		w := metricsfile.New(e.d.MetricsDir(), "test")
 		w.Now = func() time.Time { return mdAt }
-		start := time.Now()
-		got := collectMemoryDocs(context.Background(), w, e.ix, blockingMD{}, mdAt)
-		if el := time.Since(start); el > 2*time.Second {
-			t.Errorf("step took %v, want about its 300 ms bound", el)
-		}
+		got := collectMemoryDocs(context.Background(), w, mdIndex{Index: e.ix, detached: true}, blockingMD{}, mdAt)
 		if want := "memory docs: days not listed (timeout), operations not read (timeout)"; got != want {
 			t.Errorf("result %q, want %q", got, want)
 		}
 	})
 	t.Run("every call times out in the job", func(t *testing.T) {
-		old, oldSD, oldReader := memoryDocsStepTimeout, serverDailyReaderFor, memoryDocsReaderFor
-		memoryDocsStepTimeout = 300 * time.Millisecond
+		oldSD, oldReader := serverDailyReaderFor, memoryDocsReaderFor
 		serverDailyReaderFor = func() (serverDailyReader, error) { return nil, nil }
-		memoryDocsReaderFor = func() (memoryDocsReader, error) { return blockingMD{}, nil }
-		t.Cleanup(func() { memoryDocsStepTimeout, serverDailyReaderFor, memoryDocsReaderFor = old, oldSD, oldReader })
+		memoryDocsReaderFor = func() (memoryDocsReader, error) { return timeoutMD{}, nil }
+		t.Cleanup(func() { serverDailyReaderFor, memoryDocsReaderFor = oldSD, oldReader })
 		home := maintainWithoutBackup(t)
 		fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK})
 		withClock(t, mdAt)
@@ -960,7 +979,7 @@ func TestMemoryDocsSurvivesOddServers(t *testing.T) {
 		}
 		_ = ix.Close()
 		code, out, _ := run(t, "jobs", "maintain", "--json")
-		if code != output.OK || !strings.Contains(out, `"status": "done"`) || !strings.Contains(out, `"memory_docs": "memory docs: days not listed (timeout), operations not read (timeout)"`) {
+		if code != output.OK || !strings.Contains(out, `"status": "done"`) || !strings.Contains(out, `"memory_docs": "memory docs: days not listed (timeout), 0 operation(s), 0 unit count(s)"`) {
 			t.Errorf("exit %d\n%s", code, out)
 		}
 	})
@@ -1066,6 +1085,9 @@ type mdIndex struct {
 	fresh            *index.Freshness // the catch-up's answer, when set
 	catchErr         error
 	sentErr, recsErr error
+	// detached: the catch-up and the listed days read through a context
+	// the step's deadline does not end.
+	detached bool
 }
 
 func (x mdIndex) CatchUp(ctx context.Context, b time.Duration) (index.Freshness, error) {
@@ -1076,7 +1098,17 @@ func (x mdIndex) CatchUp(ctx context.Context, b time.Duration) (index.Freshness,
 		}
 		return f, x.catchErr
 	}
+	if x.detached {
+		ctx = context.WithoutCancel(ctx)
+	}
 	return x.Index.CatchUp(ctx, b)
+}
+
+func (x mdIndex) ListedDays(ctx context.Context) ([]string, bool, error) {
+	if x.detached {
+		ctx = context.WithoutCancel(ctx)
+	}
+	return x.Index.ListedDays(ctx)
 }
 
 func (x mdIndex) SentDocuments(ctx context.Context, since time.Time) ([]index.SentDocument, error) {
@@ -1164,26 +1196,24 @@ func TestMemoryDocsWaitsForTheIndex(t *testing.T) {
 	}
 }
 
-// The step's deadline in the middle of a run: the days read whole are
+// The step's context ending in the middle of a run (its deadline, here
+// its caller's cancel, at a page the test picks): the days read whole are
 // written, the day cut writes nothing and is left for the next run.
 func TestMemoryDocsDeadlineKeepsWholeDays(t *testing.T) {
-	old := memoryDocsStepTimeout
-	memoryDocsStepTimeout = time.Second
-	t.Cleanup(func() { memoryDocsStepTimeout = old })
 	e := newMDEnv(t)
 	e.listedRange("2026-10-26", true)
 	setBank(bankDay("2026-10-27", 3), bankDay("2026-10-28", 4), bankDay("2026-10-29", 600))
+	// The two small days are read whole before the third reserves its
+	// later pages (mdTurn), so before its page at offset 500.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	fakeHook = func(r *http.Request) {
 		if q := r.URL.Query(); q.Get("start_date") == "2026-10-29T00:00:00Z" && q.Get("offset") == "500" {
-			<-r.Context().Done() // held until the client gives up: the step's deadline, before the call's 3 s
+			cancel()
+			<-r.Context().Done() // held until the client gives up
 		}
 	}
-	start := time.Now()
-	got := e.run(mdAt)
-	// Three times the deadline, still below the call's own 3 s bound.
-	if el := time.Since(start); el >= 3*time.Second {
-		t.Errorf("step took %v, want about its 1 s deadline", el)
-	}
+	got := e.runWithin(ctx, mdAt)
 	if want := "memory docs: 2 day(s) listed (7 memories), 1 day(s) left for the next run, operations not read (timeout)"; got != want {
 		t.Errorf("result %q, want %q", got, want)
 	}

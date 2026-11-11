@@ -385,15 +385,15 @@ func SkipWindows(t testing.TB, reason string) {
 	}
 }
 
-// BenchDirEnv names a directory for the time budgets' files, on the
-// disk the budgets are measured on. CI's windows-latest sets it to the
-// runner's local disk (D:): its C:, the OS disk, flushes about 340
-// random 4 KiB writes a second, 30 times fewer than the local disk or the
-// Windows test VM's disk (Task 12b).
+// BenchDirEnv names a directory for the files of the tests on a heavy
+// generated history (indexgen.Budget), on a disk that writes them fast
+// enough. CI's windows-latest sets it to the runner's local disk (D:): its
+// C:, the OS disk, flushes about 340 random 4 KiB writes a second, 30
+// times fewer than the local disk or the Windows test VM's disk (Task 12b).
 const BenchDirEnv = "BACKSIGHT_TEST_BENCH_DIR"
 
-// BenchTempDir is a new directory for a time budget's files: under
-// BenchDirEnv when it is set (removed when the test ends), else
+// BenchTempDir is a new directory for a heavy generated history's files:
+// under BenchDirEnv when it is set (removed when the test ends), else
 // t.TempDir().
 func BenchTempDir(t testing.TB) string {
 	t.Helper()

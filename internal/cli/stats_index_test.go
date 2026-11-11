@@ -711,18 +711,21 @@ func TestStatsIndexMigrateIsBounded(t *testing.T) {
 		t.Fatalf("budget %v", oldBudget)
 	}
 	indexMigrateBudget = 7 * time.Second
-	var left time.Duration
+	var dl time.Time
 	var has bool
 	indexMigrate = func(ctx context.Context, o index.Options, plan bool) (index.MigrateResult, error) {
-		dl, ok := ctx.Deadline()
-		has, left = ok, time.Until(dl)
+		dl, has = ctx.Deadline()
 		return index.Migrate(ctx, o, plan)
 	}
+	// The deadline is set during the run: the budget after a time
+	// between its start and its end.
+	before := time.Now()
 	if code, _, _ := run(t, "stats", "index", "migrate"); code != output.OK {
 		t.Fatalf("exit %d", code)
 	}
-	if !has || left <= 5*time.Second || left > 7*time.Second {
-		t.Errorf("deadline %v (set %v)", left, has)
+	after := time.Now()
+	if !has || dl.Before(before.Add(7*time.Second)) || dl.After(after.Add(7*time.Second)) {
+		t.Errorf("deadline %v after the start (set %v), want the 7 s budget from within the run (%v long)", dl.Sub(before), has, after.Sub(before))
 	}
 	// a migration past the budget is a failure, not a hang
 	indexMigrateBudget = time.Nanosecond

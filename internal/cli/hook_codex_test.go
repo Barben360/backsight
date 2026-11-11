@@ -403,11 +403,15 @@ func TestShellCommandsTakeCodexsSessionOnlyOutsideClaudeCode(t *testing.T) {
 		st.Injected = []session.Injection{{ID: "c1", Text: "codex memory", Rule: "first"}}
 		return nil
 	})
-	time.Sleep(10 * time.Millisecond)
 	_ = sessions(home).Update("latest", func(st *session.State) error {
 		st.Injected = []session.Injection{{ID: "l1", Text: "latest memory", Rule: "first"}}
 		return nil
 	})
+	// The latest session is the last written: set the times, no sleep.
+	sessDir := pathsOf(home).SessionsDir()
+	if err := os.Chtimes(filepath.Join(sessDir, cxRoot+".json"), time.Time{}, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("BACKSIGHT_SESSION", "")
 	t.Setenv("CODEX_SESSION_ID", cxRoot)
 

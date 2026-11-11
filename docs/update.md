@@ -15,7 +15,7 @@ The checks carry no memory or usage data. GitHub limits anonymous requests; if y
 
 ## Pre-releases
 
-backsight is a preview, so its releases are pre-releases. Pre-releases are offered when the installed version is a pre-release itself, or when `config.toml` opts in:
+Releases are stable from v1.0.0 on; the v0.1 releases before it were pre-releases (a suffix such as `-m7`). A pre-release is offered when the installed version is a pre-release itself, so a v0.1 install is offered v1.0.0, or when `config.toml` opts in:
 
 ```toml
 [update]

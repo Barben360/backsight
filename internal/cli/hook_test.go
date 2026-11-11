@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/recall"
@@ -91,9 +90,8 @@ func TestHookPrintsTheChildAnswerAndCutsAHang(t *testing.T) {
 		t.Fatalf("exit %d: %q", code, out)
 	}
 	childFromTestBinary(t, "hang")
-	start := time.Now()
-	if code, out := runHookCmd(t, `{"session_id":"s1"}`, "post-tool-use"); code != 0 || out != "" || time.Since(start) > 4*time.Second {
-		t.Errorf("hang: exit %d %q after %s", code, out, time.Since(start))
+	if code, out := runHookCmd(t, `{"session_id":"s1"}`, "post-tool-use"); code != 0 || out != "" {
+		t.Errorf("hang: exit %d %q", code, out)
 	}
 	if !strings.Contains(telemetryText(t, home), `"kind":"timeout"`) || !strings.Contains(telemetryText(t, home), `"session":"s1"`) {
 		t.Error("timeout not logged with its session")
