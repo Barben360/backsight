@@ -348,12 +348,16 @@ func loadEntries(tx *sql.Tx, out map[string]feedback.Entry, ids []string) error 
 		for i, id := range chunk {
 			args[i] = id
 		}
-		q := `SELECT ` + memoryColumns + ` FROM memories WHERE memory_id IN (?` + strings.Repeat(", ?", len(chunk)-1) + `)`
-		if err := scanEntries(tx, out, q, args...); err != nil {
+		if err := scanEntries(tx, out, entriesQuery(len(chunk)), args...); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// entriesQuery selects the rows of n ids (n >= 1), by the primary key.
+func entriesQuery(n int) string {
+	return `SELECT ` + memoryColumns + ` FROM memories WHERE memory_id IN (?` + strings.Repeat(", ?", n-1) + `)`
 }
 
 // insertKeys records settle keys as applied.

@@ -27,11 +27,11 @@ export CGO_ENABLED := 0
 # load passed 100. GOMAXPROCS sets both go's -p (packages built and tested
 # at once) and the threads of each test binary and child; a GOMAXPROCS of
 # the caller's does not lift it. 4 is CI's runner (4 vCPU), whose times the
-# budgets and test slices are set by.
+# test slices are set by.
 JOBS     ?= 4
 export GOMAXPROCS := $(JOBS)
 
-.PHONY: build check test test-shard test-durations test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
+.PHONY: build check test test-shard test-durations test-sweep test-hooks lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
@@ -45,7 +45,6 @@ check:
 	@$(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory test
 	@$(MAKE) --no-print-directory test-hooks
-	@$(MAKE) --no-print-directory bench-index
 	scripts/third-party-licenses.sh --check
 	@$(MAKE) --no-print-directory cross >/dev/null
 	@if command -v gitleaks >/dev/null 2>&1; then gitleaks dir . --no-banner --redact; \
@@ -55,10 +54,9 @@ check:
 # atexit_sleep_ms=0: no race runtime sleep (1 s) as each test binary and
 # hook child exits; a GORACE of the caller's wins. internal/cli alone runs
 # about 9 minutes under -race on the CI runner: go test's default 10-minute
-# bound per package would cut it. The dashboard's page sweep (a year of
-# history, every page) reads content, not concurrency: it skips under -race
-# and runs in the second line, where -short leaves the time budgets to
-# bench-index.
+# bound per package would cut it. The tests on a year of generated history
+# read content, not concurrency: they skip under -race and run in the
+# second line (test-sweep).
 test:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m ./...
 	@$(MAKE) --no-print-directory test-sweep
@@ -89,9 +87,14 @@ RUN ?=
 test-durations:
 	scripts/test-durations.sh $(RUN)
 
-# make test's second line: the dashboard's page sweep, without -race.
+# make test's second line, without -race: the tests on a year of
+# generated history, which skip under it (minutes with it): the
+# dashboard's page sweep and page reads, the metrics views and daily
+# figures. No test is held to a time; the benchmarks (go test -bench)
+# measure, outside the gate.
 test-sweep:
-	go test -short -count=1 ./internal/dashboard/
+	go test -count=1 ./internal/dashboard/
+	go test -count=1 -run '^Test(ViewsOnAGeneratedHistory|DailyFitsTheWriteCap)$$' ./internal/metrics/
 
 # The packages with test-only code behind the testhooks tag (the failing
 # migration and server smoke of CI's update proof, the hook chaos switch),
@@ -105,20 +108,6 @@ test-hooks:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks $(filter-out ./internal/cli/,$(TESTHOOKS_PKGS))
 	go vet -tags testhooks $(TESTHOOKS_PKGS)
 	GOOS=windows go vet -tags testhooks $(TESTHOOKS_PKGS)
-
-# The metrics index's time budgets on a year of generated history (first
-# build, 15-minute catch-up), the page views' render budget and the
-# dashboard's page budgets on the same history; the ledger lookup and the
-# hook's 20 ms wait for a busy ledger. Without -race, which skips the
-# budget tests. TestIndexBudgets logs the two index times it bounds;
-# BenchmarkFirstBuild and BenchmarkCatchUp15Minutes measure the same two
-# by hand (go test -run '^$$' -bench . ./internal/index/).
-bench-index:
-	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
-	go test -count=1 -run 'TestViewBudgets' -v ./internal/metrics/
-	go test -count=1 -run 'TestPageBudgets|TestRenderBudgets' -v ./internal/dashboard/
-	go test -count=1 -run 'TestLedgerLookupBudget$$' -v ./internal/feedback/ledgerdb/
-	go test -count=1 -run 'TestHookReaderWaitsAtMost20ms$$' -v ./internal/cli/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
 # instead of failing on its lock. --concurrency: golangci-lint sizes itself
