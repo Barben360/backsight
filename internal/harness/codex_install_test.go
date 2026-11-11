@@ -615,7 +615,8 @@ func TestCodexHome(t *testing.T) {
 	if l := c.Locate(Env{Home: home}); l.Settings != filepath.Join(home, ".codex", "config.toml") || l.Conversations != filepath.Join(home, ".codex", "sessions") {
 		t.Errorf("Locate %+v", l)
 	}
-	if l := c.Locate(Env{Home: home, Profile: flag}); l.Dir != flag || l.Settings != filepath.Join(flag, "config.toml") {
+	// The recorded home's sessions/ are the conversations (block 6 reads them).
+	if l := c.Locate(Env{Home: home, Profile: flag}); l.Dir != flag || l.Settings != filepath.Join(flag, "config.toml") || l.Conversations != filepath.Join(flag, "sessions") {
 		t.Errorf("Locate %+v", l)
 	}
 	if c.ProfileEnv(home, "") != nil || !slices.Equal(c.ProfileEnv(home, flag), []string{"CODEX_HOME=" + flag}) {
