@@ -294,7 +294,7 @@ To undo the install on the host, run `backsight setup --undo` there; on this PC,
 
 ## Codex runs no backsight hook
 
-Symptoms, in Codex: no `🧠 backsight` line at your first prompt, no memories added to prompts, while `memory_search` works.
+Symptoms, in Codex: no `🧠 backsight` line at your first prompt, no memories added to prompts, while `memory_search` works. `backsight doctor`'s `codex-hooks` and `codex-plugins` checks say which case it is ([the Codex checks](#other-doctor-warnings)).
 
 1. **The hooks are not trusted yet.** Codex runs a plugin's hooks only once you have reviewed them: open Codex and trust backsight's hooks in the list it shows at start, or under `/hooks` (in the desktop app, its Settings). Codex asks again after an update that changed the hooks, and after backsight's data directory moved ([Codex](codex.md#trust-the-hooks)).
 2. **The plugins are missing or disabled.** `codex plugin list` should show `backsight@backsight` and `backsight-hooks@backsight`, installed and enabled. If not, `backsight client install --codex` adds them again (Codex then asks you to review the hooks).

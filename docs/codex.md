@@ -53,11 +53,11 @@ backsight client install --codex
 
 ## Trust the hooks
 
-Codex runs a plugin's hooks only once you have reviewed and trusted them. After setup or `backsight client install --codex`, open Codex: it lists backsight's hooks for review at start (also under `/hooks`, or in the desktop app's Settings). Until you trust them, the memory tools and skills work but no hook runs: no briefing, no recall on prompts, no end-of-turn check.
+Codex runs a plugin's hooks only once you have reviewed and trusted them. After setup or `backsight client install --codex`, open Codex: it lists backsight's hooks for review at start (also under `/hooks`, or in the desktop app's Settings). Until you trust them, the memory tools and skills work but no hook runs: no briefing, no recall on prompts, no end-of-turn check. `backsight doctor`'s `codex-hooks` check says when a hook has no trust recorded, or when Codex's latest session ran none.
 
 backsight never trusts its hooks for you. Codex asks again only when the hooks plugin changes: a hook added or changed by an update, or backsight's data directory moved (every hook's command then names another path). That is why the hooks have a plugin of their own: an update that changes only a skill or the memory server leaves `backsight-hooks@backsight` as it was, and its trust with it. Replacing the binary behind the shim keeps it too.
 
-Trust covers the plugin's files, not the program its hooks run: whoever can write backsight's shim (`<data>/bin/current`, under your home) runs code at every hook without a new review, as under Claude Code.
+Trust covers the plugin's files, not the program its hooks run: whoever can write backsight's shim (`<data>/bin/current`, under your home) runs code at every hook without a new review, as under Claude Code. doctor's `codex-shim` check compares the program behind the shim with the one recorded when Codex was wired.
 
 ## Approvals
 
@@ -124,6 +124,8 @@ A summary whose conversation is still on disk waits for that conversation: backs
 
 **Folders kept out of memory stay out.** A summary of a folder excluded from memory (`privacy.exclude_paths`, `backsight pause --project`, a `.backsight.toml` with `retain = false`) is skipped. Codex merges every project's work into `memory_summary.md` and `MEMORY.md`, so when its memories hold such a folder's work, or name a folder backsight cannot check from this PC (a network path, a relative one), those two files are skipped as well: they may quote it. The plan names the folders (`mixes_excluded`). There is no flag to send them anyway.
 
+While Codex's own memories are on, `backsight doctor`'s `codex-memories` check says so, with the command that turns them off.
+
 ## Past Codex sessions
 
 Sessions you run in Codex once it is wired are sent as they settle. Past ones, still in Codex's history, are sent by a backfill, which setup's offer does not include for Codex: its `backfill` question is Claude Code's. Run it yourself once Codex is wired:
@@ -179,15 +181,24 @@ skip_entrypoints = ["sdk-*", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_s
 
 ## Both tools on one memory
 
-Wire both and they share one memory: a decision made in a Claude Code session is recalled in a Codex session the next day, in the same project. Projects, the transverse pool, `.backsight.toml`, privacy rules, pause by project, `backsight search`, `backsight stats` and the dashboard are the same for both.
+Wire both and they share one memory: a decision made in a Claude Code session is recalled in a Codex session the next day, in the same project. Projects, the transverse pool, `.backsight.toml`, privacy rules, pause by project and `backsight search` are the same for both.
 
-Each session's document keeps which tool it came from (`harness:claude-code` or `harness:codex`).
+Each session's document keeps which tool it came from (`harness:claude-code` or `harness:codex`), and so does this PC's usage record:
+
+- `backsight stats` adds both tools up, and adds a `By tool` line once both were used; `--client codex` (or `--client claude-code`) on any view counts one tool alone, each figure computed as the combined one.
+- The dashboard shows a `Coding tool` choice and, on the Overview, a card splitting sessions, recalls, Found, Used and context by tool ([dashboard](dashboard.md#claude-code-and-codex)).
+
+## Checking Codex
+
+Once Codex is wired, `backsight doctor` adds its Codex checks: `codex` (the version), `codex-plugins` (both plugins installed and enabled), `codex-drift` (the plugins are this binary's), `codex-hooks` (trusted, and run in the latest session), `codex-tools` (the memory tools declare what Codex needs to run them without asking), `codex-rollouts` (record types backsight does not know), `codex-memories` (Codex's own memories on), `codex-mcp-name` (another server named `backsight`) and `codex-shim` (the program behind the shim). A machine without Codex wired shows none of them. Each check, and its fix: [troubleshooting](troubleshooting.md#other-doctor-warnings).
+
+`backsight report` adds a Codex section to its diagnostic, once Codex is wired: Codex's version, the plugins' version, and where Codex keeps the files backsight reads and adds (a Codex home outside your home folder is written `<codex>`). `$backsight:doctor` in Codex runs both, as `/backsight:doctor` does in Claude Code.
 
 ## The memory server's name
 
 In Codex, backsight's memory server is named `backsight`, so its tools are `mcp__backsight__memory_search` and so on. (Under Claude Code it is the plugin's `memory` server, `mcp__plugin_backsight_memory__memory_search`.)
 
-An MCP server of yours with the same name, in Codex's `config.toml` (`[mcp_servers.backsight]`) or in `codex mcp list`, would share those tool names, and backsight's hooks would take its calls for backsight's. `backsight client install --codex`, and setup at its `codex` step, stop while it is there, naming it: rename it in `config.toml`, or remove it (`codex mcp remove backsight`), then wire Codex again. A server of yours named `memory` is no clash.
+An MCP server of yours with the same name, in Codex's `config.toml` (`[mcp_servers.backsight]`) or in `codex mcp list`, would share those tool names, and backsight's hooks would take its calls for backsight's. `backsight client install --codex`, and setup at its `codex` step, stop while it is there, naming it (and doctor's `codex-mcp-name` check, if one appears later): rename it in `config.toml`, or remove it (`codex mcp remove backsight`), then wire Codex again. A server of yours named `memory` is no clash.
 
 ## Updates
 
