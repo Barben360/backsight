@@ -21,6 +21,15 @@ DIST     ?= dist
 OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
+# Every target runs go on JOBS CPUs (make check JOBS=8 for more). The Go
+# default is every core: go test -race ./... then runs a package per core,
+# each on every core with its child processes, and a 24-core workstation's
+# load passed 100. GOMAXPROCS sets both go's -p (packages built and tested
+# at once) and the threads of each test binary and child; a GOMAXPROCS of
+# the caller's does not lift it. 4 is CI's runner (4 vCPU), whose times the
+# budgets and test slices are set by.
+JOBS     ?= 4
+export GOMAXPROCS := $(JOBS)
 
 .PHONY: build check test test-shard test-durations test-sweep test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
 build:
@@ -112,9 +121,10 @@ bench-index:
 	go test -count=1 -run 'TestHookReaderWaitsAtMost20ms$$' -v ./internal/cli/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
-# instead of failing on its lock.
+# instead of failing on its lock. --concurrency: golangci-lint sizes itself
+# by the machine's cores, not by GOMAXPROCS.
 lint:
-	golangci-lint run --allow-parallel-runners
+	golangci-lint run --concurrency $(JOBS) --allow-parallel-runners
 
 # Compile every release target (no tests: those run on Linux only until M7).
 cross:

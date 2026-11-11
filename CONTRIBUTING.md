@@ -33,6 +33,8 @@ Optional:
 
 The first `make check` downloads the modules and builds the race runtime: count a few minutes; later runs take about a minute and a half.
 
+Every `make` target runs Go on 4 CPUs (`GOMAXPROCS`, and `golangci-lint --concurrency`), CI's runner size, so the machine stays usable while the race-detector tests run. `JOBS=<n>` changes it (`make check JOBS=8`); a `GOMAXPROCS` of your own does not.
+
 | Command | Does |
 |---|---|
 | `make check` | the whole gate below, in one command |
