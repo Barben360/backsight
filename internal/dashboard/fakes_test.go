@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indexgen"
+	"github.com/Barben360/backsight/internal/index/indextest"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/paths"
@@ -53,6 +54,7 @@ var _ Index = (*fakeIndex)(nil)
 func newFakeIndex(t *testing.T, dirs paths.Dirs, home string, now func() time.Time) *fakeIndex {
 	t.Helper()
 	indexgen.Generate(t, dirs.State, dataSpec)
+	indextest.Seed(t, dirs) // at the head: the migrations are not what these tests read
 	ctx := context.Background()
 	// The other PCs' cache is read as the command line reads it (a spec with
 	// OtherPCs wrote one).

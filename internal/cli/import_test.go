@@ -21,6 +21,7 @@ import (
 func importHome(t *testing.T) string {
 	t.Helper()
 	home := devInstall(t, true)
+	seedIndex(t)
 	pointAt(t, home, fakeHindsight(t))
 	configure(t, home, "[llm]\nprice_input = 1.0\nprice_output = 2.0")
 	return home

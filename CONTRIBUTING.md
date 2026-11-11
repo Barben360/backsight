@@ -102,6 +102,7 @@ Every Monday, `.github/workflows/price-drift.yml` compares the binary's price ta
 - Each test must fail when the behaviour it guards is missing or wrong: assert the observable outcome (exit code, output, files written), not the implementation.
 - Cover the refusals and edge cases, not only the happy path.
 - Write the test first and watch it fail.
+- A test that needs a metrics index but does not test its building or its migrations calls `indextest.Seed` (`internal/index/indextest`) on its directories before the first open: it gets a copy of an empty index already at the head, where a build from nothing runs every migration (close to a second under the race detector, paid once per test).
 - Build tags `testkey` and `testhooks` exist only for tests and CI; a release build refuses both (`make verify-keys`). Code that makes backsight fail on purpose (a failing migration or server smoke, the `BACKSIGHT_HOOK_CHAOS` switch of hook children) lives in `testhooks` files with a no-op twin, so no environment variable can trigger it in a release.
 
 ## Documentation
