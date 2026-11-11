@@ -98,17 +98,30 @@ func (d mcpDeps) live() (session.Live, string) {
 // one of this process (a server may serve several sessions at once). With
 // that session's hook record current, the record: "call"; without one (its
 // hooks have not run, or not since this server's parent started), the
-// session with the start directory and project: "unrecorded"; a call
-// naming no session has none: "none".
+// session in the call's directory (callDir): "unrecorded"; a call naming
+// no session has none, in the call's directory too: "none".
 func (d mcpDeps) liveOfCall(current func(session.Live) bool) (session.Live, string) {
-	cwd, _ := os.Getwd()
+	cwd, proj := d.callDir()
 	if !session.ValidID(d.sessionID) {
-		return session.Live{Cwd: cwd, Project: d.current}, "none"
+		return session.Live{Cwd: cwd, Project: proj}, "none"
 	}
 	if l, ok := session.ReadLiveSession(d.dirs.SessionsDir(), d.sessionID); ok && current(l) {
 		return l, "call"
 	}
-	return session.Live{SessionID: d.sessionID, Cwd: cwd, Project: d.current}, "unrecorded"
+	return session.Live{SessionID: d.sessionID, Cwd: cwd, Project: proj}, "unrecorded"
+}
+
+// callDir is the directory and project of a call no hook record places:
+// the server's start directory when the call's turn works there or names
+// no workspace, else the turn's first workspace (on a shared process the
+// start directory may be another chat's).
+func (d mcpDeps) callDir() (string, string) {
+	cwd, _ := os.Getwd()
+	if len(d.callDirs) == 0 || slices.Contains(d.callDirs, cwd) {
+		return cwd, d.current
+	}
+	dir := d.callDirs[0]
+	return dir, project.New(d.home, d.cfg.Projects.Transverse).Project(dir)
 }
 
 // paired: live found this server's session, by its parent pid or by the
@@ -135,12 +148,17 @@ func hookRecorded(found string) bool { return found == "record" || found == "cal
 // under a harness that names it per call: calling again cannot help.
 const noCallSession = "memory session unknown: this call names no session, so the memories shown in it cannot be checked; nothing was credited"
 
-// callDirsRefusal refuses a note when the call's session has no hook
-// record (found "unrecorded") and a directory the call's turn works in is
-// excluded from memory: the server's own start directory, which checkNote
-// looks at then, may be another chat's on a shared process.
+// noCallSessionStore is memory_store's refusal of a call naming no session,
+// under a harness that names it per call.
+const noCallSessionStore = "not stored: this call names no session, so its session's pause and directory cannot be checked; store from the shell with backsight store"
+
+// callDirsRefusal refuses a note when no current hook record of the call's
+// session places it (found other than "record" or "call") and a directory
+// the call's turn works in is excluded from memory: checkNote looks at one
+// directory only, and on a shared process the server's own may be another
+// chat's. Claude Code's calls name no directories: nothing to refuse.
 func (d mcpDeps) callDirsRefusal(cfg config.Config, found string) error {
-	if found != "unrecorded" {
+	if hookRecorded(found) {
 		return nil
 	}
 	res := project.New(d.home, cfg.Projects.Transverse)
@@ -424,6 +442,11 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			err := checkNote(deps.dirs, deps.home, cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text)
 			if err == nil {
 				err = deps.callDirsRefusal(cfg, found)
+			}
+			if err == nil && found == "none" && !deps.harnessOf().PairsByPID() {
+				// A call naming no valid session (Codex) cannot be checked
+				// against its chat's pause or directory: refused outright.
+				err = &output.Error{Code: output.Blocked, Message: noCallSessionStore}
 			}
 			if err == nil && !ownSession(found) && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
 				// Without its session this server cannot honour a pause:

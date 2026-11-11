@@ -300,49 +300,73 @@ func TestACodexCallWithoutItsSessionFailsClosed(t *testing.T) {
 	if evs := recallEvents(t, home); len(evs) != 0 {
 		t.Errorf("recall journaled without a session: %+v", evs)
 	}
-	// Any session paused: no store without the call's session.
+	// No store without the call's session, paused or not, the turn's
+	// directory allowed or excluded: neither its pause nor its directory
+	// can be checked.
 	retainStatus.Store(http.StatusServiceUnavailable)
-	_ = sessions(home).Update("other", func(st *session.State) error { st.SetPaused(true, time.Now()); return nil })
-	before := len(queuedNotes(t, home))
-	if out, isErr := callMeta(t, cs, nil, "memory_store", map[string]any{"kind": "decision", "text": "Decision (2026-11-11): keep 16."}); !isErr || !strings.Contains(out, "a session is paused") || len(queuedNotes(t, home)) != before {
-		t.Errorf("stored while a session is paused: %v %s", isErr, out)
+	secret := filepath.Join(home, "secret")
+	appendConfig(t, home, "[privacy]\nexclude_paths = ["+testtool.TOMLStr(secret)+"]")
+	bad := map[string]any{"sessionId": "../x", "x-codex-turn-metadata": map[string]any{"workspaces": map[string]any{filepath.Join(home, "shop"): map[string]any{}}}}
+	excluded := map[string]any{"sessionId": codexRoot, "x-codex-turn-metadata": map[string]any{"session_id": codexChatB, "workspaces": map[string]any{filepath.Join(home, "billing"): map[string]any{}, secret: map[string]any{}}}}
+	for _, paused := range []bool{true, false} {
+		_ = sessions(home).Update("other", func(st *session.State) error { st.SetPaused(paused, time.Now()); return nil })
+		for name, meta := range map[string]map[string]any{"no _meta": nil, "a bad id": bad, "an excluded workspace": excluded} {
+			out, isErr := callMeta(t, cs, meta, "memory_store", map[string]any{"kind": "decision", "text": "Decision (2026-11-11): keep 16."})
+			if !isErr || !strings.Contains(out, "not stored") && !strings.Contains(out, "nothing stored") {
+				t.Errorf("%s, paused %v: %v %s", name, paused, isErr, out)
+			}
+			if name == "an excluded workspace" && !strings.Contains(out, "excluded from memory") {
+				t.Errorf("an excluded workspace: %s", out)
+			}
+		}
+	}
+	if n := len(queuedNotes(t, home)); n != 0 {
+		t.Errorf("%d notes queued without a session", n)
 	}
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"live":"none"`) || strings.Contains(tel, `"live":"record"`) || strings.Contains(tel, `"live":"session"`) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
-	// No pause on: stored, under no session.
-	_ = sessions(home).Update("other", func(st *session.State) error { st.SetPaused(false, time.Now()); return nil })
-	text := "Decision (2026-11-11): keep 16 everywhere."
-	if out, isErr := callMeta(t, cs, nil, "memory_store", map[string]any{"kind": "decision", "text": text}); isErr {
-		t.Fatalf("store: %s", out)
-	}
-	if n := queuedNote(t, home, text); n.Session != "" || n.Project != "billing" {
-		t.Errorf("note under %q/%q", n.Session, n.Project)
+	// A search without its session is scoped to the turn's workspace, not
+	// to the server's start project.
+	recallTags = nil
+	callMeta(t, cs, bad, "memory_search", map[string]any{"queries": []string{"x"}})
+	if j := "|" + strings.Join(recallTags, "|"); !strings.Contains(j, "|project:shop,") || strings.Contains(j, "project:billing") {
+		t.Errorf("search scoped to %q", recallTags)
 	}
 }
 
 // A call naming its session with no hook record for it (hooks not trusted
 // yet): the session is still the call's own (its pause, its shows), the
-// directory the server's, and the turn's workspaces must be allowed too.
+// directory the turn's workspace, which must be allowed.
 func TestACodexCallWithoutAHookRecordKeepsItsOwnSession(t *testing.T) {
 	home := codexHome(t, nil)
 	cs := codexMCP(t, home)
 	secret := filepath.Join(home, "secret")
 	appendConfig(t, home, "[privacy]\nexclude_paths = ["+testtool.TOMLStr(secret)+"]")
 	retainStatus.Store(http.StatusServiceUnavailable)
-	m := codexMeta(codexChatA, codexChatA, filepath.Join(home, "billing"))
+	m := codexMeta(codexChatA, codexChatA, filepath.Join(home, "shop"))
 	showIn(t, home, codexChatA, creditA)
 	if out, isErr := callMeta(t, cs, m, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, creditUsedPrefix) {
 		t.Errorf("credit: %v %s", isErr, out)
 	}
 	// Another session's pause does not stop it: the server knows its session.
 	_ = sessions(home).Update(codexChatB, func(st *session.State) error { st.SetPaused(true, time.Now()); return nil })
-	text := "Decision (2026-11-11): billing keeps Redis 7."
+	// Into the project of the turn's workspace, not the server's start one.
+	text := "Decision (2026-11-11): shop keeps Redis 7."
 	if out, isErr := callMeta(t, cs, m, "memory_store", map[string]any{"kind": "decision", "text": text}); isErr {
 		t.Fatalf("store: %s", out)
 	}
-	if n := queuedNote(t, home, text); n.Session != codexChatA || n.Project != "billing" {
+	if n := queuedNote(t, home, text); n.Session != codexChatA || n.Project != "shop" {
 		t.Errorf("note under %q/%q", n.Session, n.Project)
+	}
+	// A turn working in the server's own directory keeps its start project.
+	cwd, _ := os.Getwd()
+	text = "Decision (2026-11-11): the start project keeps Redis 7."
+	if out, isErr := callMeta(t, cs, codexMeta(codexChatA, codexChatA, cwd, filepath.Join(home, "shop")), "memory_store", map[string]any{"kind": "decision", "text": text}); isErr {
+		t.Fatalf("store: %s", out)
+	}
+	if n := queuedNote(t, home, text); n.Project != "billing" {
+		t.Errorf("in the server's directory: project %q", n.Project)
 	}
 	if !strings.Contains(telemetryText(t, home), `"live":"unrecorded"`) {
 		t.Errorf("telemetry:\n%s", telemetryText(t, home))
