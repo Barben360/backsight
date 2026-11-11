@@ -54,7 +54,7 @@ func catchUp15(t testing.TB, ix *Index, stateDir string, spec indexgen.Spec, rou
 	indexgen.AppendRecent(t, stateDir, spec, 60, 10, round)
 	start := time.Now()
 	fr, err := ix.CatchUp(context.Background(), ViewBudget)
-	d := time.Since(start)
+	d := time.Since(start) //nolint:forbidigo // measured for the benchmark, never asserted
 	if err != nil {
 		t.Fatal(err)
 	}

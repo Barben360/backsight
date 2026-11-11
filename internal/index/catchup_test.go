@@ -440,13 +440,10 @@ func TestCatchUpWaiterHonoursItsContext(t *testing.T) {
 		_, err := e.ix.CatchUp(ctx, time.Minute)
 		waiter <- err
 	}()
-	select {
-	case err := <-waiter:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("err %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("the waiter ignored its context")
+	// The leader stays in its batch until release: a waiter that ignores
+	// its context hangs here until go test's -timeout.
+	if err := <-waiter; !errors.Is(err, context.Canceled) {
+		t.Errorf("err %v", err)
 	}
 	close(release)
 	if err := <-leader; err != nil {
@@ -567,17 +564,12 @@ func touchBarrier(dir, name string) {
 	}
 }
 
-// waitBarrier polls for the marker file name in dir; a broken barrier
-// ends the child with an error instead of a hang.
+// waitBarrier polls for the marker file name in dir, with no deadline: a
+// broken barrier hangs the child until its -test.timeout, the parent's.
 func waitBarrier(dir, name string) {
-	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			return
-		}
-		if time.Now().After(deadline) {
-			fmt.Fprintln(os.Stderr, "barrier: timed out waiting for", name)
-			os.Exit(3)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -595,8 +587,14 @@ func TestTwoProcessesIngestConcurrently(t *testing.T) {
 	barrier := t.TempDir()
 	var cmds []*exec.Cmd
 	var outs []*bytes.Buffer
+	args := []string{"-test.run=^TestHelperIngest$", "-test.count=1"}
+	if d, ok := t.Deadline(); ok {
+		// The children's barrier has no timer: a child left waiting ends
+		// with this test's own -timeout instead of outliving it.
+		args = append(args, "-test.timeout="+time.Until(d).String()) //nolint:forbidigo // hands the child go test's own remaining timeout
+	}
 	for _, role := range []string{"a", "b"} {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperIngest$", "-test.count=1")
+		cmd := exec.Command(os.Args[0], args...)
 		cmd.Env = append(os.Environ(), "BACKSIGHT_INDEX_HELPER="+d.State,
 			"BACKSIGHT_INDEX_ROLE="+role, "BACKSIGHT_INDEX_BARRIER="+barrier)
 		out := &bytes.Buffer{}

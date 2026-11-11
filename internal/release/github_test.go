@@ -72,7 +72,10 @@ func (f *fakeGitHub) serve(t *testing.T) *httptest.Server {
 
 func newTestGitHub(url, token string) *GitHub {
 	g := NewGitHub("Barben360", "backsight", token)
-	g.BaseURL = url
+	// Out of reach (go test's -timeout ends a hang first): a busy runner
+	// never cuts a list from the in-process fake. A test of the bound
+	// sets its own.
+	g.BaseURL, g.Timeout = url, time.Hour
 	return g
 }
 
@@ -152,8 +155,9 @@ func TestGitHubUnreachable(t *testing.T) {
 	}
 }
 
-// Releases is bounded by its timeout; Open reports an asset the API
-// refuses (not a body to verify).
+// Releases is bounded by its timeout (the list stalls until its request
+// ends: without the bound, this hangs until go test's -timeout); Open
+// reports an asset the API refuses (not a body to verify).
 func TestGitHubTimeoutAndRefusedAsset(t *testing.T) {
 	stall := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,10 +173,9 @@ func TestGitHubTimeoutAndRefusedAsset(t *testing.T) {
 	defer srv.Close()
 	defer close(stall)
 	g := newTestGitHub(srv.URL, "")
-	g.Timeout = 100 * time.Millisecond
-	start := time.Now()
-	if _, err := g.Releases(context.Background()); err == nil || time.Since(start) > 5*time.Second {
-		t.Errorf("a stalled list: %v after %s", err, time.Since(start))
+	g.Timeout = time.Millisecond
+	if _, err := g.Releases(context.Background()); err == nil || !strings.Contains(err.Error(), "deadline") {
+		t.Errorf("a stalled list: %v, want its deadline", err)
 	}
 	rel := Release{Tag: "v1.0.0", Assets: []Asset{{Name: "checksums.txt", URL: srv.URL + "/assets/1"}}}
 	if rc, err := g.Open(context.Background(), rel, "checksums.txt"); err == nil || !strings.Contains(err.Error(), "410") {

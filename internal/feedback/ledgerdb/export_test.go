@@ -186,7 +186,7 @@ func TestConcurrentExportsAgreeWithTheirGeneration(t *testing.T) {
 		case err := <-bDone:
 			t.Errorf("the second export finished (%v) while the first held its snapshot", err)
 			bDone <- err
-		case <-time.After(time.Second):
+		case <-time.After(time.Second): //nolint:forbidigo // a negative wait: can only pass wrongly, never fail
 		}
 	})
 	mustExport(t, a)

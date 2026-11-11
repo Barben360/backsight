@@ -24,7 +24,7 @@ func TestReadViewsKeepsTheDeclaredOrder(t *testing.T) {
 		if view == "overview" {
 			select {
 			case <-release:
-			case <-time.After(2 * time.Second):
+			case <-time.After(2 * time.Second): //nolint:forbidigo // a negative wait: can only pass wrongly, never fail
 			}
 		} else {
 			close(release)

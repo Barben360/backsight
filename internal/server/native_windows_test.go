@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -613,13 +614,18 @@ func shortPath(p string) string {
 	return p
 }
 
-// waitGone waits until none of pids runs, 10 s at most.
-func waitGone(t *testing.T, pids string) {
-	t.Helper()
-	for end := time.Now().Add(10 * time.Second); len(pidsAlive(pids)) > 0; time.Sleep(50 * time.Millisecond) {
-		if time.Now().After(end) {
-			t.Fatalf("pids %v still run", pidsAlive(pids))
-		}
+// waitGone waits until none of pids runs, without a deadline of its own
+// (go test's -timeout is the guard).
+func waitGone(pids string) {
+	for len(pidsAlive(pids)) > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitAlive waits until n of pids run, as waitGone.
+func waitAlive(pids string, n int) {
+	for len(pidsAlive(pids)) < n {
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -637,11 +643,11 @@ func TestStraysOnWindows(t *testing.T) {
 	n.Cfg.Server.ComposeDir = strings.ToUpper(n.Cfg.Server.ComposeDir)
 	tools := &execTools{}
 	n.Tools = tools
-	n.StrayWait = 10 * time.Second
+	n.StrayWait = time.Hour // out of reach: the stray stops with pg_ctl
 	bin := filepath.Join(n.installation(), "bin")
 	stop := filepath.Join(t.TempDir(), "stop")
 	pids := filepath.Join(t.TempDir(), "pids") // every postgres' and backend's
-	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644); waitGone(t, pids) })
+	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644); waitGone(pids) })
 	backend := testtool.Write(t, filepath.Join(n.Root(), "pg", "backend", "bin"), "postgres", testtool.Fake{Script: "pid " + pids + "\nwaitfile " + stop, NoLog: true})
 	pg := testtool.Write(t, bin, "postgres", testtool.Fake{Script: "pid " + pids + "\nstart " + backend + "\nwaitfile " + stop, NoLog: true})
 	testtool.Write(t, bin, "pg_ctl", testtool.Fake{Script: "write " + stop + " x"})
@@ -681,11 +687,7 @@ func TestStraysOnWindows(t *testing.T) {
 	// started by. Each starts a backend.
 	strayA, strayB := startFake(t, strings.ToUpper(pg)), startFake(t, shortPath(pg))
 	startFake(t, other)
-	for end := time.Now().Add(5 * time.Second); len(pidsAlive(pids)) < 4; time.Sleep(50 * time.Millisecond) {
-		if time.Now().After(end) {
-			t.Fatalf("pids %v: want two postgres and their backends", pidsAlive(pids))
-		}
-	}
+	waitAlive(pids, 4) // two postgres and their backends
 
 	writePidFile := func(pid int) {
 		t.Helper()
@@ -722,16 +724,12 @@ func TestStraysOnWindows(t *testing.T) {
 	if err := os.WriteFile(stop, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	waitGone(t, pids)
+	waitGone(pids)
 	if err := os.Remove(stop); err != nil {
 		t.Fatal(err)
 	}
 	one := startFake(t, pg)
-	for end := time.Now().Add(5 * time.Second); len(pidsAlive(pids)) < 2; time.Sleep(50 * time.Millisecond) {
-		if time.Now().After(end) {
-			t.Fatalf("pids %v: want postgres and its backend", pidsAlive(pids))
-		}
-	}
+	waitAlive(pids, 2) // postgres and its backend
 	writePidFile(one.Process.Pid)
 	if strays, err = n.Strays(); err != nil || len(strays) != 1 || strays[0].PID != one.Process.Pid {
 		t.Fatalf("Strays = %v %v, want pid %d alone (not its backend)", strays, err, one.Process.Pid)
@@ -780,7 +778,6 @@ func TestVerifyInProgressIsNoStray(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lock.Release() })
-	time.Sleep(300 * time.Millisecond)
 	pidsOf := func() []int {
 		t.Helper()
 		strays, err := n.Strays()
@@ -792,6 +789,11 @@ func TestVerifyInProgressIsNoStray(t *testing.T) {
 			out = append(out, s.PID)
 		}
 		return out
+	}
+	// Both run as postgres of <Root>\pg\ once the scan sees them: the
+	// unlocked one among the strays, both by their image.
+	for !n.strayRunning(verifying) || !n.strayRunning(unlocked) || !slices.Contains(pidsOf(), unlocked) {
+		time.Sleep(50 * time.Millisecond)
 	}
 	if got := pidsOf(); !slices.Equal(got, []int{unlocked}) {
 		t.Errorf("Strays = %v, want %d alone (verify aaaa's %d runs under its held lock)", got, unlocked, verifying)
@@ -865,8 +867,11 @@ func TestVerifyDumpLeavesNothingRunning(t *testing.T) {
 			n, _, _ := winInstall(t)
 			n.Tools = &execTools{}
 			withFreePort(t, 18998)
+			// The wait ends one that never answers at once; one that
+			// answers has all the time it takes (Defender may scan each
+			// fake, a fresh copy of the test binary, for seconds).
 			old := verifyWait
-			verifyWait = 3 * time.Second
+			verifyWait = map[bool]time.Duration{true: time.Hour, false: time.Millisecond}[answers]
 			t.Cleanup(func() { verifyWait = old })
 			bin := filepath.Join(n.installation(), "bin")
 			pids := filepath.Join(t.TempDir(), "pids")
@@ -875,7 +880,7 @@ func TestVerifyDumpLeavesNothingRunning(t *testing.T) {
 			// psql answers (or fails) only once postgres and its backend
 			// run: each fake is a fresh copy of the test binary, which
 			// Defender may scan for seconds before it starts (windows-latest
-			// once ended the 3 s wait with neither started).
+			// once ended a 3 s wait with neither started).
 			up := filepath.Join(t.TempDir(), "up")
 			backend := testtool.Write(t, t.TempDir(), "backend", testtool.Fake{Script: "pid " + pids + "\nwrite " + up + " up\nwaitfile " + never})
 			testtool.Write(t, bin, "initdb", testtool.Fake{})
@@ -891,11 +896,9 @@ func TestVerifyDumpLeavesNothingRunning(t *testing.T) {
 			dump := filepath.Join(t.TempDir(), "db.dump")
 			touch(t, dump, 0o600)
 
-			// The bound of a postgres that never starts (psql would wait
-			// for it): an error other than the wait's.
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			counts, err := n.VerifyDump(ctx, dump, []string{"memory_units", "documents"})
+			// A postgres that never starts leaves psql waiting: go test's
+			// -timeout ends the test.
+			counts, err := n.VerifyDump(context.Background(), dump, []string{"memory_units", "documents"})
 			if answers && (err != nil || counts["memory_units"] != 3 || counts["documents"] != 3) {
 				t.Errorf("VerifyDump = %v, %v; want 3 rows each", counts, err)
 			}
@@ -905,15 +908,8 @@ func TestVerifyDumpLeavesNothingRunning(t *testing.T) {
 			if raw, _ := os.ReadFile(pids); len(strings.Fields(string(raw))) != 2 {
 				t.Fatalf("pids %q: want postgres' and its backend's", raw)
 			}
-			var alive []int
-			for end := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-				if alive = pidsAlive(pids); len(alive) == 0 || time.Now().After(end) {
-					break
-				}
-			}
-			if len(alive) != 0 {
-				t.Errorf("pids %v still run after VerifyDump", alive)
-			}
+			// Its job ends them: one left running hangs the test.
+			waitGone(pids)
 			left, _ := filepath.Glob(filepath.Join(n.Root(), "tmp", "*verify*"))
 			if len(left) != 0 {
 				t.Errorf("left in <Root>\\tmp: %v", left)
@@ -1008,18 +1004,19 @@ func TestDeleteWaitsForAFileHeldAMoment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	released := make(chan struct{})
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		_ = f.Close()
-		close(released)
-	}()
-	defer func() { <-released }()
+	// Held until the removal's first retry: a removal that does not retry
+	// fails.
+	var once sync.Once
+	pauses := fakeRetryClock(t, func() { once.Do(func() { _ = f.Close() }) })
+	defer func() { _ = f.Close() }()
 	if err := n.Delete(context.Background()); err != nil {
 		t.Fatalf("Delete while a file is held a moment: %v", err)
 	}
 	if exists(n.Root()) {
 		t.Error("the root stays")
+	}
+	if len(pauses()) == 0 {
+		t.Error("the first removal passed: the held file did not hold it (the case under test)")
 	}
 }
 
@@ -1027,9 +1024,6 @@ func TestDeleteWaitsForAFileHeldAMoment(t *testing.T) {
 // an indexer) refuses its rename with a sharing violation, not an access
 // denied: renameRetry waits for it as fsutil's retries do.
 func TestRenameRetriesASharingViolation(t *testing.T) {
-	old := renameRetryWait
-	renameRetryWait = 5 * time.Second
-	t.Cleanup(func() { renameRetryWait = old })
 	dir := t.TempDir()
 	from, to := filepath.Join(dir, "from"), filepath.Join(dir, "to")
 	if err := os.WriteFile(from, []byte("x"), 0o600); err != nil {
@@ -1043,13 +1037,10 @@ func TestRenameRetriesASharingViolation(t *testing.T) {
 		_ = f.Close()
 		t.Fatalf("a rename of a held file: %v, want a sharing violation (the case under test)", err)
 	}
-	released := make(chan struct{})
-	go func() {
-		time.Sleep(400 * time.Millisecond)
-		_ = f.Close()
-		close(released)
-	}()
-	defer func() { <-released }()
+	// Held until renameRetry's first retry.
+	var once sync.Once
+	fakeRetryClock(t, func() { once.Do(func() { _ = f.Close() }) })
+	defer func() { _ = f.Close() }()
 	if err := renameRetry(from, to); err != nil {
 		t.Fatalf("renameRetry while the file is held a moment: %v", err)
 	}

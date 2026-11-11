@@ -554,7 +554,9 @@ func stopsTheLatencySession(t *testing.T, cmd string) {
 	if err := os.MkdirAll(filepath.Join(home, "m6-latency"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	left := exec.Command("setsid", "sleep", "60")
+	// It outlives go test's -timeout: a cleanup that does not stop it
+	// hangs the wait below until then.
+	left := exec.Command("setsid", "sleep", "86400")
 	if err := left.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -562,11 +564,9 @@ func stopsTheLatencySession(t *testing.T, cmd string) {
 	go func() { _ = left.Wait(); close(done) }()
 	t.Cleanup(func() { _ = left.Process.Kill(); <-done })
 	// Until setsid has made it a session leader, the cleanup's pkill -s
-	// would find nothing.
-	for deadline := time.Now().Add(5 * time.Second); !sessionLeader(left.Process.Pid); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d is not a session leader after 5 s", left.Process.Pid)
-		}
+	// would find nothing. Polled with no deadline.
+	for !sessionLeader(left.Process.Pid) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	writeLines(t, filepath.Join(home, "m6-latency", "pgid"), strconv.Itoa(left.Process.Pid))
 	run := exec.Command("sh", "-c", cmd)
@@ -574,11 +574,7 @@ func stopsTheLatencySession(t *testing.T, cmd string) {
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Logf("cleanup: %v %s", err, out)
 	}
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Errorf("the latency script's session still runs after the cleanup: %s", cmd)
-	}
+	<-done // the session stopped by the cleanup
 	if _, err := os.Stat(filepath.Join(home, "m6-latency")); err == nil {
 		t.Error("~/m6-latency stayed")
 	}

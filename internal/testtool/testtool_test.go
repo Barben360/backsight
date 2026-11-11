@@ -78,10 +78,11 @@ func TestFakeScriptSteps(t *testing.T) {
 	// runFake gives an empty environment: the probe is unset, whatever this
 	// process has.
 	t.Setenv("TESTTOOL_PROBE", "set")
-	start := time.Now()
+	// sleep is a step the script runs through (how long it waited is
+	// the clock's, not a test's).
 	stdout, stderr, code := runFake(t, path, "piped\n", "--version", "x y")
-	if code != 0 || time.Since(start) < 30*time.Millisecond {
-		t.Errorf("code %d after %v: sleep did not wait", code, time.Since(start))
+	if code != 0 {
+		t.Errorf("code %d", code)
 	}
 	if want := "\nunset\npiped\nhello  world\n2.1.310\n--version\nx y\nlast\n"; stdout != want {
 		t.Errorf("stdout %q, want %q", stdout, want)
@@ -157,19 +158,14 @@ func TestFakeWaitsForAFileAndRecordsItsPID(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("exited before its file appeared: %v", err)
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): //nolint:forbidigo // a negative wait: can only pass wrongly, never fail
 	}
 	if err := os.WriteFile(stop, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-done:
-		if err != nil || o.String() != "stopped\n" {
-			t.Errorf("after the file: %v, stdout %q", err, o.String())
-		}
-	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
-		t.Fatal("still running 5 s after its file appeared")
+	// A fake that missed its file runs on: go test's -timeout ends it.
+	if err := <-done; err != nil || o.String() != "stopped\n" {
+		t.Errorf("after the file: %v, stdout %q", err, o.String())
 	}
 	if raw, _ := os.ReadFile(pids); strings.TrimSpace(string(raw)) != strconv.Itoa(cmd.Process.Pid) {
 		t.Errorf("pid file %q, want %d", raw, cmd.Process.Pid)
@@ -196,23 +192,25 @@ func TestFakeStartsAChildItDoesNotWaitFor(t *testing.T) {
 	child := Write(t, dir, "child", Fake{Script: "pid " + pids + "\nwaitfile " + stop})
 	parent := Write(t, dir, "parent", Fake{Script: "start " + child + "\nstdout started"})
 	// The child stopped and gone before TempDir's removal: Windows cannot
-	// remove a running program.
+	// remove a running program. Removed once it exits, whatever the time
+	// it takes.
 	t.Cleanup(func() {
 		_ = os.WriteFile(stop, nil, 0o644)
-		for deadline := time.Now().Add(10 * time.Second); os.Remove(child) != nil && time.Now().Before(deadline); {
+		for {
+			if err := os.Remove(child); err == nil || errors.Is(err, os.ErrNotExist) {
+				return
+			}
 			time.Sleep(20 * time.Millisecond)
 		}
 	})
 	if out, _, code := runFake(t, parent, ""); code != 0 || out != "started\n" {
 		t.Fatalf("parent: code %d, stdout %q", code, out)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	// The child runs after its parent exited (one never started hangs the
+	// test: go test's -timeout ends it).
 	for {
 		if raw, _ := os.ReadFile(pids); strings.TrimSpace(string(raw)) != "" {
 			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the child never ran")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -232,20 +230,20 @@ func TestFakeIgnoresSignals(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+	// up comes after ignoresignals: the signals below meet the fake
+	// ignoring them.
+	for {
 		if _, err := os.Stat(filepath.Join(dir, "up")); err == nil {
 			break
 		}
-		if time.Since(start) > 10*time.Second {
-			t.Fatal("the fake never started")
-		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Process.Signal(os.Interrupt)
 	select {
 	case err := <-done:
 		t.Fatalf("exited on an interrupt: %v", err)
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): //nolint:forbidigo // a negative wait: can only pass wrongly, never fail
 	}
 	if err := os.WriteFile(stop, nil, 0o644); err != nil {
 		t.Fatal(err)

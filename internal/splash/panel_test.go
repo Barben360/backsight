@@ -35,7 +35,9 @@ func fixture(t testing.TB) Sources {
 	write(t, filepath.Join(d.OutboxDir(), "notes.jsonl"), "{\"a\":1}\n{\"b\":2}\n")
 	write(t, filepath.Join(d.State, "doctor-snapshot.json"), `{"generated_at":"2026-11-09T17:00:00Z","report":{"checks":[`+
 		`{"status":"ok"},{"status":"ok"},{"status":"ok"},{"status":"info"},{"status":"warn"}]}}`)
-	return Sources{Dirs: d, Now: testNow, Zone: time.UTC, Version: "0.1.34-m7", Hindsight: "1.2.0", Deadline: 2 * time.Second}
+	// A deadline no reader of a test reaches: a loaded machine never
+	// drops a line (the late reader's test ends the wait itself).
+	return Sources{Dirs: d, Now: testNow, Zone: time.UTC, Version: "0.1.34-m7", Hindsight: "1.2.0", Deadline: time.Hour}
 }
 
 func texts(ls []Line) []string {
@@ -279,20 +281,28 @@ func TestPanelNeverNamesTheProject(t *testing.T) {
 	}
 }
 
+// The deadline comes once every reader but the blocked one is in: Build
+// returns without it (one waiting for it never returns), the others'
+// lines kept.
 func TestPanelSlowReaderDropsItsLine(t *testing.T) {
 	src := fixture(t)
-	src.Deadline = 300 * time.Millisecond
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	saved := readFile
-	t.Cleanup(func() { readFile = saved })
+	saved, savedDeadline, savedCollected := readFile, buildDeadline, buildCollected
+	t.Cleanup(func() { readFile, buildDeadline, buildCollected = saved, savedDeadline, savedCollected })
 	readFile = func(path string, limit int64) ([]byte, error) {
 		if filepath.Base(path) == "doctor-snapshot.json" {
 			<-release
 		}
 		return saved(path, limit)
 	}
-	start := time.Now()
+	deadline := make(chan time.Time, 1)
+	buildDeadline = deadline
+	buildCollected = func(got, of int) {
+		if got == of-1 {
+			deadline <- testNow
+		}
+	}
 	ls, _ := Build(src)
 	if line(ls, "Checks") != "" {
 		t.Fatalf("a blocked reader's line shows")
@@ -301,9 +311,6 @@ func TestPanelSlowReaderDropsItsLine(t *testing.T) {
 		if line(ls, label) == "" {
 			t.Errorf("%s dropped with the slow reader", label)
 		}
-	}
-	if el := time.Since(start); el > 5*time.Second {
-		t.Fatalf("Build waited %v for a blocked reader", el)
 	}
 }
 

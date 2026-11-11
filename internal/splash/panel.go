@@ -73,6 +73,14 @@ type count struct {
 	more bool
 }
 
+// buildDeadline, set by a test, stands for Build's deadline timer, and
+// buildCollected runs once got of its readers' results are in: the test
+// ends the wait at a known point instead of a time.
+var (
+	buildDeadline  <-chan time.Time
+	buildCollected = func(int, int) {}
+)
+
 // Build reads the sources under the deadline and returns the panel and
 // the configured logo kind. A reader that fails, panics or is late drops
 // only its line; nothing is written or created.
@@ -120,14 +128,19 @@ func Build(src Sources) ([]Line, string) {
 	var f facts
 	timer := time.NewTimer(cmp.Or(src.Deadline, 50*time.Millisecond))
 	defer timer.Stop()
+	deadline := timer.C
+	if buildDeadline != nil {
+		deadline = buildDeadline
+	}
 collect:
-	for range readers {
+	for i := range readers {
 		select {
 		case apply := <-results:
 			if apply != nil {
 				apply(&f)
 			}
-		case <-timer.C:
+			buildCollected(i+1, len(readers))
+		case <-deadline:
 			break collect
 		}
 	}

@@ -17,6 +17,31 @@ func shortRetry(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { RetryFor = old })
 }
 
+// closeOnRetry closes c at the first retry of a held file, with RetryFor
+// out of reach (go test's -timeout ends a hang first): the retry is what
+// frees the file, not a sleep. It returns the count of retries so far.
+func closeOnRetry(t *testing.T, c io.Closer) (retries func() int) {
+	t.Helper()
+	shortRetry(t, time.Hour)
+	n := 0
+	RetryHook = func() {
+		if n++; n == 1 {
+			_ = c.Close()
+		}
+	}
+	t.Cleanup(func() { RetryHook = func() {} })
+	return func() int { return n }
+}
+
+// countRetries counts the retries of a held file.
+func countRetries(t *testing.T) (retries func() int) {
+	t.Helper()
+	n := 0
+	RetryHook = func() { n++ }
+	t.Cleanup(func() { RetryHook = func() {} })
+	return func() int { return n }
+}
+
 // A reader that opened the file through OpenShared does not stop a write,
 // and keeps reading the bytes it opened.
 func TestWriteAtomicWhileAReaderHoldsTheFile(t *testing.T) {
@@ -30,8 +55,12 @@ func TestWriteAtomicWhileAReaderHoldsTheFile(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 	shortRetry(t, 300*time.Millisecond)
+	retries := countRetries(t)
 	if err := WriteAtomic(p, []byte("new"), 0o600); err != nil {
 		t.Fatalf("write over a shared reader: %v", err)
+	}
+	if n := retries(); n != 0 {
+		t.Errorf("the write waited for a shared reader (%d retries)", n)
 	}
 	if b, _ := io.ReadAll(r); string(b) != "old" {
 		t.Errorf("the reader sees %q, want the bytes it opened", b)
@@ -48,23 +77,22 @@ func TestWriteAtomicWaitsForAPlainReader(t *testing.T) {
 	if err := WriteAtomic(p, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shortRetry(t, 3*time.Second)
 	r, err := os.Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(400 * time.Millisecond); _ = r.Close() }()
-	start := time.Now()
+	retries := closeOnRetry(t, r)
 	if err := WriteAtomic(p, []byte("new"), 0o600); err != nil {
 		t.Fatalf("write after the reader closed: %v", err)
 	}
-	if time.Since(start) < 300*time.Millisecond {
+	if retries() == 0 {
 		t.Error("the write did not wait for the reader")
 	}
 	if b, _ := os.ReadFile(p); string(b) != "new" {
 		t.Errorf("the file holds %q", b)
 	}
 
+	RetryHook = func() {}
 	shortRetry(t, 200*time.Millisecond)
 	r, err = os.Open(p)
 	if err != nil {
@@ -90,14 +118,16 @@ func TestReplaceIfUnchangedRetriesToo(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, h, _ := ReadHashed(p)
-	shortRetry(t, 3*time.Second)
 	r, err := os.Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(300 * time.Millisecond); _ = r.Close() }()
+	retries := closeOnRetry(t, r)
 	if err := ReplaceIfUnchanged(p, []byte("b"), 0o600, h); err != nil {
 		t.Fatal(err)
+	}
+	if retries() == 0 {
+		t.Error("the replace did not wait for the reader")
 	}
 }
 
@@ -106,18 +136,21 @@ func TestRemoveRetryWaitsForAPlainReader(t *testing.T) {
 	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shortRetry(t, 3*time.Second)
 	r, err := os.Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(300 * time.Millisecond); _ = r.Close() }()
+	retries := closeOnRetry(t, r)
 	if err := RemoveRetry(p); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(p); err == nil {
 		t.Error("the file is still there")
 	}
+	if retries() == 0 {
+		t.Error("the remove did not wait for the reader")
+	}
+	RetryHook = func() {}
 	shortRetry(t, 150*time.Millisecond)
 	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -144,14 +177,16 @@ func TestRenameRetryWaitsForAPlainReader(t *testing.T) {
 	if err := os.WriteFile(from, []byte("a"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shortRetry(t, 3*time.Second)
 	r, err := os.Open(from)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(300 * time.Millisecond); _ = r.Close() }()
+	retries := closeOnRetry(t, r)
 	if err := RenameRetry(from, to); err != nil {
 		t.Fatalf("rename after the reader closed: %v", err)
+	}
+	if retries() == 0 {
+		t.Error("the rename did not wait for the reader")
 	}
 	if b, _ := os.ReadFile(to); string(b) != "a" {
 		t.Errorf("target holds %q", b)

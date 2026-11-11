@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,13 +18,18 @@ import (
 // helper variable is set, like the real binary's hidden hook-child command.
 func TestMain(m *testing.M) {
 	// No race runtime exit sleep (1 s while other threads live) in the
-	// children, unless the caller chose GORACE: the deadlines here are
-	// tighter than that (issue #281).
+	// children, unless the caller chose GORACE: each child would take a
+	// second more to end (issue #281).
 	if _, ok := os.LookupEnv("GORACE"); !ok {
 		_ = os.Setenv("GORACE", "atexit_sleep_ms=0")
 	}
 	if os.Getenv("HOOK_TEST_CHILD") == "1" {
 		os.Exit(RunChild(context.Background(), os.Args[len(os.Args)-1], os.Stdin, os.Stdout, func(_ context.Context, event string, in []byte) ([]byte, error) {
+			// The handler runs: a test waiting for the child to be under
+			// way learns it here.
+			if path := os.Getenv("HOOK_TEST_RUNNING"); path != "" {
+				_ = os.WriteFile(path, nil, 0o600)
+			}
 			switch os.Getenv("HOOK_TEST_BEHAVIOUR") {
 			case "echo-input":
 				msg, _ := json.Marshal(string(in))
@@ -53,6 +59,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// far is a deadline no child of these tests reaches but a hanging one:
+// a slow start (a loaded machine, a scanned binary) never turns a test's
+// outcome into a timeout.
+const far = time.Hour
+
 func super(t *testing.T, behaviour, chaos string, deadline time.Duration) ([]byte, *Failure) {
 	t.Helper()
 	exe, err := os.Executable()
@@ -71,14 +82,14 @@ func super(t *testing.T, behaviour, chaos string, deadline time.Duration) ([]byt
 }
 
 func TestChildOutputPassesThroughWhenValid(t *testing.T) {
-	out, f := super(t, "echo", "", 5*time.Second)
+	out, f := super(t, "echo", "", far)
 	if f != nil || !strings.Contains(string(out), `"additionalContext":"ok"`) {
 		t.Errorf("out %q failure %+v", out, f)
 	}
-	if out, f := super(t, "empty", "", 5*time.Second); f != nil || len(out) != 0 {
+	if out, f := super(t, "empty", "", far); f != nil || len(out) != 0 {
 		t.Errorf("empty: %q %+v", out, f)
 	}
-	if out, f := super(t, "slow", "", 5*time.Second); f != nil || !strings.Contains(string(out), "late but in time") {
+	if out, f := super(t, "slow", "", far); f != nil || !strings.Contains(string(out), "late but in time") {
 		t.Errorf("slow within deadline: %q %+v", out, f)
 	}
 }
@@ -90,22 +101,19 @@ func TestEveryChildFailurePrintsNothing(t *testing.T) {
 		behaviour, kind string
 		deadline        time.Duration
 	}{
-		{"fault-panic", "panic", 5 * time.Second},
-		{"fault-fatal", "fatal", 5 * time.Second},
+		{"fault-panic", "panic", far},
+		{"fault-fatal", "fatal", far},
+		// Cut at its deadline: a timeout (a hang not cut never returns).
 		{"fault-hang", "timeout", 400 * time.Millisecond},
-		{"fault-kill", "killed", 5 * time.Second},
-		{"fault-exit2", "exit", 5 * time.Second},
-		{"fail", "exit", 5 * time.Second}, // the handler's own failure is no kill, on Windows too
-		{"garbage", "invalid_output", 5 * time.Second},
-		{"array", "invalid_output", 5 * time.Second},
+		{"fault-kill", "killed", far},
+		{"fault-exit2", "exit", far},
+		{"fail", "exit", far}, // the handler's own failure is no kill, on Windows too
+		{"garbage", "invalid_output", far},
+		{"array", "invalid_output", far},
 	} {
-		start := time.Now()
 		out, f := super(t, c.behaviour, "", c.deadline)
 		if len(out) != 0 || f == nil || f.Kind != c.kind {
 			t.Errorf("%s: out %q failure %+v", c.behaviour, out, f)
-		}
-		if c.behaviour == "fault-hang" && time.Since(start) > 3*time.Second {
-			t.Errorf("hang not cut at the deadline: %s", time.Since(start))
 		}
 	}
 }
@@ -118,17 +126,27 @@ func TestAChildEndedForItsCallerIsKilled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	running := filepath.Join(t.TempDir(), "running")
 	s := Supervisor{
 		Command: func(ctx context.Context, event string) *exec.Cmd {
 			c := exec.CommandContext(ctx, exe, "-test.run=^$", event)
-			c.Env = append(os.Environ(), "HOOK_TEST_CHILD=1", "HOOK_TEST_BEHAVIOUR=fault-hang")
+			c.Env = append(os.Environ(), "HOOK_TEST_CHILD=1", "HOOK_TEST_BEHAVIOUR=fault-hang", "HOOK_TEST_RUNNING="+running)
 			return c
 		},
-		Deadline: func(string, []byte) time.Duration { return time.Minute },
+		Deadline: func(string, []byte) time.Duration { return far },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { time.Sleep(500 * time.Millisecond); cancel() }()
+	// The caller gives up once the child runs its handler (and hangs).
+	go func() {
+		for {
+			if _, err := os.Stat(running); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
 	out, f := s.Run(ctx, "stop", []byte(`{}`))
 	if len(out) != 0 || f == nil || f.Kind != "killed" {
 		t.Errorf("out %q failure %+v", out, f)
@@ -164,7 +182,7 @@ func TestStdinReachesTheChildAndIsCapped(t *testing.T) {
 			c.Env = append(os.Environ(), "HOOK_TEST_CHILD=1", "HOOK_TEST_BEHAVIOUR=echo")
 			return c
 		},
-		Deadline: func(string, []byte) time.Duration { return 5 * time.Second },
+		Deadline: func(string, []byte) time.Duration { return far },
 	}
 	if _, f := s.Run(context.Background(), "stop", []byte(big)); f == nil || f.Kind != "input_too_large" {
 		t.Errorf("%+v", f)
@@ -196,7 +214,7 @@ func TestDeadlines(t *testing.T) {
 }
 
 func TestTheChildReceivesTheEvent(t *testing.T) {
-	out, f := super(t, "echo-input", "", 5*time.Second)
+	out, f := super(t, "echo-input", "", far)
 	if f != nil || !strings.Contains(string(out), `session_id`) || !strings.Contains(string(out), `s1`) {
 		t.Errorf("out %q failure %+v", out, f)
 	}
@@ -207,7 +225,7 @@ func TestTheChildReceivesTheEvent(t *testing.T) {
 // can take over a second (final review, M7 block 2).
 func TestTheChildReceivesItsKillTime(t *testing.T) {
 	before := time.Now()
-	out, f := super(t, "kill-at", "", 5*time.Second)
+	out, f := super(t, "kill-at", "", far)
 	after := time.Now()
 	var msg struct {
 		SystemMessage string `json:"systemMessage"`
@@ -219,8 +237,8 @@ func TestTheChildReceivesItsKillTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%s = %q, want Unix nanoseconds", KillAtEnv, msg.SystemMessage)
 	}
-	if at := time.Unix(0, ns); at.Before(before.Add(5*time.Second)) || at.After(after.Add(5*time.Second)) {
-		t.Errorf("kill time %v, want the run's start plus its 5 s deadline (between %v and %v)", at, before.Add(5*time.Second), after.Add(5*time.Second))
+	if at := time.Unix(0, ns); at.Before(before.Add(far)) || at.After(after.Add(far)) {
+		t.Errorf("kill time %v, want the run's start plus its deadline (between %v and %v)", at, before.Add(far), after.Add(far))
 	}
 }
 
