@@ -93,7 +93,7 @@ func sessionEnd(ctx context.Context, event string, input []byte) ([]byte, error)
 // gate (SPEC §6.2): before AskUserQuestion, if no memory tool ran during
 // this prompt, deny once with the top hits for the question.
 func (h *hookEnv) gate() []byte {
-	if h.in.ToolName != "AskUserQuestion" {
+	if q := h.adapter.QuestionTool(); q == "" || h.in.ToolName != q {
 		return nil
 	}
 	if h.maintenance() || h.breakerOpen() {

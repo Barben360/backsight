@@ -87,7 +87,7 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// session: written whatever the components (0056).
 	live := session.Live{SessionID: h.in.SessionID, Cwd: cwd, Project: h.project, At: now()}
 	pid, err := strconv.Atoi(os.Getenv(claudePIDEnv))
-	if err == nil {
+	if err == nil && h.adapter.PairsByPID() {
 		_ = session.WriteLive(h.dirs.SessionsDir(), pid, live)
 	}
 	// Under the session id too where the pid may not pair (0080): where

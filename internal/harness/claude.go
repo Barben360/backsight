@@ -317,6 +317,12 @@ type claudeHookInput struct {
 	Error                string          `json:"error"`            // PostToolUseFailure
 	IsInterrupt          bool            `json:"is_interrupt"`     // PostToolUseFailure
 	StopHookActive       bool            `json:"stop_hook_active"` // Stop, SubagentStop: the turn goes on from a Stop hook's block
+	// Codex's fields, never read from Claude Code's events (HookInput has
+	// them; the conversion below needs the same fields).
+	TurnID         string `json:"-"`
+	ToolUseID      string `json:"-"`
+	Model          string `json:"-"`
+	PermissionMode string `json:"-"`
 }
 
 func (Claude) DecodeHook(_ string, raw []byte) (HookInput, error) {
@@ -374,6 +380,12 @@ func (Claude) MCPCallSession(_ map[string]any, getenv func(string) string) strin
 // PairsBySession: on Windows, Claude Code's process tree may not make the
 // hooks' grandparent the MCP server's parent (decision 0080).
 func (Claude) PairsBySession(goos string) bool { return goos == "windows" }
+
+// PairsByPID: Claude Code's hooks record their session under Claude Code's
+// pid, the memory server's parent, where it looks first (decision 0056).
+func (Claude) PairsByPID() bool { return true }
+
+func (Claude) QuestionTool() string { return plugin.QuestionTool }
 
 // Conversations are projects/<project>/<session>.jsonl in env's profile;
 // subagent transcripts nested deeper belong to their session.

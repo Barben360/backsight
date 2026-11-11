@@ -2,6 +2,7 @@ package harness
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -50,23 +51,37 @@ import (
 //	"<shim>" hook --harness codex <E>
 //
 // The parent `backsight hook` already reads `--harness <id>` before the
-// event (2A) and hands the child the harness. 0085's generator test ("every
-// command ends with `hook <event>`") holds in the form "ends with `hook
-// --harness codex <event>`": the event is still the command's last word,
-// and no args field is written. The quoting (sh for "command", cmd /C for
-// "commandWindows") is block 3's HookCommand.
+// event (2A) and hands the child the harness. The generator rule, as
+// built (it amends 0085's "every command ends with `hook <event>`"): the
+// hooks.json of Codex has no args field, and every handler's command ends
+// with `hook --harness codex <event>`, the event its last word.
+//
+// Quoting (0085 D2). HookCommand (block 3) writes "command" for sh and
+// "commandWindows" for cmd, with QuoteSh and QuoteCmd (codex_quote.go):
+//   - sh: POSIX single quotes, a single quote written '\” and a
+//     backslash '\\' (both outside the quotes), which every shell Codex
+//     may run the command with ($SHELL -lc: sh, bash, zsh, fish) reads
+//     back as the same path, $, %, & and spaces included;
+//   - cmd: the path in double quotes, for cmd /C "<command>"; a path
+//     holding a double quote, a %, or a control character is refused, as
+//     cmd cannot be made to read it back reliably.
+//
+// Block 3 tests both on paths with spaces, $, ', %, & (cmd on Windows: its
+// run comes from Codex's source only, unverified).
 //
 // Memory server (0085 D2, D4). Codex's .mcp.json uses the exec form, whose
 // args Codex honours there: command the shim, args MCPArgs (`mcp --harness
 // codex`, the server's hidden flag), env_vars MCPEnvVars (BACKSIGHT_HOME,
 // so a non-default home reaches the server, which gets almost no other
 // environment). The server then asks MCPCallSession for each call's
-// session (block 5).
+// session (block 5), and keeps no by-pid pairing (PairsByPID false).
 //
 // Hook events (0085 D3). The Codex events backsight wires, their matchers
 // and timeouts, and the backsight event each one runs, are the table in
-// codex_hooks.go (Events). Codex sends Claude Code's field names plus a few
-// (block 4 decodes them).
+// codex_hooks.go (Events). The hooks.json generator groups the rows by
+// Name, in order (SessionStart has two rows, two matchers). Codex sends
+// Claude Code's field names plus a few, in HookInput already (TurnID,
+// ToolUseID, Model, PermissionMode; block 4 decodes them).
 //
 // Home and profile (0085 D1). The Codex home is $CODEX_HOME when set and
 // non-empty, else ~/.codex, overridden by --codex-home; it is resolved
@@ -74,16 +89,23 @@ import (
 // state's per-harness entry, state.ClientFor(harnessid.Codex).Profile
 // ("" for ~/.codex) (RecordHome); every later command reads the recorded
 // one (RecordedHome), never the shell's. ProfileVar is therefore "", so
-// the shared wiredProfile never reads CODEX_HOME from a shell.
+// the shared wiredProfile never reads CODEX_HOME from a shell. These are
+// the HomeRecorder and HookCommander interfaces (harness.go): the code
+// that needs them asserts an adapter to them, so block 3 fills only
+// codex_install.go (and the codex command runner, cli/codex_cli.go).
 type Codex struct{}
 
-var _ Adapter = Codex{}
+var (
+	_ Adapter       = Codex{}
+	_ HookCommander = Codex{}
+	_ HomeRecorder  = Codex{}
+)
 
 // ErrNotImplemented: a Codex method its block has not implemented yet.
 var ErrNotImplemented = errors.New("not available for Codex yet")
 
-// notYet is ErrNotImplemented for what.
-func notYet(what string) error { return errors.Join(errors.New("codex "+what), ErrNotImplemented) }
+// notYet is ErrNotImplemented for what, on one line.
+func notYet(what string) error { return fmt.Errorf("codex %s: %w", what, ErrNotImplemented) }
 
 // codexToolPrefix starts every memory tool's name under Codex: its MCP
 // tools are mcp__<server>__<tool>, the server being "memory" (0085 D1).
