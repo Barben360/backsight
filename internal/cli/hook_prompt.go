@@ -248,6 +248,8 @@ func (h *hookEnv) userPrompt() []byte {
 	}
 	if machineRE.MatchString(prompt) || harnessMachinePrompt(h.adapter, prompt) {
 		h.beginTurn(0, true) // not a prompt, but its hooks journal under a turn of their own
+		// the next human prompt does not answer the last injection
+		h.updateSession(func(s *session.State) error { s.MachineAfter = s.Prompts; return nil })
 		ev.Decision, ev.Reason = "skip", "machine"
 		h.tw.Emit(ev)
 		return nil
@@ -283,7 +285,11 @@ func (h *hookEnv) userPrompt() []byte {
 		case credited != nil && (*credited == "exact" || *credited == "free"):
 			source = "citation"
 		}
-		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, CreditSource: source, Contradicted: detector == "rule"})
+		// A correction judges the injection only when nothing but the
+		// reply came between: after a machine message the prompt answers
+		// that, not the memory (issue 317).
+		contradicted := detector == "rule" && st.MachineAfter != n-1
+		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, CreditSource: source, Contradicted: contradicted})
 	}
 
 	var parts []string
@@ -660,8 +666,7 @@ func (h *hookEnv) postToolUse() {
 	if strings.HasSuffix(h.in.ToolName, "memory_store") {
 		// the note's id is on the answer's first lines, never in the
 		// similar memory's text below them
-		head, _, _ := strings.Cut(text, "\n"+storeSimilarHeader+"\n")
-		notes = noteRE.FindAllString(head, -1)
+		notes = noteRE.FindAllString(storeHead(text), -1)
 		stored = storeShows(text)
 		for _, it := range stored {
 			ids = append(ids, it.ID)

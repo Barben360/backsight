@@ -45,7 +45,7 @@ Every line about the memory has the same shape: 🧠 alone when a memory was rea
 |---|---|
 | 🧠 **From memory (my-project · 0b4c2a52)** — … | A memory informed the answer. |
 | 🧠💾 **Saved (my-project · decision)** — … | Claude stored a new fact with `memory_store`. |
-| 🧠🔄 **Updated (my-project · correction · replaces 7d1e93a0)** — … | The fact stored updates the similar memory `memory_store` showed. |
+| 🧠🔄 **Updated (my-project · correction · replaces 7d1e93a0)** — … | The fact stored updates the similar memory `memory_store` showed. It retires nothing: when the fact makes that memory false or obsolete, Claude also reports it outdated with `memory_credit`, as the answer asks. |
 | 🧠❌ **Wrong, retired (my-project · 7e1f9d03)** — … · undo: `backsight forget --restore <id>` | Claude reported a memory false; it is retired on the server ([below](#memories-claude-reports-wrong)). |
 | 🧠✔ **Confirmed by memory (my-project · 5a1d0c33)** — … | A memory the session checked on its own (your words, a file, a command output) and found true, though it did not inform the answer. It counts like a used one for the ranking by use. |
 | 🧠⌛ **Outdated, retired (my-project · c93a0e17)** — … · undo: `backsight forget --restore <id>` | The same for a memory that was true and no longer is. |
@@ -163,7 +163,7 @@ The plan lists the project's documents and memory counts, changing nothing. The 
 
 ## Memories Claude reports wrong
 
-When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note in the wrong memory's project and retires the wrong memory, at most 3 per session (`feedback.max_retirements`), whichever projects they belong to. A memory of another project than the session's can be retired too: turn it off with `feedback.cross_project_retire = false` in `config.toml`. Nothing is deleted:
+When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note in the wrong memory's project and retires the wrong memory, at most 10 per session (`feedback.max_retirements`), whichever projects they belong to; an observation retired through several of the facts it is drawn from counts once, as does one hidden on this PC. A memory of another project than the session's can be retired too: turn it off with `feedback.cross_project_retire = false` in `config.toml`. Nothing is deleted:
 
 - a [raw fact](glossary.md#fact) is invalidated on the server: recall stops returning it;
 - for an [observation](glossary.md#observation), Claude is first shown the facts it is drawn from, then names the wrong ones, which are invalidated;

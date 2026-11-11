@@ -56,6 +56,10 @@ type State struct {
 	Unavailable   bool     `json:"unavailable_notified"` // the visible failure was shown
 	LastAssistant string   `json:"last_assistant"`       // the last reply, recorded at Stop
 	SubagentDone  bool     `json:"subagent_done"`        // a subagent finished since the last prompt
+	// MachineAfter: the human prompt a machine message (a sub-agent's
+	// hand-back, another session's message) last followed; the next
+	// prompt then answers that work, not the injection (issue 317).
+	MachineAfter int `json:"machine_after,omitempty"`
 	// BriefingRefreshedAt: the page's last_refreshed_at when BriefingPage
 	// was given; a compaction gives the page again only once it changed
 	// (decision 0083 C5).

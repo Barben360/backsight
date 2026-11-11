@@ -81,6 +81,32 @@ func TestReadShowsTheMemoryAndItsSources(t *testing.T) {
 	}
 }
 
+// Issue 317: read takes the 8-character id the hook lines and the tools
+// print, resolved among the ids this PC's journal holds, as memory_read
+// does; a prefix of several is refused, and one the journal does not hold
+// asks for the full id rather than sending the server a malformed one.
+func TestReadResolvesAShortID(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	const full, twin = "07a11aa5-0000-4000-8000-000000000001", "abababab-0000-4000-8000-000000000002"
+	memories[full] = `{"id":"` + full + `","text":"Merging is left to the developer.","type":"observation","tags":["project:billing"]}`
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: "s1", Project: "billing"})
+	for _, items := range [][]feedback.Item{{{ID: full, Rank: 1}}, {{ID: twin, Rank: 1}, {ID: "abababab-0000-4000-8000-000000000003", Rank: 2}}} {
+		if err := j.Append(feedback.Event{Kind: "shows", Turn: "p-1", Path: "search", Items: items}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, out, _ := run(t, "read", "07a11aa5"); code != output.OK || !strings.Contains(out, "Merging is left to the developer.") {
+		t.Errorf("short id: exit %d\n%s", code, out)
+	}
+	if code, out, errOut := run(t, "read", "abababab"); code != output.Usage || !strings.Contains(out+errOut, "several") {
+		t.Errorf("ambiguous: exit %d\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := run(t, "read", "cdcdcdcd"); code != output.Usage || !strings.Contains(out+errOut, "full id") {
+		t.Errorf("unknown short id: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
 func TestJobsTickRebuildsAStaleEntityIndex(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))

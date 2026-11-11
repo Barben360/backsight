@@ -38,10 +38,12 @@ import (
 // short guide and memory_store leave merges, releases and CI status to the conversation, and close
 // the loop on a settled open item rather than on any shipped work; v16 (0083 C7): each rule once
 // across the guide, the MCP instructions and the tool texts, the guide keeping only the conversation's
-// rules, shorter memory_store and memory_credit descriptions, the briefing asks for the process rules;
-// v18 (0085 D1): the skills and the first-session notice in Codex's words, $backsight:<name>, none of
-// Claude Code's syntax, AGENTS.md for the retro; Claude Code's texts unchanged).
-const Version = "v18"
+// rules, shorter memory_store and memory_credit descriptions, the briefing asks for the process rules);
+// v18 (issue 317): memory_store shows a correction up to two similar memories, and after the memories
+// it shows asks for memory_credit outdated on the one the fact replaces; v19 (0085 D1): the skills and
+// the first-session notice in Codex's words, $backsight:<name>, none of Claude Code's syntax, AGENTS.md
+// for the retro; Claude Code's texts unchanged.
+const Version = "v19"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in

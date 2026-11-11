@@ -417,7 +417,7 @@ var Catalog = withDrills([]Def{
 		ID: "injection.contradicted", Label: "Corrections after memory was shown", Unit: "ratio", Direction: "none", MinN: 20,
 		CI: "wilson", Scope: "machine", Source: "telemetry", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
 		Question:   "Does the user correct Claude after memory is shown?",
-		Definition: "The share of turns with injected memories where the next prompt looked like a correction.",
+		Definition: "The share of turns with injected memories where the next prompt looked like a correction, with no subagent's hand-back or other session's message between.",
 		Action:     "Frequent corrections after memory is shown point to memories that mislead.",
 	},
 	{

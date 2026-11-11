@@ -196,6 +196,7 @@ func TestValidate(t *testing.T) {
 		{"bank dotdot", func(c *Config) { c.Server.Bank = ".." }, "server.bank"},
 		{"global_min_score range", func(c *Config) { c.Recall.GlobalMinScore = 1.2 }, "recall.global_min_score"},
 		{"store_similar_min_score range", func(c *Config) { c.Recall.StoreSimilarMinScore = -0.1 }, "recall.store_similar_min_score"},
+		{"store_correction_min_score range", func(c *Config) { c.Recall.StoreCorrectionMinScore = 1.1 }, "recall.store_correction_min_score"},
 		{"briefing source", func(c *Config) { c.Recall.Briefing = "both" }, "recall.briefing"},
 		{"skip_entrypoints bad glob", func(c *Config) { c.Privacy.SkipEntrypoints = []string{"sdk-["} }, "privacy.skip_entrypoints"},
 		{"skip_entrypoints empty pattern", func(c *Config) { c.Privacy.SkipEntrypoints = []string{""} }, "privacy.skip_entrypoints"},
@@ -543,7 +544,7 @@ func TestOwnOwnersAreRead(t *testing.T) {
 // binary refuses a config.toml with keys it does not know.
 func TestFeedbackDefaultsAndValidation(t *testing.T) {
 	got := Default(dirs, "/home/u").Feedback
-	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
+	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 10, StaleShows: 10,
 		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true}); got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
@@ -551,7 +552,7 @@ func TestFeedbackDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited", MaxRetirements: 3, StaleShows: 10,
+	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited", MaxRetirements: 10, StaleShows: 10,
 		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true}); cfg.Feedback != want {
 		t.Errorf("read %+v, want %+v", cfg.Feedback, want)
 	}
@@ -588,8 +589,22 @@ func TestShareLedgerKey(t *testing.T) {
 	}
 }
 
+// store_correction_min_score: a correction shows the memories it may
+// replace from a lower bar than any other store (issue 317).
+func TestStoreCorrectionMinScoreKey(t *testing.T) {
+	if got := Default(dirs, "/home/u").Recall.StoreCorrectionMinScore; got != 0.6 {
+		t.Errorf("default %v", got)
+	}
+	cfg, err := Load(write(t, "[recall]\nstore_correction_min_score = 0.7\n"), dirs, "/home/u")
+	if err != nil || cfg.Recall.StoreCorrectionMinScore != 0.7 {
+		t.Errorf("0.7: %v %v", err, cfg.Recall.StoreCorrectionMinScore)
+	}
+}
+
 func TestMaxRetirementsKey(t *testing.T) {
-	if got := Default(dirs, "/home/u").Feedback.MaxRetirements; got != 3 {
+	// 10 since issue 317: a slot is one memory reported, and fixing two
+	// wrong observations took more than 3.
+	if got := Default(dirs, "/home/u").Feedback.MaxRetirements; got != 10 {
 		t.Errorf("default %d", got)
 	}
 	cfg, err := Load(write(t, "[feedback]\nmax_retirements = 0\n"), dirs, "/home/u")

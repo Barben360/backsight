@@ -240,6 +240,10 @@ type Recall struct {
 	// StoreSimilarMinScore: the score (after boost) the most similar memory
 	// needs to be shown in memory_store's answer (0083 C4).
 	StoreSimilarMinScore float64 `toml:"store_similar_min_score" json:"store_similar_min_score"`
+	// StoreCorrectionMinScore: the same bar for a note of kind correction,
+	// lower, so the memories it may replace are shown and can be reported
+	// outdated (issue 317).
+	StoreCorrectionMinScore float64 `toml:"store_correction_min_score" json:"store_correction_min_score"`
 }
 
 // FailurePitfallsKey names Recall.FailurePitfalls for messages: client
@@ -342,7 +346,8 @@ type Feedback struct {
 	// ("always", "cited" or "off").
 	StopCheck string `toml:"stop_check" json:"stop_check"`
 	// MaxRetirements: the most memories Claude may report wrong or
-	// outdated in one session; 0: none.
+	// outdated in one session, an observation counting once however many
+	// of its source facts are retired; 0: none.
 	MaxRetirements int `toml:"max_retirements" json:"max_retirements"`
 	// StaleShows: memory stale lists a memory shown this many times or
 	// more and never used.
@@ -384,7 +389,7 @@ func Default(d paths.Dirs, home string) Config {
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: DefaultSkipEntrypoints()},
 		Components: Components{Read: true, Write: true},
-		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
+		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, StoreCorrectionMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
 			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model", BriefingRefreshInterval: Hours(6)},
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-flash", Currency: "USD"},
@@ -393,7 +398,7 @@ func Default(d paths.Dirs, home string) Config {
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, SubagentReportMinChars: 400, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Retain:     Retain{AppendMinChars: 30_000, AppendMaxWait: "6h"},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
-		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
+		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 10, StaleShows: 10,
 			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true},
 		Terminal: Terminal{Logo: "braille"},
 	}
@@ -571,6 +576,7 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	unit("recall.min_score", r.MinScore)
 	unit("recall.global_min_score", r.GlobalMinScore)
 	unit("recall.store_similar_min_score", r.StoreSimilarMinScore)
+	unit("recall.store_correction_min_score", r.StoreCorrectionMinScore)
 	unit("recall.sticky_bypass", r.StickyBypass)
 	unit("recall.project_boost", r.ProjectBoost)
 	if r.Briefing != "model" && r.Briefing != "recent" {

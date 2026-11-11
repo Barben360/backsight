@@ -50,11 +50,37 @@ type retirePlan struct {
 	retire, hide, unread, skip []string
 	sources                    map[string][]sourceFact // observation → its facts, in order
 	listed                     []string                // the observations of sources, in id order
+	of                         map[string]string       // a fact named with its skipped observation → that observation
 }
 
-// acted is how many memories the plan retires or hides: what counts
-// toward feedback.max_retirements.
+// acted is the memories the plan retires or hides.
 func (p retirePlan) acted() []string { return append(slices.Clone(p.retire), p.hide...) }
+
+// slot is the memory the agent reported that retiring id stands for, what
+// counts toward feedback.max_retirements (issue 317): the observation a
+// fact was named with in this call, else the one a Sources answer of this
+// session listed it for, else id itself.
+func (p retirePlan) slot(id string, listedFor map[string]string) string {
+	if o := p.of[id]; o != "" {
+		return o
+	}
+	if o := listedFor[id]; o != "" {
+		return o
+	}
+	return id
+}
+
+// listedFor maps each fact a Sources answer of the session listed to the
+// observation it was listed for (the last listing wins).
+func listedFor(shown []feedback.Show) map[string]string {
+	out := map[string]string{}
+	for _, s := range shown {
+		if s.Path == feedback.PathSources && s.Of != "" {
+			out[s.ID] = s.Of
+		}
+	}
+	return out
+}
 
 // onServer runs f with the server's client, once more after a key the
 // server refused was rotated in secrets.toml.
@@ -73,7 +99,7 @@ func onServer(key *mcpKey, f func(*hindsight.Client) error) error {
 // sources is skipped when one of them is named too, else its sources are
 // listed; a read that fails, another type, or no sources: hidden.
 func (d mcpDeps) classify(ctx context.Context, key *mcpKey, ids []string, owner func(string) string) retirePlan {
-	plan := retirePlan{sources: map[string][]sourceFact{}}
+	plan := retirePlan{sources: map[string][]sourceFact{}, of: map[string]string{}}
 	for _, id := range ids {
 		var m hindsight.MemoryDetail
 		err := onServer(key, func(cl *hindsight.Client) (err error) {
@@ -103,6 +129,11 @@ func (d mcpDeps) classify(ctx context.Context, key *mcpKey, ids []string, owner 
 			}
 			if named {
 				plan.skip = append(plan.skip, id)
+				for _, f := range facts {
+					if slices.Contains(ids, f.id) && plan.of[f.id] == "" {
+						plan.of[f.id] = id
+					}
+				}
 				continue
 			}
 			plan.sources[id] = facts
@@ -121,7 +152,7 @@ func sourcesText(p retirePlan) string {
 	var b strings.Builder
 	b.WriteString(creditSourcesPrefix + " only raw facts are retired, and an observation is drawn from them; nothing was retired or stored.\n")
 	for _, obs := range p.listed {
-		fmt.Fprintf(&b, "%s is drawn from:\n", shortID(obs))
+		fmt.Fprintf(&b, "%s is drawn from:\n", safeProject(obs))
 		for _, s := range p.sources[obs] {
 			fmt.Fprintf(&b, "- %s %s (%s)\n", memoryTag(s.project, s.id), clip(singleLine(s.text), sourceTextChars), safeProject(s.id))
 		}
@@ -152,10 +183,10 @@ func printLines(lines []string) string {
 }
 
 // retire carries out plan in id order after the correction note was
-// stored: each raw fact invalidated with reason, each hidden one
-// journaled. A server error stops it: the answer names what was retired
+// stored: each raw fact invalidated with reason, its retire event naming
+// the observation whose slot it uses (slots), each hidden one journaled. A server error stops it: the answer names what was retired
 // and what was not, and only what was is journaled.
-func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, verdict, note, reason string, ids []string, plan retirePlan, owner func(string) string) (string, error) {
+func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, verdict, note, reason string, ids []string, plan retirePlan, slots map[string]string, owner func(string) string) (string, error) {
 	var retired, hidden, notRetired []string
 	var failure error
 	local := false // the failure is this PC's sends gate, not the server's answer
@@ -176,7 +207,11 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 			}
 			if failure == nil {
 				retired = append(retired, id)
-				d.journal(live, feedback.Event{Kind: feedback.KindRetire, IDs: []string{id}, Verdict: verdict, Outcome: "invalidated", Note: note, MemoryProject: canonicalProject(d.cfg, owner(id))})
+				var of string // the observation reported, whose slot this fact uses
+				if slots[id] != id {
+					of = slots[id]
+				}
+				d.journal(live, feedback.Event{Kind: feedback.KindRetire, IDs: []string{id}, Verdict: verdict, Outcome: "invalidated", Note: note, MemoryProject: canonicalProject(d.cfg, owner(id)), Of: of})
 				continue
 			}
 			for _, rest := range ids[i:] {

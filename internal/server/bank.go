@@ -29,26 +29,37 @@ const (
 // and each costs extraction and consolidation (decision 0083 C6). The
 // import strategy shares them: its own rule already says a log line or a
 // status holds no fact, and the C6 sentences only make that explicit.
+// A plan never becomes a delivered state (issue 317: a note "the agent
+// deploys X for plan 8" came out as "X was deployed and verified").
 const rules = `Write every fact in English, whatever the language of the source. Keep identifiers, file paths, commands, versions, URLs, issue and pull request numbers, and quoted user wording exactly as written.
 Extract only durable knowledge a coding agent will need in later sessions: decisions with their reasons, corrections of earlier facts, conventions and preferences, pitfalls with their cause and fix, delivered outcomes, and lessons.
 Keep one fact per delivered outcome: a pull request merged with what it closes, a release published, a setting changed and where.
 Do not extract process steps: commits made, pushes, branches created or deleted, rebases, CI runs and their status, pull requests opened or updated, waiting states.
 Do not extract plans, hypotheses, guesses, intermediate debugging steps, abandoned approaches, or anything the source later contradicts; keep only the final outcome.
+A plan, an assignment or an intended step is never a delivered outcome: where one is kept, record it as planned, with its date, never as done. Only a source that says something was done, verified, merged or released yields a state.
 One fact per statement, self-contained: name the project, component or tool it is about.
 Use absolute dates (YYYY-MM-DD) taken from the source timestamps, never relative ones such as yesterday or last week.
 Never record secrets, tokens, passwords or keys, even partially.
 Label each fact with its kind.`
 
+// conversationRules: a permission or restriction given for one task is
+// not a standing rule (issue 317: "merge it yourself" for one PR became
+// "the agent merges once CI passes").
 const conversationRules = rules + `
-The source is a coding session between a developer and an AI coding agent: what the developer asked, approved or corrected carries more weight than what the agent proposed.`
+The source is a coding session between a developer and an AI coding agent: what the developer asked, approved or corrected carries more weight than what the agent proposed.
+A permission or restriction granted for one task is recorded with that scope ("for the CI speedup pull request").`
 
 const documentRules = rules + `
-The source is a note someone chose to store: keep every durable statement in it, with its reason.`
+The source is a note someone chose to store: keep every durable statement in it, with its reason. A note that states a plan keeps it a plan.`
 
 // subagentRules: a report is not a note someone chose to keep, and a bare
-// status ("monitoring CI") is no fact (decision 0071 C5, E30 V5).
+// status ("monitoring CI") is no fact (decision 0071 C5, E30 V5). The
+// constraints of its brief are the task's, not the developer's rules
+// (issue 317: "merging is left to the developer" in a hand-back became a
+// user convention).
 const subagentRules = rules + `
-The source is the final report of a sub-agent. A report that only says work is in progress, being monitored or waiting, with no finding, cause, decision or delivered result, holds no fact. Keep findings with their cause, decisions with their reason, and what was delivered and where.`
+The source is the final report of a sub-agent. A report that only says work is in progress, being monitored or waiting, with no finding, cause, decision or delivered result, holds no fact. Keep findings with their cause, decisions with their reason, and what was delivered and where.
+Constraints the sub-agent was given for its task (do not merge, do not push) are not the developer's rules: never extract them as conventions or attribute them to the user.`
 
 // importRules: a whole folder holds logs, statuses and drafts beside the
 // notes worth keeping, so imported files get a stricter rule than a note
@@ -61,7 +72,7 @@ var kindValues = [][2]string{
 	{"correction", "A fact that replaces or invalidates an earlier one."},
 	{"convention", "A rule, preference or standard to follow."},
 	{"pitfall", "Something that broke or misled, with its cause and fix."},
-	{"state", "A delivered outcome (merged, released or configured), and where."},
+	{"state", "A delivered outcome the source says happened (merged, released or configured), and where."},
 	{"lesson", "A generalised insight to reuse elsewhere."},
 }
 
@@ -84,7 +95,9 @@ func bankTemplate() map[string]any {
 		"enable_observations":      true,
 		"observations_mission": "Write every observation in English. Consolidate durable knowledge per project: decisions with their reasons, " +
 			"conventions, pitfalls and fixes, and the current state of what was delivered. When a newer fact corrects or supersedes an older one, " +
-			"rewrite the observation to the newest truth and keep the date of the change.",
+			"rewrite the observation to the newest truth and keep the date of the change. " +
+			"A fact with no date of its own is not a change: never write \"since <date>\" from the date it was mentioned. " +
+			"A rule the developer stated outranks one inferred from an agent's report.",
 		"default_observation_scopes": [][]string{{"project:*"}},
 	}
 }
