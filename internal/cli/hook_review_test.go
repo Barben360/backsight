@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,12 +157,17 @@ func TestBreakerPausesRecallAfterRepeatedFailures(t *testing.T) {
 func TestRecallRecordsReach(t *testing.T) {
 	home := hookHome(t)
 	recallStatus.Store(500)
-	first := time.Now()
+	first := time.Now().UTC().Truncate(time.Second)
+	at := first
+	old := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = old })
 	prompt(t, home, "s1", longPrompt)
+	at = first.Add(time.Minute) // the second failure keeps the first's time
 	prompt(t, home, "s2", longPrompt)
 	r := state.LoadReach(pathsOf(home))
-	if r.FailingSince.Before(first.Add(-time.Second)) || r.FailingSince.After(first.Add(time.Second)) {
-		t.Fatalf("failures: %+v", r)
+	if !r.FailingSince.Equal(first) {
+		t.Fatalf("failures: %+v, want failing since %v", r, first)
 	}
 	recallStatus.Store(0)
 	prompt(t, home, "s3", longPrompt)
@@ -266,7 +272,10 @@ func TestParallelToolHooksKeepEveryStore(t *testing.T) {
 	}
 }
 
-func TestHugePastesStayFast(t *testing.T) {
+// A huge paste is cut before the hook's text passes run over it: the
+// query to the server holds its first QueryChars runes, the session's
+// words come from its first maxWordChars (what keeps such a prompt fast).
+func TestHugePastesAreCut(t *testing.T) {
 	home := hookHome(t)
 	recallAnswer = "[]"
 	var b strings.Builder
@@ -276,10 +285,20 @@ func TestHugePastesStayFast(t *testing.T) {
 		b.WriteString(strings.Repeat("x", i%7))
 		b.WriteString(" ")
 	}
-	start := time.Now()
+	b.WriteString("zebratail") // only past the cut
+	recallQueries = nil
 	prompt(t, home, "s1", b.String())
-	if el := time.Since(start); el > 2*time.Second {
-		t.Errorf("a %d KB prompt took %s", b.Len()/1024, el)
+	if len(recallQueries) == 0 {
+		t.Fatal("no recall: the checks below prove nothing")
+	}
+	for _, q := range recallQueries {
+		if n := len([]rune(q)); n > 300 {
+			t.Errorf("a %d-rune query reached the server, want at most the 300 of recall.query_chars", n)
+		}
+	}
+	st, _ := sessions(home).Load("s1")
+	if len(st.LastWords) == 0 || slices.Contains(st.LastWords, "zebratail") {
+		t.Errorf("the session's words %d, the end of the paste among them: %v", len(st.LastWords), slices.Contains(st.LastWords, "zebratail"))
 	}
 }
 

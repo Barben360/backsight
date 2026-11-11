@@ -615,7 +615,7 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	if c, ok := src.(server.Cleaner); ok {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), switchProbeWait)
 		if n, err := c.CleanSize(sctx); err == nil {
-			rs.KeptBytes, rs.KeptAt = n, time.Now().UTC()
+			rs.KeptBytes, rs.KeptAt = n, now().UTC()
 		}
 		cancel()
 	}

@@ -207,8 +207,8 @@ var (
 // order. documentNoUnits are documents GET /documents/{id} answers without
 // memory_unit_count. fakeCalls counts the requests per endpoint
 // ("GET /memories/list", "GET /documents/{id}", …); fakeMaxInFlight is
-// the most requests the fake held at once; with fakeOverlap each created
-// day listing and document read waits (up to 20 ms) for 4 in flight.
+// the most requests the fake held at once; with fakeOverlap the document
+// reads wait until 4 requests were in flight at once.
 type fakeMem struct {
 	ID, FactType, Document string // "" leaves the field out, "<null>" sends null
 	Created                time.Time
@@ -226,6 +226,7 @@ var (
 	fakeInFlight    atomic.Int64
 	fakeMaxInFlight atomic.Int64
 	fakeOverlap     atomic.Bool
+	fakeOverlapMet  atomic.Bool // fakeOverlap's 4 were in flight
 )
 
 // fakeEndpoint names a request's endpoint for fakeCalls: the bank-scoped
@@ -437,6 +438,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	fakeInFlight.Store(0)
 	fakeMaxInFlight.Store(0)
 	fakeOverlap.Store(false)
+	fakeOverlapMet.Store(false)
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
 	bankDocs := map[string]map[string]bool{}
@@ -475,8 +477,14 @@ func fakeHindsight(t *testing.T) (port int) {
 		defer fakeInFlight.Add(-1)
 		for m := fakeMaxInFlight.Load(); n > m && !fakeMaxInFlight.CompareAndSwap(m, n); m = fakeMaxInFlight.Load() {
 		}
-		if ep := fakeEndpoint(r); fakeOverlap.Load() && (ep == "GET /memories/list" || ep == "GET /documents/{id}") {
-			for until := time.Now().Add(20 * time.Millisecond); fakeInFlight.Load() < 4 && time.Now().Before(until); {
+		// Held, no timer, until 4 are in flight: fewer workers hang the
+		// test, more show in fakeMaxInFlight.
+		if fakeOverlap.Load() && fakeEndpoint(r) == "GET /documents/{id}" {
+			for !fakeOverlapMet.Load() {
+				if fakeInFlight.Load() >= 4 {
+					fakeOverlapMet.Store(true)
+					break
+				}
 				time.Sleep(time.Millisecond)
 			}
 		}
@@ -1247,7 +1255,6 @@ func TestInstallCrashLoopFailsFastWithRedactedLogs(t *testing.T) {
 	f.ps = `{"Service":"hindsight","State":"restarting","Health":""}`
 	s, _ := config.LoadSecrets(secretsFile(home))
 	f.logs = "FATAL: password authentication failed; url postgresql://hindsight:" + s.DBPassword + "@db"
-	start := time.Now()
 	code, _, errOut := run(t, "server", "install")
 	if code != output.Blocked || !strings.Contains(errOut, "restarting") || !strings.Contains(errOut, "password authentication failed") {
 		t.Errorf("exit %d: %s", code, errOut)
@@ -1255,8 +1262,16 @@ func TestInstallCrashLoopFailsFastWithRedactedLogs(t *testing.T) {
 	if strings.Contains(errOut, s.DBPassword) {
 		t.Error("the database password reached the output")
 	}
-	if time.Since(start) > 5*time.Second {
-		t.Error("a crash loop must not wait for the health timeout")
+	// The first look at the containers ends the wait: a crash loop has no
+	// health to wait for.
+	ps := 0
+	for _, c := range f.subcommands() {
+		if strings.HasPrefix(c, "ps") {
+			ps++
+		}
+	}
+	if ps != 1 {
+		t.Errorf("%d container looks (%q), want the wait cut at the first", ps, f.subcommands())
 	}
 }
 

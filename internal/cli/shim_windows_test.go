@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -546,6 +547,20 @@ func scanShim(t *testing.T, shim string) *os.File {
 	return f
 }
 
+// onHeldRetry closes f the first time a retry finds a file held
+// (fsutil.RetryHook), with a retry window no wait reaches; it reports
+// whether that happened.
+func onHeldRetry(t *testing.T, f *os.File) (retried func() bool) {
+	t.Helper()
+	oldHook, oldFor := fsutil.RetryHook, fsutil.RetryFor
+	var once sync.Once
+	done := false
+	fsutil.RetryHook = func() { once.Do(func() { done = true; _ = f.Close() }) }
+	fsutil.RetryFor = 10 * time.Minute
+	t.Cleanup(func() { fsutil.RetryHook, fsutil.RetryFor = oldHook, oldFor })
+	return func() bool { return done }
+}
+
 func TestPointShimWaitsForAHandleWithoutShareDelete(t *testing.T) {
 	dir := t.TempDir()
 	v1, v2 := sleeper(t, filepath.Join(dir, "v1"), "1"), sleeper(t, filepath.Join(dir, "v2"), "2")
@@ -554,10 +569,10 @@ func TestPointShimWaitsForAHandleWithoutShareDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	startShim(t, shim) // a running copy keeps its .old-1
-	f := scanShim(t, shim)
-	go func() { time.Sleep(300 * time.Millisecond); _ = f.Close() }()
-	if err := pointShim(v2, shim); err != nil {
-		t.Fatalf("swap while a scanner holds the shim briefly: %v", err)
+	// The scanner lets go once the swap waits for it.
+	retried := onHeldRetry(t, scanShim(t, shim))
+	if err := pointShim(v2, shim); err != nil || !retried() {
+		t.Fatalf("swap while a scanner holds the shim briefly: %v (waited for it: %v)", err, retried())
 	}
 	if !sameBytes(t, shim, v2) || len(olds(t, shim)) != 1 {
 		t.Errorf("shim is v2 %v, old copies %v", sameBytes(t, shim, v2), olds(t, shim))
@@ -571,16 +586,14 @@ func TestPointShimGivesUpWhenTheHandleStays(t *testing.T) {
 	if err := pointShim(v1, shim); err != nil {
 		t.Fatal(err)
 	}
+	// The retry window ends at once: the wait itself is
+	// TestPointShimWaitsForAHandleWithoutShareDelete's.
 	was := fsutil.RetryFor
-	fsutil.RetryFor = 300 * time.Millisecond
+	fsutil.RetryFor = time.Millisecond
 	t.Cleanup(func() { fsutil.RetryFor = was })
 	scanShim(t, shim)
-	start := time.Now()
 	if err := pointShim(v2, shim); err == nil {
 		t.Fatal("a handle that stays must fail the swap")
-	}
-	if d := time.Since(start); d < fsutil.RetryFor-50*time.Millisecond {
-		t.Errorf("gave up after %v, want it to retry for %v", d, fsutil.RetryFor)
 	}
 	if !sameBytes(t, shim, v1) {
 		t.Error("the shim must still be the previous version")
@@ -600,11 +613,9 @@ func TestCopyFileWaitsForAHandleOnTheDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	src2 := sleeper(t, filepath.Join(dir, "v2"), "2")
-	f := scanShim(t, dst)
-	// Held past the copy (about 0.7 s on a VM), released within RetryFor.
-	go func() { time.Sleep(1500 * time.Millisecond); _ = f.Close() }()
-	if err := copyFile(src2, dst, 0o755); err != nil {
-		t.Fatalf("copy onto a destination a scanner holds briefly: %v", err)
+	retried := onHeldRetry(t, scanShim(t, dst)) // held past the copy, until the rename waits for it
+	if err := copyFile(src2, dst, 0o755); err != nil || !retried() {
+		t.Fatalf("copy onto a destination a scanner holds briefly: %v (waited for it: %v)", err, retried())
 	}
 	if !sameBytes(t, dst, src2) {
 		t.Error("the destination is not the new version")
