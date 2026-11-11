@@ -591,7 +591,7 @@ func TestTwoProcessesIngestConcurrently(t *testing.T) {
 	if d, ok := t.Deadline(); ok {
 		// The children's barrier has no timer: a child left waiting ends
 		// with this test's own -timeout instead of outliving it.
-		args = append(args, "-test.timeout="+time.Until(d).String())
+		args = append(args, "-test.timeout="+time.Until(d).String()) //nolint:forbidigo // hands the child go test's own remaining timeout
 	}
 	for _, role := range []string{"a", "b"} {
 		cmd := exec.Command(os.Args[0], args...)
