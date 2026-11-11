@@ -28,8 +28,10 @@ const (
 	// MaxRelated caps the related projects searched (SPEC §4).
 	MaxRelated = 6
 	// MaxAsked caps the projects a caller asks for explicitly.
-	MaxAsked  = 10
-	maxTokens = 1500 // per call, as the reference hook (C12)
+	MaxAsked = 10
+	// DefaultMaxTokens: the memory text a server call returns at most when
+	// the query sets none, as the reference hook (C12).
+	DefaultMaxTokens = 1500
 )
 
 // Engine runs searches against one bank.
@@ -56,15 +58,18 @@ type Adjustment struct {
 
 // Query is one search.
 type Query struct {
-	Queries     []string
-	Current     string   // the current project
-	Linked      []string // the repository's .backsight.toml related: searched with the current project
-	Projects    []string // projects asked for explicitly (all searched, up to MaxAsked)
-	Related     []string // projects matched in the entity index (up to MaxRelated)
-	All         bool     // the whole bank only, no project scopes
-	Limit       int      // 0: no limit
-	MinScore    float64  // on the boosted score
-	MinReranker float64  // on the server's score (prompt recall: SPEC §10.2)
+	Queries  []string
+	Current  string   // the current project
+	Linked   []string // the repository's .backsight.toml related: searched with the current project
+	Projects []string // projects asked for explicitly (all searched, up to MaxAsked)
+	Related  []string // projects matched in the entity index (up to MaxRelated)
+	All      bool     // the whole bank only, no project scopes
+	Limit    int      // 0: no limit
+	// MaxTokens caps the memory text of each (scope, query) server call,
+	// so how many candidates one call can bring; 0: DefaultMaxTokens.
+	MaxTokens   int
+	MinScore    float64 // on the boosted score
+	MinReranker float64 // on the server's score (prompt recall: SPEC §10.2)
 	// GlobalMinReranker: hits of projects that are neither the current one,
 	// a transverse alias nor linked/asked/related need this score (0046 poisoning
 	// defence: recall.global_min_score).
@@ -167,7 +172,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		defer cancel()
 	}
 	scopes := e.scopes(q)
-	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds)
+	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds, q.MaxTokens)
 	res := Result{Scopes: map[string]ScopeMeta{}}
 	var empty []scope
 	for _, s := range scopes {
@@ -176,7 +181,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 	}
 	if len(empty) > 0 && ctx.Err() == nil {
-		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, false)
+		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, false, q.MaxTokens)
 		for _, a := range raw {
 			if len(a.hits) > 0 {
 				res.Raw = true
@@ -324,7 +329,10 @@ func meta(answers []answer, name string) ScopeMeta {
 	return m
 }
 
-func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sources bool) []answer {
+func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sources bool, maxTokens int) []answer {
+	if maxTokens <= 0 {
+		maxTokens = DefaultMaxTokens
+	}
 	type job struct {
 		scope scope
 		query string

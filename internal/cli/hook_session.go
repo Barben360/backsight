@@ -34,9 +34,6 @@ const (
 	briefingModelChars  = 1600
 	briefingModelTokens = 600
 	briefingModelPrefix = retain.BriefingModelPrefix
-	// briefingModelTimeout bounds the page read, and the page creation,
-	// within the briefing's own budget.
-	briefingModelTimeout = 1500 * time.Millisecond
 	// briefingIdleDays: a project quiet this long loses its page (jobs tick),
 	// so the server stops refreshing it.
 	briefingIdleDays  = 14
@@ -52,6 +49,10 @@ const (
 	// (doctor's server-reach check warns from the same age).
 	unreachableAfter = time.Hour
 )
+
+// briefingModelTimeout bounds the page read, and the page creation,
+// within the briefing's own budget (a var for the tests).
+var briefingModelTimeout = 1500 * time.Millisecond
 
 func init() {
 	handlers["session-start"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {

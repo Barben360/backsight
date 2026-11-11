@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -202,6 +203,13 @@ func (f *fakeServer) count(method string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[method]
+}
+
+// counts is a copy of the calls per method so far.
+func (f *fakeServer) counts() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.calls)
 }
 
 // enter counts a call of method and holds it as down or gate say.

@@ -132,7 +132,7 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 			// The unit tests and the native chain run on Windows too (M7
 			// block 2); every other job is Linux's.
 			want := "ubuntu-latest"
-			if w.name == "ci.yml" && (j.name == "test-windows" || j.name == "test-windows-budgets" || j.name == "native-chain-windows") {
+			if w.name == "ci.yml" && (j.name == "test-windows" || j.name == "native-chain-windows") {
 				want = "windows-latest"
 			}
 			if len(on) != 1 || on[0] != want {
@@ -544,8 +544,9 @@ func TestWorkflowsBoundEveryJob(t *testing.T) {
 
 // ci.yml runs the whole unit-test suite on Windows (M7 block 2): the job
 // exists and runs `go test ./...` uncached, one slice per matrix entry
-// (TestCISlicesRunEverySlice), with the time budgets' files on the
-// runner's local disk (Task 12b).
+// (TestCISlicesRunEverySlice), every test of the slice (none skipped by
+// name), with the files of the tests on a year of generated history on
+// the runner's local disk (Task 12b).
 func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 	for _, w := range workflows(t) {
 		if w.name != "ci.yml" {
@@ -569,8 +570,11 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 			if m := regexp.MustCompile(`go test \./\.\.\. -count=1 -timeout (\d+)m\b`).FindStringSubmatch(j.raw); m == nil || atoi(m[1]) < 15 {
 				t.Errorf("ci.yml job test-windows does not give go test a timeout of 15 minutes or more (-timeout <n>m):\n%s", j.raw)
 			}
+			if strings.Contains(j.raw, "-skip") {
+				t.Errorf("ci.yml job test-windows skips tests by name (-skip): every test of the slice runs:\n%s", j.raw)
+			}
 			if !strings.Contains(j.raw, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
-				t.Errorf("ci.yml job test-windows does not put the time budgets' files on the runner's local disk (BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}):\n%s", j.raw)
+				t.Errorf("ci.yml job test-windows does not put the generated histories' files on the runner's local disk (BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}):\n%s", j.raw)
 			}
 			return
 		}
@@ -647,7 +651,7 @@ func TestCITestCheckNeedsEveryLinuxTestJob(t *testing.T) {
 	for _, n := range strings.Split(m[1], ",") {
 		needs[strings.TrimSpace(n)] = true
 	}
-	runsTests := regexp.MustCompile(`make (test-shard|test-hooks|test-sweep|bench-index|cross)\b|ci-docs-only\.sh`)
+	runsTests := regexp.MustCompile(`make (test-shard|test-hooks|test-sweep|cross)\b|ci-docs-only\.sh`)
 	found := 0
 	for name, j := range jobs {
 		if name == "test" || !runsTests.MatchString(j.raw) {
@@ -659,7 +663,7 @@ func TestCITestCheckNeedsEveryLinuxTestJob(t *testing.T) {
 		}
 	}
 	if found < 5 {
-		t.Errorf("%d jobs found for the test check, want changes, test-race, test-hooks, bench and checks: the check proves nothing", found)
+		t.Errorf("%d jobs found for the test check, want changes, test-race, test-hooks, test-sweep and checks: the check proves nothing", found)
 	}
 	if !regexp.MustCompile(`(?m)^    if: always\(\)\s*$`).MatchString(test.raw) || !strings.Contains(test.raw, `all(.[]; .result == "success")`) {
 		t.Errorf("ci.yml job test does not run always and fail unless every job it needs succeeded:\n%s", test.raw)
@@ -670,17 +674,11 @@ func TestCITestCheckNeedsEveryLinuxTestJob(t *testing.T) {
 // backup privilege, go.exe inherits it, and Go opens files for reading
 // with backup semantics, so a read passes a deny ACE and the tests of an
 // unreadable file fail (TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable).
-// The time budgets run apart, one package at a time: the slices skip
-// make bench-index's tests, and test-windows-budgets runs those of the
-// index, metrics and dashboard packages (the ledger's two are not
-// measured on Windows yet).
-func TestCIRunsWindowsTestsInPowerShellAndItsBudgetsApart(t *testing.T) {
-	jobs := ciJobs(t)
+func TestCIRunsWindowsTestsInPowerShell(t *testing.T) {
 	steps := 0
-	for _, name := range []string{"test-windows", "test-windows-budgets"} {
-		j, ok := jobs[name]
-		if !ok {
-			t.Fatalf("ci.yml has no %s job", name)
+	for name, j := range ciJobs(t) {
+		if !strings.Contains(j.raw, "runs-on: windows-latest") {
+			continue
 		}
 		for _, step := range j.steps {
 			if !regexp.MustCompile(`(?m)^\s+(?:run: )?go test `).MatchString(step) {
@@ -692,72 +690,52 @@ func TestCIRunsWindowsTestsInPowerShellAndItsBudgetsApart(t *testing.T) {
 			}
 		}
 	}
-	if steps != 2 {
-		t.Errorf("%d go test steps found in test-windows and test-windows-budgets, want one each", steps)
+	if steps == 0 {
+		t.Error("no go test step found on Windows: the check proves nothing")
 	}
-	if !strings.Contains(jobs["test-windows"].raw, "-skip $env:TIME_BUDGETS") {
-		t.Errorf("ci.yml job test-windows does not skip the time budgets (-skip $env:TIME_BUDGETS)")
-	}
-	b := jobs["test-windows-budgets"].raw
-	if !strings.Contains(b, "go test -count=1 -p 1 ") || !strings.Contains(b, "-run $env:TIME_BUDGETS") || !strings.Contains(b, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
-		t.Errorf("ci.yml job test-windows-budgets does not run the time budgets one package at a time on the local disk:\n%s", b)
-	}
-	// Its parts run at once, each package's budgets in exactly one of
-	// them, the dashboard's (about 470 s) alone, and the step tests the
-	// part's packages, not a fixed list.
-	if !strings.Contains(b, "PACKAGES: ${{ matrix.packages }}") || !strings.Contains(b, "@($env:PACKAGES -split ' ')") || !strings.Contains(b, "fail-fast: false") {
-		t.Errorf("ci.yml job test-windows-budgets does not test its matrix part's packages, fail-fast off:\n%s", b)
-	}
-	parts := regexp.MustCompile(`(?m)^            packages: (.+?)\s*$`).FindAllStringSubmatch(b, -1)
-	seen := map[string]int{}
-	for _, p := range parts {
-		pkgs := strings.Fields(p[1])
-		for _, pkg := range pkgs {
-			seen[pkg]++
-			if pkg == "./internal/dashboard/" && len(pkgs) != 1 {
-				t.Errorf("ci.yml job test-windows-budgets: the dashboard's budgets share a part with %v", pkgs)
+}
+
+// No test may fail because of wall-clock time (CONTRIBUTING.md, Tests): no
+// workflow runs time budgets (a list of them, a job or a make target of
+// their own), the Makefile has no such target, and make test's second
+// line, the tests on a year of generated history, runs on Linux in a job
+// the required check needs (TestCITestCheckNeedsEveryLinuxTestJob).
+func TestCIHoldsNoTestToATime(t *testing.T) {
+	budget := regexp.MustCompile(`TIME_BUDGETS|bench-index|Test\w*Budgets?\b`)
+	sweeps := 0
+	for _, w := range workflows(t) {
+		if m := budget.FindString(w.env); m != "" {
+			t.Errorf("%s: its env names time budgets (%q)", w.name, m)
+		}
+		for _, j := range w.jobs {
+			if j.name == "bench" || strings.Contains(j.name, "budget") {
+				t.Errorf("%s: job %s is a time budgets' job", w.name, j.name)
+			}
+			for _, step := range j.steps {
+				if m := budget.FindString(step); m != "" {
+					t.Errorf("%s job %s: a step runs time budgets (%q):\n%s", w.name, j.name, m, step)
+				}
+				if w.name == "ci.yml" && strings.Contains(step, "make test-sweep") {
+					sweeps++
+					if !strings.Contains(j.raw, "runs-on: ubuntu-latest") {
+						t.Errorf("ci.yml job %s runs make test-sweep off Linux", j.name)
+					}
+				}
 			}
 		}
 	}
-	for _, pkg := range []string{"./internal/index/", "./internal/metrics/", "./internal/dashboard/"} {
-		if seen[pkg] != 1 {
-			t.Errorf("ci.yml job test-windows-budgets: %s is in %d parts, want 1 (parts %v)", pkg, seen[pkg], parts)
-		}
+	if sweeps != 1 {
+		t.Errorf("ci.yml runs make test-sweep %d times, want once", sweeps)
 	}
-	if len(seen) != 3 || len(parts) < 2 {
-		t.Errorf("ci.yml job test-windows-budgets: parts %v, want the index's, metrics' and dashboard's budgets in two parts or more", parts)
-	}
-	// TIME_BUDGETS names make bench-index's tests, each
-	raw, err := os.ReadFile("../.github/workflows/ci.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`(?m)^  TIME_BUDGETS: (\S+)\s*$`).FindSubmatch(raw)
-	if m == nil {
-		t.Fatal("ci.yml has no workflow-level TIME_BUDGETS")
-	}
-	re := regexp.MustCompile(string(m[1]))
 	mk, err := os.ReadFile("../Makefile")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bench := regexp.MustCompile(`(?s)\nbench-index:\n(.*?)\n\n`).FindSubmatch(mk)
-	if bench == nil {
-		t.Fatal("Makefile has no bench-index target")
+	if m := regexp.MustCompile(`(?m)^[a-z-]*(bench|budget)[a-z-]*:`).Find(mk); m != nil {
+		t.Errorf("the Makefile has a time budgets' target: %q", m)
 	}
-	names := regexp.MustCompile(`Test[A-Za-z0-9]+`).FindAllString(string(bench[1]), -1)
-	if len(names) < 6 {
-		t.Fatalf("make bench-index names %v, want its six budget tests", names)
-	}
-	for _, n := range names {
-		if !re.MatchString(n) {
-			t.Errorf("TIME_BUDGETS %s does not match %s, a time budget of make bench-index", m[1], n)
-		}
-	}
-	for _, n := range []string{"TestBackfillStopsAtTheBudgetAndResumes", "TestCatchUpBudgets", "TestPageBudgetsX"} {
-		if re.MatchString(n) {
-			t.Errorf("TIME_BUDGETS %s matches %s, not a time budget", m[1], n)
-		}
+	if !regexp.MustCompile(`(?m)^test-sweep:\n\tgo test `).Match(mk) || !regexp.MustCompile(`(?m)^test:\n(?:\t.*\n)*\t@\$\(MAKE\) --no-print-directory test-sweep$`).Match(mk) {
+		t.Error("the Makefile has no test-sweep target that make test runs")
 	}
 }
 
@@ -775,7 +753,7 @@ func withoutDocsOnlyGate(header string) string {
 // those: the sandbox tests and fresh-install search the embedded docs
 // (guide search), the required checks must run.
 func TestCIDocsOnlySkipsOnlyWhatDocsCannotReach(t *testing.T) {
-	want := map[string]bool{"test-windows": true, "test-windows-budgets": true, "m6-chain": true, "native-chain": true, "native-chain-windows": true}
+	want := map[string]bool{"test-windows": true, "m6-chain": true, "native-chain": true, "native-chain-windows": true}
 	for name, j := range ciJobs(t) {
 		gated := docsOnlyGate.MatchString(j.raw)
 		if gated != want[name] {

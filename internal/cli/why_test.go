@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,11 +42,17 @@ func TestWhyPicksTheGivenOrTheLatestSession(t *testing.T) {
 		st.Injected = []session.Injection{{ID: "o1", Text: "old memory", Rule: "first"}}
 		return nil
 	})
-	time.Sleep(10 * time.Millisecond)
 	_ = sessions(home).Update("new", func(st *session.State) error {
 		st.Injected = []session.Injection{{ID: "n1", Text: "new memory", Rule: "first"}}
 		return nil
 	})
+	// The later write, by the files' times.
+	at := time.Now()
+	for id, mt := range map[string]time.Time{"old": at.Add(-time.Hour), "new": at} {
+		if err := os.Chtimes(filepath.Join(pathsOf(home).SessionsDir(), id+".json"), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("BACKSIGHT_SESSION", "")
 	if _, out, _ := run(t, "why"); !strings.Contains(out, "new memory") {
 		t.Errorf("latest: %s", out)

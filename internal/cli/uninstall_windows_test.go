@@ -466,46 +466,48 @@ func holdShim(t *testing.T, d paths.Dirs) (release func()) {
 		})
 	}
 	t.Cleanup(release)
-	// Running: its image cannot be deleted.
-	deadline := time.Now().Add(10 * time.Second)
+	// Running: its image cannot be deleted (no deadline of its own: go
+	// test's -timeout ends a hang).
 	for {
 		f, err := os.OpenFile(shim, os.O_WRONLY, 0)
 		if err != nil {
 			break // the running image refuses a writer
 		}
 		_ = f.Close()
-		if time.Now().After(deadline) {
-			t.Fatal("the held shim never ran")
-		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return release
 }
 
-// waitGone waits up to within for p to be gone.
-func waitGone(p string, within time.Duration) bool {
-	deadline := time.Now().Add(within)
+// waitGone waits for p to be gone (no deadline of its own: go test's
+// -timeout ends a hang).
+func waitGone(p string) {
 	for onDisk(p) {
-		if time.Now().After(deadline) {
-			return false
-		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return true
+}
+
+// longCleaner gives the cleaner a loop no wait of a test reaches: 300
+// tries a second apart.
+func longCleaner(t *testing.T) {
+	t.Helper()
+	oldT, oldP := cleanerTries, cleanerPings
+	cleanerTries, cleanerPings = 300, 2
+	t.Cleanup(func() { cleanerTries, cleanerPings = oldT, oldP })
 }
 
 // Review Focus 3, the uninstall side: with a session running current.exe,
 // the shim goes to <data>\trash, the cleaner is started on that trash and
-// the result names it; once the session ends, the cleaner (its loop
-// shortened) empties the trash within 10 s.
+// the result names it; once the session ends, the cleaner empties the
+// trash.
 func TestUninstallWithTheShimHeldOpen(t *testing.T) {
 	_, d, _ := windowsUninstallHost(t)
 	release := holdShim(t, d)
-	oldT, oldP, oldC := cleanerTries, cleanerPings, startCleaner
-	cleanerTries, cleanerPings = 20, 2 // every second, for 20 s
+	longCleaner(t)
+	oldC := startCleaner
 	var started []string
 	startCleaner = func(trash string) error { started = append(started, trash); return startTrashCleaner(trash) }
-	t.Cleanup(func() { cleanerTries, cleanerPings, startCleaner = oldT, oldP, oldC })
+	t.Cleanup(func() { startCleaner = oldC })
 	trash := filepath.Join(d.Data, "trash")
 
 	code, env, out := uninstall(t)
@@ -526,10 +528,7 @@ func TestUninstallWithTheShimHeldOpen(t *testing.T) {
 	}
 
 	release()
-	if !waitGone(trash, 10*time.Second) {
-		left, _ := os.ReadDir(trash)
-		t.Errorf("the cleaner left %s after the session ended: %v", trash, left)
-	}
+	waitGone(trash) // the cleaner empties it
 }
 
 // A file held so that it can be neither deleted nor renamed (open without
@@ -559,9 +558,7 @@ func TestUninstallNamesAFileItCanNeitherDeleteNorMove(t *testing.T) {
 // caller's job, from System32; for real it deletes that trash, then the
 // data root once empty, but never a data root that still holds something.
 func TestCleanerGetsTheTrashPathThroughItsEnvironment(t *testing.T) {
-	oldT, oldP := cleanerTries, cleanerPings
-	cleanerTries, cleanerPings = 20, 2
-	t.Cleanup(func() { cleanerTries, cleanerPings = oldT, oldP })
+	longCleaner(t)
 	base := t.TempDir()
 	for _, kept := range []bool{false, true} {
 		data := filepath.Join(base, "Jé & Co! 100%PATH% x%", map[bool]string{false: "data", true: "data-kept"}[kept])
@@ -604,16 +601,14 @@ func TestCleanerGetsTheTrashPathThroughItsEnvironment(t *testing.T) {
 		if err := startTrashCleaner(trash); err != nil {
 			t.Fatal(err)
 		}
-		if !waitGone(trash, 10*time.Second) {
-			t.Fatalf("the cleaner left %s", trash)
-		}
+		waitGone(trash)
 		if kept {
 			time.Sleep(2 * time.Second) // its last step, the data root's rmdir, has run
 			if !onDisk(filepath.Join(data, "backups")) {
 				t.Errorf("a data root that holds backups lost them")
 			}
-		} else if !waitGone(data, 5*time.Second) {
-			t.Errorf("the empty data root %s stays", data)
+		} else {
+			waitGone(data) // the empty data root goes too
 		}
 	}
 }

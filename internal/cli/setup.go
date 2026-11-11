@@ -1745,6 +1745,11 @@ var (
 	jsonBeat    = 5 * time.Second
 	textBeat    = 30 * time.Second
 	stepElapsed = time.Since
+	// beatTicks ticks every period until stop; tests tick it themselves.
+	beatTicks = func(every time.Duration) (ticks <-chan time.Time, stop func()) {
+		t := time.NewTicker(every)
+		return t.C, t.Stop
+	}
 )
 
 // heartbeat shows that the running step still works until the returned
@@ -1766,15 +1771,15 @@ func (s *setupEnv) heartbeat(ctx context.Context, detail string, text bool) (sto
 	done, finished := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(finished)
-		t := time.NewTicker(every)
-		defer t.Stop()
+		ticks, stopTicks := beatTicks(every)
+		defer stopTicks()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-ticks:
 			}
 			elapsed := stepElapsed(start)
 			if !s.e.json {
