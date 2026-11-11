@@ -37,10 +37,11 @@ With Codex picked, setup:
 1. checks Codex's version;
 2. adds the marketplace and the two plugins with Codex's own commands (`codex plugin marketplace add`, `codex plugin add`);
 3. records the Codex home it wired: every later command (update, uninstall, the background jobs) uses that one, whatever `CODEX_HOME` says in the shell they run from;
-4. offers to import Codex's own memories, then to turn them off ([Codex's own memories](#codexs-own-memories));
-5. tells you to restart Codex and to trust the hooks ([next section](#trust-the-hooks)).
+4. runs `backsight verify --codex`: Codex's hooks and memory server as Codex runs them, then a store-and-recall round trip (with both tools, Claude Code's `verify` makes the round trip and Codex's check skips it);
+5. offers to send your past Codex sessions ([past Codex sessions](#past-codex-sessions)), then to import Codex's own memories and to turn them off ([Codex's own memories](#codexs-own-memories));
+6. tells you to restart Codex and to trust the hooks ([next section](#trust-the-hooks)).
 
-With Codex alone, setup skips what is Claude Code's: the plugin and its permission rule, transcript retention, `verify`, unwiring an older Hindsight integration, and the backfill offer (see [past Codex sessions](#past-codex-sessions)).
+With Codex alone, setup skips what is Claude Code's: the plugin and its permission rule, transcript retention and unwiring an older Hindsight integration.
 
 On a machine already set up, wire Codex with:
 
@@ -128,14 +129,16 @@ While Codex's own memories are on, `backsight doctor`'s `codex-memories` check s
 
 ## Past Codex sessions
 
-Sessions you run in Codex once it is wired are sent as they settle. Past ones, still in Codex's history, are sent by a backfill, which setup's offer does not include for Codex: its `backfill` question is Claude Code's. Run it yourself once Codex is wired:
+Sessions you run in Codex once it is wired are sent as they settle. Past ones, still in Codex's history, are sent by a backfill. Setup's `backfill` question covers each tool it wires, Codex included ("Send your 3 past sessions (2 Claude Code, 1 Codex) to the memory…"), with its cost and a spending cap, and queues them for the background job. Headless sessions ([below](#headless-codex)) are left out, except for the facts stored in them.
+
+Later, or for one tool:
 
 ```sh
-backsight retain backfill --plan
-backsight retain backfill
+backsight retain backfill --tools codex --plan
+backsight retain backfill --tools codex
 ```
 
-Without `--projects-dir`, it reads Claude Code's transcripts and the rollouts of the wired Codex home, oldest first, within a spending cap ([daily use](daily-use.md#importing-past-sessions)); sessions already sent are skipped.
+`--tools claude-code`, `codex` or `both` names whose sessions it sends; without it, every tool wired (Claude Code alone with `--projects-dir`, which is Claude Code's). Codex's sessions are read only once Codex is wired (exit 10 otherwise). Oldest first, within a spending cap, sessions already sent skipped ([daily use](daily-use.md#importing-past-sessions)).
 
 ## What is recorded
 
@@ -177,7 +180,7 @@ skip_entrypoints = ["sdk-*", "codex_sdk_*", "codex-app-server-sdk", "codex_mcp_s
 | Pitfalls after a failed tool call (`recall.failure_pitfalls`) | Available | Not wired: Codex reports no failed tool call to hooks |
 | Tool permissions | A permission rule setup adds | None needed ([approvals](#approvals)) |
 | History retention | `clients.claude_code.retention_days` | Not managed by backsight |
-| `backsight verify` | Runs every hook and the memory tools | Claude Code only for now |
+| `backsight verify` | Runs every hook and the memory tools | `backsight verify --codex`: Codex's hooks, its memory server (each call's session read from its `_meta`), then the round trip; setup runs it |
 
 ## Both tools on one memory
 
@@ -193,6 +196,8 @@ Each session's document keeps which tool it came from (`harness:claude-code` or 
 Each PC that joins a shared memory runs Claude Code, Codex or both: they all share one memory, whatever tool each runs. `backsight connect` runs setup's client steps, so on a PC with Codex it asks `tools` (and the Codex questions), and takes `--codex-home <dir>`; so does `backsight server install --ssh`, for the PC it runs from. After connect, restart each tool wired ([several PCs](several-pcs.md#join-from-another-pc)).
 
 ## Checking Codex
+
+`backsight verify --codex` runs each of backsight's hooks as Codex does, its memory server (each call's session read from its `_meta`), then a store-and-recall round trip; setup runs it when it wires Codex ([when it fails](troubleshooting.md#verify---codex-fails)).
 
 Once Codex is wired, `backsight doctor` adds its Codex checks: `codex` (the version), `codex-plugins` (both plugins installed and enabled), `codex-drift` (the plugins are this binary's), `codex-hooks` (trusted, and run in the latest session), `codex-tools` (the memory tools declare what Codex needs to run them without asking), `codex-rollouts` (record types backsight does not know), `codex-memories` (Codex's own memories on), `codex-mcp-name` (another server named `backsight`) and `codex-shim` (the program behind the shim). A machine without Codex wired shows none of them. Each check, and its fix: [troubleshooting](troubleshooting.md#other-doctor-warnings).
 
@@ -212,17 +217,17 @@ Then restart Codex: open sessions keep the plugins they started with. When the u
 
 ## Uninstall and undo
 
-`backsight uninstall` removes backsight from Codex, in each Codex home it wired:
+`backsight client uninstall --codex` unwires Codex alone, keeping Claude Code, the server and the memory; `backsight uninstall` removes backsight from both. Either one, in each Codex home it acts on:
 
 1. the two plugins and the marketplace, with Codex's commands (`codex plugin remove`, `codex plugin marketplace remove`), then the empty `plugins/cache/backsight/` folder;
 2. backsight's hook trust tables in Codex's `config.toml` (`[hooks.state."backsight-hooks@backsight:…"]`), which `codex plugin remove` leaves behind, through the config editor (a copy of the file kept first);
 3. Codex's memories back on, when backsight turned them off and you have not set the key since.
 
-Everything else in Codex's `config.toml` stays as it was. When `codex` is no longer on your PATH, uninstall goes on without these steps and names the commands to run by hand. A trust table backsight cannot edit safely is left, named, for you to delete. Then restart Codex: open sessions still run the removed plugins.
+Everything else in Codex's `config.toml` stays as it was. When `codex` is no longer on your PATH, `uninstall` goes on without these steps and names the commands to run by hand; `client uninstall --codex` stops instead (exit 10), changing nothing, with the same commands. A trust table backsight cannot edit safely is left, named, for you to delete. Then restart Codex: open sessions still run the removed plugins.
 
 `backsight setup --undo` removes the plugins, their marketplace and the hook trust from each Codex home setup wired (not from one that had them before), and puts Codex's memories back as they were. A `marketplace` named `backsight` that backsight did not create (a git one, say) is never removed: setup and `client install --codex` refuse it, naming it.
 
-There is no command yet that unwires Codex alone and keeps Claude Code: `setup --undo` and `uninstall` act on both.
+`client uninstall --codex` also forgets the Codex home: no Codex session is read after it, and its sessions still queued for a backfill are dropped, never sent. `--codex-home <dir>` names another home than the recorded one; `--plan` shows what it would remove. A later `backsight setup --undo` leaves Codex alone, its memories setting included. `client install --codex` wires it again. `client uninstall` without `--codex` is refused: `backsight uninstall` removes backsight from Claude Code.
 
 ## Windows
 

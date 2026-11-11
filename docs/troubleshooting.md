@@ -10,7 +10,7 @@ backsight doctor
 
 doctor checks the whole install and changes nothing: the server, the bank, Claude Code's wiring, the jobs, the queues, backups, updates, disk and recent usage. Each line is `ok`, `info`, `WARN` or `ERROR`, and every problem comes with a `fix:` line, usually a command to run. `backsight doctor --json` gives the same report as JSON.
 
-`backsight verify` goes further: it runs every hook and the memory tools as Claude Code does, then a store-and-recall round trip (`--no-round-trip` skips the round trip and its LLM call). `backsight verify --live` checks real use, read-only: this PC's latest settled session (30 minutes after its last turn) reached the server whole and its facts were consolidated, with an observation from it or, failing that, from one of this PC's 5 previous sessions. "pending" means not yet, with how long to wait; "fail" comes with a fix.
+`backsight verify` goes further: it runs every hook and the memory tools as Claude Code does, then a store-and-recall round trip (`--no-round-trip` skips the round trip and its LLM call); `backsight verify --codex` does the same for Codex. `backsight verify --live` checks real use, read-only: this PC's latest settled session (30 minutes after its last turn) reached the server whole and its facts were consolidated, with an observation from it or, failing that, from one of this PC's 5 previous sessions. "pending" means not yet, with how long to wait; "fail" comes with a fix.
 
 ## Setup stopped
 
@@ -303,6 +303,17 @@ Symptoms, in Codex: no `🧠 backsight` line at your first prompt, no memories a
 
 Codex runs each hook through your login shell (`$SHELL -lc`): a profile that prints, prompts or takes seconds slows every prompt, and a hook past its time limit is cut.
 
+## verify --codex fails
+
+`backsight verify --codex` (setup runs it when it wires Codex) runs each of backsight's hooks as Codex does, then its memory server, then a store-and-recall round trip. What a failure means:
+
+- **Exit 10, Codex is not wired**: run `backsight client install --codex` first. **"Codex has nothing to run"**: the shim is missing; `backsight client install --codex` puts it back.
+- **A hook fails**: the line names the event and what the hook printed. Run `backsight doctor`: its `codex-drift` check says when the plugins or the shim are not this binary's (`backsight client install --codex` fixes it).
+- **The MCP check: "a call naming its session in _meta was not taken as that session's"**, or "a call naming no session was not refused": the memory server did not read each call's session from what Codex sends with it, so pause, privacy and `memory_credit` would not work in Codex. The shim most likely runs an older backsight: `backsight client install --codex`, then `backsight verify --codex` again.
+- **The round trip fails**: as for Claude Code's `verify` ([the server is down](#the-server-is-down), [extraction fails](#extraction-fails-or-costs-too-much)).
+
+It does not check that Codex trusts the hooks: doctor's `codex-hooks` check does ([Codex runs no backsight hook](#codex-runs-no-backsight-hook)).
+
 ## A backsight command fails inside Codex
 
 A `backsight` command a skill ran in Codex fails with a permission error (writing under your home) or a network error (reaching the memory server): Codex's sandbox blocked it. The skills tell Codex to run that same command again with escalated permissions, which Codex asks you to approve; approve it, or run the command in a terminal of your own ([the sandbox](codex.md#the-sandbox)). The hooks and the memory tools are not affected.
@@ -415,7 +426,7 @@ What it exposes: for every call made meanwhile, the first 20,000 characters of w
 - `backsight import` stops with exit 20, "the server's memory settings do not know imported files yet": the server's backsight is older than this PC's. Update backsight on the server's computer, then run the import again.
 - A file you expected is not sent: `backsight import ~/notes --plan` lists the skipped files by reason (too large, not text, empty, hidden, excluded, a link, unreadable, another extension, or already sent by another import).
 - With `--from codex` ([Codex's own memories](codex.md#codexs-own-memories)), `backsight import --from codex --plan` names more reasons:
-  - `rollout_on_disk`: a conversation's summary whose conversation is still in Codex's history. The conversation itself is sent instead, by `backsight retain backfill`, which you run for Codex yourself ([past Codex sessions](codex.md#past-codex-sessions)).
+  - `rollout_on_disk`: a conversation's summary whose conversation is still in Codex's history. The conversation itself is sent instead, by the backfill setup offers, or `backsight retain backfill --tools codex` ([past Codex sessions](codex.md#past-codex-sessions)).
   - `opted_out`: the summary of a folder kept out of memory.
   - `mixes_excluded`: `memory_summary.md` or `MEMORY.md`, which mix every project's work, while Codex's memories hold the work of a folder kept out of memory, or name a folder that cannot be checked from this PC (a network or relative path). The plan names those folders (`mixes_excluded_by` in `--json`). Nothing sends these files while such a folder is in Codex's memories.
   - `bad_header`: a summary whose header cannot be read; `duplicate`: a file the other store holds too, sent once; `codex_working`, `codex_skills`, `codex_notes`, `codex_unknown`: Codex's own working files, skills, notes and unknown names, never sent.

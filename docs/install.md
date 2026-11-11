@@ -70,12 +70,12 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 6. wires Claude Code: a plugin with the hooks, the memory tools and the skills, plus a permission rule for the memory tools;
 7. sets how long Claude Code keeps its transcripts, as you answered;
 8. installs the background jobs (a timer every 15 minutes and a daily one) and, with backups on, generates your backup identity, the key backups are encrypted to;
-9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
+9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip (with Codex, `backsight verify --codex` checks Codex's the same way);
 10. unwires an older Hindsight integration from Claude Code, if you chose to (see below);
 11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted, and starts the first `jobs tick` at once so the import begins before setup ends;
 12. queues the folder of notes you gave for import ([import](import.md)), if you accepted, and starts the first `jobs tick` if the backfill did not.
 
-With Codex installed, setup first asks which tools to wire. With Codex picked, it adds Codex's two plugins after step 7, and after step 12 queues the import of Codex's own memories and turns them off, each only as you answered ([Codex](codex.md#install)). With Codex alone, the steps that are Claude Code's (6, 7, 9, 10 and 11) are skipped: "Claude Code is not among the tools wired".
+With Codex installed, setup first asks which tools to wire. With Codex picked, it adds Codex's two plugins after step 7, verifies them in step 9, offers Codex's past sessions in step 11's backfill, and after step 12 queues the import of Codex's own memories and turns them off, each only as you answered ([Codex](codex.md#install)). With Codex alone, the steps that are Claude Code's alone (6, 7 and 10) are skipped: "Claude Code is not among the tools wired".
 
 The first run downloads about 2.4 GB: the server images (about 1.2 GB, with Docker's progress shown), then the embedding models at the server's first start (about 1.2 GB; setup prints the time spent while it waits). Expect several minutes on a home connection. Every step is journaled: if setup stops, `backsight setup --resume` continues where it stopped, the server it started included.
 
@@ -95,7 +95,7 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 | `retention`, only with Claude Code: how long it keeps transcripts | a number of days (`3650` offered), or `keep` (leave Claude Code's setting) | `3650` |
 | `backups`: daily encrypted backups | `on`, `off` | `on` |
 | `reference`, only when another Hindsight integration is wired: unwire it | `retire`, `keep` | `retire` |
-| `backfill`, only when Claude Code keeps past sessions: import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
+| `backfill`, only when a tool picked keeps past sessions (Claude Code's transcripts, Codex's history): import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
 | `import`: import a folder of notes or another tool's memory files ([import](import.md)) | `yes`, `no` | `no` |
 | `import_path`, only after `import=yes`: the folder (`~` is your home folder) | a folder | none, you must answer; setup checks it holds files to import and shows their count and cost. A rerun leaves a folder already imported alone (`backsight import <folder>` sends its new files) |
 | `codex_import`, only with Codex, when its own memories hold files to send: import them in the background ([Codex](codex.md#codexs-own-memories)) | `yes`, `no` | `no` (`yes` recommended) |

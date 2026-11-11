@@ -221,7 +221,7 @@ Every detail: [docs/install.md](docs/install.md).
 
 ## Check it works
 
-1. `backsight verify` runs every hook and the memory tools as Claude Code does, then stores and recalls a test memory. No line should say `fail`.
+1. `backsight verify` runs every hook and the memory tools as Claude Code does, then stores and recalls a test memory (`backsight verify --codex` does the same for Codex). No line should say `fail`.
 2. Start a Claude Code session in one of your projects. Its first line is `🧠 backsight · 🗂️ <project>`; the very first session also shows `👋 Memory is on`, with where sessions go.
 3. `backsight doctor` checks the whole install. Right after setup, a warning that there is no backup yet is expected: the first one runs tonight, or now with `backsight backup create`.
 4. Work as usual. Once your first session has ended (or sat idle for 30 minutes) and a few minutes more have passed, `backsight verify --live` confirms it reached the server and became memories, and `backsight search "<a topic of that session>"` finds them.

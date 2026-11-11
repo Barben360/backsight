@@ -208,7 +208,7 @@ See [privacy.md](privacy.md) for the other opt-outs. In a shell inside Codex, or
 
 ## Importing past sessions
 
-Setup offers to import the sessions Claude Code still keeps ([backfill](glossary.md#backfill)); Codex's past sessions are sent only when you run it yourself ([Codex](codex.md#past-codex-sessions)). You can also run it later:
+Setup offers to import the sessions Claude Code still keeps ([backfill](glossary.md#backfill)), and Codex's with Codex wired (`--tools` picks one tool: [Codex](codex.md#past-codex-sessions)). You can also run it later:
 
 ```sh
 backsight retain backfill --plan

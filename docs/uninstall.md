@@ -16,7 +16,7 @@ How to remove backsight, and what stays afterwards.
 | Config, secrets, state | kept | kept, or deleted with `--purge-local` |
 | Backups | kept | kept |
 
-Use `setup --undo` to go back to how the machine was before setup, keeping backsight installed. Use `uninstall` to remove backsight itself.
+Use `setup --undo` to go back to how the machine was before setup, keeping backsight installed. Use `uninstall` to remove backsight itself. To unwire Codex alone, keeping Claude Code and the memory: `backsight client uninstall --codex` ([Codex](codex.md#uninstall-and-undo)).
 
 If setup replaced another Hindsight integration and you want it back, run `backsight setup --undo` before uninstalling: uninstall does not put it back.
 
