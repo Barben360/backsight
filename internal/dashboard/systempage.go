@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/dashboard/chart"
 	"github.com/Barben360/backsight/internal/dashboard/format"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -142,6 +143,17 @@ func (d PageData) serverCard(r *metrics.Result, reach MetricView, s metrics.Syst
 	return c
 }
 
+// updateSkill is how a session of the coding tool client asks for an
+// update: the page of Codex's activity names Codex's way of invoking the
+// skill ($backsight:update, decision 0085 D1), every other page Claude
+// Code's, as before.
+func updateSkill(client string) string {
+	if client == harnessid.Codex {
+		return "$backsight:update"
+	}
+	return "/backsight:update"
+}
+
 // pcCard is this PC.
 func (d PageData) pcCard(r *metrics.Result, jobs, backlog MetricView, s metrics.SystemInfo) PCCard {
 	l := d.L
@@ -157,7 +169,7 @@ func (d PageData) pcCard(r *metrics.Result, jobs, backlog MetricView, s metrics.
 		update.Pre = "the last check failed"
 	case s.Update.Newer > 0:
 		update.Pre, update.Class = views.CountOf(int64(s.Update.Newer), "newer release", "newer releases"), "st-info"
-		c.Cmd = "/backsight:update"
+		c.Cmd = updateSkill(d.Frame.Client)
 	}
 	c.Rows = append(c.Rows, update)
 

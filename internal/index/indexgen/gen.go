@@ -32,6 +32,22 @@ type Spec struct {
 	Seed             uint64
 	Collection       bool
 	OtherPCs         int
+	// Codex, when set, gives one session in codexEvery to Codex: its
+	// telemetry and journal lines carry client codex (the others, as every
+	// line before, Claude Code's). The random draws are the same either way,
+	// so the history is otherwise unchanged.
+	Codex bool
+}
+
+// codexEvery: with Spec.Codex, the sessions whose number is a multiple of
+// it are Codex's.
+const codexEvery = 4
+
+// clientOf sets m's client from its session number n.
+func (x *gen) clientOf(m map[string]any, n int) {
+	if x.g.Codex && n%codexEvery == 0 {
+		m["client"] = "codex"
+	}
 }
 
 // Budget is the volume the budgets are measured on: 13 months, above a
@@ -100,7 +116,9 @@ func (x *gen) telLine(ts time.Time) map[string]any {
 		}
 		n -= k.pct
 	}
-	m := map[string]any{"event": kind, "ts": ts.Format(time.RFC3339Nano), "session": session(ts, x.rng.IntN(sessionsPerDay)), "project": fmt.Sprintf("proj-%d", x.rng.IntN(8)), "binary_version": "v0.1.17"}
+	sn := x.rng.IntN(sessionsPerDay)
+	m := map[string]any{"event": kind, "ts": ts.Format(time.RFC3339Nano), "session": session(ts, sn), "project": fmt.Sprintf("proj-%d", x.rng.IntN(8)), "binary_version": "v0.1.17"}
+	x.clientOf(m, sn)
 	switch kind {
 	case "prompt":
 		m["decision"] = []string{"recall", "skip"}[x.rng.IntN(2)]
@@ -150,8 +168,10 @@ func (x *gen) telLine(ts time.Time) map[string]any {
 }
 
 func (x *gen) journalLine(ts time.Time, seq int) map[string]any {
+	sn := x.rng.IntN(sessionsPerDay)
 	m := map[string]any{"schema": 1, "seq": seq, "ts": ts.Format(time.RFC3339Nano),
-		"session": session(ts, x.rng.IntN(sessionsPerDay)), "turn": fmt.Sprintf("turn-%d", x.rng.IntN(40)), "project": "proj-1"}
+		"session": session(ts, sn), "turn": fmt.Sprintf("turn-%d", x.rng.IntN(40)), "project": "proj-1"}
+	x.clientOf(m, sn)
 	switch n := x.rng.IntN(10); {
 	case n < 6:
 		m["kind"], m["path"] = "shows", "prompt"

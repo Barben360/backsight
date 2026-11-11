@@ -443,7 +443,7 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 	if j.Improving && !slices.Contains(tags, TagImproving) {
 		tags = append(tags, TagImproving)
 	}
-	if d.Scope == "server" && q.Project != "" && !o.Filtered && !slices.Contains(tags, tagNotFiltered) {
+	if d.Scope == "server" && (q.Project != "" && !o.Filtered || q.Client != "") && !slices.Contains(tags, tagNotFiltered) {
 		tags = append(tags, tagNotFiltered)
 	}
 	m.Tags = tags
@@ -464,6 +464,11 @@ func withTx(ctx context.Context, src Source, q Query, need []string, fn func(e e
 	srv, state := loadServer(ctx, src, w, need)
 	now := src.now()
 	return src.Index.ReadTx(ctx, func(tx *sql.Tx) error {
+		if q.Client != "" {
+			if err := filterClient(ctx, tx, q.Client); err != nil {
+				return err
+			}
+		}
 		if state != nil {
 			last, err := reachLastOK(ctx, tx, w.Loc)
 			if err != nil {

@@ -212,6 +212,9 @@ func allAcceptancePages(t *testing.T) []accPage {
 		// where it changes the page) and, for the four pages the longest window costs most, at the
 		// longest custom window.
 		accPCs(t, long, hot)
+		// Every page on one coding tool: a third history where some sessions are Codex's, asked with
+		// client=codex at 90 days, and the Overview that splits that history by tool.
+		accClients(t, hot)
 		// The framed failure pages, which carry a class of their kind.
 		for _, c := range []struct {
 			path string
@@ -327,6 +330,89 @@ func accPCs(t *testing.T, long, hot string) {
 	}
 }
 
+// accClients adds the "clients" pages (every page route with client=codex at 90 days, on a history where one
+// session in four is Codex's; its session, project and day those of Codex's activity) and the "clientsplit"
+// Overview (every tool, split by tool) to the set.
+func accClients(t *testing.T, hot string) {
+	t.Helper()
+	spec := dataSpec
+	dataSpec.Codex = true
+	h := dataHarness(t)
+	dataSpec = spec
+	if got := indexgen.AppendHotMemory(t, h.dirs.State, hotShows); got != hot {
+		t.Fatalf("the hot memory of the clients history is %q, want %q", got, hot)
+	}
+	ck := cookieHdr(h.login())
+	const q = sweepWindow90 + "&client=codex"
+	sess, proj, day := "", "", ""
+	if s := apiPath(t, h, "/api/v1/sessions?"+q).Tables.Sessions; len(s) > 0 {
+		sess = s[0].ID
+	}
+	if p := apiPath(t, h, "/api/v1/projects?"+q).Tables.Projects; len(p) > 0 {
+		proj = p[0].Project
+	}
+	if d := apiPath(t, h, "/api/v1/days?"+q).Tables.Days; len(d) > 0 {
+		day = d[0].Day
+	}
+	if sess == "" || proj == "" || day == "" {
+		t.Fatalf("no Codex session (%q), project (%q) or day (%q) in the history", sess, proj, day)
+	}
+	ask := func(path, query, kind, set string) {
+		resp := h.do("GET", path+"?"+query, ck...)
+		b := body(t, resp)
+		if resp.StatusCode != 200 {
+			accFail = append(accFail, fmt.Sprintf("GET %s?%s: %d, want 200", path, query, resp.StatusCode))
+			return
+		}
+		accPages = append(accPages, accPage{Name: path + "?" + query, Kind: kind, Set: set, Body: b})
+	}
+	for _, r := range routes {
+		if r.Kind != "page" {
+			continue
+		}
+		path := r.Sample
+		switch r.Page {
+		case "project":
+			path = "/projects/" + url.PathEscape(proj)
+		case "session":
+			path = "/sessions/" + url.PathEscape(sess)
+		case "memory":
+			path = "/memories/" + url.PathEscape(hot)
+		case "day":
+			path = "/days/" + day
+		}
+		ask(path, q+"&dev=0", r.Page, "clients")
+	}
+	ask("/", sweepWindow90+"&dev=0", "overview", "clientsplit")
+}
+
+// Every page of the "clients" set says it counts Codex alone, in the scope line's choice, and keeps the filter
+// on its links into the dashboard; the Overview of the history splits it by tool. A page that dropped the
+// parameter would count every tool, and fail here.
+func TestAcceptanceClientPagesCountOneTool(t *testing.T) {
+	n := 0
+	eachAcceptancePage(t, func(p accPage) bool { return p.Set == "clients" }, func(t *testing.T, p accPage) {
+		n++
+		doc := parseHTML(t, p.Body)
+		if got := current(doc, `.scopebar nav.tseg`, "true"); !slices.Equal(got, []string{"Codex"}) {
+			t.Errorf("the tool choice shows %q, want Codex", got)
+		}
+		if !strings.Contains(p.Body, `href="/quality?client=codex"`) {
+			t.Error("the navigation drops the filter")
+		}
+	})
+	if n < 16 {
+		t.Errorf("%d pages swept on one tool", n)
+	}
+	split := parseHTML(t, pageOf(t, "overview", "clientsplit", false).Body)
+	if got := current(split, `.scopebar nav.tseg`, "true"); !slices.Equal(got, []string{"every tool"}) {
+		t.Errorf("the split overview's choice shows %q", got)
+	}
+	if card := split.first("section.card[aria-labelledby=w-by-client]"); card == nil || len(card.find("tbody tr")) != 2 {
+		t.Error("the Overview of two tools has no split with a row per tool")
+	}
+}
+
 // eachAcceptancePage runs f as a subtest on each page keep accepts.
 func eachAcceptancePage(t *testing.T, keep func(accPage) bool, f func(t *testing.T, p accPage)) {
 	t.Helper()
@@ -359,10 +445,11 @@ func pageOf(t *testing.T, kind, set string, dev bool) accPage {
 // the charting pages at 365 days (dev on for three); the 16 routes at the longest window, dev on for the
 // pages that change with it; Overview and System at the defaults; the memory with limit=500; a
 // comparison; the text page; two failure pages, /prefs and the sign-in page; the scenarios; then the 16 routes
-// on all PCs at 90 days (dev on for the pages that change with it) and four of them at the longest window (dev off and on).
+// on all PCs at 90 days (dev on for the pages that change with it) and four of them at the longest window (dev off and on);
+// then the 16 routes on Codex alone at 90 days, and the Overview split by tool.
 func wantPages() int {
 	return 16 + len(devPages) + len(charted) + len(devCharts) + 16 + len(devPages) + len(defaultPages) + 1 + 1 + 1 + 1 + 2 + 2 + len(scenarios) +
-		16 + len(devPages) + 2*len(pcsLong)
+		16 + len(devPages) + 2*len(pcsLong) + 16 + 1
 }
 
 func TestAcceptancePageSet(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 
 // CommonParams are the parameters every view takes; ViewParams adds the
 // ones a view alone takes.
-var CommonParams = []string{"days", "since", "until", "tz", "project", "path", "dev", "limit", "offset", "machines"}
+var CommonParams = []string{"days", "since", "until", "tz", "project", "path", "dev", "limit", "offset", "machines", "client"}
 
 // ViewParams are the parameters that only some views take.
 var ViewParams = map[string][]string{"sessions": {"has"}, "memories": {"sort", "state"}, "releases": {"compare", "measure"}}
@@ -91,6 +91,8 @@ func FromValues(view string, v url.Values) (Params, error) {
 			p.Path = s
 		case "machines":
 			p.Machines = s
+		case "client":
+			p.Client = s
 		case "has":
 			p.Has = s
 		case "sort":
