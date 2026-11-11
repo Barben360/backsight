@@ -2,12 +2,20 @@ version: "2"
 linters:
   enable:
     - errorlint
+    - forbidigo
     - gocritic
     - misspell
     - revive
     - unconvert
     - unparam
   settings:
+    # No test may fail because of wall-clock time (CONTRIBUTING.md, Tests):
+    # a test that reads the clock or waits on a timer says why it cannot
+    # fail on a slow machine, in a //nolint:forbidigo comment.
+    forbidigo:
+      forbid:
+        - pattern: ^time\.(Since|Until|After|NewTimer|Tick|NewTicker)$
+          msg: "a test must not fail on wall-clock time (CONTRIBUTING.md, Tests): inject the clock or a tiny deadline and assert the outcome; wait on a channel, file or hook"
     errcheck:
       exclude-functions:
         - fmt.Fprint
@@ -17,6 +25,12 @@ linters:
       rules:
         - name: exported
           disabled: true
+  exclusions:
+    rules:
+      # The rule is the tests': production code has real deadlines.
+      - path-except: _test\.go$
+        linters:
+          - forbidigo
 formatters:
   enable:
     - gofmt

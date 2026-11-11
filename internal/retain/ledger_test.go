@@ -544,24 +544,20 @@ func TestLearnOwnerGivesUpOnALockThatStaysStale(t *testing.T) {
 	commitAs(t, d, "me@example.org")
 	a := e.f.Attribution
 	a.Resolver = project.New(filepath.Dir(filepath.Dir(d)), []string{".claude"})
-	done := make(chan bool, 1)
-	go func() { done <- a.learnOwner(d) }()
-	select {
-	case ok := <-done:
-		if ok {
-			t.Error("recorded an owner without the lock")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("learnOwner spins on a lock that stays stale")
+	// A learnOwner that spins on the lock hangs here until go test's
+	// -timeout.
+	if a.learnOwner(d) {
+		t.Error("recorded an owner without the lock")
 	}
 }
 
 // Sessions learning owners at once lose none. The wait's bound is the
-// test's own, far past the queue: how many fsync'd writes fit in the
-// product's 1 s is the disk's speed (windows-latest once kept 1 of 6).
+// test's own, out of reach (go test's -timeout ends a hang first): how
+// many fsync'd writes fit in the product's 1 s is the disk's speed
+// (windows-latest once kept 1 of 6).
 func TestOwnersLearntConcurrentlyAreAllKept(t *testing.T) {
 	old := learnOwnerWait
-	learnOwnerWait = time.Minute
+	learnOwnerWait = time.Hour
 	t.Cleanup(func() { learnOwnerWait = old })
 	e := newEnv(t)
 	e.attributed()

@@ -56,7 +56,8 @@ type readPath struct{ key, path string }
 // counted (a detail page asked for a project, session, memory and day of
 // h's history); the Overview, System and Cost pages at the longest window
 // the picker takes (they draw the most positions); and the pages that
-// merge the other PCs, with machines=all.
+// merge the other PCs, with machines=all; and the pages of one coding
+// tool, with client=codex.
 func readPaths(t *testing.T, h *harness) []readPath {
 	t.Helper()
 	sample := map[string]string{
@@ -86,12 +87,21 @@ func readPaths(t *testing.T, h *harness) []readPath {
 		}
 		out = append(out, readPath{key + " all", p + "?machines=all"})
 	}
+	for _, p := range []string{"/", "/quality", "/cost", "/sessions", "/system", sample["day"]} {
+		key := p
+		if p == sample["day"] {
+			key = "day"
+		}
+		out = append(out, readPath{key + " codex", p + "?client=codex"})
+	}
 	return out
 }
 
-// withOtherPCs is spec with the metrics/machines.json of 8 other PCs.
+// withOtherPCs is spec with the metrics/machines.json of 8 other PCs, and
+// one session in four Codex's (the Overview splits the window by tool).
 func withOtherPCs(spec indexgen.Spec) indexgen.Spec {
 	spec.OtherPCs = 8
+	spec.Codex = true
 	return spec
 }
 
@@ -121,6 +131,12 @@ func TestPageReadsDoNotGrowWithTheHistory(t *testing.T) {
 			b, r := h.readsOf(p.path, ck)
 			if strings.HasSuffix(p.key, " all") && !strings.Contains(b, "all PCs on this server (9)") {
 				t.Errorf("GET %s: not on all PCs", p.path)
+			}
+			if strings.HasSuffix(p.key, " codex") && !strings.Contains(b, `data-client="Codex" aria-current="true"`) {
+				t.Errorf("GET %s: not on Codex alone", p.path)
+			}
+			if p.path == "/" && !strings.Contains(b, "Which coding tool used memory?") {
+				t.Errorf("GET /: no split by coding tool")
 			}
 			out[p.key] = r
 		}

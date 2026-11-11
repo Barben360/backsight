@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 )
@@ -24,6 +25,9 @@ type Params struct {
 	Text             bool   // CLI only: the API never sets it
 	Compare, Measure string // releases: the two versions "A,B" and the measure
 	Machines         string // "this" or "all"; empty reads "this"
+	// Client is the coding tool whose activity the figures count
+	// (ClientValues); empty counts every one.
+	Client string
 }
 
 // ThisPC is p asking for this PC's figures alone: the widgets that stay this
@@ -38,7 +42,24 @@ var (
 	hasValues   = []string{"used", "wrong", "undeclared", "memory", "never_extracted", "contradicted"}
 	sortValues  = []string{"shown", "used", "rate", "last_shown"}
 	stateValues = []string{"hidden", "wrong", "never_used"}
+	// clientValues are the coding tools' ids (harnessid), the client filter's values.
+	clientValues = []string{harnessid.ClaudeCode, harnessid.Codex}
 )
+
+// ClientValues are the allowed values of client.
+func ClientValues() []string { return slices.Clone(clientValues) }
+
+// clientNames are the tools' names as the user reads them.
+var clientNames = map[string]string{harnessid.ClaudeCode: "Claude Code", harnessid.Codex: "Codex"}
+
+// ClientName is the name of the coding tool id, the id itself when it is
+// not one this binary knows.
+func ClientName(id string) string {
+	if n, ok := clientNames[id]; ok {
+		return n
+	}
+	return id
+}
 
 // HasValues, SortValues and StateValues are the allowed values of has, sort
 // and state.
@@ -112,7 +133,7 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 	for _, c := range []struct {
 		name, value string
 		allowed     []string
-	}{{"has", p.Has, hasValues}, {"sort", p.Sort, sortValues}, {"state", p.State, stateValues}} {
+	}{{"has", p.Has, hasValues}, {"sort", p.Sort, sortValues}, {"state", p.State, stateValues}, {"client", p.Client, clientValues}} {
 		if c.value != "" && !slices.Contains(c.allowed, c.value) {
 			return metrics.Query{}, Usage("--%s: one of %s", c.name, strings.Join(c.allowed, ", "))
 		}
@@ -134,7 +155,7 @@ func Query(view string, p Params, id string, now time.Time) (metrics.Query, erro
 	}
 	return metrics.Query{Window: w, Project: p.Project, Path: p.Path, ID: id, Limit: p.Limit, Offset: p.Offset,
 		Has: p.Has, Sort: p.Sort, State: p.State, Dev: p.Dev, Text: p.Text,
-		Compare: cmp, Measure: p.Measure, Machines: machines}, nil
+		Compare: cmp, Measure: p.Measure, Machines: machines, Client: p.Client}, nil
 }
 
 // windowUsage is the usage error for a --since/--until window NewWindow

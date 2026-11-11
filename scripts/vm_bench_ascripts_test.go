@@ -177,7 +177,11 @@ func TestVMBenchOfflineScriptOnA(t *testing.T) {
 	home, bin := aHome(t)
 	d := filepath.Join(home, "m6-offline")
 	prompts := offlinePrompts()
-	_, stderr, code := runAScript(t, home, bin, "vb_offline_script", d, append([]string{"laptop", "http://srv:8888", "360", "bs-m6-offline", "of1"}, prompts...))
+	// The bound out of reach (a day: go test's -timeout ends a hang
+	// first); start and end bracket the script's clock.
+	start := time.Now().Truncate(time.Second)
+	_, stderr, code := runAScript(t, home, bin, "vb_offline_script", d, append([]string{"laptop", "http://srv:8888", "86400", "bs-m6-offline", "of1"}, prompts...))
+	end := time.Now()
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %s", code, stderr)
 	}
@@ -222,8 +226,10 @@ func TestVMBenchOfflineScriptOnA(t *testing.T) {
 	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(home, "state", "reach.json"))), &reach); err != nil {
 		t.Fatal(err)
 	}
+	// 2 h before the script's clock (whole seconds), read between start
+	// and end: a bracket, so a slow run cannot fail it.
 	back := readFile(t, filepath.Join(d, "backdated"))
-	if at, err := time.Parse(time.RFC3339, back); err != nil || time.Since(at) < 119*time.Minute || time.Since(at) > 121*time.Minute ||
+	if at, err := time.Parse(time.RFC3339, back); err != nil || at.Before(start.Add(-2*time.Hour)) || at.After(end.Add(-2*time.Hour)) ||
 		reach["failing_since"] != back || reach["last_ok"] != back {
 		t.Errorf("backdated %q, reach.json %v", back, reach)
 	}
@@ -265,15 +271,17 @@ func TestVMBenchOfflineScriptRecordsALateHook(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: POSIX script")
 	home, bin := aHome(t)
 	d := filepath.Join(home, "m6-offline")
-	_, stderr, code := runAScript(t, home, bin, "vb_offline_script", d, append([]string{"hung", "http://srv:8888", "360", "bs-m6-offline", "oh1"}, offlinePrompts()...),
+	// The script's bound out of reach (a day: go test's -timeout ends a
+	// hang first): only the hook's own deadline cuts it.
+	_, stderr, code := runAScript(t, home, bin, "vb_offline_script", d, append([]string{"hung", "http://srv:8888", "86400", "bs-m6-offline", "oh1"}, offlinePrompts()...),
 		"SLOW_HOOK=session-end", "SLOW_S=6")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %s", code, stderr)
 	}
 	runs := readHookRuns(t, filepath.Join(d, "hooks.jsonl"))
 	end := runs[len(runs)-1]
-	if end.Name != "end" || end.RC != 124 || end.MS < 1000 || end.MS > 5500 {
-		t.Errorf("the late hook %+v: want rc 124, killed between its deadline (1 s) and 3 s more", end)
+	if end.Name != "end" || end.RC != 124 {
+		t.Errorf("the late hook %+v: want rc 124 (killed past its deadline)", end)
 	}
 	if readFile(t, filepath.Join(d, "health-end")) != "down" {
 		t.Error("the script stopped at the late hook")
@@ -303,12 +311,10 @@ func TestVMBenchOfflineScriptStopsAtItsBound(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: POSIX script")
 	home, bin := aHome(t)
 	d := filepath.Join(home, "m6-offline")
-	start := time.Now()
+	// Without its watchdog the script waits out the 9 s hook and goes on:
+	// no error, and a health-end.
 	_, _, _ = runAScript(t, home, bin, "vb_offline_script", d, append([]string{"laptop", "http://srv:8888", "2", "bs-m6-offline", "of1"}, offlinePrompts()...),
 		"SLOW_HOOK=session-start", "SLOW_S=9")
-	if el := time.Since(start); el > 7*time.Second {
-		t.Errorf("the script ran %s past a 2 s bound", el)
-	}
 	if e := readFile(t, filepath.Join(d, "error")); !strings.Contains(e, "passed its bound of 2 s") {
 		t.Errorf("error %q", e)
 	}
@@ -320,7 +326,9 @@ func TestVMBenchOfflineScriptStopsAtItsBound(t *testing.T) {
 
 // The watchdog goes with the script however it ends: here an early exit
 // (backsight paths fails) leaves nothing of the script's session running,
-// though the bound is far; the offline script's done is still written.
+// though the bound is far (a day, past go test's -timeout: a watchdog left
+// would never end on its own); the offline script's done is still
+// written.
 func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, c := range []struct{ fn, dir string }{
@@ -330,9 +338,9 @@ func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
 		home, bin := aHome(t)
 		writeExec(t, filepath.Join(home, "backsight"), "#!/bin/sh\nexit 1\n")
 		d := filepath.Join(home, c.dir)
-		args := append([]string{"laptop", "http://srv:8888", "600", "bs-m6-offline", "of1"}, offlinePrompts()...)
+		args := append([]string{"laptop", "http://srv:8888", "86400", "bs-m6-offline", "of1"}, offlinePrompts()...)
 		if c.fn == "vb_latency_script" {
-			args = []string{"20", "bs-m6-latency", "600", "a prompt"}
+			args = []string{"20", "bs-m6-latency", "86400", "a prompt"}
 		}
 		_, _, code := runAScript(t, home, bin, c.fn, d, args)
 		if code == 0 {
@@ -340,16 +348,14 @@ func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
 		}
 		sid := readFile(t, filepath.Join(d, "pgid"))
 		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-s", sid).Run() })
-		// A killed watchdog may not be reaped yet: polled, not judged at once.
-		var left []byte
-		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-			out, err := exec.Command("pgrep", "-s", sid).Output()
-			if left = out; err != nil || time.Now().After(deadline) {
+		// A killed watchdog may not be reaped yet: polled until the session
+		// is empty, with no deadline (a watchdog left hangs this until go
+		// test's -timeout).
+		for {
+			if err := exec.Command("pgrep", "-s", sid).Run(); err != nil {
 				break
 			}
-		}
-		if len(left) > 0 {
-			t.Errorf("%s: its session still runs 5 s after an early exit (watchdog left): pids %s", c.fn, strings.Fields(string(left)))
+			time.Sleep(50 * time.Millisecond)
 		}
 		if c.fn == "vb_offline_script" {
 			readFile(t, filepath.Join(d, "done"))

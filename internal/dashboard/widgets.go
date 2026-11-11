@@ -387,6 +387,7 @@ func cliFor(view, id string, p views.Params) string {
 	flag("tz", p.TZ)
 	flag("project", p.Project)
 	flag("path", p.Path)
+	flag("client", p.Client)
 	if p.Dev {
 		b.WriteString(" --dev")
 	}

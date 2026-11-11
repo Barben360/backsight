@@ -40,6 +40,8 @@ type Tables struct {
 	ByPC             []ByPCRow           `json:"by_pc,omitzero"`
 	Machines         *Machines           `json:"machines,omitzero"`
 	Note             string              `json:"note,omitzero"`
+	// ByClient: the overview's split by coding tool (two or more active).
+	ByClient []ClientRow `json:"by_client,omitzero"`
 }
 
 // ByPCRow is one counted PC on the cost view with all PCs (M8): this PC's
