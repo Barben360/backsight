@@ -43,6 +43,12 @@ import (
 
 const setupResume = "backsight setup --resume"
 
+// The next steps of a setup that installed or changed a tool's plugin.
+const (
+	claudeRestartStep = "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin"
+	codexRestartStep  = "restart Codex so it loads backsight's plugins"
+)
+
 type setupFlags struct {
 	answers                      []string
 	answersFile                  string
@@ -1712,7 +1718,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	res.Steps = rec.Steps
 	res.RestartRequired = restart
 	if restart {
-		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin")
+		res.NextSteps = append(res.NextSteps, claudeRestartStep)
 	}
 	if next := s.codexNextSteps(); len(next) > 0 {
 		res.RestartRequired = res.RestartRequired || s.codexAdded

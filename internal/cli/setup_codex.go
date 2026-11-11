@@ -269,7 +269,7 @@ func (s *setupEnv) planTools(steps []setup.Step, a map[string]string) []setup.St
 func (s *setupEnv) codexNextSteps() []string {
 	var out []string
 	if s.codexAdded {
-		out = append(out, "restart Codex so it loads backsight's plugins")
+		out = append(out, codexRestartStep)
 	}
 	if s.codexTrust != "" {
 		out = append(out, s.codexTrust)

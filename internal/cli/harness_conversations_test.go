@@ -14,7 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
-// Codex's reader is always among the readers, on or not: a rollout a
+// Codex's reader is among the readers (Codex is on): a rollout a
 // hook or a cursor names is read as one, never as a Claude Code
 // transcript; any other path is Claude Code's.
 func TestConversationReadersKnowCodex(t *testing.T) {

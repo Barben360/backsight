@@ -4,7 +4,8 @@
 # containers. One server (Hindsight's mock LLM, on this machine's Docker)
 # is opened on the machine's private IPv4; two client homes, a and b, on
 # the same runner connect to it there with a token, each with its own
-# HOME, BACKSIGHT_HOME and Claude Code profile. The checks reach the three
+# HOME, BACKSIGHT_HOME and Claude Code profile; B also runs Codex (the
+# pinned release, against the fake model) for codex-claude. The checks reach the three
 # homes through the driver below; no VM, no systemd timer: a client's
 # `jobs tick` is run directly where the bench waits for its timer. The
 # clients run with scheduler=off, so CI does not cover a timer's tick
@@ -19,7 +20,7 @@
 # With no private IPv4 on the default route it fails on CI and is skipped
 # elsewhere.
 
-M6C_CHECKS=(two-clients dedup-copied dedup-concurrent dedup-split key-rotation)
+M6C_CHECKS=(two-clients codex-claude dedup-copied dedup-concurrent dedup-split key-rotation)
 
 # shellcheck disable=SC2154 # work is main's, set before any driver call
 # m6_home <a|b|srv>: that machine's home, a directory of this run.
@@ -62,6 +63,10 @@ m6_on() {
   esac
   m6c_env "$who" "$bin" "$@"
 }
+
+# m6_codex_on <backsight words…>: B's backsight with Codex on its PATH
+# (codex-claude): B runs Codex beside Claude Code for that check alone.
+m6_codex_on() { m6c_env b env PATH="$M6_CODEX_DIR:$PATH" "$bin" "$@"; }
 
 m6_put() { m6_sh "$1" "umask 077 && cat > $(m6_q "$2") && chmod 600 $(m6_q "$2")"; }
 m6_get() { m6_sh "$1" "cat $(m6_q "$2")"; }
@@ -129,6 +134,9 @@ m6c_main() {
   bin=$work/bin/backsight
   # Built before HOME moves: Go's caches stay the caller's.
   make -s -C "$root" build OUT="$bin" VERSION=0.940.0
+  # B's Codex (codex-claude): the pinned release and the fake model.
+  M6_CODEX_DIR=$work/codex
+  "$root/scripts/codex/fetch.sh" "$M6_CODEX_DIR"
   # shellcheck source=scripts/hf-cache.sh
   . "$root/scripts/hf-cache.sh"
   # shellcheck source=scripts/proof-lib.sh
