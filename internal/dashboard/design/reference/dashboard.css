@@ -684,6 +684,7 @@ dialog.keys::backdrop { background: rgba(14, 17, 22, 0.5); }
 .scope .mseg { padding: 1px; }
 .scope .mseg a { min-height: 24px; padding: 0 8px; }
 .scope .mseg a[aria-current="true"] { color: var(--fg); }
+.scope .tseg a { white-space: nowrap; }
 .seg a.seg-off { color: var(--fg-3); text-decoration: underline dotted; text-underline-offset: 3px; }
 .scope details.pcs > summary.chip { cursor: pointer; }
 .scope details.pcs[open] > summary.chip { background: var(--surface-2); color: var(--fg); }

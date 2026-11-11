@@ -3,6 +3,7 @@ package cli
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
@@ -24,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/stats"
 	"github.com/Barben360/backsight/internal/termstyle"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // extraction is the server's LLM use over the period (Hindsight's traces).
@@ -68,7 +71,74 @@ type statsResult struct {
 	RuntimeSwitch *statsSwitch       `json:"runtime_switch,omitempty"`
 	Extraction    extraction         `json:"extraction"`
 	Parity        []stats.ParityLine `json:"parity,omitempty"`
-	now           time.Time
+	// Client is the coding tool the report counts (--client), "" every
+	// one; ByClient splits an unfiltered report by tool when more than one
+	// was active.
+	Client   string        `json:"client,omitempty"`
+	ByClient []clientShare `json:"by_client,omitempty"`
+	now      time.Time
+}
+
+// clientShare is one coding tool's share of the legacy report: its typed
+// prompts' sessions, its recalls and those that injected something, and
+// the memory_credit calls accepted, by verdict.
+type clientShare struct {
+	Client   string         `json:"client"`
+	Sessions int            `json:"sessions"`
+	Prompts  int            `json:"prompts"`
+	Recalls  int            `json:"recalls"`
+	WithHits int            `json:"with_hits"`
+	Verdicts map[string]int `json:"verdicts"`
+}
+
+// clientShares splits events by coding tool, nil when one tool or none was
+// active (a prompt or a memory tool call).
+func clientShares(events []stats.Event) []clientShare {
+	by := map[string]*clientShare{}
+	sessions := map[string]map[string]bool{}
+	for _, e := range events {
+		c := stats.ClientOf(e)
+		if e.Event != "prompt" && e.Event != "tool" && e.Event != "credit" {
+			continue
+		}
+		s := by[c]
+		if s == nil {
+			s = &clientShare{Client: c, Verdicts: map[string]int{}}
+			by[c], sessions[c] = s, map[string]bool{}
+		}
+		switch {
+		case e.Event == "prompt" && e.Reason != "machine":
+			s.Prompts++
+			if e.Session != "" {
+				sessions[c][e.Session] = true
+			}
+			if e.Decision == "recall" {
+				s.Recalls++
+				if e.Injected > 0 {
+					s.WithHits++
+				}
+			}
+		case e.Event == "credit" && e.OK:
+			s.Verdicts[e.Verdict]++
+		}
+	}
+	if len(by) < 2 {
+		return nil
+	}
+	var out []clientShare
+	for _, id := range views.ClientValues() {
+		if s, ok := by[id]; ok {
+			s.Sessions = len(sessions[id])
+			out = append(out, *s)
+			delete(by, id)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(by)) { // a tool this binary does not know
+		s := by[id]
+		s.Sessions = len(sessions[id])
+		out = append(out, *s)
+	}
+	return out
 }
 
 // statsSwitch is the last server runtime switch, from state.json.
@@ -179,15 +249,22 @@ func newStatsCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if f.client != "" && !slices.Contains(views.ClientValues(), f.client) {
+				return &output.Error{Code: output.Usage, Message: "--client: one of " + strings.Join(views.ClientValues(), ", ")}
+			}
 			ev, err := stats.Load(d.TelemetryDir(), from, to)
 			if err != nil {
 				return blocked(err)
 			}
-			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to), now: now()}
+			mine := stats.ForClient(ev, f.client)
+			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(mine, from, to), now: now(), Client: f.client}
+			if f.client == "" {
+				res.ByClient = clientShares(ev)
+			}
 			res.Server = reachOf(d, home, res.now)
 			res.Runtime, res.RuntimeSwitch = runtimeOf(d, home)
 			res.Feedback.SharedMachines = sharedMachines(d)
-			journalCounts(d, &res.Report)
+			journalCounts(d, &res.Report, f.client)
 			res.Extraction = extractionOver(cmd, from, to)
 			if parity {
 				res.Parity = stats.Parity(res.Report)
@@ -284,11 +361,11 @@ func sharedMachines(d paths.Dirs) int {
 // changed (their set_changed flag), the shows imported from earlier
 // history, and the memories a session of another project retired. A
 // journal that cannot be read counts what it could.
-func journalCounts(d paths.Dirs, r *stats.Report) {
+func journalCounts(d paths.Dirs, r *stats.Report, client string) {
 	events, _, _ := feedback.Read(d.FeedbackDir(), r.From)
 	f := &r.Feedback
 	for _, e := range events {
-		if e.TS.Before(r.From) || !e.TS.Before(r.To) {
+		if e.TS.Before(r.From) || !e.TS.Before(r.To) || client != "" && harnessid.Or(e.Client) != client {
 			continue
 		}
 		changed := slices.Contains(e.Flags, feedback.FlagSetChanged)
@@ -407,6 +484,9 @@ func statsLines(st termstyle.Style, r statsResult) string {
 	} else {
 		fmt.Fprintf(&b, "Memory over the last %d day(s), %s (UTC)\n\n", r.Days, span)
 	}
+	if r.Client != "" {
+		fmt.Fprintf(&b, "Coding tool  %s only (the server's extraction counts every tool)\n", views.ClientName(r.Client))
+	}
 	fmt.Fprintf(&b, "Server       %s\n", reachText(st, r.Server, r.now))
 	if r.Runtime != "" {
 		fmt.Fprintf(&b, "Runtime      %s\n", runtimeText(r.Runtime, r.RuntimeSwitch))
@@ -472,6 +552,13 @@ func statsLines(st termstyle.Style, r statsResult) string {
 	fmt.Fprintf(&b, "Boost        changed the shown set of %d of %d prompt recalls (%s) and %d of %d searches (%s)\n",
 		bo.PromptsSetChanged, bo.Prompts, pct(bo.PromptsSetChanged, bo.Prompts), bo.SearchesSetChanged, bo.Searches, pct(bo.SearchesSetChanged, bo.Searches))
 	fmt.Fprintf(&b, "Hook failures %s; unknown transcript records: %s\n", counts(r.HookFailures), counts(r.Unknown))
+	if len(r.ByClient) > 0 {
+		parts := make([]string, 0, len(r.ByClient))
+		for _, c := range r.ByClient {
+			parts = append(parts, fmt.Sprintf("%s %s, %d recalls (%s injected something), %d used", views.ClientName(c.Client), plural(c.Sessions, "session"), c.Recalls, pct(c.WithHits, c.Recalls), c.Verdicts["used"]))
+		}
+		fmt.Fprintf(&b, "By tool      %s (--client for one)\n", strings.Join(parts, "; "))
+	}
 	x := r.Extraction
 	switch {
 	case x.Error != "":

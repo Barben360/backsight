@@ -8,6 +8,10 @@ type Query struct {
 	Project, Path string
 	// Machines is "this" (block 8 adds "all").
 	Machines string
+	// Client keeps the activity of one coding tool (a harnessid id): the
+	// rows of the index tables that record it (clientTables), this PC's
+	// alone (other PCs send no client). "" keeps every one.
+	Client string
 	// Sort, State, ID and Has serve the browse views.
 	Sort, State, ID, Has string
 	// Limit is the page size (DefaultLimit when 0, at most MaxLimit).

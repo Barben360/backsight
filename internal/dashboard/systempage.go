@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/dashboard/chart"
 	"github.com/Barben360/backsight/internal/dashboard/format"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -157,7 +158,7 @@ func (d PageData) pcCard(r *metrics.Result, jobs, backlog MetricView, s metrics.
 		update.Pre = "the last check failed"
 	case s.Update.Newer > 0:
 		update.Pre, update.Class = views.CountOf(int64(s.Update.Newer), "newer release", "newer releases"), "st-info"
-		c.Cmd = "/backsight:update"
+		c.Cmd = instructions.SkillRef(d.Frame.Client, "update") // the page of Codex's activity names its way
 	}
 	c.Rows = append(c.Rows, update)
 

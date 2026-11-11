@@ -173,6 +173,8 @@ type Frame struct {
 	CustomMenu                             *Custom   // its copy in the Menu
 	Machines                               string    // "all" when the URL asks for all PCs: every link and form keeps it; "" this PC
 	Switch                                 *Switch   // the scope line's this PC / all PCs switch; nil: the line as shipped
+	Client                                 string    // the coding tool the URL asks for: every link and form keeps it; "" every one
+	Tools                                  *Tools    // the scope line's choice of coding tool; nil: the line as shipped
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -433,6 +435,13 @@ func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 			keep = append(keep, [2]string{k, v})
 		}
 	}
+	// The coding tool is a URL parameter too: the forms carry it, the links
+	// get it from keepClient.
+	client := ""
+	if c := q.Get("client"); slices.Contains(views.ClientValues(), c) {
+		client = c
+		keep = append(keep, [2]string{"client", c})
+	}
 	// All PCs is a URL parameter like the project filter, never a preference:
 	// the forms carry it, the links get it from keepMachines.
 	machines := ""
@@ -444,13 +453,13 @@ func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 		Title: title, Path: path, Version: s.cfg.Version, HelpURL: helpURL,
 		Nav: navFor(path, p.Dev), Prefs: p, Windows: windowsFor(path, q),
 		AllProjects: without(path, "project"), ProjectInput: q.Get("project"), Keep: keep,
-		PrefMenu: prefMenu(path, p), Machines: machines,
+		PrefMenu: prefMenu(path, p), Machines: machines, Client: client,
 	}
 	// The text page takes no parameter: it offers no window or filter. It
 	// never refreshes on its own: each reading of the text is a click. The
 	// menu still shows the preference as set.
 	if kindOf[r.Pattern] == "text" {
-		f.Windows, f.Keep, f.Machines = nil, nil, ""
+		f.Windows, f.Keep, f.Machines, f.Client = nil, nil, "", ""
 		f.Prefs.Refresh = false
 	}
 	return f
@@ -594,6 +603,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		}
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Switch = switchOf(data, head.View)
+			data.Frame.Tools = toolsOf(data)
 		}
 		body, err := renderPage(s.tpl, spec.Name, data)
 		if err != nil {
@@ -601,7 +611,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(keepMachines(body, data.Frame.Machines))
+		_, _ = w.Write(keepClient(keepMachines(body, data.Frame.Machines), data.Frame.Client))
 		if r.Method == http.MethodGet {
 			s.served.Add(1)
 		}
@@ -754,7 +764,7 @@ func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, k
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(keepMachines(buf.Bytes(), data.Frame.Machines))
+	_, _ = w.Write(keepClient(keepMachines(buf.Bytes(), data.Frame.Machines), data.Frame.Client))
 }
 
 // Switch is the scope line's choice between this PC and all PCs on this
@@ -848,7 +858,7 @@ func addMachines(path string) string {
 // is not offered).
 func switchOf(d PageData, view string) *Switch {
 	f, sc := d.Frame, d.Frame.Scope
-	if sc == nil || sc.PCs == nil {
+	if sc == nil || sc.PCs == nil || sc.Client != "" { // one tool's figures are this PC's
 		return nil
 	}
 	pcs, asked := sc.PCs, f.Machines == "all"

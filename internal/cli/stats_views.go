@@ -46,6 +46,7 @@ type viewFlags struct {
 	text             bool
 	compare, measure string
 	machines         string
+	client           string
 }
 
 // Allowed values of the view flags.
@@ -72,6 +73,7 @@ func addViewFlags(cmd *cobra.Command, f *viewFlags) {
 	p.IntVar(&f.limit, "limit", metrics.DefaultLimit, "views: rows per page, 1 to 500")
 	p.IntVar(&f.offset, "offset", 0, "views: rows to skip")
 	p.StringVar(&f.machines, "machines", "", "views: this (this PC's figures, default) or all (merged with the other PCs sharing this server)")
+	p.StringVar(&f.client, "client", "", "only one coding tool's activity: "+strings.Join(views.ClientValues(), " or ")+" (default both)")
 }
 
 // refuseViewFlags is the usage error for a view-only flag given to the
@@ -168,7 +170,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 func (f viewFlags) params() views.Params {
 	return views.Params{Days: f.days, DaysSet: f.daysSet, Since: f.since, Until: f.until, TZ: f.tz,
 		Project: f.project, Path: f.path, Dev: f.dev, Limit: f.limit, Offset: f.offset,
-		Has: f.has, Sort: f.sort, State: f.state, Text: f.text, Compare: f.compare, Measure: f.measure, Machines: f.machines}
+		Has: f.has, Sort: f.sort, State: f.state, Text: f.text, Compare: f.compare, Measure: f.measure, Machines: f.machines, Client: f.client}
 }
 
 // viewQuery maps the flags and the id of a view to its Query.

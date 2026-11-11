@@ -100,6 +100,13 @@ These cards come from the daily upkeep's record (see the notes of v0.1.28-m7 in 
 - **Do two versions differ?** Pick two versions and a measure. The answer is a difference with its 95 % interval, matched by project and by where memory was shown, read as differs, no clear difference or too few, with what is missing and when to look again. It is observational: the two versions ran on different weeks, work and settings, so it never says one is better. When the raw numbers point the other way it says so.
 - **When did Claude use memory?** The share of turns where Claude used memory over time, with a marker at each version switch and settings change recorded on this PC.
 
+## Claude Code and Codex
+
+When both Claude Code and Codex used memory on this PC in the window, the figures add both up, as they always did, and two things appear:
+
+- **The tool choice.** The line under the top bar reads `Coding tool` and a choice: **every tool | Claude Code | Codex**. Choosing one puts `client=codex` (or `client=claude-code`) in the address: every page then counts that tool's activity alone, each figure computed exactly as the combined one; every link and form on the page keeps it, **every tool** removes it, and it is never a preference. The same figures are in `backsight stats overview --client codex` and the other views, and the cards' commands end with `--client codex`. What the memory server reports (what its model spent, the memory's size) counts every tool whatever you choose. A tool's figures are this PC's: under a tool choice the this PC / all PCs switch is not offered (the other PCs send no tool). On a PC where one tool was active, the line reads as before, unless the address names a tool.
+- **Which coding tool used memory?** On the Overview, with every tool chosen, a card splits the window by tool: its sessions and recalls, how often recall found memory (Found), how often it used memory (Used) and the context it added per session. A tool's name opens the pages for that tool alone.
+
 ## Several PCs
 
 When other PCs use the same memory server and share their activity (`feedback` and `feedback.share_ledger`, both on by default; [what they send](privacy.md#what-your-pcs-share-with-each-other)), the pages can add them up. The same figures are in `backsight stats overview --machines all` and the other views ([several-pcs.md](several-pcs.md#see-all-your-pcs-activity)).
