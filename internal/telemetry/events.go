@@ -80,7 +80,7 @@ type Tool struct {
 	MS          int    `json:"ms"`
 	Hits        int    `json:"hits"`
 	OK          bool   `json:"ok"`
-	Live        string `json:"live,omitempty"` // MCP: record | session | stale | none (how the server found its session: by its parent pid, by the session id)
+	Live        string `json:"live,omitempty"` // MCP: record | session | stale | none, or call | unrecorded | none under a harness naming each call's session (how the server found its session: by its parent pid, by the session id, by the call's own with or without its hook record)
 	QueriesN    int    `json:"queries_n,omitempty"`
 	QueryHits   []int  `json:"query_hits,omitempty"`
 	ResultChars int    `json:"result_chars,omitempty"`

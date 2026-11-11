@@ -66,10 +66,16 @@ type creditArgs struct {
 // (by the session id), "stale" (written before the parent started: a
 // reused pid, a previous run) or "none". Without a current record, the
 // start directory and no session.
+//
+// A harness that keeps no by-pid pairing (Codex) names each call's session
+// in the call itself (forCall): see liveOfCall.
 func (d mcpDeps) live() (session.Live, string) {
 	found := "none"
 	current := func(l session.Live) bool { return d.parentStart.IsZero() || !l.At.Before(d.parentStart) }
-	if d.parentPID > 1 && d.harnessOf().PairsByPID() {
+	if !d.harnessOf().PairsByPID() {
+		return d.liveOfCall(current)
+	}
+	if d.parentPID > 1 {
 		if l, ok := session.ReadLive(d.dirs.SessionsDir(), d.parentPID); ok {
 			if current(l) {
 				return l, "record"
@@ -87,12 +93,64 @@ func (d mcpDeps) live() (session.Live, string) {
 	return session.Live{Cwd: cwd, Project: d.current}, found
 }
 
+// liveOfCall is live for a harness that names each call's session in the
+// call (0085 D4, Codex): the session is the call's own, d.sessionID, never
+// one of this process (a server may serve several sessions at once). With
+// that session's hook record current, the record: "call"; without one (its
+// hooks have not run, or not since this server's parent started), the
+// session with the start directory and project: "unrecorded"; a call
+// naming no session has none: "none".
+func (d mcpDeps) liveOfCall(current func(session.Live) bool) (session.Live, string) {
+	cwd, _ := os.Getwd()
+	if !session.ValidID(d.sessionID) {
+		return session.Live{Cwd: cwd, Project: d.current}, "none"
+	}
+	if l, ok := session.ReadLiveSession(d.dirs.SessionsDir(), d.sessionID); ok && current(l) {
+		return l, "call"
+	}
+	return session.Live{SessionID: d.sessionID, Cwd: cwd, Project: d.current}, "unrecorded"
+}
+
 // paired: live found this server's session, by its parent pid or by the
 // session id. The id is the one of the session the server was spawned
 // for: after a /clear it names the previous one. Only what is bounded to
 // that session's own shows takes it (memory_credit, memory_read's short
-// ids); a pause and the recall audit trust the pid record alone.
-func paired(found string) bool { return found == "record" || found == "session" }
+// ids); a pause and the recall audit trust the pid record alone. A session
+// a call names itself (Codex: "call", "unrecorded") is that call's: paired.
+func paired(found string) bool {
+	return found == "record" || found == "session" || found == "call" || found == "unrecorded"
+}
+
+// ownSession: live's session is certainly the one this call runs in (the
+// pid record, or the call's own), so its pause alone applies to the call.
+func ownSession(found string) bool {
+	return found == "record" || found == "call" || found == "unrecorded"
+}
+
+// hookRecorded: live comes from a current hook record of the call's own
+// session, which gives its directory, project and turn (the recall audit).
+func hookRecorded(found string) bool { return found == "record" || found == "call" }
+
+// noCallSession is memory_credit's refusal of a call naming no session,
+// under a harness that names it per call: calling again cannot help.
+const noCallSession = "memory session unknown: this call names no session, so the memories shown in it cannot be checked; nothing was credited"
+
+// callDirsRefusal refuses a note when the call's session has no hook
+// record (found "unrecorded") and a directory the call's turn works in is
+// excluded from memory: the server's own start directory, which checkNote
+// looks at then, may be another chat's on a shared process.
+func (d mcpDeps) callDirsRefusal(cfg config.Config, found string) error {
+	if found != "unrecorded" {
+		return nil
+	}
+	res := project.New(d.home, cfg.Projects.Transverse)
+	for _, dir := range d.callDirs {
+		if out, why := res.OptedOut(dir, cfg.Privacy.ExcludePaths); out {
+			return &output.Error{Code: output.Blocked, Message: "a directory of this turn is excluded from memory (" + why + "): nothing stored"}
+		}
+	}
+	return nil
+}
 
 // freshPrivacy is the server's config with the privacy and components
 // sections and feedback.cross_project_retire read again: a pause
@@ -212,6 +270,9 @@ type mcpDeps struct {
 	// for each call's session (nil: none).
 	adapter harness.Adapter
 	getenv  func(string) string
+	// callDirs are the directories this call's turn works in, when its
+	// harness names them (harness.CallDirs); set by forCall.
+	callDirs []string
 }
 
 // harnessOf is the harness that started this server, Claude Code's when
@@ -225,14 +286,26 @@ func (d mcpDeps) harnessOf() harness.Adapter {
 
 // forCall is d for one tool call: the session the harness names for it
 // (its _meta, or the server's environment) replaces the server's, so a
-// server shared by several sessions files each call under its own.
+// server shared by several sessions files each call under its own. A
+// harness that keeps no by-pid pairing (Codex) names it in each call or
+// not at all: nothing of the server's stands in for a call naming none
+// (0085 D4). d is a copy: nothing of one call reaches another.
 func (d mcpDeps) forCall(req *mcp.CallToolRequest) mcpDeps {
 	a := d.harnessOf()
 	var meta map[string]any
 	if req != nil && req.Params != nil {
 		meta = req.Params.GetMeta()
 	}
-	if s := a.MCPCallSession(meta, d.getenv); s != "" {
+	s := a.MCPCallSession(meta, d.getenv)
+	if !a.PairsByPID() {
+		d.sessionID = s
+		d.callDirs = nil
+		if cd, ok := a.(harness.CallDirs); ok {
+			d.callDirs = cd.MCPCallDirs(meta)
+		}
+		return d
+	}
+	if s != "" {
 		d.sessionID = s
 	}
 	return d
@@ -246,6 +319,17 @@ func errorResult(s string) *mcp.CallToolResult {
 	r := textResult(s)
 	r.IsError = true
 	return r
+}
+
+// closedWorldWrite are the hints of a tool that writes to the memory only:
+// it adds (a note, a credit; a retirement is undone with restore), and
+// reaches nothing outside backsight's own server. Codex runs a tool so
+// hinted without asking, in codex exec too, where it denies one without
+// hints (0085 D6); Claude Code's own permission rule stays what it is,
+// whatever the hints (SPEC §5).
+func closedWorldWrite() *mcp.ToolAnnotations {
+	no := false
+	return &mcp.ToolAnnotations{DestructiveHint: &no, OpenWorldHint: &no}
 }
 
 // newMCPServer builds the memory server (SPEC §7).
@@ -330,7 +414,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			}
 			return textResult(text), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "memory_store", Description: instructions.StoreDescription},
+	mcp.AddTool(s, &mcp.Tool{Name: "memory_store", Description: instructions.StoreDescription, Annotations: closedWorldWrite()},
 		func(ctx context.Context, req *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
 			deps := deps.forCall(req) // this call's session
 			start := time.Now()
@@ -338,13 +422,21 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			live, found := deps.live()
 			cfg := deps.freshPrivacy()
 			err := checkNote(deps.dirs, deps.home, cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text)
-			if err == nil && found != "record" && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
+			if err == nil {
+				err = deps.callDirsRefusal(cfg, found)
+			}
+			if err == nil && !ownSession(found) && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
 				// Without its session this server cannot honour a pause:
 				// while one is on, it fails closed. A pairing by the
 				// session id is no proof either: the id is the one Claude
 				// Code gave at spawn, and after a /clear the session that
-				// runs (and may be paused) is another.
-				err = errors.New("not stored: a session is paused and this server cannot tell which session it belongs to (no current hook record); resume it, or store from the shell with backsight store")
+				// runs (and may be paused) is another. Under a harness naming
+				// each call's session (Codex), the call named none.
+				why := "no current hook record"
+				if !deps.harnessOf().PairsByPID() {
+					why = "the call names no session"
+				}
+				err = errors.New("not stored: a session is paused and this server cannot tell which session it belongs to (" + why + "); resume it, or store from the shell with backsight store")
 			}
 			var proj string
 			if err == nil {
@@ -380,7 +472,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			return textResult(text), nil, nil
 		})
 	if deps.cfg.Feedback.Enabled {
-		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
+		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription, Annotations: closedWorldWrite()},
 			func(ctx context.Context, req *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
 				deps := deps.forCall(req) // this call's session
 				verdict := a.Verdict
@@ -454,6 +546,9 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 	}
 	live, found := d.live()
 	if !paired(found) {
+		if !d.harnessOf().PairsByPID() {
+			return "", errors.New(noCallSession)
+		}
 		return "", errors.New("memory session not ready: call memory_credit again")
 	}
 	if verdict == "none" {
@@ -483,6 +578,9 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 				return "", errors.New(id + ": a briefing page summarises memories and is not one: nothing is retired; " +
 					"give the id of the memory it took the wrong fact from (memory_search finds it), or store the right fact with memory_store")
 			}
+		}
+		if err := d.callDirsRefusal(d.freshPrivacy(), found); err != nil {
+			return "", err
 		}
 		return d.correct(ctx, key, live, verdict, a, ids, owner)
 	}
