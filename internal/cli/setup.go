@@ -49,6 +49,7 @@ type setupFlags struct {
 	questions, undo, force       bool
 	reconfigure                  bool
 	configDir                    string
+	codexHome                    string // --codex-home: Codex's home
 	role                         string // --role: the answer role
 	runtime                      string // --runtime: the answer runtime
 }
@@ -129,6 +130,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
+	cmd.Flags().StringVar(&f.codexHome, "codex-home", "", codexHomeFlag)
 	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without a coding tool (Claude Code or Codex) that only holds the memory for your other PCs (default both: this PC runs one)")
 	cmd.Flags().StringVar(&f.runtime, "runtime", "", "native: run the server from PyPI instead of Docker, under two systemd user units (Linux x86_64) or a scheduled task (Windows x86_64, where it is the default); this PC only; default docker elsewhere")
 	return cmd
@@ -200,6 +202,16 @@ type setupEnv struct {
 	// importEsts: the import folder estimates of this run, by folder and
 	// model.
 	importEsts map[string]importEst
+	// Codex (decision 0085): codexDir is its home (absolute) when the codex
+	// command answers there, "" when it does not (setup then wires Claude
+	// Code alone, as before Codex); claudeFound, the claude command answers;
+	// codexMemories, Codex's own memories are on. codexTrust is what the
+	// codex step leaves the user to do, codexAdded that it added a plugin.
+	codexDir      string
+	claudeFound   bool
+	codexMemories bool
+	codexTrust    string
+	codexAdded    bool
 }
 
 // setupGOOS and setupGOARCH are the machine setup chooses defaults for
@@ -280,6 +292,9 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	}
 	s.loc = claudecode.Locate(home, getenv)
 	s.refs = referenceCount(ctx, s.loc)
+	if err := s.detectCodex(ctx); err != nil {
+		return res, err
+	}
 
 	interactive := !e.json && !f.nonInteractive && !f.plan && !f.questions && stdinIsTerminal() && stdoutIsTerminal()
 	if f.reconfigure {
@@ -322,6 +337,14 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	probes := preflightProbes(ctx, s, extra)
 	probes.SchedulerOff = extra["scheduler"] == "off"
 	probes.ServerOnly = extra["role"] == config.RoleServer
+	if claude, codexOn := setup.Tools(res.Answers); s.codexDir != "" {
+		probes.NoClaude = !claude
+		if codexOn {
+			env := harnessEnv(codex, s.home, codexProfile(s.home, s.codexDir))
+			probes.Codex = func(ctx context.Context) (string, error) { return codex.Detect(ctx, env) }
+			probes.MinCodex = codex.MinVersion()
+		}
+	}
 	if schedulerGOOS == "linux" && !s.schedulerSettled(extra) {
 		probes.UserScheduler = userSession
 	}
@@ -437,6 +460,9 @@ func (s *setupEnv) rerunWith(answer string) string {
 	if s.f.configDir != "" {
 		parts = append(parts, "--config-dir", resumeWord(s.f.configDir))
 	}
+	if s.f.codexHome != "" {
+		parts = append(parts, "--codex-home", resumeWord(s.f.codexHome))
+	}
 	if s.f.role != "" {
 		parts = append(parts, "--role", resumeWord(s.f.role))
 	}
@@ -468,7 +494,8 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			}
 		}
 	}
-	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime()}
+	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime(),
+		Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories}
 	// --reconfigure: the questions the last run answered are asked again,
 	// their answers the defaults; the hidden answers (ports, project) stay.
 	prev := map[string]string{}
@@ -525,7 +552,8 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			trial[k] = val
 		}
 		trial[next.ID] = v
-		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs, Import: s.importEstimate}); errors.As(err, &ue) {
+		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs, Import: s.importEstimate,
+			Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories}); errors.As(err, &ue) {
 			fmt.Fprintln(s.e.stdout, "  "+ue.Msg)
 			continue
 		}
@@ -1284,6 +1312,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "import", Status: "done", Detail: detail}, nil
 		}},
 	}
+	steps = s.withTools(steps, answers, withRuns)
 	if answers["role"] == config.RoleServer {
 		for i, st := range steps {
 			if slices.Contains(clientSteps, st.name) {
@@ -1296,7 +1325,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 
 // clientSteps wire Claude Code: a server-only host has none, they are
 // skipped there.
-var clientSteps = []string{"client", "retention", "verify", "reference", "backfill", "import"}
+var clientSteps = []string{"client", "retention", "codex", "verify", "reference", "backfill", "import", "codex_memories"}
 
 func serverOnlyStep(name string) setup.Step {
 	return setup.Step{Name: name, Status: "skipped", Detail: "server-only host"}
@@ -1575,6 +1604,10 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	if restart {
 		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin")
 	}
+	if next := s.codexNextSteps(); len(next) > 0 {
+		res.RestartRequired = res.RestartRequired || s.codexAdded
+		res.NextSteps = append(res.NextSteps, next...)
+	}
 	if answers["backfill"] == "yes" {
 		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
@@ -1596,6 +1629,9 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""
+	if claude, _ := setup.Tools(answers); !claude {
+		res.TryFirst = "In a new Codex session, ask: \"What do you remember about this project?\""
+	}
 	if answers["role"] == config.RoleServer {
 		res.TryFirst = "backsight doctor: the server's own checks (the client ones read \"not a client: server-only host\")"
 	}
@@ -1816,6 +1852,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "backfill", Status: "planned", Detail: backfill},
 		{Name: "import", Status: "planned", Detail: importDetail},
 	}
+	steps = s.planTools(steps, a)
 	if a["role"] == config.RoleServer {
 		for i, st := range steps {
 			if slices.Contains(clientSteps, st.Name) {

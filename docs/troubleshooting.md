@@ -91,6 +91,8 @@ Setup pulls each image up to 3 times before it stops, and says what Docker's las
 
 Setup's `claude` check needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup). A host that only serves the memory for your other PCs needs no Claude Code: run `backsight setup --role server` there, and setup does not look for `claude`.
 
+Setup's `codex` check runs when you wire Codex: it needs Codex 0.167.0 or newer, with `codex` on your PATH (`npm install -g @openai/codex@latest`). Setup wires Claude Code only when you pick it, and skips its `claude` check otherwise.
+
 ## The server is down
 
 Symptoms: no memories in your sessions, one "⚠️ backsight · memory unavailable (server unreachable)" message, doctor's `server` check in error.

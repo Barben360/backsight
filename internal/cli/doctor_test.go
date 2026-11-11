@@ -57,6 +57,11 @@ func isolate(t *testing.T) string {
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
 	testtool.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "") // never the machine's Codex home
+	// Nor the machine's codex: a test that wants Codex fakes it (withCodex).
+	oldCodex := codexRunner
+	codexRunner = &fakeCodexCLI{t: t, home: home, missing: true}
+	t.Cleanup(func() { codexRunner = oldCodex })
 	// The git-bash check (Windows) finds this one, not the machine's Git.
 	bash := filepath.Join(home, "git", "bin", "bash.exe")
 	_ = os.MkdirAll(filepath.Dir(bash), 0o700)

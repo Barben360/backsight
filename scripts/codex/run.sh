@@ -49,7 +49,10 @@ cleanup() {
 trap cleanup EXIT
 
 # The builds the container runs, static so the image needs no Go.
+# backsight-next: the same code under another version, an update for the
+# round trip (roundtrip.sh).
 (cd "$root" && CGO_ENABLED=0 go build -o "$work/bin/backsight" ./cmd/backsight &&
+  CGO_ENABLED=0 go build -ldflags "-X github.com/Barben360/backsight/internal/buildinfo.Version=0.0.1-next" -o "$work/bin/backsight-next" ./cmd/backsight &&
   CGO_ENABLED=0 go build -o "$work/bin/fakeresponses" ./scripts/codex/fakeresponses &&
   CGO_ENABLED=0 go build -o "$work/bin/probemcp" ./scripts/codex/probemcp)
 docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" "$here" >/dev/null

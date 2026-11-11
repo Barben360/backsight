@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -89,20 +90,39 @@ type clientInstallResult struct {
 	Profile string        `json:"profile"`
 	Steps   []installStep `json:"steps"`
 	Plan    bool          `json:"plan"`
+	// Client is the coding tool wired, "codex" for Codex ("" is Claude
+	// Code's, as every older result).
+	Client string `json:"client,omitempty"`
+	// Trust: Codex runs backsight's hooks only once the user trusts them,
+	// and this install (re)added them: what to do.
+	Trust string `json:"trust,omitempty"`
 }
 
 func newClientInstallCmd(e *env, configDir *string) *cobra.Command {
-	var plan bool
+	var plan, codex bool
+	var codexHome string
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Wire Claude Code to backsight: the plugin (hooks and memory tools) and its permission rule",
+		Short: "Wire Claude Code to backsight: the plugin (hooks and memory tools) and its permission rule; --codex wires Codex",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := clientInstall(cmd.Context(), *configDir, plan)
+			if !codex {
+				if codexHome != "" {
+					return &output.Error{Code: output.Usage, Message: "--codex-home goes with --codex"}
+				}
+				res, err := clientInstall(cmd.Context(), *configDir, plan)
+				return e.report("client install", res, func() string { return installText(res) }, err)
+			}
+			if *configDir != "" {
+				return &output.Error{Code: output.Usage, Message: "--config-dir is Claude Code's directory: give Codex's with --codex-home"}
+			}
+			res, err := clientInstallCodex(cmd.Context(), codexHome, plan)
 			return e.report("client install", res, func() string { return installText(res) }, err)
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be done without doing it")
+	cmd.Flags().BoolVar(&codex, "codex", false, "wire Codex instead: its two plugins (memory tools and skills, hooks), added with the codex command")
+	cmd.Flags().StringVar(&codexHome, "codex-home", "", codexHomeFlag)
 	return cmd
 }
 
@@ -149,63 +169,9 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	add("claude", "done", version)
 
 	// 2. The stable shim every generated file points at (SPEC §3 Paths).
-	shim := filepath.Join(c.dirs.Data, "bin", plugin.ShimName(runtime.GOOS))
-	target, err := shimTarget(c.dirs.Data)
+	shim, target, err := shimSteps(c, plan, before, add, did)
 	if err != nil {
-		return res, blocked(err)
-	}
-	current, _ := filepath.EvalSymlinks(shim)
-	wantTarget, _ := filepath.EvalSymlinks(target)
-	shimChanged := current == "" || current != wantTarget
-	exe, _ := selfExe()
-	exeHash, _ := fsutil.HashFile(exe) // hashed once for the copies below
-	if runtime.GOOS == "windows" {
-		// A copy: changed unless it already holds this binary's bytes, which
-		// pointShim then leaves in place (a supervisor or a session running
-		// it keeps running current.exe, not a .old-<n>), or the signed
-		// checksums beside it were written again.
-		shimChanged = !holds(shim, exeHash)
-	}
-	if !plan {
-		sumsBefore := checksumsIn(filepath.Dir(shim))
-		if err := installShim(target, shim); err != nil {
-			return res, blocked(err)
-		}
-		shimChanged = shimChanged || checksumsIn(filepath.Dir(shim)) != sumsBefore
-	}
-	add("shim", did(shimChanged), shim+" → "+target)
-	// The command on PATH runs the shim (decision 0067 block review), and
-	// is made when absent, as install.sh makes it (M5 review rules, PATH).
-	if link, older := olderPathLink(c.dirs, shim); older || absentPathLink(c.dirs) {
-		// On Windows the PATH command is a copy of the shim, always ours:
-		// unchanged when it already holds this binary's bytes.
-		pathChanged := runtime.GOOS != "windows" || !holds(link, exeHash)
-		if !plan {
-			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-				return res, blocked(err)
-			}
-			sumsBefore := checksumsIn(filepath.Dir(link))
-			if err := pointShim(shim, link); err != nil {
-				return res, blocked(err)
-			}
-			pathChanged = pathChanged || checksumsIn(filepath.Dir(link)) != sumsBefore
-		}
-		add("path", did(pathChanged), link+" → "+shim)
-	}
-	if runtime.GOOS == "windows" && c.dirs.Bin != "" {
-		// The PATH copy is found through the user's PATH (HKCU, no admin).
-		added := false
-		if !plan {
-			if added, err = ensureUserPath(c.dirs.Bin); err != nil {
-				return res, blocked(fmt.Errorf("adding %s to the user PATH: %w", c.dirs.Bin, err))
-			}
-		} else {
-			added = true // planned: reported as a possible change
-		}
-		add("userpath", did(added), c.dirs.Bin+" (user PATH, takes effect in new terminals)")
-	}
-	if !plan {
-		pruneBinaries(c.dirs.Data, c.dirs.Bin, target, before.ShimTarget)
+		return res, err
 	}
 
 	// 3. The plugin, generated whole in a local marketplace (E1), and
@@ -264,6 +230,73 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	schedulerStep(ctx, false, add)
 	bankStep(ctx, false, add)
 	return res, nil
+}
+
+// shimSteps installs this binary and points the stable shim at it, makes
+// the command on PATH when it is absent or an older link, and on Windows
+// adds its directory to the user's PATH: the steps every client install
+// starts with, whatever the coding tool. It returns the shim and its
+// target.
+func shimSteps(c clientEnv, plan bool, before state.State, add func(name, status, detail string), did func(bool) string) (shim, target string, err error) {
+	shim = filepath.Join(c.dirs.Data, "bin", plugin.ShimName(runtime.GOOS))
+	target, err = shimTarget(c.dirs.Data)
+	if err != nil {
+		return "", "", blocked(err)
+	}
+	current, _ := filepath.EvalSymlinks(shim)
+	wantTarget, _ := filepath.EvalSymlinks(target)
+	shimChanged := current == "" || current != wantTarget
+	exe, _ := selfExe()
+	exeHash, _ := fsutil.HashFile(exe) // hashed once for the copies below
+	if runtime.GOOS == "windows" {
+		// A copy: changed unless it already holds this binary's bytes, which
+		// pointShim then leaves in place (a supervisor or a session running
+		// it keeps running current.exe, not a .old-<n>), or the signed
+		// checksums beside it were written again.
+		shimChanged = !holds(shim, exeHash)
+	}
+	if !plan {
+		sumsBefore := checksumsIn(filepath.Dir(shim))
+		if err := installShim(target, shim); err != nil {
+			return "", "", blocked(err)
+		}
+		shimChanged = shimChanged || checksumsIn(filepath.Dir(shim)) != sumsBefore
+	}
+	add("shim", did(shimChanged), shim+" → "+target)
+	// The command on PATH runs the shim (decision 0067 block review), and
+	// is made when absent, as install.sh makes it (M5 review rules, PATH).
+	if link, older := olderPathLink(c.dirs, shim); older || absentPathLink(c.dirs) {
+		// On Windows the PATH command is a copy of the shim, always ours:
+		// unchanged when it already holds this binary's bytes.
+		pathChanged := runtime.GOOS != "windows" || !holds(link, exeHash)
+		if !plan {
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				return "", "", blocked(err)
+			}
+			sumsBefore := checksumsIn(filepath.Dir(link))
+			if err := pointShim(shim, link); err != nil {
+				return "", "", blocked(err)
+			}
+			pathChanged = pathChanged || checksumsIn(filepath.Dir(link)) != sumsBefore
+		}
+		add("path", did(pathChanged), link+" → "+shim)
+	}
+	if runtime.GOOS == "windows" && c.dirs.Bin != "" {
+		// The PATH copy is found through the user's PATH (HKCU, no admin).
+		added := false
+		if !plan {
+			if added, err = ensureUserPath(c.dirs.Bin); err != nil {
+				return "", "", blocked(fmt.Errorf("adding %s to the user PATH: %w", c.dirs.Bin, err))
+			}
+		} else {
+			added = true // planned: reported as a possible change
+		}
+		add("userpath", did(added), c.dirs.Bin+" (user PATH, takes effect in new terminals)")
+	}
+	if !plan {
+		pruneBinaries(c.dirs.Data, c.dirs.Bin, target, before.ShimTarget)
+	}
+	return shim, target, nil
 }
 
 // schedulerStep refreshes the installed scheduler entries (issue 222): the
@@ -598,7 +631,15 @@ func installText(r clientInstallResult) string {
 	for _, s := range r.Steps {
 		fmt.Fprintf(&b, "%-8s %s %s\n", s.Status, s.Name, s.Detail)
 	}
-	if !r.Plan && len(r.Steps) > 0 {
+	switch {
+	case r.Client == harnessid.Codex:
+		if r.Trust != "" {
+			b.WriteString(r.Trust + "\n")
+		}
+		if !r.Plan && len(r.Steps) > 0 {
+			b.WriteString("restart Codex to load the plugins\n")
+		}
+	case !r.Plan && len(r.Steps) > 0:
 		b.WriteString("restart Claude Code (or /reload-plugins) to load the plugin\n")
 	}
 	return b.String()

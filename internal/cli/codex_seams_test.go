@@ -130,14 +130,15 @@ func TestTheGateStopsTheHarnesssQuestionTool(t *testing.T) {
 	}
 }
 
-// The codex command is reached through Codex's runner, which runs nothing
-// yet; Claude Code's runner is unchanged.
+// The codex command is reached through Codex's runner (codex_cli_test.go
+// runs it for real); Claude Code's runner is unchanged.
 func TestToolRunnersPerHarness(t *testing.T) {
 	run := toolRunner(harnessid.Codex)
 	if run == nil {
 		t.Fatal("no runner for Codex")
 	}
-	if _, err := run(t.Context(), nil, "--version"); !errors.Is(err, harness.ErrNotImplemented) {
+	t.Setenv("PATH", t.TempDir()) // no codex there
+	if _, err := run(t.Context(), nil, "--version"); !errors.Is(err, harness.ErrMissing) {
 		t.Errorf("codex runner: %v", err)
 	}
 	f := withClaude(t)
