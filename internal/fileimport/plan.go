@@ -59,6 +59,9 @@ type Plan struct {
 	Stores       []string            `json:"stores,omitempty"`
 	Sends        []PlanFile          `json:"sends,omitempty"`
 	SkippedFiles map[string][]string `json:"skipped_files,omitempty"`
+	// MixesExcludedBy: the kept-out folders that keep the consolidated
+	// files out (skip reason mixes_excluded).
+	MixesExcludedBy []string `json:"mixes_excluded_by,omitempty"`
 }
 
 // BuildPlan estimates the files of s that toSend accepts (all when nil),
@@ -68,6 +71,7 @@ func BuildPlan(s Scan, toSend func(File) bool, source, project string, p retain.
 	plan := Plan{Root: s.Root, Source: source, Project: project, Skipped: map[string]int{}, SkippedDirs: map[string]int{},
 		RedactedKinds: []string{}, PricesKnown: p.Known(), Currency: p.Currency, Preset: s.Preset, Stores: s.Stores}
 	if s.Preset != "" {
+		plan.MixesExcludedBy = slices.Clone(s.KeptOut)
 		plan.Sends, plan.SkippedFiles = []PlanFile{}, map[string][]string{}
 		for k, v := range s.Skipped {
 			plan.SkippedFiles[k] = slices.Clone(v)

@@ -376,7 +376,11 @@ func filesImportText(r filesImportResult) string {
 			skipped = append(skipped, fmt.Sprintf("%d %s folder(s)", dirs, skipLabels[k]))
 		}
 		if n > 0 {
-			skipped = append(skipped, fmt.Sprintf("%d %s", n, skipLabels[k]))
+			s := fmt.Sprintf("%d %s", n, skipLabels[k])
+			if k == fileimport.SkipMixesExcluded && len(p.MixesExcludedBy) > 0 {
+				s += " (" + strings.Join(p.MixesExcludedBy, ", ") + ")"
+			}
+			skipped = append(skipped, s)
 		}
 	}
 	if len(skipped) > 0 {

@@ -174,6 +174,16 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 	machineID string, prices retain.Prices, optedOut func(string) bool, budget *int, r *importTickResult) (int, error) {
 	done := 0
 	save := func() error { return fileimport.SaveManifest(d.ImportDir(), *m) }
+	// Whether the Codex home names a kept-out folder now: read once per
+	// send run, for its first consolidated file.
+	var keptOutOnce *bool
+	homeKeptOut := func() bool {
+		if keptOutOnce == nil {
+			v := len(fileimport.CodexKeptOut(m.Root, optedOut)) > 0
+			keptOutOnce = &v
+		}
+		return *keptOutOnce
+	}
 	for i := range m.Entries {
 		e := &m.Entries[i]
 		if e.Sent || e.Gone {
@@ -213,7 +223,7 @@ func sendImport(ctx context.Context, c *hindsight.Client, d paths.Dirs, m *filei
 		if reason == "" && m.Preset == fileimport.PresetCodex {
 			// Its header is Codex's, read again: a folder kept out since the
 			// import is not sent.
-			codexDate, codexDated, reason = fileimport.CodexRecheck(e.Rel, raw, optedOut)
+			codexDate, codexDated, reason = fileimport.CodexRecheck(e.Rel, raw, optedOut, homeKeptOut)
 		}
 		if reason != "" {
 			// Gone, a link, too large, empty or no longer text: nothing is

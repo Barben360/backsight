@@ -286,8 +286,61 @@ func TestScanCodexKeepsOutExcludedFolders(t *testing.T) {
 	t.Run("other folder", func(t *testing.T) {
 		home := codexHome(t, "v1")
 		s, _ := ScanCodex(home, CodexOptions{OptedOut: func(cwd string) bool { return cwd == "/elsewhere" }})
-		if len(s.Files) != 5 || len(s.Skipped[SkipMixesExcluded]) != 0 {
-			t.Errorf("sent %v, mixes %v", rels(s.Files), s.Skipped[SkipMixesExcluded])
+		if len(s.Files) != 5 || len(s.Skipped[SkipMixesExcluded]) != 0 || len(s.KeptOut) != 0 {
+			t.Errorf("sent %v, mixes %v, kept out %v", rels(s.Files), s.Skipped[SkipMixesExcluded], s.KeptOut)
+		}
+	})
+	t.Run("one store names it, both stores' consolidated files stay", func(t *testing.T) {
+		home := codexHome(t, "dual")
+		raw := filepath.Join(home, "memories", "raw_memories.md")
+		b, err := os.ReadFile(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, raw, string(b)+"\n## Thread `01a1c748-0000-7000-8000-000000000000`\nupdated_at: 2026-11-10T19:06:23+00:00\ncwd: /secret\nrollout_path: /gone.jsonl\n\nsecret work\n")
+		s, err := ScanCodex(home, CodexOptions{OptedOut: func(cwd string) bool { return cwd == "/secret" }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"memories/MEMORY.md", "memories/memory_summary.md", "memories_v2/memory_summary.md"}
+		if got := s.Skipped[SkipMixesExcluded]; !reflect.DeepEqual(got, want) {
+			t.Errorf("mixes = %v, want %v (sent %v)", got, want, rels(s.Files))
+		}
+		for _, f := range s.Files {
+			if isCodexConsolidated(f.Rel) {
+				t.Errorf("%s sent", f.Rel)
+			}
+		}
+		if !reflect.DeepEqual(s.KeptOut, []string{"/secret"}) {
+			t.Errorf("kept out = %v", s.KeptOut)
+		}
+	})
+	// A summary Codex wrote badly still names its folder: it counts.
+	for name, content := range map[string]string{
+		"bad header": "thread_id: ../x\nupdated_at: yesterday\ncwd: /secret\n\nsecret work\n",
+		"too large":  "thread_id: 01a1c748-85f2-7011-b1ee-74ef2a380048\nupdated_at: 2026-11-10T19:00:00+00:00\nrollout_path: /gone\ncwd: /secret\n\n" + strings.Repeat("x", 1<<20),
+		"not text":   "thread_id: a\x00\ncwd: /secret\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			writeFile(t, filepath.Join(home, "memories_v2", "memory_summary.md"), "v1\n## User Profile\n")
+			writeFile(t, filepath.Join(home, "memories_v2", "rollout_summaries", "a.md"), content)
+			s, err := ScanCodex(home, CodexOptions{OptedOut: func(cwd string) bool { return cwd == "/secret" }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(s.Files) != 0 || !reflect.DeepEqual(s.Skipped[SkipMixesExcluded], []string{"memories_v2/memory_summary.md"}) {
+				t.Errorf("sent %v, skipped %v", rels(s.Files), s.Skipped)
+			}
+		})
+	}
+	t.Run("a network cwd is never looked at", func(t *testing.T) {
+		home := t.TempDir()
+		writeFile(t, filepath.Join(home, "memories_v2", "rollout_summaries", "a.md"), "cwd: //host/share\n\nx\n")
+		var asked []string
+		CodexKeptOut(home, func(cwd string) bool { asked = append(asked, cwd); return true })
+		if len(asked) != 0 {
+			t.Errorf("asked about %v", asked)
 		}
 	})
 }
@@ -304,6 +357,11 @@ func TestScanCodexUntrustedFiles(t *testing.T) {
 		"rollout_summaries/unc-rollout.md":                        sum(ok[0], ok[1], `rollout_path: \\host\share\r.jsonl`, ok[3]),
 		"rollout_summaries/two-cwds.md":                           sum(ok[0], ok[1], ok[2], ok[3], "cwd: /other"),
 		"rollout_summaries/bad-thread.md":                         sum("thread_id: ../../etc", ok[1], ok[2], ok[3]),
+		"rollout_summaries/net-cwd-slashes.md":                    sum(ok[0], ok[1], ok[2], "cwd: //host/share/src"),
+		"rollout_summaries/net-cwd-mixed.md":                      sum(ok[0], ok[1], ok[2], `cwd: /\host\share\src`),
+		"rollout_summaries/net-cwd-mixed2.md":                     sum(ok[0], ok[1], ok[2], `cwd: \/host\share\src`),
+		"rollout_summaries/device-rollout.md":                     sum(ok[0], ok[1], `rollout_path: \\?\C:\r.jsonl`, ok[3]),
+		"rollout_summaries/pipe-cwd.md":                           sum(ok[0], ok[1], ok[2], `cwd: \\.\pipe\x`),
 		"rollout_summaries/no-header.md":                          "just a summary\n",
 		"rollout_summaries/not-md.txt":                            "x",
 		"rollout_summaries/deeper/x.md":                           sum(ok...),
@@ -339,7 +397,9 @@ func TestScanCodexUntrustedFiles(t *testing.T) {
 	}
 	want := map[string][]string{
 		SkipBadHeader: p("rollout_summaries/no-date.md", "rollout_summaries/bad-date.md", "rollout_summaries/relative-cwd.md",
-			"rollout_summaries/unc-rollout.md", "rollout_summaries/two-cwds.md", "rollout_summaries/bad-thread.md", "rollout_summaries/no-header.md"),
+			"rollout_summaries/unc-rollout.md", "rollout_summaries/two-cwds.md", "rollout_summaries/bad-thread.md", "rollout_summaries/no-header.md",
+			"rollout_summaries/net-cwd-slashes.md", "rollout_summaries/net-cwd-mixed.md", "rollout_summaries/net-cwd-mixed2.md",
+			"rollout_summaries/device-rollout.md", "rollout_summaries/pipe-cwd.md"),
 		SkipCodexUnknown: p("rollout_summaries/not-md.txt", "notes.txt"),
 		SkipCodexNotes:   p("extensions/ad_hoc/resources/2026-11-10T21-00-00-note.md"),
 		SkipNotText:      p("rollout_summaries/binary.md", "rollout_summaries/invalid.md"),
@@ -408,17 +468,63 @@ func TestParseCodexSummaryHeader(t *testing.T) {
 
 func TestCodexRecheck(t *testing.T) {
 	raw := []byte("thread_id: a\nupdated_at: 2026-11-10T19:05:24Z\nrollout_path: /r\ncwd: /c\n\nx")
-	if d, dated, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", raw, nil); !dated || reason != "" || !d.Equal(time.Date(2026, 11, 10, 19, 5, 24, 0, time.UTC)) {
+	if d, dated, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", raw, nil, nil); !dated || reason != "" || !d.Equal(time.Date(2026, 11, 10, 19, 5, 24, 0, time.UTC)) {
 		t.Errorf("recheck = %v %v %q", d, dated, reason)
 	}
-	if _, _, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", raw, func(cwd string) bool { return cwd == "/c" }); reason != SkipOptedOut {
+	if _, _, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", raw, func(cwd string) bool { return cwd == "/c" }, nil); reason != SkipOptedOut {
 		t.Errorf("kept-out folder: reason %q", reason)
 	}
-	if _, _, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", []byte("no header"), nil); reason != SkipBadHeader {
+	if _, _, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", []byte("no header"), nil, nil); reason != SkipBadHeader {
 		t.Errorf("bad header: reason %q", reason)
 	}
-	if _, dated, reason := CodexRecheck("memories_v2/memory_summary.md", []byte("v1"), nil); dated || reason != "" {
+	if _, dated, reason := CodexRecheck("memories_v2/memory_summary.md", []byte("v1"), nil, func() bool { return false }); dated || reason != "" {
 		t.Errorf("consolidated file: %v %q", dated, reason)
+	}
+	// The home names a kept-out folder since the queue: the consolidated
+	// files stay home, a summary is not asked about the home.
+	for _, rel := range []string{"memories_v2/memory_summary.md", "memories/MEMORY.md"} {
+		if _, _, reason := CodexRecheck(rel, []byte("v1"), nil, func() bool { return true }); reason != SkipMixesExcluded {
+			t.Errorf("%s with a kept-out folder: reason %q", rel, reason)
+		}
+	}
+	if _, _, reason := CodexRecheck("memories_v2/rollout_summaries/a.md", raw, nil, func() bool { return true }); reason != "" {
+		t.Errorf("summary with a kept-out folder elsewhere: reason %q", reason)
+	}
+}
+
+func TestLocalAbsRefusesNetworkAndDevicePaths(t *testing.T) {
+	// The same answer on every OS: a header is read the same wherever it
+	// was written.
+	for p, want := range map[string]bool{
+		"/home/u/src":                   true,
+		"//host/share/x":                false,
+		`/\host\share\x`:                false,
+		`\/host\share\x`:                false,
+		`\\host\share\x`:                false,
+		`\\?\C:\x`:                      false,
+		`\\.\pipe\x`:                    false,
+		"src/app":                       false,
+		"":                              false,
+		"/a\x00b":                       false,
+		"/" + strings.Repeat("a", 4096): false,
+	} {
+		if got := localAbs(p); got != want {
+			t.Errorf("localAbs(%q) = %v, want %v", p, got, want)
+		}
+	}
+	if runtime.GOOS == "windows" && !localAbs(`C:\Users\u\src`) {
+		t.Error("a drive path is refused")
+	}
+}
+
+// An entry sent before entries recorded the project of their send (no
+// SentProject): a move still remembers the project it was sent to.
+func TestMergeMovesAnEntryWithoutSentProject(t *testing.T) {
+	m := Manifest{Source: "s", Project: "home", Preset: PresetCodex,
+		Entries: []Entry{{Rel: "memories_v2/rollout_summaries/a.md", SHA256: "h", Project: "app", Sent: true}}}
+	res := m.Merge(Scan{Files: []File{{Rel: "memories_v2/rollout_summaries/a.md", SHA256: "h", Project: "renamed"}}}, nil)
+	if e := m.Entries[0]; res.Moved != 1 || e.Sent || e.SentProject != "app" || e.Project != "renamed" {
+		t.Errorf("merge = %+v, entry %+v", res, e)
 	}
 }
 
@@ -456,7 +562,7 @@ func TestBuildPlanPerProjectForAPreset(t *testing.T) {
 		{Rel: "memories_v2/memory_summary.md", Chars: 600, DateFromMtime: true, Date: at},
 		{Rel: "memories_v2/rollout_summaries/a.md", Chars: 1200, Project: "app", Date: at},
 		{Rel: "memories_v2/rollout_summaries/b.md", Chars: 600, Project: "app", Date: at},
-	}, Skipped: map[string][]string{SkipRolloutOnDisk: {"memories_v2/rollout_summaries/c.md"}}}
+	}, Skipped: map[string][]string{SkipRolloutOnDisk: {"memories_v2/rollout_summaries/c.md"}}, KeptOut: []string{"/secret"}}
 	p := retain.Prices{Input: 1, Output: 2, Currency: "USD"}
 	plan := BuildPlan(s, nil, "src", "home", p)
 	if len(plan.Projects) != 2 || plan.Projects[0].Project != "app" || plan.Projects[0].Files != 2 || plan.Projects[1].Project != "home" || plan.Projects[1].Files != 1 {
@@ -475,6 +581,9 @@ func TestBuildPlanPerProjectForAPreset(t *testing.T) {
 	want := []PlanFile{{Rel: "memories_v2/memory_summary.md", Project: "home", Date: at, DateFrom: "mtime"},
 		{Rel: "memories_v2/rollout_summaries/a.md", Project: "app", Date: at, DateFrom: "header"},
 		{Rel: "memories_v2/rollout_summaries/b.md", Project: "app", Date: at, DateFrom: "header"}}
+	if !reflect.DeepEqual(plan.MixesExcludedBy, []string{"/secret"}) {
+		t.Errorf("mixes excluded by %v", plan.MixesExcludedBy)
+	}
 	if !reflect.DeepEqual(plan.Sends, want) || !reflect.DeepEqual(plan.SkippedFiles, s.Skipped) || plan.Preset != PresetCodex {
 		t.Errorf("sends = %+v skipped files %v", plan.Sends, plan.SkippedFiles)
 	}

@@ -79,6 +79,9 @@ type Scan struct {
 	// the stores it read, for a preset that has several.
 	Preset string
 	Stores []string
+	// KeptOut: the working folders kept out of memory a preset's sources
+	// name, which keep its consolidated files out (mixes_excluded).
+	KeptOut []string
 }
 
 // ScanDir reads root recursively. Hidden components and excludes apply to

@@ -126,12 +126,17 @@ func validThreadID(id string) bool {
 }
 
 // localAbs: an absolute path on this machine's disks, or a rooted one
-// (/home/u/src: on Windows, the current drive's). A network path
-// (\\host\share, //host/share) is refused: looking at it would reach
-// another machine.
+// (/home/u/src: on Windows, the current drive's). A path starting with two
+// separators of either kind is refused on every OS: on Windows it names
+// another machine (\\host\share, //host, /\host, \/host) or a device
+// (\\?\, \\.\), and looking at it (a stat, git, a .backsight.toml read)
+// would reach that machine.
 func localAbs(p string) bool {
-	return p != "" && len(p) <= 4096 && (filepath.IsAbs(p) || strings.HasPrefix(p, "/")) && !strings.ContainsRune(p, 0) &&
-		!strings.HasPrefix(p, `\\`) && !strings.HasPrefix(p, "//")
+	sep := func(c byte) bool { return c == '/' || c == '\\' }
+	if p == "" || len(p) > 4096 || strings.ContainsRune(p, 0) || (len(p) >= 2 && sep(p[0]) && sep(p[1])) {
+		return false
+	}
+	return filepath.IsAbs(p) || p[0] == '/'
 }
 
 // codexSkip is the Codex layout, by path relative to a store.
@@ -202,7 +207,10 @@ func ScanCodex(home string, opt CodexOptions) (Scan, error) {
 	out := Scan{Root: abs, Preset: PresetCodex, Skipped: map[string][]string{}, SkippedDirs: map[string][]string{}}
 	threads := codexRollouts(filepath.Join(abs, "sessions"))
 	summaries := map[string]CodexSummary{} // rel -> header, of the summaries to send
-	keptOut := map[string]bool{}           // store -> holds a kept-out folder's work
+	// The consolidated files of every store draw on every thread Codex
+	// remembers: one kept-out folder anywhere in the home keeps them all
+	// out (a dual write mirrors one store into the other).
+	out.KeptOut = CodexKeptOut(abs, optedOut)
 	for _, store := range CodexStores {
 		dir := filepath.Join(abs, store)
 		fi, err := os.Lstat(dir)
@@ -229,7 +237,6 @@ func ScanCodex(home string, opt CodexOptions) (Scan, error) {
 				return SkipBadHeader
 			}
 			if optedOut(sum.CWD) {
-				keptOut[store] = true
 				return SkipOptedOut
 			}
 			if rolloutOnDisk(sum, threads) {
@@ -255,18 +262,14 @@ func ScanCodex(home string, opt CodexOptions) (Scan, error) {
 				}
 			}
 		}
-		if !keptOut[store] && rawMemoriesKeepOut(filepath.Join(dir, "raw_memories.md"), optedOut) {
-			keptOut[store] = true
-		}
 	}
 	keep := out.Files[:0]
 	for _, f := range out.Files {
-		store, _, _ := strings.Cut(f.Rel, "/")
 		reason := ""
 		switch {
 		case slices.ContainsFunc(opt.Exclude, func(g string) bool { return MatchGlob(g, f.Rel) }):
 			reason = SkipExcluded
-		case isCodexConsolidated(f.Rel) && keptOut[store]:
+		case isCodexConsolidated(f.Rel) && len(out.KeptOut) > 0:
 			reason = SkipMixesExcluded
 		}
 		if reason != "" {
@@ -363,37 +366,77 @@ func codexRollouts(sessions string) map[string]bool {
 	return ids
 }
 
-// rawMemoriesKeepOut reports whether a v1 store's raw_memories.md (Codex's
-// merge of every thread it remembers, each with its cwd) names a folder
-// kept out of memory: the consolidated files are drawn from the same
-// threads. Unreadable or too large: no.
-func rawMemoriesKeepOut(p string, optedOut func(string) bool) bool {
-	fi, err := os.Lstat(p)
-	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxFileSize {
-		return false
+// codexSummariesLimit bounds the summaries of one store read for the
+// keep-out check.
+const codexSummariesLimit = 10_000
+
+// CodexKeptOut are the working folders kept out of memory (optedOut) that
+// the Codex home home names: in the cwd: lines of any store's summaries
+// (their first 4 KiB, whatever else is wrong with the file: a bad header,
+// too large, not text) and of a v1 store's raw_memories.md (Codex's merge
+// of every thread it remembers). The consolidated files draw on the same
+// threads. A cwd that is not a local absolute path cannot be looked at
+// and is passed over. Sorted, each once.
+func CodexKeptOut(home string, optedOut func(string) bool) []string {
+	if optedOut == nil {
+		return nil
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(io.LimitReader(f, maxFileSize))
-	sc.Buffer(make([]byte, 0, 64*1024), maxFileSize)
-	for sc.Scan() {
-		if cwd, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "cwd:"); ok {
-			if cwd = strings.TrimSpace(cwd); localAbs(cwd) && optedOut(cwd) {
-				return true
+	found := map[string]bool{}
+	check := func(r io.Reader, limit int64) {
+		sc := bufio.NewScanner(io.LimitReader(r, limit))
+		sc.Buffer(make([]byte, 0, 64*1024), int(limit)+1)
+		for sc.Scan() {
+			if cwd, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "cwd:"); ok {
+				if cwd = strings.TrimSpace(cwd); !found[cwd] && localAbs(cwd) && optedOut(cwd) {
+					found[cwd] = true
+				}
 			}
 		}
 	}
-	return false
+	read := func(p string, limit int64) {
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			return
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return
+		}
+		defer func() { _ = f.Close() }()
+		check(f, limit)
+	}
+	for _, store := range CodexStores {
+		dir := filepath.Join(home, store)
+		if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+			continue
+		}
+		read(filepath.Join(dir, "raw_memories.md"), maxFileSize)
+		entries, _ := os.ReadDir(filepath.Join(dir, "rollout_summaries"))
+		for i, e := range entries {
+			if i == codexSummariesLimit {
+				break
+			}
+			read(filepath.Join(dir, "rollout_summaries", e.Name()), codexHeaderBytes)
+		}
+	}
+	out := make([]string, 0, len(found))
+	for cwd := range found {
+		out = append(out, cwd)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // CodexRecheck is what a queued file of the Codex preset is worth when it
 // is sent (rel relative to the Codex home, raw its bytes then): a summary
 // is dated by its header again (dated true), and no longer sent when the
-// header became unreadable or its folder was kept out since (reason).
-func CodexRecheck(rel string, raw []byte, optedOut func(cwd string) bool) (date time.Time, dated bool, reason string) {
+// header became unreadable or its folder was kept out since (reason); a
+// consolidated file is no longer sent when the home names a kept-out
+// folder since (homeKeptOut, asked only for one).
+func CodexRecheck(rel string, raw []byte, optedOut func(cwd string) bool, homeKeptOut func() bool) (date time.Time, dated bool, reason string) {
+	if isCodexConsolidated(rel) && homeKeptOut != nil && homeKeptOut() {
+		return time.Time{}, false, SkipMixesExcluded
+	}
 	if !isCodexSummary(rel) {
 		return time.Time{}, false, ""
 	}
