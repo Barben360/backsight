@@ -69,6 +69,11 @@ type State struct {
 	// the one shown longest ago.
 	ShownTexts map[string]string `json:"shown_texts,omitempty"`
 	ShownOrder []string          `json:"shown_order,omitempty"`
+	// StartedIn: the Claude Code session this one's tool was started from
+	// (a Codex started from Claude Code's shell, whose hooks found its
+	// session in their environment). A shell of this session inherits
+	// that session's variables: the shell's own is this one.
+	StartedIn string `json:"started_in,omitempty"`
 }
 
 // maxShownTexts bounds ShownTexts: a turn shows a dozen memories at most.

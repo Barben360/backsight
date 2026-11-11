@@ -111,7 +111,7 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			if id == "" && sess == "" {
-				sess = shellSession(os.Getenv)
+				sess = shellSessionHere()
 			}
 			if id == "" && sess == "" {
 				return &output.Error{Code: output.Usage, Message: "give --id <memory id> or --session <session id>"}
