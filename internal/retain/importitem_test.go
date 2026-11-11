@@ -56,3 +56,25 @@ func TestImportOperationIDCollapsesRepeats(t *testing.T) {
 		t.Error("changed content or bank kept the operation id")
 	}
 }
+
+func TestImportOperationIDOfAMove(t *testing.T) {
+	f := importFile()
+	_, sent := ImportItem("bank", f)
+	// The same content sent again to another project is a new operation:
+	// a collapse would leave it in the old one.
+	f.Project, f.MovedFrom = "renamed", f.Project
+	item, moved := ImportItem("bank", f)
+	_, again := ImportItem("bank", f)
+	back := f
+	back.Project, back.MovedFrom = f.MovedFrom, "renamed"
+	_, returned := ImportItem("bank", back)
+	if moved == sent || returned == sent || returned == moved {
+		t.Errorf("operations %s, %s, %s: a move must not collapse with an earlier send", sent, moved, returned)
+	}
+	if moved != again {
+		t.Error("the same move, two operation ids")
+	}
+	if !slices.Contains(item.Tags, "project:renamed") || item.ObservationScopes[0][0] != "project:renamed" {
+		t.Errorf("tags %v scopes %v", item.Tags, item.ObservationScopes)
+	}
+}

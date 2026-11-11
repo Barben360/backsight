@@ -30,6 +30,7 @@ type filesImportFlags struct {
 	plan, allowSubscription bool
 	exclude, ext            []string
 	project                 string
+	from, codexHome         string
 	maxCost                 float64
 	maxTokens               int64
 }
@@ -50,13 +51,19 @@ type filesImportResult struct {
 func newImportCmd(e *env) *cobra.Command {
 	var fl filesImportFlags
 	cmd := &cobra.Command{
-		Use:   "import <folder>",
-		Short: "Import a folder of text files into the memory, in the background (see the cost first with --plan)",
-		Args:  usageArgs(cobra.ExactArgs(1)),
+		Use:   "import [<folder>]",
+		Short: "Import a folder of text files, or Codex's own memories, into the memory, in the background (see the cost first with --plan)",
+		Args:  usageArgs(cobra.RangeArgs(0, 1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFilesImport(cmd, e, args[0], fl)
+			folder := ""
+			if len(args) == 1 {
+				folder = args[0]
+			}
+			return runFilesImport(cmd, e, folder, fl)
 		},
 	}
+	cmd.Flags().StringVar(&fl.from, "from", "", "import another tool's memories instead of a folder: codex (each file to its project)")
+	cmd.Flags().StringVar(&fl.codexHome, "codex-home", "", "with --from codex: the Codex home to read (default: the one setup recorded, else $CODEX_HOME or ~/.codex)")
 	cmd.Flags().BoolVar(&fl.plan, "plan", false, "show what would be sent and what it would cost; send and write nothing")
 	cmd.Flags().StringArrayVar(&fl.exclude, "exclude", nil, "skip paths matching this pattern, relative to the folder (** for any depth; repeatable)")
 	cmd.Flags().StringArrayVar(&fl.ext, "ext", nil, "also read files with this extension, e.g. jsonl (repeatable)")
@@ -70,7 +77,20 @@ func newImportCmd(e *env) *cobra.Command {
 
 func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFlags) error {
 	ctx := cmd.Context()
-	d, _, err := machine()
+	switch {
+	case fl.from == "" && folder == "":
+		return &output.Error{Code: output.Usage, Message: "give the folder to import, or --from codex for Codex's own memories"}
+	case fl.from != "" && folder != "":
+		return &output.Error{Code: output.Usage, Message: "give a folder or --from, not both"}
+	case fl.from != "" && fl.from != fileimport.PresetCodex:
+		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("--from %q: the only tool known is codex", fl.from)}
+	case fl.codexHome != "" && fl.from == "":
+		return &output.Error{Code: output.Usage, Message: "--codex-home goes with --from codex"}
+	case fl.from != "" && (cmd.Flags().Changed("project") || cmd.Flags().Changed("ext")):
+		return &output.Error{Code: output.Usage, Message: "--from codex reads Codex's memory files only and sends each one to its own project: --project and --ext do not apply"}
+	}
+	preset := fl.from
+	d, home, err := machine()
 	if err != nil {
 		return err
 	}
@@ -81,6 +101,15 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 	for _, g := range fl.exclude {
 		if err := fileimport.ValidGlob(g); err != nil {
 			return &output.Error{Code: output.Usage, Message: fmt.Sprintf("--exclude %q is not a valid pattern: %v", g, err)}
+		}
+	}
+	if preset == fileimport.PresetCodex {
+		st, err := state.Load(d.StateFile())
+		if err != nil {
+			return blocked(err)
+		}
+		if folder, err = importCodexHome(home, fl.codexHome, st, os.Getenv); err != nil {
+			return err
 		}
 	}
 	folder = expandHome(folder)
@@ -111,6 +140,9 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 		return &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	source := fileimport.SourceID(machineID, root)
+	if preset != "" {
+		source = fileimport.PresetSourceID(machineID, preset, root)
+	}
 	if !fl.plan {
 		// One writer of the manifests at a time: a tick sending this folder
 		// would write its older copy back over this merge.
@@ -136,13 +168,18 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 			res.Reused = append(res.Reused, "--exclude '"+g+"'")
 		}
 	}
-	if found && !cmd.Flags().Changed("ext") && len(m.Ext) > 0 {
+	if found && preset == "" && !cmd.Flags().Changed("ext") && len(m.Ext) > 0 {
 		exts = m.Ext
 		for _, x := range exts {
 			res.Reused = append(res.Reused, "--ext "+x)
 		}
 	}
-	scan, err := fileimport.ScanDir(root, fileimport.ScanOptions{Exclude: exclude, Ext: exts, Now: now()})
+	var scan fileimport.Scan
+	if preset == fileimport.PresetCodex {
+		scan, err = scanCodexImport(home, root, cfg.Projects.Transverse, cfg.Privacy.ExcludePaths, exclude)
+	} else {
+		scan, err = fileimport.ScanDir(root, fileimport.ScanOptions{Exclude: exclude, Ext: exts, Now: now()})
+	}
 	if err != nil {
 		return &output.Error{Code: output.Usage, Message: err.Error()}
 	}
@@ -175,7 +212,7 @@ func runFilesImport(cmd *cobra.Command, e *env, folder string, fl filesImportFla
 		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("this folder was imported for project %s: remove it with backsight import purge %s first to import it for %s", m.Project, source, project)}
 	}
 	if !found {
-		m = fileimport.Manifest{Schema: 1, Source: source, Root: scan.Root, Project: project}
+		m = fileimport.Manifest{Schema: 1, Source: source, Root: scan.Root, Project: project, Preset: preset}
 		docs, err := cl.ListDocuments(ctx, cfg.Server.Bank)
 		if err != nil {
 			if err := unreachable(err); err != nil {
@@ -270,8 +307,12 @@ func hasImportStrategy(ctx context.Context, cl *hindsight.Client, bank string) (
 }
 
 func importEvent(action string, p fileimport.Plan) telemetry.Raw {
-	return telemetry.Raw{Name: "import", Fields: map[string]any{"action": action, "source": p.Source, "files": p.Files,
+	ev := telemetry.Raw{Name: "import", Fields: map[string]any{"action": action, "source": p.Source, "files": p.Files,
 		"chars": p.Total.Chars, "est_tokens": p.Total.InputTokens + p.Total.OutputTokens, "est_cost": p.Total.Cost, "skipped": p.Skipped}}
+	if p.Preset != "" {
+		ev.Fields["preset"], ev.Fields["projects"] = p.Preset, len(p.Projects)
+	}
+	return ev
 }
 
 func appendOnce(s []string, v string) []string {
@@ -287,13 +328,31 @@ var skipLabels = map[string]string{
 	fileimport.SkipExtension: "other file type", fileimport.SkipTooLarge: "over 1 MB", fileimport.SkipNotText: "not text",
 	fileimport.SkipEmpty: "empty", fileimport.SkipExcluded: "excluded", fileimport.SkipHidden: "hidden",
 	fileimport.SkipSymlink: "link", fileimport.SkipUnreadable: "unreadable", fileimport.SkipOtherSource: "already in another import",
+	fileimport.SkipCodexWorking: "Codex working file", fileimport.SkipCodexSkills: "Codex skills",
+	fileimport.SkipCodexNotes: "Codex note (not read yet)", fileimport.SkipCodexUnknown: "not a Codex memory file",
+	fileimport.SkipRolloutOnDisk: "conversation still on disk (sent with past sessions)", fileimport.SkipBadHeader: "header unreadable",
+	fileimport.SkipOptedOut: "folder kept out of memory", fileimport.SkipMixesExcluded: "holds a kept-out folder's work",
+	fileimport.SkipDuplicate: "same as in the other store",
 }
+
+// skipOrder is the order the plan's text names skip reasons in.
+var skipOrder = []string{fileimport.SkipExtension, fileimport.SkipTooLarge, fileimport.SkipNotText, fileimport.SkipEmpty,
+	fileimport.SkipExcluded, fileimport.SkipHidden, fileimport.SkipSymlink, fileimport.SkipUnreadable, fileimport.SkipOtherSource,
+	fileimport.SkipRolloutOnDisk, fileimport.SkipDuplicate, fileimport.SkipOptedOut, fileimport.SkipMixesExcluded, fileimport.SkipBadHeader,
+	fileimport.SkipCodexWorking, fileimport.SkipCodexSkills, fileimport.SkipCodexNotes, fileimport.SkipCodexUnknown}
 
 func filesImportText(r filesImportResult) string {
 	var b strings.Builder
 	p := r.Plan
 	money := func(v float64) string { return importMoney(v, p.PricesKnown, p.Currency) }
-	fmt.Fprintf(&b, "%s (import %s, project %s)\n", p.Root, p.Source, p.Project)
+	if p.Preset == fileimport.PresetCodex {
+		fmt.Fprintf(&b, "Codex memories in %s (import %s; a conversation's summary goes to its folder's project, the rest to %s)\n", p.Root, p.Source, p.Project)
+		if len(p.Stores) == 0 {
+			b.WriteString("no Codex memory store here (memories_v2/ or memories/): Codex's memories may be off, or never ran\n")
+		}
+	} else {
+		fmt.Fprintf(&b, "%s (import %s, project %s)\n", p.Root, p.Source, p.Project)
+	}
 	if p.Files == 0 {
 		b.WriteString("nothing to send\n")
 	} else {
@@ -302,17 +361,26 @@ func filesImportText(r filesImportResult) string {
 			fmt.Fprintf(&b, "%-28s %6d %12d %8d %14s\n", truncate(f.Folder, 28), f.Files, f.Chars, f.Facts, money(f.Cost))
 		}
 		fmt.Fprintf(&b, "%-28s %6d %12d %8d %14s\n", "total", p.Files, p.Total.Chars, p.Facts, money(p.Total.Cost))
+		if len(p.Projects) > 1 || p.Preset != "" {
+			fmt.Fprintf(&b, "%-28s %6s %12s %8s %14s\n", "project", "files", "characters", "facts", "cost")
+			for _, pp := range p.Projects {
+				fmt.Fprintf(&b, "%-28s %6d %12d %8d %14s\n", truncate(pp.Project, 28), pp.Files, pp.Chars, pp.Facts, money(pp.Cost))
+			}
+		}
 		fmt.Fprintf(&b, "facts are approximate: the server decides; %s of work on the server\n", importDuration(p.Total.Duration))
 	}
 	var skipped []string
-	for _, k := range []string{fileimport.SkipExtension, fileimport.SkipTooLarge, fileimport.SkipNotText, fileimport.SkipEmpty,
-		fileimport.SkipExcluded, fileimport.SkipHidden, fileimport.SkipSymlink, fileimport.SkipUnreadable, fileimport.SkipOtherSource} {
+	for _, k := range skipOrder {
 		n := p.Skipped[k]
 		if dirs := p.SkippedDirs[k]; dirs > 0 {
 			skipped = append(skipped, fmt.Sprintf("%d %s folder(s)", dirs, skipLabels[k]))
 		}
 		if n > 0 {
-			skipped = append(skipped, fmt.Sprintf("%d %s", n, skipLabels[k]))
+			s := fmt.Sprintf("%d %s", n, skipLabels[k])
+			if k == fileimport.SkipMixesExcluded && len(p.MixesExcludedBy) > 0 {
+				s += " (" + strings.Join(p.MixesExcludedBy, ", ") + ")"
+			}
+			skipped = append(skipped, s)
 		}
 	}
 	if len(skipped) > 0 {
@@ -324,9 +392,12 @@ func filesImportText(r filesImportResult) string {
 	if p.RedactedFiles > 0 {
 		fmt.Fprintf(&b, "secrets hidden in %d file(s): %s\n", p.RedactedFiles, strings.Join(p.RedactedKinds, ", "))
 	}
-	if r.Merge.Unchanged+r.Merge.Changed+r.Merge.Gone > 0 {
+	if r.Merge.Unchanged+r.Merge.Changed+r.Merge.Gone+r.Merge.Moved > 0 {
 		fmt.Fprintf(&b, "since the last import: %d new, %d changed, %d unchanged, %d no longer in the folder (kept in memory)\n",
 			r.Merge.New, r.Merge.Changed, r.Merge.Unchanged, r.Merge.Gone)
+		if r.Merge.Moved > 0 {
+			fmt.Fprintf(&b, "%d file(s) now belong to another project: sent there again, what the old project drew from them cleared\n", r.Merge.Moved)
+		}
 	}
 	if len(r.Reused) > 0 {
 		b.WriteString("using the settings saved with this import: " + strings.Join(r.Reused, " ") + " (give --exclude or --ext to change them)\n")
@@ -384,6 +455,7 @@ type filesImportSource struct {
 	Source    string  `json:"source"`
 	Root      string  `json:"root"`
 	Project   string  `json:"project"`
+	Preset    string  `json:"preset,omitempty"` // codex: Codex's memories, each file to its project
 	Files     int     `json:"files"`
 	Sent      int     `json:"sent"`
 	Gone      int     `json:"gone"`
@@ -420,7 +492,7 @@ func newImportListCmd(e *env) *cobra.Command {
 			pending := st.Backfill != nil && len(st.Backfill.Sessions) > 0
 			out := make([]filesImportSource, 0, len(all))
 			for _, m := range all {
-				s := filesImportSource{Source: m.Source, Root: m.Root, Project: m.Project, Files: len(m.Entries),
+				s := filesImportSource{Source: m.Source, Root: m.Root, Project: m.Project, Preset: m.Preset, Files: len(m.Entries),
 					SpentCost: m.PriorCost + m.SpentCost, MaxCost: m.MaxCost, MaxTokens: m.MaxTokens, Currency: m.Currency}
 				for _, en := range m.Entries {
 					if en.Sent {
@@ -457,12 +529,19 @@ func importListText(all []filesImportSource) string {
 		"subscription": "rerun backsight import <folder> --allow-subscription to send on your Claude subscription"}
 	var b strings.Builder
 	for _, s := range all {
-		fmt.Fprintf(&b, "%s  %s (project %s): %d/%d sent", s.Source, s.Root, s.Project, s.Sent, s.Files)
+		if s.Preset == fileimport.PresetCodex {
+			fmt.Fprintf(&b, "%s  Codex memories in %s (project %s, or a conversation's own): %d/%d sent", s.Source, s.Root, s.Project, s.Sent, s.Files)
+		} else {
+			fmt.Fprintf(&b, "%s  %s (project %s): %d/%d sent", s.Source, s.Root, s.Project, s.Sent, s.Files)
+		}
 		if s.Gone > 0 {
 			fmt.Fprintf(&b, ", %d no longer in the folder", s.Gone)
 		}
 		fmt.Fprintf(&b, ", %s", s.Status)
 		if r := reasons[s.Reason]; r != "" {
+			if s.Preset != "" {
+				r = strings.ReplaceAll(r, "backsight import <folder>", "backsight import --from "+s.Preset)
+			}
 			b.WriteString(": " + r)
 		}
 		if s.Currency != "" {
