@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/stats"
 )
 
@@ -31,6 +32,9 @@ func checkUsage(dir string, now time.Time, writeOff bool) []Check {
 	}
 	var this, last []stats.Event
 	for _, e := range ev {
+		if e.Event == "transcript_unknown" && stats.ClientOf(e) == harnessid.Codex {
+			continue // Codex's rollouts: codex-rollouts reports them
+		}
 		if e.TS.Before(now.Add(-week)) {
 			last = append(last, e)
 		} else {

@@ -23,6 +23,8 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
@@ -80,7 +82,7 @@ func newReportCmd(e *env) *cobra.Command {
 backsight errors, redacted: no memory text, prompt, transcript, secret
 (secrets.toml and the server's .env included) or server answer; your home
 shows as ~, backsight's directories outside it as <data>, <config>,
-<state>, <bin> and <backups>, your user, machine, bank and remote
+<state>, <bin> and <backups> (and a Codex home outside it as <codex>), your user, machine, bank and remote
 server hosts (backsight's and an older Hindsight install's) as <user>, <host>,
 <bank> and <server>, git remotes (whole, scp form, without host, owner)
 as <remote> and every project name this machine knows (the bank's tags,
@@ -110,6 +112,7 @@ func buildReport(cmd *cobra.Command, d paths.Dirs, home string) (report.Report, 
 	diag := report.Diagnostic{GeneratedAt: now.Truncate(time.Second), Versions: reportVersions(cmd.Context(), d, home)}
 
 	sc := reportScrubber(d, home)
+	diag.Codex = reportCodex(cmd.Context(), d, home, sc)
 
 	doc := runDoctor(cmd, d, home)
 	diag.Doctor = report.Doctor{Checks: doc.Checks, Errors: doc.Errors, Warnings: doc.Warnings}
@@ -446,6 +449,37 @@ func reportVersions(ctx context.Context, d paths.Dirs, home string) report.Versi
 		v.ClaudeCode = version
 	}
 	return v
+}
+
+// reportCodex is the Codex section, nil while backsight is not wired into
+// Codex: the codex command's version, the integration's, and Codex's paths.
+// A Codex home outside the user's home is scrubbed as <codex>.
+func reportCodex(ctx context.Context, d paths.Dirs, home string, sc *report.Scrubber) *report.Codex {
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		return nil
+	}
+	entry := st.ClientOf(harnessid.Codex)
+	if entry == nil || entry.PluginVersion == "" {
+		return nil
+	}
+	env := harnessEnv(codex, home, entry.Profile)
+	loc := codex.Locate(env)
+	if filepath.IsAbs(loc.Dir) {
+		sc.Root(loc.Dir, "<codex>")
+	}
+	out := &report.Codex{Plugin: entry.PluginVersion, Home: loc.Dir, Config: loc.Settings, Sessions: loc.Conversations, Marketplace: harness.CodexMarketplaceDir(d.Data)}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	switch v, err := codex.Detect(ctx, env); {
+	case errors.Is(err, harness.ErrMissing):
+		out.Version = "not found"
+	case err != nil:
+		out.Version = "unknown"
+	default:
+		out.Version = v
+	}
+	return out
 }
 
 func reportCounts(d paths.Dirs) report.Counts {

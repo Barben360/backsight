@@ -455,7 +455,10 @@ type RolloutMeta struct {
 	Cwd, Originator string
 	// AgentType is a subagent's role, "default" when it has none.
 	AgentType string
-	subagent  bool
+	// Started is when the thread started (session_meta's timestamp),
+	// zero when it names none.
+	Started  time.Time
+	subagent bool
 }
 
 // Subagent: the thread was spawned by another one (its report goes to its
@@ -471,10 +474,12 @@ type rawMeta struct {
 	Originator     string          `json:"originator"`
 	Source         json.RawMessage `json:"source"`
 	ThreadSource   string          `json:"thread_source"`
+	Timestamp      string          `json:"timestamp"`
 }
 
 func (r rawMeta) meta() RolloutMeta {
-	m := RolloutMeta{ID: r.ID, SessionID: r.SessionID, ParentThreadID: r.ParentThreadID, ForkedFromID: r.ForkedFromID, Cwd: r.Cwd, Originator: r.Originator}
+	m := RolloutMeta{ID: r.ID, SessionID: r.SessionID, ParentThreadID: r.ParentThreadID, ForkedFromID: r.ForkedFromID, Cwd: r.Cwd, Originator: r.Originator,
+		Started: parseCodexTime(r.Timestamp)}
 	var src struct {
 		Subagent json.RawMessage `json:"subagent"`
 	}
