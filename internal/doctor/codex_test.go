@@ -326,6 +326,17 @@ func TestCodexHooksCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, f.check("codex-hooks"), OK, "no Codex session to judge them by")
+	// Wired by an earlier version, with no wiring time: the session that
+	// ran no SessionStart may predate the hooks; not judged, never failed.
+	st.ClientOf(harnessid.Codex).WiredAt = time.Time{}
+	if err := state.Save(f.env.Dirs.StateFile(), st); err != nil {
+		t.Fatal(err)
+	}
+	c = f.check("codex-hooks")
+	expect(t, c, Info, "not judged")
+	if !strings.Contains(c.Fix, "client install --codex") {
+		t.Errorf("fix %q", c.Fix)
+	}
 	// One handler without its trust.
 	keys := harness.CodexTrustKeys()
 	f.trust(keys[1:]...)

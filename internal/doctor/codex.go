@@ -233,8 +233,15 @@ func checkCodexHooks(codex harness.Codex, env harness.Env, wiredAt time.Time, ru
 		return c
 	}
 	trusted := fmt.Sprintf("%d hooks trusted", total)
+	// No wiring time (Codex wired by an earlier version): no session can be
+	// told apart from those before the hooks existed, so none is judged.
+	if wiredAt.IsZero() {
+		c.Status, c.Summary = Info, trusted+"; whether they run is not judged: the time Codex was wired was not recorded"
+		c.Fix = "backsight client install --codex records it"
+		return c
+	}
 	meta, _, ok := codex.LatestRoot(env, now.Add(-heartbeatGrace))
-	if !ok || (!wiredAt.IsZero() && meta.Started.Before(wiredAt)) {
+	if !ok || meta.Started.Before(wiredAt) {
 		c.Status, c.Summary = OK, trusted+"; no Codex session to judge them by since Codex was wired"
 		return c
 	}
