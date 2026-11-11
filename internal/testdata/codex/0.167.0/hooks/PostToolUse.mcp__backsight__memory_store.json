@@ -6,19 +6,18 @@
   "hook_event_name": "PostToolUse",
   "model": "fake-model",
   "permission_mode": "default",
-  "tool_name": "mcp__memory__memory_search",
+  "tool_name": "mcp__backsight__memory_store",
   "tool_input": {
-    "queries": [
-      "codex spike"
-    ]
+    "kind": "decision",
+    "text": "Decision (2026-11-10): the Codex harness records fixtures with a fake model."
   },
   "tool_response": {
     "content": [
       {
         "type": "text",
-        "text": "nothing in memory\n"
+        "text": "stored (decision, project work) note:44279acb-631c-5c4a-9e24-fcfcb33bb25c\nPrint this line in your final message:\n> 🧠💾 **Saved (work · decision)** — <the fact, in a few words>\n"
       }
     ]
   },
-  "tool_use_id": "call_fake_6_0"
+  "tool_use_id": "call_fake_14_4"
 }

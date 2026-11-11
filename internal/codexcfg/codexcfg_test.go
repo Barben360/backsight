@@ -263,12 +263,12 @@ func TestApprovalFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tool := range []string{"memory_store", "memory_credit"} {
-		v := tree["plugins"].(map[string]any)["backsight@backsight"].(map[string]any)["mcp_servers"].(map[string]any)["memory"].(map[string]any)["tools"].(map[string]any)[tool].(map[string]any)["approval_mode"]
+		v := tree["plugins"].(map[string]any)["backsight@backsight"].(map[string]any)["mcp_servers"].(map[string]any)["backsight"].(map[string]any)["tools"].(map[string]any)[tool].(map[string]any)["approval_mode"]
 		if v != "approve" {
 			t.Errorf("%s: %v", tool, v)
 		}
 	}
-	if !strings.Contains(string(out), "\n[plugins.\"backsight@backsight\".mcp_servers.memory.tools.memory_store]\napproval_mode = \"approve\"\n") {
+	if !strings.Contains(string(out), "\n[plugins.\"backsight@backsight\".mcp_servers.backsight.tools.memory_store]\napproval_mode = \"approve\"\n") {
 		t.Errorf("got:\n%s", out)
 	}
 	if len(changes) != 2 || !changes[0].Changed() {

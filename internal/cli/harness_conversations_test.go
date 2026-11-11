@@ -31,7 +31,7 @@ func TestConversationReadersKnowCodex(t *testing.T) {
 	for _, r := range conversationReaders() {
 		ids = append(ids, r.ID())
 	}
-	if !slices.Equal(ids, []string{"claude-code", "fake-tool", harnessid.Codex}) {
+	if !slices.Equal(ids, []string{"claude-code", harnessid.Codex, "fake-tool"}) {
 		t.Errorf("readers %v", ids)
 	}
 }

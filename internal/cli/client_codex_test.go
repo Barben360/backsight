@@ -161,13 +161,13 @@ func TestClientInstallCodexRefusals(t *testing.T) {
 		t.Errorf("older: exit %d %s", code, out)
 	}
 	f.version = "0.167.0"
-	codexHomeWith(t, home, "[mcp_servers.memory]\ncommand = \"/usr/bin/mem\"\n")
+	codexHomeWith(t, home, "[mcp_servers.backsight]\ncommand = \"/usr/bin/mem\"\n")
 	code, out, _ := run(t, "client", "install", "--codex", "--json")
-	if code != output.NeedsUser || !strings.Contains(out, "[mcp_servers.memory]") || !strings.Contains(out, "codex mcp remove memory") {
+	if code != output.NeedsUser || !strings.Contains(out, "[mcp_servers.backsight]") || !strings.Contains(out, "codex mcp remove backsight") {
 		t.Errorf("clash in config.toml: exit %d %s", code, out)
 	}
 	codexHomeWith(t, home, "")
-	f.mcp = `[{"name":"memory","transport":{"type":"stdio","command":"/usr/bin/mem"}}]`
+	f.mcp = `[{"name":"backsight","transport":{"type":"stdio","command":"/usr/bin/mem"}}]`
 	if code, out, _ := run(t, "client", "install", "--codex", "--json"); code != output.NeedsUser || !strings.Contains(out, "/usr/bin/mem") {
 		t.Errorf("clash in codex mcp list: exit %d %s", code, out)
 	}

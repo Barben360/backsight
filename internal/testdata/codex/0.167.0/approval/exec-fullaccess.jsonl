@@ -2,4 +2,4 @@
 {"server":"probe","tool":"closed","status":"completed","error":null}
 {"server":"probe","tool":"plain","status":"completed","error":null}
 {"server":"probe","tool":"destructive","status":"completed","error":null}
-{"server":"memory","tool":"memory_store","status":"completed","error":null}
+{"server":"backsight","tool":"memory_store","status":"completed","error":null}

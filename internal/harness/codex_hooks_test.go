@@ -93,11 +93,11 @@ func TestCodexToolResponseShapes(t *testing.T) {
 		return in.ToolResponse
 	}
 	var blocks []struct{ Type, Text string }
-	if err := json.Unmarshal(decode("PostToolUse.mcp__memory__memory_search"), &blocks); err != nil || len(blocks) != 1 || blocks[0].Text != "nothing in memory\n" {
+	if err := json.Unmarshal(decode("PostToolUse.mcp__backsight__memory_search"), &blocks); err != nil || len(blocks) != 1 || blocks[0].Text != "nothing in memory\n" {
 		t.Errorf("MCP response %v %v", blocks, err)
 	}
 	var store []struct{ Text string }
-	if json.Unmarshal(decode("PostToolUse.mcp__memory__memory_store"), &store) != nil || len(store) == 0 || !strings.Contains(store[0].Text, "note:") {
+	if json.Unmarshal(decode("PostToolUse.mcp__backsight__memory_store"), &store) != nil || len(store) == 0 || !strings.Contains(store[0].Text, "note:") {
 		t.Errorf("store response %v", store)
 	}
 	var out string
@@ -283,7 +283,7 @@ func TestCodexEventMap(t *testing.T) {
 		case "PostToolUse":
 			for _, name := range fixtureNames(t, "PostToolUse") {
 				tool, _ := codexFixture(t, name)["tool_name"].(string)
-				if m.MatchString(tool) != strings.HasPrefix(tool, "mcp__memory__") {
+				if m.MatchString(tool) != strings.HasPrefix(tool, "mcp__backsight__") {
 					t.Errorf("memory matcher %q on %s's %q", e.Matcher, name, tool)
 				}
 			}

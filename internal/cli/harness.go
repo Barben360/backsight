@@ -74,9 +74,30 @@ func wiredProfile(a harness.Adapter) string {
 }
 
 // conversations lists a's conversations in the profile backsight is wired
-// to (wiredProfile).
+// to (wiredProfile). A tool whose home is recorded when it is wired
+// (Codex, a HomeRecorder) is read only once wired there: recording its
+// conversations is opt-in, so a machine that never wired it reads nothing
+// of its default home (~/.codex), whatever it holds.
 func conversations(home string, a harness.Adapter) []string {
+	if _, records := a.(harness.HomeRecorder); records && !toolWired(a) {
+		return nil
+	}
 	return a.Conversations(harness.Env{Home: home, Profile: wiredProfile(a)})
+}
+
+// toolWired reports that client install recorded a's integration: its
+// state entry names a plugin version.
+func toolWired(a harness.Adapter) bool {
+	d, _, err := machine()
+	if err != nil {
+		return false
+	}
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		return false
+	}
+	c := st.ClientOf(a.ID())
+	return c != nil && c.PluginVersion != ""
 }
 
 // conversationReaders are the conversation readers of every harness that

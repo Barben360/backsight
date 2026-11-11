@@ -401,10 +401,10 @@ func (c Codex) Untrusted(env Env) []string {
 	return out
 }
 
-// NameClash names an MCP server of the user's that is called memory, as
-// backsight's is: its tools would be mcp__memory__… too, and backsight's
-// PostToolUse hook would take them for its own (0085 D3). It reads
-// config.toml ([mcp_servers.memory]) and `codex mcp list --json`, where
+// NameClash names an MCP server of the user's that is called backsight,
+// as backsight's is (CodexServer): its tools would be mcp__backsight__…
+// too, and backsight's PostToolUse hook would take them for its own (0085
+// D3). It reads config.toml ([mcp_servers.backsight]) and `codex mcp list --json`, where
 // backsight's own server (the one running shim) is not a clash. "" when
 // there is none.
 func (c Codex) NameClash(ctx context.Context, env Env, shim string) (string, error) {
@@ -412,10 +412,10 @@ func (c Codex) NameClash(ctx context.Context, env Env, shim string) (string, err
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
-	if there, err := codexcfg.MCPServerTable(raw, plugin.Server); err != nil {
+	if there, err := codexcfg.MCPServerTable(raw, CodexServer); err != nil {
 		return "", fmt.Errorf("%s: %w", c.Locate(env).Settings, err)
 	} else if there {
-		return "[mcp_servers." + plugin.Server + "] in " + c.Locate(env).Settings, nil
+		return "[mcp_servers." + CodexServer + "] in " + c.Locate(env).Settings, nil
 	}
 	out, err := c.run(ctx, env, "mcp", "list", "--json")
 	if err != nil {
@@ -433,14 +433,14 @@ func (c Codex) NameClash(ctx context.Context, env Env, shim string) (string, err
 		return "", fmt.Errorf("codex mcp list --json: unexpected output: %w", err)
 	}
 	for _, s := range servers {
-		if s.Name != plugin.Server || (s.Transport.Command != "" && filepath.Clean(s.Transport.Command) == filepath.Clean(shim)) {
+		if s.Name != CodexServer || (s.Transport.Command != "" && filepath.Clean(s.Transport.Command) == filepath.Clean(shim)) {
 			continue
 		}
 		what := s.Transport.Command
 		if what == "" {
 			what = s.Transport.URL
 		}
-		return "the MCP server " + plugin.Server + " (" + strings.TrimSpace(s.Transport.Type+" "+what) + ") that codex mcp list shows", nil
+		return "the MCP server " + CodexServer + " (" + strings.TrimSpace(s.Transport.Type+" "+what) + ") that codex mcp list shows", nil
 	}
 	return "", nil
 }
