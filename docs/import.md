@@ -83,6 +83,16 @@ A folder inside one already imported is its own import, and no file is sent twic
 
 LifeOS's `WORK/` notes overlap your recent sessions, which backfill may also send. The server merges the duplicate memories when it builds its summaries.
 
+## Codex's own memories
+
+`backsight import --from codex` imports the memories Codex built itself, from its home (the one backsight wired, else `$CODEX_HOME`, else `~/.codex`; `--codex-home <folder>` reads another). It reads every store there (`memories_v2/`, `memories/`, both when Codex writes both) and works as a folder import: `--plan` first, then queued, sent in the background within a cap, `import list`, `import purge`. Unlike a folder, each file goes to its own project with its own date:
+
+- `memory_summary.md` and `MEMORY.md` to the transverse project, dated by their modification time;
+- a conversation's summary (`rollout_summaries/`) to the project of the folder that conversation ran in, dated by its header, and only once the conversation is no longer in Codex's history: while it is, the conversation itself is sent instead, by `backsight retain backfill`;
+- a file both stores hold, once.
+
+The plan lists each file sent with its project and date, the cost per project, and the files skipped by reason. Summaries of folders kept out of memory are skipped, and so are `memory_summary.md` and `MEMORY.md` when Codex's memories hold such a folder's work: they mix every project's. `--project` and `--ext` do not apply. Running it again sends what changed; a summary whose folder now belongs to another project moves there. Setup offers this import before turning Codex's memories off. Details: [Codex](codex.md#codexs-own-memories).
+
 ## When it stops
 
 See [troubleshooting](troubleshooting.md#an-import-is-paused-or-not-moving).

@@ -1,6 +1,6 @@
 # Installing backsight for a user: guide for coding agents
 
-backsight gives Claude Code a long-term memory: one Go binary that runs a memory server on the user's machine (in Docker, or natively without it: the default on Windows) and wires it into Claude Code. You are a coding agent (Claude Code or another) asked to install it. This page is all you need: do not browse the repository.
+backsight gives Claude Code and Codex a long-term memory: one Go binary that runs a memory server on the user's machine (in Docker, or natively without it: the default on Windows) and wires it into Claude Code, Codex or both. You are a coding agent (Claude Code or another) asked to install it. This page is all you need: do not browse the repository.
 
 Quick start: if `backsight version` fails, install the binary with `curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh` (on Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"`); then run `backsight setup --questions --json` and go on at step 2. Ask the user before every choice.
 
@@ -52,6 +52,8 @@ backsight setup --questions --json
 
 Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `default`, `recommended`, `required`, and `asked`. Questions with `"asked": false` are already settled by an existing install's config or an earlier run: tell the user, don't ask again. If the provider answer changes, list the questions again: the model and other questions follow the provider.
 
+With Codex 0.167.0 or newer on the machine (`codex` on PATH, in `--codex-home <dir>`, else `$CODEX_HOME`, else `~/.codex`), setup asks `tools`: `claude-code`, `codex` or `both` (default `both` when Claude Code is there too). With Codex picked, two more may come: `codex_import` (import Codex's own memories; default `no`, recommended `yes`: show its option's `cost`, and `backsight import --from codex --plan --json` details it) and `codex_memories` (turn Codex's own memories off; default and recommended `off`). Both are the user's call. Codex alone skips Claude Code's questions and steps, its backfill offer included: offer `backsight retain backfill --plan --json` for past Codex sessions once setup is done ([Codex](codex.md#past-codex-sessions)). Setup's `codex` step stops while Codex has an MCP server of the user's named `backsight` (the message names it, with `codex mcp remove backsight`): the user decides to rename or remove theirs, then resume.
+
 `import` defaults to `no`: ask whether the user has notes or another tool's memory files to bring in. On `yes`, list the questions again with `--answer import=yes`: `import_path` appears, and an answer naming a folder with nothing to import exits 2. Show the cost first with `backsight import /path/to/folder --plan --json` (see "Following the import of a folder" below).
 
 Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a machine without a systemd user session, such as a container: setup's pre-flight stops with exit 10 and asks for it; it also removes the entries an earlier run wrote, and `backsight setup --resume --answer scheduler=off` goes on from the earlier run without asking for consent again).
@@ -80,8 +82,8 @@ Expect exit 10 the first time: the LLM key is not set. Ask the user to run `back
 
 On exit 0, `data` holds:
 - `steps`: what was done;
-- `restart_required`: if true, tell the user to restart Claude Code (or run `/reload-plugins`);
-- `next_steps`: relay each one (the backup key to save, the background backfill or import);
+- `restart_required`: if true, tell the user to restart Claude Code (or run `/reload-plugins`), and Codex when it was wired;
+- `next_steps`: relay each one (the backup key to save, the background backfill or import; with Codex, trusting backsight's hooks in the review Codex shows at start, or `/hooks`: Codex runs none of them until the user does, and you cannot do it for them);
 - `try_first`: suggest it.
 
 ### Following the import of past sessions
@@ -92,7 +94,7 @@ To finish the import now, with the user's go-ahead, run `backsight retain backfi
 
 ### Following the import of a folder
 
-When the user answered `import=yes` with `import_path=<folder>`, setup ran `backsight import <folder>`: the folder is queued, and `jobs tick` sends up to 10 files per run after any past sessions. Before answering, `backsight import /path/to/folder --plan --json` shows what would be sent and its cost (`data.plan.files`, `data.plan.total.cost`, `data.plan.skipped` by reason); propose `--exclude` patterns when the plan shows logs, archives or generated files, then run `backsight import /path/to/folder --exclude … --json` yourself instead of the setup answer. `backsight import list --json` gives each folder's `status` (`sending`, `waiting`, `paused`, `done`), `reason` (`past_sessions`, `budget`, `subscription`), `sent` out of `files`, and `spent_cost`. A `budget` pause needs a higher `--max-cost`, which is the user's call. [import](import.md) has a LifeOS recipe.
+When the user answered `import=yes` with `import_path=<folder>`, setup ran `backsight import <folder>`: the folder is queued, and `jobs tick` sends up to 10 files per run after any past sessions. Before answering, `backsight import /path/to/folder --plan --json` shows what would be sent and its cost (`data.plan.files`, `data.plan.total.cost`, `data.plan.skipped` by reason); propose `--exclude` patterns when the plan shows logs, archives or generated files, then run `backsight import /path/to/folder --exclude … --json` yourself instead of the setup answer. For Codex's own memories (`codex_import=yes`, or `backsight import --from codex --json`), the plan also has `data.plan.sends` (each file sent: `rel`, `project`, `date`, `date_from`), `data.plan.projects` (files, facts and cost per project), `data.plan.skipped_files` (paths by reason) and `data.plan.mixes_excluded_by` (folders kept out of memory that keep `memory_summary.md` and `MEMORY.md` home): show the user what goes to which project and what stays out, and why. `backsight import list --json` gives each folder's `status` (`sending`, `waiting`, `paused`, `done`), `reason` (`past_sessions`, `budget`, `subscription`), `sent` out of `files`, and `spent_cost`. A `budget` pause needs a higher `--max-cost`, which is the user's call. [import](import.md) has a LifeOS recipe.
 
 ### Offering a GPU reranker
 
@@ -178,4 +180,4 @@ When the user asks whether memory works or is worth it, run `backsight stats ove
 
 ## More
 
-The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md), [GPU reranker](gpu-reranker.md).
+The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [Codex](codex.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md), [GPU reranker](gpu-reranker.md).
