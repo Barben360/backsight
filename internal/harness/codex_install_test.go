@@ -117,7 +117,7 @@ func TestCodexHooksJSON(t *testing.T) {
 		t.Errorf("%d handlers, SessionStart %+v", n, doc.Hooks["SessionStart"])
 	}
 	post := regexp.MustCompile("^(?:" + doc.Hooks["PostToolUse"][0].Matcher + ")$")
-	if !post.MatchString("mcp__memory__memory_search") || post.MatchString("mcp__plugin_backsight_memory__memory_search") {
+	if !post.MatchString("mcp__backsight__memory_search") || post.MatchString("mcp__plugin_backsight_memory__memory_search") || post.MatchString("mcp__memory__memory_search") {
 		t.Errorf("PostToolUse matcher %q", post)
 	}
 	// The command runs the shim with the contract's words, as Codex's
@@ -245,8 +245,8 @@ func TestCodexTreeLayout(t *testing.T) {
 	if err := json.Unmarshal(tree["plugins/backsight/.mcp.json"], &mcp); err != nil {
 		t.Fatal(err)
 	}
-	m := mcp.Servers["memory"]
-	if m.Command != "/d/bin/current" || !slices.Equal(m.Args, []string{"mcp", "--harness", "codex"}) || !slices.Equal(m.EnvVars, []string{"BACKSIGHT_HOME"}) {
+	m := mcp.Servers["backsight"]
+	if len(mcp.Servers) != 1 || m.Command != "/d/bin/current" || !slices.Equal(m.Args, []string{"mcp", "--harness", "codex"}) || !slices.Equal(m.EnvVars, []string{"BACKSIGHT_HOME"}) {
 		t.Errorf(".mcp.json %+v", mcp)
 	}
 	var mk struct {
@@ -698,23 +698,30 @@ func TestCodexNameClash(t *testing.T) {
 		t.Errorf("no server: %q %v", got, err)
 	}
 	quoted, _ := json.Marshal(shim)
-	ours := `[{"name":"memory","transport":{"type":"stdio","command":` + string(quoted) + `,"args":["mcp","--harness","codex"]}}]`
+	ours := `[{"name":"backsight","transport":{"type":"stdio","command":` + string(quoted) + `,"args":["mcp","--harness","codex"]}}]`
 	f.mcp = ours
 	if got, err := c.NameClash(context.Background(), env, shim); err != nil || got != "" {
 		t.Errorf("backsight's own: %q %v", got, err)
 	}
-	f.mcp = `[{"name":"probe","transport":{"type":"stdio","command":"/x"}},{"name":"memory","transport":{"type":"stdio","command":"/usr/bin/mem","args":["serve"]}}]`
+	f.mcp = `[{"name":"probe","transport":{"type":"stdio","command":"/x"}},{"name":"backsight","transport":{"type":"stdio","command":"/usr/bin/mem","args":["serve"]}}]`
 	if got, err := c.NameClash(context.Background(), env, shim); err != nil || !strings.Contains(got, "/usr/bin/mem") {
 		t.Errorf("the user's: %q %v", got, err)
 	}
-	f.mcp = `[{"name":"memory","transport":{"type":"streamable_http","url":"https://mem.example/mcp"}}]`
+	f.mcp = `[{"name":"backsight","transport":{"type":"streamable_http","url":"https://mem.example/mcp"}}]`
 	if got, _ := c.NameClash(context.Background(), env, shim); !strings.Contains(got, "https://mem.example/mcp") {
 		t.Errorf("an HTTP one: %q", got)
 	}
-	f.mcp = ours
+	// A server of the user's named memory, Claude Code's server name, is
+	// no clash under Codex: backsight's is named backsight there.
+	f.mcp = `[{"name":"memory","transport":{"type":"stdio","command":"/usr/bin/mem"}}]`
 	_ = os.MkdirAll(filepath.Join(home, ".codex"), 0o700)
 	_ = os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("[mcp_servers.memory]\ncommand = \"/usr/bin/mem\"\n"), 0o600)
-	if got, err := c.NameClash(context.Background(), env, shim); err != nil || !strings.Contains(got, "[mcp_servers.memory]") {
+	if got, err := c.NameClash(context.Background(), env, shim); err != nil || got != "" {
+		t.Errorf("a user server named memory: %q %v", got, err)
+	}
+	f.mcp = ours
+	_ = os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("[mcp_servers.backsight]\ncommand = \"/usr/bin/mem\"\n"), 0o600)
+	if got, err := c.NameClash(context.Background(), env, shim); err != nil || !strings.Contains(got, "[mcp_servers.backsight]") {
 		t.Errorf("config.toml: %q %v", got, err)
 	}
 	f.mcp = "not json"
@@ -768,5 +775,108 @@ func TestCodexForeignMarketplace(t *testing.T) {
 				t.Errorf("uninstall ran %v: %v", f.ran, err)
 			}
 		})
+	}
+}
+
+// The name the generator gives the server is the one a real Codex 0.167.0
+// listed, offered the model, and named the tools after in its PostToolUse
+// payloads, recorded with the generated plugins (server-name/).
+func TestCodexServerNameIsTheRecordedOne(t *testing.T) {
+	read := func(name string) []byte {
+		raw, err := os.ReadFile(codexFixtures + "server-name/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	var listed []struct{ Name string }
+	if err := json.Unmarshal(read("mcp-list.json"), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(listed, func(s struct{ Name string }) bool { return s.Name == CodexServer }) {
+		t.Errorf("codex mcp list: %+v", listed)
+	}
+	var offered []struct {
+		Name  string
+		Tools []string
+	}
+	if err := json.Unmarshal(read("model-namespaces.json"), &offered); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ns := range offered {
+		if ns.Name+"__" == (Codex{}).ToolPrefix() {
+			found = true
+			var full []string
+			for _, tool := range ns.Tools {
+				full = append(full, ns.Name+"__"+tool)
+			}
+			sort.Strings(full)
+			want := Codex{}.ToolNames()
+			sort.Strings(want)
+			if !slices.Equal(full, want) {
+				t.Errorf("tools offered %v, want %v", full, want)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no namespace %s offered: %+v", Codex{}.ToolPrefix(), offered)
+	}
+	var matcher string
+	for _, e := range (Codex{}).Events() {
+		if e.Name == "PostToolUse" {
+			matcher = e.Matcher
+		}
+	}
+	post := regexp.MustCompile("^(?:" + matcher + ")$")
+	for _, line := range strings.Split(strings.TrimSpace(string(read("post-tool-use-names.txt"))), "\n") {
+		if f := strings.Fields(line); len(f) != 2 || !post.MatchString(f[1]) || !slices.Contains(Codex{}.ToolNames(), f[1]) {
+			t.Errorf("recorded PostToolUse %q", line)
+		}
+	}
+}
+
+// An install generated with the server named memory (before 2026-11-11):
+// the next install (an update's) adds both plugins again, the hooks
+// plugin's matcher now mcp__backsight__.*, and says Codex asks to review
+// the hooks once.
+func TestCodexUpdateFromTheMemoryServerName(t *testing.T) {
+	home := t.TempDir()
+	data := filepath.Join(home, "data")
+	f := &fakeCodex{}
+	env := Env{Home: home, Run: f.run}
+	in := codexIntegration(t, data, "1.0.0")
+	if _, err := (Codex{}).Install(context.Background(), env, in, false); err != nil {
+		t.Fatal(err)
+	}
+	// The tree as the earlier generator wrote it: the server key and the
+	// matcher of the old name, the hooks plugin's version of those bytes.
+	mkt := CodexMarketplaceDir(data)
+	rewrite := func(rel, from, to string) {
+		p := filepath.Join(mkt, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(p)
+		if err != nil || !strings.Contains(string(raw), from) {
+			t.Fatalf("%s: %q not found (%v)", rel, from, err)
+		}
+		_ = os.WriteFile(p, []byte(strings.ReplaceAll(string(raw), from, to)), 0o644)
+	}
+	rewrite("plugins/backsight/.mcp.json", `"backsight": {`, `"memory": {`)
+	rewrite("plugins/backsight-hooks/hooks/hooks.json", "mcp__backsight__.*", "mcp__memory__.*")
+	old, _ := os.ReadFile(filepath.Join(mkt, "plugins", "backsight-hooks", "hooks", "hooks.json"))
+	newVersion := pluginVersion(genTree(t, in.Shim, "1.0.0", Codex{}.Skills(in.Shim)), CodexHooksPlugin)
+	rewrite("plugins/backsight-hooks/.claude-plugin/plugin.json", newVersion, codexHooksVersion(old))
+	f.installed["backsight-hooks@backsight"] = codexHooksVersion(old)
+	f.commands()
+
+	res, err := (Codex{}).Install(context.Background(), env, in, false)
+	if got := f.commands(); err != nil || !slices.Equal(got, []string{"plugin add backsight@backsight", "plugin add backsight-hooks@backsight"}) {
+		t.Fatalf("update ran %v: %v", got, err)
+	}
+	if !hasStep(res, "trust") {
+		t.Errorf("no trust review said: %v", stepNames(res))
+	}
+	raw, _ := os.ReadFile(filepath.Join(mkt, "plugins", "backsight-hooks", "hooks", "hooks.json"))
+	if !strings.Contains(string(raw), `"matcher": "mcp__backsight__.*"`) || strings.Contains(string(raw), "mcp__memory__") {
+		t.Errorf("hooks.json after the update:\n%s", raw)
 	}
 }

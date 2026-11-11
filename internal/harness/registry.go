@@ -8,13 +8,14 @@ import (
 
 var (
 	mu       sync.RWMutex
-	adapters = []Adapter{Claude{}}
+	adapters = []Adapter{Claude{}, Codex{}}
 	// known are the adapters ByID finds that are not on yet: a command
 	// line naming one (`hook --harness <id>`, `mcp --harness <id>`)
 	// reaches it, but nothing iterates it (All) and nothing defaults to
-	// it. A harness moves from here to adapters once its blocks land
-	// (Codex's doc says when).
-	known = []Adapter{Codex{}}
+	// it. A harness moves from here to adapters once its blocks land.
+	// None today: Codex moved on 2026-11-11, once its install (block 3)
+	// and its rollouts (block 6) had landed.
+	known []Adapter
 )
 
 // All are the adapters that are on, Claude Code's first, then in the

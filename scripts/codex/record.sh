@@ -49,7 +49,7 @@ prompt t2 "second turn with a subagent" "$(jq -nc --arg m "sub task <<fake $sub>
   {say:"T2-DONE"}]')"
 prompt t3 "third turn after compaction" '[{"say":"T3-DONE"}]'
 paste /tmp/prompts/t1
-wait_for "Allow the memory MCP server to run tool"
+wait_for "Allow the backsight MCP server to run tool"
 mkdir -p "$fx/approval"
 screen | grep -v '^\s*$' | tail -12 > "$fx/approval/memory_store-prompt.txt"
 tmux send-keys -t t Enter # 1. Allow (once)
@@ -128,7 +128,7 @@ codex exec --json "$(cat /tmp/prompts/appr)" < /dev/null > /tmp/appr-fullaccess.
 cp "$CODEX_HOME/config.toml" /tmp/config.bak
 cat >> "$CODEX_HOME/config.toml" <<'TOML'
 
-[plugins."backsight@backsight".mcp_servers.memory.tools.memory_store]
+[plugins."backsight@backsight".mcp_servers.backsight.tools.memory_store]
 approval_mode = "approve"
 
 [mcp_servers.probe.tools.plain]

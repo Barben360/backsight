@@ -102,17 +102,17 @@ func TestCodexStubErrorText(t *testing.T) {
 	}
 }
 
-// Codex is known by its id but off: nothing iterates it, nothing defaults
-// to it, and its id cannot be registered again.
-func TestCodexIsKnownButOff(t *testing.T) {
+// Codex is on: after Claude Code in All (the flush loop and every
+// per-harness pass run it), found by its id, never the default, and its id
+// cannot be registered again.
+func TestCodexIsOn(t *testing.T) {
 	a, ok := ByID(harnessid.Codex)
 	if !ok || reflect.TypeOf(a) != reflect.TypeOf(Codex{}) || Of(harnessid.Codex).ID() != harnessid.Codex || TagOf(harnessid.Codex) != "harness:codex" {
 		t.Fatalf("ByID(codex) = %v %v", a, ok)
 	}
-	for _, b := range All() {
-		if b.ID() == harnessid.Codex {
-			t.Error("Codex is in All: the flush loop and every per-harness pass would run it")
-		}
+	all := All()
+	if len(all) < 2 || all[0].ID() != ClaudeCode || all[1].ID() != harnessid.Codex {
+		t.Errorf("All = %v, want Claude Code then Codex", all)
 	}
 	if Default().ID() != ClaudeCode || FromContext(context.Background()).ID() != ClaudeCode {
 		t.Error("the default is not Claude Code's")
@@ -127,10 +127,10 @@ func TestCodexIsKnownButOff(t *testing.T) {
 
 func TestCodexIdentityAndTools(t *testing.T) {
 	c := Codex{}
-	if c.ID() != "codex" || c.Tag() != "harness:codex" || c.Name() != "Codex" || c.ToolPrefix() != "mcp__memory__" {
+	if c.ID() != "codex" || c.Tag() != "harness:codex" || c.Name() != "Codex" || c.ToolPrefix() != "mcp__backsight__" {
 		t.Errorf("%q %q %q %q", c.ID(), c.Tag(), c.Name(), c.ToolPrefix())
 	}
-	want := []string{"mcp__memory__memory_search", "mcp__memory__memory_read", "mcp__memory__memory_store", "mcp__memory__memory_credit"}
+	want := []string{"mcp__backsight__memory_search", "mcp__backsight__memory_read", "mcp__backsight__memory_store", "mcp__backsight__memory_credit"}
 	if got := c.ToolNames(); !slices.Equal(got, want) {
 		t.Errorf("tools %v", got)
 	}
