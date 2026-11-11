@@ -115,9 +115,10 @@ func needsCodex(msg string) error {
 
 // clientInstallCodex wires Codex: the shim (shared with Claude Code), the
 // two plugins in their own marketplace, added with the codex command, and
-// the Codex home recorded (0085 D2). A user MCP server already named memory
-// is refused, named (D3). Nothing is written to config.toml: Codex's own
-// commands add the plugins, and the tools' hints spare the approvals (D6).
+// the Codex home recorded (0085 D2). A user MCP server already named
+// backsight (the server's name since 2026-11-11) is refused, named (D3).
+// Nothing is written to config.toml: Codex's own commands add the
+// plugins, and the tools' hints spare the approvals (D6).
 func clientInstallCodex(ctx context.Context, flag string, plan bool) (clientInstallResult, error) {
 	res := clientInstallResult{Plan: plan, Steps: []installStep{}, Client: harnessid.Codex}
 	c, err := loadClientEnv("")

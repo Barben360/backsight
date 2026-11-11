@@ -41,6 +41,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -53,6 +54,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:0", "listen address")
 	dir := flag.String("log", "", "directory for the request log (required)")
+	addrFile := flag.String("addr-file", "", "write the address it listens on (port 0 resolved) to this file")
 	flag.Parse()
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "fakeresponses: -log is required")
@@ -62,8 +64,28 @@ func main() {
 		log.Fatal(err)
 	}
 	s := &server{dir: *dir}
-	log.Printf("fakeresponses listening on %s, logging to %s", *addr, *dir)
-	log.Fatal(http.ListenAndServe(*addr, s))
+	l, err := listen(*addr, *addrFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("fakeresponses listening on %s, logging to %s", l.Addr(), *dir)
+	log.Fatal(http.Serve(l, s))
+}
+
+// listen listens on addr and, when file is set, writes there the address
+// it got (a port 0 resolved), so a caller can wait for the file.
+func listen(addr, file string) (net.Listener, error) {
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if file != "" {
+		if err := os.WriteFile(file, []byte(l.Addr().String()+"\n"), 0o644); err != nil {
+			_ = l.Close()
+			return nil, err
+		}
+	}
+	return l, nil
 }
 
 type server struct {
@@ -454,19 +476,41 @@ func call(list []map[string]any, s step, id, last string) (map[string]any, error
 	return item, nil
 }
 
-var placeholder = regexp.MustCompile(`\{\{last:([A-Za-z0-9_]+)\}\}`)
+var (
+	placeholder = regexp.MustCompile(`\{\{last:([A-Za-z0-9_]+)\}\}`)
+	matcher     = regexp.MustCompile(`\{\{match:(.+?)\}\}`)
+)
 
 // fill replaces each {{last:key}} in args by the value of "key" in the last
-// tool output (a spawned agent's id, say), so a step can use what an
-// earlier one returned.
+// tool output (a spawned agent's id, say), and each {{match:<regexp>}} by
+// the regexp's first group in it (a memory id in a search's text; the
+// regexp is JSON-escaped like the rest of args, and holds no "}}"), so a
+// step can use what an earlier one returned. One that finds nothing stays
+// as it is.
 func fill(args json.RawMessage, last string) json.RawMessage {
-	return placeholder.ReplaceAllFunc(args, func(m []byte) []byte {
+	args = placeholder.ReplaceAllFunc(args, func(m []byte) []byte {
 		key := placeholder.FindSubmatch(m)[1]
 		v := regexp.MustCompile(`"` + string(key) + `"\s*:\s*"([^"]*)"`).FindStringSubmatch(last)
 		if v == nil {
 			return m
 		}
 		return []byte(v[1])
+	})
+	return matcher.ReplaceAllFunc(args, func(m []byte) []byte {
+		var expr string
+		if json.Unmarshal([]byte(`"`+string(matcher.FindSubmatch(m)[1])+`"`), &expr) != nil {
+			return m
+		}
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return m
+		}
+		v := re.FindStringSubmatch(last)
+		if len(v) < 2 {
+			return m
+		}
+		quoted, _ := json.Marshal(v[1])
+		return quoted[1 : len(quoted)-1]
 	})
 }
 

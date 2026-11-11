@@ -330,7 +330,7 @@ func conflicts(cmd *cobra.Command, cfg config.Config, f installFlags) []string {
 
 // sshFlags are server install's flags for another machine: without
 // --ssh they mean nothing.
-var sshFlags = []string{"private", "source", "llm-key-from-env", "llm-key-from-file", "answer", "non-interactive", "config-dir"}
+var sshFlags = []string{"private", "source", "llm-key-from-env", "llm-key-from-file", "answer", "non-interactive", "config-dir", "codex-home"}
 
 func newServerInstallCmd(e *env) *cobra.Command {
 	var f installFlags
@@ -597,6 +597,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().StringArrayVar(&sf.answers, "answer", nil, "with --ssh: consent=yes to go ahead without a terminal; with --ssh or --print-commands: setup's answers for the host or this PC (id=value, repeatable)")
 	cmd.Flags().BoolVar(&sf.nonInteractive, "non-interactive", false, "with --ssh: never prompt: exit 10 when the consent, the key or another answer is missing")
 	cmd.Flags().StringVar(&sf.configDir, "config-dir", "", "with --ssh: this PC's Claude Code directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	cmd.Flags().StringVar(&sf.codexHome, "codex-home", "", "with --ssh: this PC's Codex home (default: $CODEX_HOME, else ~/.codex)")
 	return cmd
 }
 

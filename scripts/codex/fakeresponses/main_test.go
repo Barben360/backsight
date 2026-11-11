@@ -275,3 +275,34 @@ func TestServerLogsEachRequestWithCredentialsRedacted(t *testing.T) {
 		t.Error("an unknown path is not logged")
 	}
 }
+
+// {{match:<regexp>}} takes the regexp's first group in the last tool
+// output (a memory id in a search's text), and stays as it is when the
+// regexp matches nothing.
+func TestMatchPlaceholderTakesTheFirstGroup(t *testing.T) {
+	const search = "[work]\n- #1 Billing keeps PostgreSQL 16 (2026-11-11 [decision], 3 minutes ago, 7e1f9d03-1111-4222-8333-444455556666)\n"
+	prompt := user(`<<fake [{"call":"memory_search"},{"call":"memory_store","args":{"ids":["{{match:, ([0-9a-f-]{36})\\)}}"]}}]>>`)
+	it := item(t, body(t, prompt, output("a", search)), false)
+	if it["name"] != "memory_store" || it["arguments"] != `{"ids":["7e1f9d03-1111-4222-8333-444455556666"]}` {
+		t.Fatalf("store step: %v", it)
+	}
+	it = item(t, body(t, prompt, output("a", "nothing in memory\n")), false)
+	if it["arguments"] != `{"ids":["{{match:, ([0-9a-f-]{36})\\)}}"]}` {
+		t.Fatalf("no match: %v", it)
+	}
+}
+
+// -addr-file: the address the server listens on, port 0 resolved, is
+// written once it listens.
+func TestListenWritesItsAddress(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "addr")
+	l, err := listen("127.0.0.1:0", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	raw, err := os.ReadFile(f)
+	if err != nil || strings.TrimSpace(string(raw)) != l.Addr().String() || strings.HasSuffix(strings.TrimSpace(string(raw)), ":0") {
+		t.Errorf("addr file %q (%v), listening on %s", raw, err, l.Addr())
+	}
+}

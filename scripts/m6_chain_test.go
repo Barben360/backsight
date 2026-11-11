@@ -110,7 +110,7 @@ func TestM6ChainRunsTheDedupAndRotationProofs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("M6_DRY=1: %v", err)
 	}
-	want := "two-clients dedup-copied dedup-concurrent dedup-split key-rotation"
+	want := "two-clients codex-claude dedup-copied dedup-concurrent dedup-split key-rotation"
 	if got := strings.Join(strings.Fields(string(out)), " "); got != want {
 		t.Errorf("checks listed: %q, want %q", got, want)
 	}

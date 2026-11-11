@@ -45,8 +45,8 @@ func printCommands(f sshInstallFlags, version string) (printedCommands, error) {
 		return res, &output.Error{Code: output.Usage, Message: "--ssh and --print-commands exclude each other: --ssh runs the steps, --print-commands lists them for a host you reach yourself"}
 	case f.plan:
 		return res, &output.Error{Code: output.Usage, Message: "--plan and --print-commands exclude each other: --print-commands changes nothing and lists the steps"}
-	case f.source != "", f.keyEnv != "", f.keyFile != "", f.nonInteractive, f.configDir != "":
-		return res, &output.Error{Code: output.Usage, Message: "--source, --llm-key-from-env, --llm-key-from-file, --non-interactive and --config-dir go with --ssh: --print-commands lists the steps and reads no key; the host's own prompt asks for it"}
+	case f.source != "", f.keyEnv != "", f.keyFile != "", f.nonInteractive, f.configDir != "", f.codexHome != "":
+		return res, &output.Error{Code: output.Usage, Message: "--source, --llm-key-from-env, --llm-key-from-file, --non-interactive, --config-dir and --codex-home go with --ssh: --print-commands lists the steps and reads no key; the host's own prompt asks for it"}
 	}
 	if err := refuseTokenArgs(f); err != nil {
 		return res, err

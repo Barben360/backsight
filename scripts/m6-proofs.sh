@@ -25,6 +25,15 @@
 #   m6_link a <up|down>                 A's network link
 #   m6_host_key <new|old>               the server's ed25519 host key, and the
 #                                       driver's own trust of it
+# The codex-claude check also needs (scripts/codex/fetch.sh makes the
+# directory):
+#   M6_CODEX_DIR                        a directory on B holding the pinned
+#                                       codex and the fake model
+#                                       (fakeresponses), absolute; on no
+#                                       PATH of B's otherwise, so the other
+#                                       checks see a PC with Claude Code
+#   m6_codex_on <backsight words…>      B's backsight with M6_CODEX_DIR
+#                                       first on its PATH
 #
 # Secrets: a key or token is never in an argv, a trace or a result. B's
 # API key is read in a process substitution (m6_auth, curl -K). Every
@@ -898,6 +907,110 @@ m6_check_several_pcs() {
   done
   m6_result several-pcs PASS "A and B published $day (B's hit denominator $theirs); each lists the other in scope.pcs.list, the server host lists both; A's merged recall.hit_rate den $merged = own $own + B's $theirs" \
     "$(jq -cn --argjson own "$own" --argjson b "$theirs" --argjson merged "$merged" '{own: $own, b: $b, merged: $merged}')"
+}
+
+# codex-claude (issue 284): A runs Claude Code, B runs Codex beside it;
+# one memory. A stores a decision in a project of its own; B's Codex (a
+# real codex exec against the fake model, no paid one) searches that
+# project with memory_search and is shown a memory built from A's note.
+# Then B's Codex stores one with memory_store, and A's search shows a
+# memory built from B's note. Hindsight's mock LLM "extracts" its prompt's
+# lines, so what proves the recall is each shown memory's source document
+# (backsight read), never its text.
+m6_check_codex_claude() {
+  local nonce proj hb cx addr out rc i note_a note_b ids id from_a from_b pid
+  nonce=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+  proj=bs-m6-codex-$nonce
+  hb=$(m6_home b)
+  cx=$hb/codex-$nonce
+  [ -n "${M6_CODEX_DIR:-}" ] || fail "no M6_CODEX_DIR: the driver gives B Codex and the fake model (scripts/codex/fetch.sh)"
+  out=$(m6_sh b "$(m6_q "$M6_CODEX_DIR/codex") --version" < /dev/null 2>&1) || fail "no codex in $M6_CODEX_DIR on B: $out"
+  # B's Codex: its own home, pointed at the fake model it runs.
+  m6_sh b "mkdir -p $(m6_q "$cx/model") $(m6_q "$hb/work/$proj") && (nohup $(m6_q "$M6_CODEX_DIR/fakeresponses") -addr 127.0.0.1:0 -addr-file $(m6_q "$cx/addr") -log $(m6_q "$cx/model") > $(m6_q "$cx/model.log") 2>&1 < /dev/null & echo \$! > $(m6_q "$cx/model.pid"))" < /dev/null ||
+    fail "cannot start the fake model on B"
+  for i in $(seq 1 50); do
+    addr=$(m6_sh b "cat $(m6_q "$cx/addr") 2> /dev/null" < /dev/null || true)
+    [ -z "$addr" ] || break
+    sleep 0.2
+  done
+  [ -n "$addr" ] || fail "the fake model on B wrote no address ($(m6_sh b "tail -n 3 $(m6_q "$cx/model.log")" < /dev/null 2>&1))"
+  printf 'model = "fake-model"\nmodel_provider = "fake"\n\n[model_providers.fake]\nname = "fake"\nbase_url = "http://%s/v1"\nwire_api = "responses"\n\n[projects.%s]\ntrust_level = "trusted"\n' \
+    "$addr" "\"$hb/work/$proj\"" | m6_put b "$cx/config.toml" || fail "cannot write B's Codex config"
+  rc=0
+  out=$(m6_codex_on client install --codex --codex-home "$cx" --json < /dev/null 2> "$M6_WORK/codex-install.err") || rc=$?
+  out=$(m6_json "client install --codex on B (exit $rc)" "$out") || exit 1
+  jq -e .ok > /dev/null <<<"$out" || fail "client install --codex on B: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub))"
+  # A's decision, recalled in B's Codex.
+  out=$(m6_on a store --json --kind decision --project "$proj" "Decision (2026-11-11): the $proj service keeps its queue on PostgreSQL 17, from Claude Code on A." < /dev/null) ||
+    fail "store on A failed: $(jq -r '.error.message // ""' <<<"$out" 2> /dev/null | m6_scrub)"
+  note_a=$(jq -r '.data.document // ""' <<<"$out")
+  [ -n "$note_a" ] || fail "store on A named no document: $(jq -c .data <<<"$out")"
+  m6_queue_wait
+  out=$(m6_codex_exec "$hb/work/$proj" "$cx" "Where does $proj keep its queue?" \
+    "$(jq -cn --arg p "$proj" '[{call: "memory_search", args: {queries: ["\($p) queue database"], projects: [$p], min_score: 0, limit: 20}}, {say: "B-SEARCHED"}]')") || exit 1
+  ids=$(m6_codex_result "$out" memory_search | awk -v p="[$proj]" '/^\[/ { on = ($0 == p); next } on' | grep -oE 'ago, [0-9a-f-]{36}' | cut -c6- || true)
+  [ -n "$ids" ] || fail "B's Codex was shown no memory of $proj: $(m6_codex_result "$out" memory_search | head -n 5)"
+  from_a=
+  for id in $ids; do
+    if m6_docs_of b "$id" | grep -qxF "$note_a"; then
+      from_a=$id
+      break
+    fi
+  done
+  [ -n "$from_a" ] || fail "none of the $(wc -w <<<"$ids") memories of $proj shown to B's Codex comes from A's $note_a"
+  # B's Codex stores one; A's search shows it.
+  out=$(m6_codex_exec "$hb/work/$proj" "$cx" "Remember where $proj keeps its cache." \
+    "$(jq -cn --arg p "$proj" '[{call: "memory_store", args: {kind: "decision", project: $p, text: "Decision (2026-11-11): the \($p) service keeps its cache on Valkey 8, from Codex on B."}}, {say: "B-STORED"}]')") || exit 1
+  note_b=$(m6_codex_result "$out" memory_store | sed -n 's/^stored .* \(note:[0-9a-f-]*\)$/\1/p')
+  [ -n "$note_b" ] || fail "B's Codex memory_store answered: $(m6_codex_result "$out" memory_store | head -n 3 | m6_scrub)"
+  m6_queue_wait
+  out=$(m6_on a search --json --all --min-score 0 --limit 50 --project "$proj" "$proj cache" < /dev/null) || fail "search on A failed"
+  ids=$(jq -r --arg p "$proj" '.data.hits[] | select(.project == $p) | .id' <<<"$out")
+  [ -n "$ids" ] || fail "A's search shows no memory of $proj"
+  from_b=
+  for id in $ids; do
+    if m6_docs_of a "$id" | grep -qxF "$note_b"; then
+      from_b=$id
+      break
+    fi
+  done
+  [ -n "$from_b" ] || fail "none of the $(wc -w <<<"$ids") memories of $proj A's search shows comes from B's $note_b"
+  pid=$(m6_sh b "cat $(m6_q "$cx/model.pid")" < /dev/null 2> /dev/null || true)
+  [ -z "$pid" ] || m6_sh b "kill $pid" < /dev/null > /dev/null 2>&1 || true
+  m6_result codex-claude PASS "A (Claude Code) stored $note_a, B's Codex was shown $from_a built from it; B's Codex stored $note_b, A's search shows $from_b built from it" \
+    "$(jq -cn --arg a "$note_a" --arg b "$note_b" '{note_a: $a, note_b: $b}')"
+}
+
+# m6_codex_exec <dir> <codex home> <prompt> <steps json>: one codex exec turn
+# on B in dir (workspace-write: its approval policy is never; dir is no git
+# repository), the fake
+# model playing steps; its JSON events on stdout.
+m6_codex_exec() {
+  local out rc=0
+  out=$(m6_sh b "cd $(m6_q "$1") && PATH=$(m6_q "$M6_CODEX_DIR"):\$PATH CODEX_HOME=$(m6_q "$2") codex exec -s workspace-write --skip-git-repo-check --json $(m6_q "$3 <<fake $4>>")" < /dev/null 2> "$M6_WORK/codex-exec.err") || rc=$?
+  jq -e 'select(.type == "turn.completed")' > /dev/null 2>&1 <<<"$out" || fail "codex exec on B did not complete a turn (exit $rc): $(tail -n 3 "$M6_WORK/codex-exec.err" | m6_scrub)"
+  printf '%s\n' "$out"
+}
+
+# m6_docs_of <who> <memory id>: the documents that memory comes from, read
+# there, one a line: its own, or its source facts' (an observation has none
+# of its own).
+m6_docs_of() {
+  local out f
+  out=$(m6_on "$1" read --json "$2" < /dev/null 2> /dev/null) || return 0
+  jq -r '.data.document_id // empty' <<<"$out" 2> /dev/null || true
+  for f in $(jq -r '.data.source_memories[]?.id' <<<"$out" 2> /dev/null); do
+    m6_on "$1" read --json "$f" < /dev/null 2> /dev/null | jq -r '.data.document_id // empty' 2> /dev/null || true
+  done
+}
+
+# m6_codex_result <events> <tool>: what that tool answered in the turn; a
+# failed call fails the check.
+m6_codex_result() {
+  local st
+  st=$(jq -r --arg t "$2" 'select(.type == "item.completed" and .item.type == "mcp_tool_call" and .item.tool == $t) | .item.status' <<<"$1")
+  [ "$st" = completed ] || fail "B's Codex $2 call: '${st:-none}'"
+  jq -r --arg t "$2" 'select(.type == "item.completed" and .item.type == "mcp_tool_call" and .item.tool == $t) | .item.result.content[]?.text // empty' <<<"$1"
 }
 
 # ---- Dedup and key rotation (also the CI chain's checks).
