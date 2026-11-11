@@ -505,8 +505,9 @@ func pagesDeclared(t *testing.T) map[string][]string {
 // prints: the pages show nothing the command line cannot.
 func TestEveryPageReadsServedViews(t *testing.T) {
 	// "served", not "fast": the 10 s request deadline can expire on a busy
-	// runner (windows-latest answered 503 "the page took too long").
-	t.Cleanup(dashboard.SetRenderTimeout(2 * time.Minute))
+	// runner (windows-latest answered 503 "the page took too long"); go
+	// test's -timeout ends a hang.
+	t.Cleanup(dashboard.SetRenderTimeout(time.Hour))
 	base, c := parityDashboard(t, true)
 	declared := pagesDeclared(t)
 	if len(declared) < 16 {

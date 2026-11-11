@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
@@ -24,16 +23,17 @@ type engineDocker struct {
 	infoErr error
 	ps      string
 	// A machine that never ran the server: no image, no model cache; a
-	// pull takes pullTime and fails with pullErr.
-	fresh    bool
-	pullTime time.Duration
-	pullErr  error
+	// pull ticks the heartbeat pullBeats times (fastBeats) and fails with
+	// pullErr.
+	fresh     bool
+	pullBeats int
+	pullErr   error
 }
 
 func (f *engineDocker) Stream(_ context.Context, w, errw io.Writer, args ...string) error {
 	f.calls = append(f.calls, strings.Join(args, " "))
 	_, _ = io.WriteString(w, "a1b2: Downloading [=====>      ]  52.4MB/1GB\n")
-	time.Sleep(f.pullTime)
+	sendBeats(f.pullBeats)
 	if f.pullErr != nil {
 		_, _ = io.WriteString(errw, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
 		return f.pullErr

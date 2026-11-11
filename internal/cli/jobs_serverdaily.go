@@ -22,8 +22,9 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 )
 
-// serverDailyTimeout bounds each server read of the server-daily step.
-const serverDailyTimeout = 3 * time.Second
+// serverDailyTimeout bounds each server read of the server-daily step (a
+// var for the tests).
+var serverDailyTimeout = 3 * time.Second
 
 // The reach of the answers the step asks for: the memories series over 90
 // days, the LLM stats over 30, each the window now − period.

@@ -117,6 +117,10 @@ func shellWord(s string) string { return shellword.POSIX(s) }
 // jobLockWait bounds the wait for a running jobs tick or jobs maintain.
 var jobLockWait = 2 * time.Minute
 
+// jobLockWaitHook runs each time a job's lock was found held and uninstall
+// waits to try again; tests release the lock there.
+var jobLockWaitHook = func() {}
+
 // uninstallShareBudget bounds the deletes of this machine's shared counts and
 // daily figures together.
 var uninstallShareBudget = 5 * time.Second
@@ -802,6 +806,7 @@ func waitForJobs(ctx context.Context, d paths.Dirs, say func(string)) ([]func(),
 				return unlocks, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s is still running after %s (%s): nothing was changed; rerun once it finishes",
 					held.Owner.Command, jobLockWait, held.Error())}
 			}
+			jobLockWaitHook()
 			select {
 			case <-ctx.Done():
 				return unlocks, blocked(ctx.Err())

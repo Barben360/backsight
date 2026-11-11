@@ -38,7 +38,8 @@ type sdFake struct {
 	llm       map[string][]hindsight.LLMBucket // by operation, "" = all
 	llmErr    map[string]error
 	llmStart  bool
-	block     bool // every call waits for its context, then longer
+	block     bool // every call waits until the test ends, whatever its context
+	release   chan struct{}
 	calls     []string
 }
 
@@ -50,8 +51,17 @@ func (f *sdFake) record(c string) {
 
 func (f *sdFake) wait() {
 	if f.block {
-		time.Sleep(10 * time.Second) // ignores its context
+		<-f.release // ignores its context
 	}
+}
+
+// blockAll makes every call of f hang, its context ignored, until the
+// test ends; each call is bounded by a serverDailyTimeout of 1 ms.
+func (f *sdFake) blockAll(t *testing.T) {
+	old := serverDailyTimeout
+	serverDailyTimeout = time.Millisecond
+	f.block, f.release = true, make(chan struct{})
+	t.Cleanup(func() { serverDailyTimeout = old; close(f.release) })
 }
 
 func (f *sdFake) BankStats(context.Context) (hindsight.BankStats, error) {
@@ -569,14 +579,10 @@ func TestServerDailySurvivesOddServers(t *testing.T) {
 	t.Run("blocking reader", func(t *testing.T) {
 		dir := t.TempDir()
 		f := healthyFake(t, at)
-		f.block = true
-		start := time.Now()
+		f.blockAll(t)
+		// The bound is the calls' context deadline, not the fake clock:
+		// the step abandons them.
 		got := sdRun(t, dir, f, at, loc)
-		// The bound is the calls' 3 s context deadline, not the fake
-		// clock: the step abandons them.
-		if el := time.Since(start); el > 3500*time.Millisecond {
-			t.Errorf("step took %v, want within 3.5 s", el)
-		}
 		if got != "server daily: not reached (timeout), 0 day(s)" {
 			t.Errorf("result %q", got)
 		}
@@ -588,7 +594,7 @@ func TestServerDailySurvivesOddServers(t *testing.T) {
 		maintainWithoutBackup(t)
 		fixedMaintainDoctor(t, doctor.Check{ID: "a", Status: doctor.OK})
 		f := healthyFake(t, at)
-		f.block = true
+		f.blockAll(t)
 		old := serverDailyReaderFor
 		serverDailyReaderFor = func() (serverDailyReader, error) { return f, nil }
 		t.Cleanup(func() { serverDailyReaderFor = old })
