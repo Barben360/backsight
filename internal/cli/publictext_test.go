@@ -159,7 +159,9 @@ func TestSetupQuestionsNameNoPrivateReference(t *testing.T) {
 		qs, _, err := setup.Resolve(setup.Inputs{
 			Answers:         map[string]string{"provider": provider},
 			ReferencePieces: 2,
-			Backfill:        func(string) (int, string) { return 12, "about $0.40" },
+			Backfill: func(string, bool, bool) setup.Backlog {
+				return setup.Backlog{Tools: []setup.ToolSessions{{Tool: setup.ToolsClaude, Sessions: 12}}, Cost: "about $0.40"}
+			},
 		})
 		if err != nil {
 			t.Fatalf("provider=%s: %v", provider, err)

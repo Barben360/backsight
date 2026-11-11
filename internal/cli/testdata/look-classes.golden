@@ -21,6 +21,7 @@ backsight client config restore	full
 backsight client install	full
 backsight client retention	full
 backsight client retire	full
+backsight client uninstall	full
 backsight completion	plain
 backsight completion bash	plain
 backsight completion fish	plain

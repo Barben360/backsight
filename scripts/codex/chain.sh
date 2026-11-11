@@ -8,7 +8,9 @@
 # chain stopped at the first failure:
 #   setup     setup --answer tools=codex: both plugins installed, Codex's
 #             own memories turned off
-#   trust     no hook runs before the user trusts them; trusted through
+#   verify    setup's verify step ran (verify --codex), and verify --codex
+#             again: Codex's hooks and its server, the _meta session
+#   trust    no hook runs before the user trusts them; trusted through
 #             Codex's own review screen (the TUI, no bypass flag), every
 #             handler gets its trust entry
 #   session   codex exec in workspace-write (approval policy never): the
@@ -144,6 +146,14 @@ plugins=$(jq -r '[.installed[] | select(.installed and .enabled) | .pluginId] | 
 [ "$plugins" = "backsight-hooks@backsight backsight@backsight" ] || fail "plugins installed and enabled: '$plugins'"
 ! grep -q '^memories = true' "$CODEX_HOME/config.toml" || fail "Codex's own memories still on"
 pass "client steps skipped, plugins $plugins, Codex's memories off"
+
+# --- verify ----------------------------------------------------------------
+step=verify
+[ "$(jq -r '.data.steps[] | select(.name=="verify") | .status' "$fx/setup.json")" = done ] || fail "setup's verify step: $(jq -c '.data.steps[] | select(.name=="verify")' "$fx/setup.json")"
+backsight verify --codex --no-round-trip --json > "$fx/verify.json" 2> "$fx/verify.err" || fail "verify --codex exited $?: $(jq -c '[.data.checks[]? | select(.status=="fail")]' "$fx/verify.json")"
+mcp=$(jq -r '.data.checks[] | select(.id=="mcp") | .summary' "$fx/verify.json")
+[[ $mcp == *"_meta"* ]] || fail "mcp: $mcp"
+pass "setup ran verify --codex; again: $(jq -r '[.data.checks[] | select(.status=="ok")] | length' "$fx/verify.json") checks ok, $mcp"
 
 # --- trust -----------------------------------------------------------------
 step=trust

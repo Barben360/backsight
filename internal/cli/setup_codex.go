@@ -9,6 +9,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fileimport"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
 )
@@ -19,8 +20,17 @@ import (
 // answered, after the import step.
 
 // claudeSteps are the steps that wire Claude Code alone: skipped when the
-// tools answer leaves it out.
-var claudeSteps = []string{"client", "retention", "verify", "reference", "backfill"}
+// tools answer leaves it out. verify and backfill cover each tool wired.
+var claudeSteps = []string{"client", "retention", "reference"}
+
+// verifyToolPrefix names Codex before a failed check of its verify when
+// Claude Code's ran too: both name their checks alike.
+func verifyToolPrefix(vr verifyResult, both bool) string {
+	if both && vr.Client == harnessid.Codex {
+		return "Codex "
+	}
+	return ""
+}
 
 // detectCodex finds Codex in the home setup acts on (--codex-home, the
 // one recorded, the shell's): there, the tools question is asked. A
@@ -223,6 +233,15 @@ func (s *setupEnv) planTools(steps []setup.Step, a map[string]string) []setup.St
 	}
 	if !codexOn {
 		return steps
+	}
+	for i, st := range steps {
+		if st.Name == "verify" && st.Status == "planned" {
+			if claude {
+				steps[i].Detail += "; then backsight verify --codex --no-round-trip: every Codex hook and its MCP server"
+			} else {
+				steps[i].Detail = "backsight verify --codex: every Codex hook, its MCP handshake and per-call session, a round trip in a scratch bank"
+			}
+		}
 	}
 	imp := setup.Step{Name: "codex_import", Status: "skipped", Detail: codexImportSkipped(a)}
 	if a["codex_import"] == "yes" {
