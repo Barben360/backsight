@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/state"
@@ -32,6 +33,24 @@ func toolRunner(id string) harness.Runner {
 // harnessEnv is the Env of a call to a in profile ("" its default).
 func harnessEnv(a harness.Adapter, home, profile string) harness.Env {
 	return harness.Env{Home: home, Profile: profile, Run: toolRunner(a.ID())}
+}
+
+// wiredRecord is what drift compares for a, from st: the profile wired
+// and what client install recorded there. Claude Code's profile is the
+// shell's (a hook runs with the session's, decision 0048), its version
+// state's plugin_version; another tool's are those its own state entry
+// records, never a shell's (0085 D1).
+func wiredRecord(a harness.Adapter, home, data string, st state.State) (harness.Env, harness.Recorded) {
+	env := harness.Env{Home: home}
+	rec := harness.Recorded{ShimTarget: st.ShimTarget, Data: data, BinaryVersion: buildinfo.Version}
+	if a.ID() == harness.ClaudeCode {
+		env.Profile, rec.Version = os.Getenv(a.ProfileVar()), st.PluginVersion
+		return env, rec
+	}
+	if c := st.ClientOf(a.ID()); c != nil {
+		env.Profile, rec.Version = c.Profile, c.PluginVersion
+	}
+	return env, rec
 }
 
 // wiredProfile is the profile of a that backsight is wired to: the shell's

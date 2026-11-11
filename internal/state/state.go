@@ -402,6 +402,13 @@ type Client struct {
 	// write it).
 	Profile      string `json:"profile,omitempty"`
 	ShimPrevious string `json:"shim_previous,omitempty"`
+	// PluginVersion is the integration client install generated for a
+	// tool other than Claude Code (whose version stays State.PluginVersion,
+	// where older binaries read it): "" while that tool is not wired.
+	PluginVersion string `json:"plugin_version,omitempty"`
+	// MemoriesOff: backsight turned the tool's own memories off (Codex,
+	// with the user's consent); uninstall turns them on again.
+	MemoriesOff bool `json:"memories_off,omitempty"`
 }
 
 // ClientOf is the entry of the coding tool harness (a harness id), nil

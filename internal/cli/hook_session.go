@@ -155,9 +155,9 @@ func (h *hookEnv) sessionStart() []byte {
 		}
 	}
 	if st, err := state.Load(h.dirs.StateFile()); err == nil {
-		// The session's own profile: the harness runs its hooks with it.
-		env := harness.Env{Home: h.home, Profile: os.Getenv(h.adapter.ProfileVar())}
-		rec := harness.Recorded{Version: st.PluginVersion, ShimTarget: st.ShimTarget, Data: h.dirs.Data, BinaryVersion: buildinfo.Version}
+		// The session's own profile for Claude Code (it runs its hooks with
+		// it); another tool's recorded one, and what install recorded there.
+		env, rec := wiredRecord(h.adapter, h.home, h.dirs.Data, st)
 		if drift := h.adapter.Drift(env, rec, &h.cfg); len(drift) > 0 {
 			banner += "\n" + instructions.DriftLine(drift[0])
 		}

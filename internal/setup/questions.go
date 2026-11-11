@@ -122,6 +122,31 @@ type Inputs struct {
 	// DefaultRuntime replaces docker as the runtime's default: "native" on
 	// Windows x86_64 (decision 0080), "" elsewhere.
 	DefaultRuntime string
+	// Codex: the codex command answers in the Codex home setup acts on.
+	// Without it there is no tools question: setup wires Claude Code, as
+	// it always did. ClaudeFound: the claude command answers (the tools
+	// question's default). CodexMemories: Codex's own memories are on
+	// there (decision 0085 D10).
+	Codex, ClaudeFound, CodexMemories bool
+}
+
+// The coding tools the tools question picks from.
+const (
+	ToolsClaude = "claude-code"
+	ToolsCodex  = "codex"
+	ToolsBoth   = "both"
+)
+
+// Tools reads the tools answer: which of Claude Code and Codex setup
+// wires. No answer is Claude Code alone, as before Codex.
+func Tools(answers map[string]string) (claude, codex bool) {
+	switch answers["tools"] {
+	case ToolsCodex:
+		return false, true
+	case ToolsBoth:
+		return true, true
+	}
+	return true, false
 }
 
 // Hidden answers have defaults and are never asked.
@@ -132,7 +157,7 @@ type Inputs struct {
 var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth, "runtime": "docker"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "import", "import_path", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "tools", "retention", "backups", "reference", "backfill", "import", "import_path", "codex_memories", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -287,7 +312,24 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 
-	if !serverOnly {
+	// Which coding tools to wire, asked only when Codex is there: without
+	// it, setup wires Claude Code as it always did.
+	claude, codex := !serverOnly, false
+	if in.Codex && !serverOnly {
+		tq := Question{ID: "tools", Prompt: "Which coding tools should backsight wire? Both share one memory.", Default: ToolsCodex, Recommended: ToolsCodex,
+			Options: []Option{{Value: ToolsClaude, Label: "Claude Code"}, {Value: ToolsCodex, Label: "Codex"}, {Value: ToolsBoth, Label: "Claude Code and Codex"}}}
+		if in.ClaudeFound {
+			tq.Default, tq.Recommended = ToolsBoth, ToolsBoth
+		}
+		if err := add(tq); err != nil {
+			return nil, nil, err
+		}
+		claude, codex = Tools(map[string]string{"tools": orDefault(qs[len(qs)-1].Value, tq.Default)})
+	} else if _, wantsCodex := Tools(in.Answers); wantsCodex && !serverOnly {
+		return nil, nil, &UsageError{"tools=" + in.Answers["tools"] + ": the codex command was not found (install Codex, or answer tools=" + ToolsClaude + ")"}
+	}
+
+	if claude {
 		rq := Question{ID: "retention", Prompt: "How long should Claude Code keep its transcripts? Backfill and memory rebuilds read them.",
 			Free: true, Default: RecommendedRetention, Recommended: RecommendedRetention,
 			Options: []Option{{Value: RecommendedRetention, Label: "ten years"}, {Value: "keep", Label: "leave Claude Code's setting as it is", Caveat: "Claude Code deletes transcripts after 30 days by default"}}}
@@ -307,14 +349,14 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			return nil, nil, err
 		}
 	}
-	if in.ReferencePieces > 0 && !serverOnly {
+	if in.ReferencePieces > 0 && claude {
 		if err := add(Question{ID: "reference", Prompt: fmt.Sprintf("%d pieces of an older Hindsight install are wired into Claude Code. Retire them once backsight is installed (undoable; the old server is left untouched)?", in.ReferencePieces),
 			Default: "retire", Recommended: "retire",
 			Options: []Option{{Value: "retire", Label: "retire them (backup copies kept, setup --undo restores them)"}, {Value: "keep", Label: "leave them", Caveat: "both memories then inject into every prompt"}}}); err != nil {
 			return nil, nil, err
 		}
 	}
-	if in.Backfill != nil && !serverOnly {
+	if in.Backfill != nil && claude {
 		if n, cost := in.Backfill(model); n > 0 {
 			sessions := "sessions"
 			if n == 1 {
@@ -360,6 +402,16 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 				pq.Options = []Option{{Value: pq.Value, Label: fmt.Sprintf("%d %s to import, within a spending cap", n, files), Cost: cost}}
 			}
 			qs = append(qs, pq)
+		}
+	}
+	// Codex's own memories, turned off only as answered (the step comes
+	// after the import, so their files can be imported first).
+	if codex && in.CodexMemories {
+		if err := add(Question{ID: "codex_memories", Prompt: "Codex's own memories are on. Beside backsight's, two memories would answer the same questions. Turn Codex's off (undoable)?",
+			Default: "off", Recommended: "off",
+			Options: []Option{{Value: "off", Label: "turn them off in Codex's config.toml (a copy kept; setup --undo and uninstall turn them on again)"},
+				{Value: "keep", Label: "keep them on", Caveat: "both memories then add their context to every Codex session"}}}); err != nil {
+			return nil, nil, err
 		}
 	}
 	if err := add(Question{ID: "consent", Prompt: "Go ahead with this plan?", Required: true,

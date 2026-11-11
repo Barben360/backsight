@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/migrate"
 	"github.com/Barben360/backsight/internal/output"
@@ -627,6 +628,7 @@ type applyRun struct {
 	target      string
 	clientArgs  []string
 	clientWired bool
+	codexWired  bool
 	marker      state.UpdateMarker
 	rb          *updateRollback
 	fl          updateApplyFlags
@@ -640,9 +642,19 @@ func newApplyRun(d paths.Dirs, cfg config.Config, st state.State, shim, previous
 		clientArgs = append(clientArgs, "--config-dir", p)
 	}
 	wayBack := previous + " " + strings.Join(clientArgs, " ")
-	return &applyRun{d: d, cfg: cfg, shim: shim, target: target, clientArgs: clientArgs, clientWired: st.PluginVersion != "", res: res, add: add,
+	// Codex, when wired: the new binary's client install --codex acts on
+	// the Codex home recorded (0085 D1).
+	c := st.ClientOf(harnessid.Codex)
+	codexWired := c != nil && c.PluginVersion != ""
+	if codexWired {
+		wayBack += " and " + previous + " " + strings.Join(codexClientArgs, " ")
+	}
+	return &applyRun{d: d, cfg: cfg, shim: shim, target: target, clientArgs: clientArgs, clientWired: st.PluginVersion != "", codexWired: codexWired, res: res, add: add,
 		rb: &updateRollback{d: d, shim: shim, previous: previous, target: target, clientArgs: clientArgs, wayBack: wayBack, add: add, res: res}}
 }
+
+// codexClientArgs wire Codex again, in the Codex home recorded.
+var codexClientArgs = []string{"client", "install", "--codex"}
 
 // plan asks the staged binary what it would do; nothing changes.
 func (a *applyRun) plan(ctx context.Context, staged string) error {
@@ -665,6 +677,9 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 	} else {
 		res.Plugin = "skipped: Claude Code is not wired on this machine"
 		add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
+	}
+	if a.codexWired {
+		add("codex", "planned", "would run the new binary's "+strings.Join(codexClientArgs, " ")+" (plugins regenerated, codex plugin add for those that changed)")
 	}
 	a.refreshScheduler(ctx, staged, true)
 	a.planIndex(ctx, staged)
@@ -795,6 +810,24 @@ func (a *applyRun) steps(ctx context.Context) error {
 		}
 		if err := ctx.Err(); err != nil {
 			return failed("plugin", err)
+		}
+		// 5b. Codex's plugins: regenerated, those that changed added again.
+		if a.codexWired {
+			a.rb.codexTouched = true
+			cenv, err := runChild(ctx, target, codexClientArgs...)
+			if err != nil {
+				return failed("codex", err)
+			}
+			var cr clientInstallResult
+			_ = json.Unmarshal(cenv.Data, &cr)
+			detail := "the new binary's " + strings.Join(codexClientArgs, " ") + ": plugins regenerated"
+			if cr.Trust != "" {
+				detail += "; " + cr.Trust
+			}
+			add("codex", "done", detail)
+			if err := ctx.Err(); err != nil {
+				return failed("codex", err)
+			}
 		}
 
 		// 6. The server, when the new binary pins another version than the
@@ -1564,6 +1597,7 @@ type updateRollback struct {
 	clientArgs       []string // client install, with the wired profile
 	wayBack          string   // the previous binary's client install, by hand
 	pluginTouched    bool
+	codexTouched     bool              // the new binary's client install --codex ran
 	serverTouched    bool              // the new binary's server upgrade ran
 	committed        bool              // past the commit point: never rolled back
 	saved            map[string][]byte // state.json and config.toml before the update (nil: absent)
@@ -1638,6 +1672,14 @@ func (r *updateRollback) run(ctx context.Context, cause error) error {
 		cancel()
 		if err != nil {
 			errs = append(errs, "the previous plugin: "+err.Error())
+		}
+	}
+	if r.codexTouched {
+		cctx, cancel := context.WithTimeout(base, 5*time.Minute)
+		_, err := runChild(cctx, r.previous, codexClientArgs...)
+		cancel()
+		if err != nil {
+			errs = append(errs, "the previous Codex plugins: "+err.Error())
 		}
 	}
 	if len(errs) > 0 {

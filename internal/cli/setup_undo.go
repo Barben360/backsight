@@ -12,7 +12,9 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/codexcfg"
 	"github.com/Barben360/backsight/internal/harness"
+	"github.com/Barben360/backsight/internal/harnessid"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -160,6 +162,14 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 			add(undoAction{Name: name, Status: "done", Detail: changedPaths(fr)})
 			res.Kept = append(res.Kept, sortedValues(kept)...)
 		}
+		if r.m.Command == "client codex-memories" { // back on: uninstall has nothing to turn on
+			_ = state.Update(d, "setup --undo", func(s *state.State) error {
+				if c := s.ClientOf(harnessid.Codex); c != nil {
+					c.MemoriesOff = false
+				}
+				return nil
+			})
+		}
 		claudecfg.Unpin(d.PreImagesDir(), r.ts)
 		rec.Undo.ConfigRuns = without(rec.Undo.ConfigRuns, r.ts)
 		delete(rec.Undo.Retention, r.ts)
@@ -208,6 +218,26 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 			save()
 		}
 		add(undoAction{Name: "client " + prof, Status: done(f.plan), Detail: detail})
+	}
+
+	// Codex, where setup added the plugins: they go with the hook trust
+	// Codex leaves (Codex's memories came back with the config runs above).
+	for _, dir := range append([]string(nil), rec.Undo.CodexHomes...) {
+		name := "codex " + dir
+		if !f.plan {
+			edits, err := removeCodex(ctx, d, home, dir, "setup --undo", false)
+			if err != nil {
+				return fail(name, err)
+			}
+			if err := forgetCodex(d, home, dir, "setup --undo"); err != nil {
+				return fail(name, err)
+			}
+			rec.Undo.CodexHomes = without(rec.Undo.CodexHomes, dir)
+			save()
+			add(undoAction{Name: name, Status: "done", Detail: codexRemovedDetail(edits)})
+			continue
+		}
+		add(undoAction{Name: name, Status: "planned", Detail: codexRemovedDetail("")})
 	}
 
 	if rec.Undo.ServerStarted {
@@ -316,6 +346,16 @@ func inverseEdits(dir string, m claudecfg.Manifest, wrote string, kept map[strin
 				return nil, false, err
 			}
 			edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: removeAdded(b)})
+		}
+	case "client codex-memories":
+		// Codex's memories back where they were, unless set again since;
+		// Codex's own writes to config.toml meanwhile stay.
+		for _, mf := range m.Files {
+			b, err := pre(mf)
+			if err != nil {
+				return nil, false, err
+			}
+			edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: codexcfg.MemoriesBack(b)})
 		}
 	case "client retention":
 		for _, mf := range m.Files {

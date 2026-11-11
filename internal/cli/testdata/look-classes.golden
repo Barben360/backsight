@@ -13,6 +13,7 @@ backsight bank apply	full
 backsight bank rename	full
 backsight changelog	full
 backsight client	full
+backsight client codex-memories	full
 backsight client config	full
 backsight client config apply	full
 backsight client config plan	full

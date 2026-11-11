@@ -45,6 +45,9 @@ type Undo struct {
 	// ClientProfiles: the Claude Code profiles (absolute) where setup
 	// installed the plugin, which was not there before.
 	ClientProfiles []string `json:"client_profiles,omitempty"`
+	// CodexHomes: the Codex homes (absolute) where setup added backsight's
+	// plugins, which were not there before.
+	CodexHomes []string `json:"codex_homes,omitempty"`
 	// Scheduler: the scheduler entries were not installed before setup.
 	Scheduler bool `json:"scheduler,omitempty"`
 	// ServerStarted: the server was not answering before setup.
@@ -58,7 +61,7 @@ type Undo struct {
 
 // Empty reports whether there is nothing to undo.
 func (u Undo) Empty() bool {
-	return len(u.ConfigRuns) == 0 && len(u.ClientProfiles) == 0 && !u.Scheduler && !u.ServerStarted && len(u.Timers) == 0
+	return len(u.ConfigRuns) == 0 && len(u.ClientProfiles) == 0 && len(u.CodexHomes) == 0 && !u.Scheduler && !u.ServerStarted && len(u.Timers) == 0
 }
 
 // RecordVersion of setup.json.

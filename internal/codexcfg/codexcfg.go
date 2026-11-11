@@ -1,0 +1,107 @@
+package codexcfg
+
+import (
+	"strings"
+
+	"github.com/Barben360/backsight/internal/claudecfg"
+)
+
+// The edits backsight makes to Codex's config.toml (decision 0085, D6,
+// D8, D10): each an Apply for a claudecfg.Edit.
+
+// The plugins whose hook trust Codex keeps under [hooks.state."<plugin
+// id>:…"] (0085 D2, D5).
+var trustPlugins = []string{"backsight@backsight", "backsight-hooks@backsight"}
+
+// IsTrustTable reports a [hooks.state."<key>"] table of backsight's plugins:
+// what `codex plugin remove` leaves behind (0085 D8).
+func IsTrustTable(path []string) bool {
+	if len(path) != 3 || path[0] != "hooks" || path[1] != "state" {
+		return false
+	}
+	for _, p := range trustPlugins {
+		if strings.HasPrefix(path[2], p+":") {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveTrust removes backsight's [hooks.state] tables, each whole, and
+// nothing else: other hooks' trust and the [hooks.state] table itself
+// (Codex's own) stay.
+func RemoveTrust(doc []byte) ([]byte, []claudecfg.Change, error) {
+	return RemoveTables(doc, IsTrustTable)
+}
+
+// MemoriesKey turns Codex's own memories on ([features] memories = true).
+var MemoriesKey = []string{"features", "memories"}
+
+// MemoriesOn reports that config.toml turns Codex's own memories on (a
+// profile or a command line flag may still turn them on otherwise: codex
+// features list tells the effective state).
+func MemoriesOn(doc []byte) (bool, error) {
+	v, ok, err := Get(doc, MemoriesKey)
+	return ok && v == "true", err
+}
+
+// MemoriesOff removes `memories = true`, as `codex features disable
+// memories` does (an empty [features] table stays); any other value is
+// left as it is.
+func MemoriesOff(doc []byte) ([]byte, []claudecfg.Change, error) {
+	if on, err := MemoriesOn(doc); err != nil || !on {
+		return doc, nil, err
+	}
+	out, ch, err := Remove(doc, MemoriesKey)
+	return out, []claudecfg.Change{ch}, err
+}
+
+// MemoriesBack puts `memories = true` back where pre (config.toml before
+// MemoriesOff) had it, unless memories is set again since.
+func MemoriesBack(pre []byte) func(doc []byte) ([]byte, []claudecfg.Change, error) {
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		out, ch, err := Restore(doc, pre, MemoriesKey)
+		return out, []claudecfg.Change{ch}, err
+	}
+}
+
+// MemoriesTrue sets `memories = true` in [features]: uninstall's way back
+// when the pre-image is gone.
+func MemoriesTrue(doc []byte) ([]byte, []claudecfg.Change, error) {
+	out, ch, err := Set(doc, MemoriesKey, "true")
+	return out, []claudecfg.Change{ch}, err
+}
+
+// ApprovalFallback approves tools of backsight's memory server without a
+// prompt: [plugins."backsight@backsight".mcp_servers.memory.tools.<tool>]
+// approval_mode = "approve", the key Codex's own "Always allow" writes. It
+// is the fallback of 0085 D6, for a Codex that stops honouring the tools'
+// hints: nothing applies it by default.
+func ApprovalFallback(tools ...string) func(doc []byte) ([]byte, []claudecfg.Change, error) {
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		var changes []claudecfg.Change
+		for _, t := range tools {
+			out, ch, err := Set(doc, []string{"plugins", "backsight@backsight", "mcp_servers", "memory", "tools", t, "approval_mode"}, `"approve"`)
+			if err != nil {
+				return nil, nil, err
+			}
+			doc, changes = out, append(changes, ch)
+		}
+		return doc, changes, nil
+	}
+}
+
+// MCPServerTable reports that config.toml configures an MCP server named
+// name ([mcp_servers.<name>]), the user's own.
+func MCPServerTable(doc []byte, name string) (bool, error) {
+	d, err := parse(doc)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range d.items {
+		if len(it.path) >= 2 && it.path[0] == "mcp_servers" && it.path[1] == name && (it.kind == headerItem || it.kind == keyvalItem) {
+			return true, nil
+		}
+	}
+	return false, nil
+}

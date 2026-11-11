@@ -184,7 +184,7 @@ func newClientCmd(e *env) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", claudeCode.Texts().ProfileFlag)
 	cfgCmd := &cobra.Command{Use: "config", Short: "Plan, apply or undo backsight's edits to Claude Code's files"}
 	cfgCmd.AddCommand(newClientConfigApplyCmd(e, &configDir, true), newClientConfigApplyCmd(e, &configDir, false), newClientConfigRestoreCmd(e, &configDir))
-	cmd.AddCommand(cfgCmd, newClientRetentionCmd(e, &configDir), newClientInstallCmd(e, &configDir), newClientRetireCmd(e, &configDir))
+	cmd.AddCommand(cfgCmd, newClientRetentionCmd(e, &configDir), newClientInstallCmd(e, &configDir), newClientRetireCmd(e, &configDir), newClientCodexMemoriesCmd(e))
 	return cmd
 }
 

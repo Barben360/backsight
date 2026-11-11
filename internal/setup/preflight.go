@@ -56,8 +56,14 @@ type Probes struct {
 	ServerInstalled bool
 	FreeBytes       func() (uint64, error)
 	// Claude returns `claude --version`'s first word.
-	Claude     func(ctx context.Context) (string, error)
-	MinClaude  string
+	Claude    func(ctx context.Context) (string, error)
+	MinClaude string
+	// NoClaude: Claude Code is not among the tools setup wires (the tools
+	// answer); its checks and lines are skipped. Codex, when set, is the
+	// codex version for Codex's check, against MinCodex.
+	NoClaude   bool
+	Codex      func(ctx context.Context) (string, error)
+	MinCodex   string
 	AtLeast    func(v, minimum string) bool
 	APIPort    int
 	UIPort     int
@@ -149,14 +155,17 @@ func Preflight(ctx context.Context, p Probes) []Check {
 		}
 		add(diskCheck(p))
 	}
-	if !p.ServerOnly {
+	if !p.ServerOnly && !p.NoClaude {
 		add(claudeCheck(ctx, p))
+	}
+	if !p.ServerOnly && p.Codex != nil {
+		add(codexCheck(ctx, p))
 	}
 	// On native, the systemd check above reaches the same user manager.
 	if p.UserScheduler != nil && !p.SchedulerOff && !native {
 		add(schedulerCheck(ctx, p))
 	}
-	if !p.ServerOnly {
+	if !p.ServerOnly && !p.NoClaude {
 		if p.Reference > 0 {
 			add(Check{ID: "reference", Status: Info, Summary: fmt.Sprintf("%d piece(s) of an older Hindsight install wired into Claude Code (see the reference question)", p.Reference)})
 		}
@@ -279,6 +288,25 @@ func claudeCheck(ctx context.Context, p Probes) Check {
 		c.Action = &output.Action{Kind: "run_as_user", Cmd: "claude update", Why: "the plugin needs a recent Claude Code"}
 	default:
 		c.Status, c.Summary = OK, "Claude Code "+v
+	}
+	return c
+}
+
+// codexCheck: a codex at least MinCodex (decision 0085 D9).
+func codexCheck(ctx context.Context, p Probes) Check {
+	c := Check{ID: "codex"}
+	v, err := p.Codex(ctx)
+	switch {
+	case err != nil:
+		c.Status, c.Class, c.Summary = Fail, "needs_user", "the codex command is missing or failed: "+err.Error()
+		c.Fix = "npm install -g @openai/codex"
+		c.Action = &output.Action{Kind: "install", Cmd: "npm install -g @openai/codex", Why: "backsight wires itself into Codex through its plugin commands"}
+	case !p.AtLeast(v, p.MinCodex):
+		c.Status, c.Class, c.Summary = Fail, "needs_user", fmt.Sprintf("Codex %s is older than %s, the oldest version backsight was verified on", v, p.MinCodex)
+		c.Fix = "npm install -g @openai/codex@latest"
+		c.Action = &output.Action{Kind: "install", Cmd: "npm install -g @openai/codex@latest", Why: "backsight needs a recent Codex"}
+	default:
+		c.Status, c.Summary = OK, "Codex "+v
 	}
 	return c
 }
