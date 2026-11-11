@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -669,6 +670,58 @@ func TestClientMigrationKeepsRowsAsClaudeCode(t *testing.T) {
 			}
 		}
 		mustClose(t, ix)
+	}
+}
+
+// TestClientMigrationRewritesNoRow: migration 0006 only changes the schema
+// text, so its cost on a user's index does not grow with the rows (about
+// 20 ms on an empty index and on one of 160 MB alike): every client table's
+// root page, which holds the schema-0005 fixture's row, is byte for byte
+// the same after the migration. A backfill (UPDATE … SET client) or a
+// table rebuild would rewrite it.
+func TestClientMigrationRewritesNoRow(t *testing.T) {
+	counts := fixtureCounts(t, fixturePath(5))
+	for _, tbl := range clientTables {
+		if counts[tbl] == 0 {
+			t.Fatalf("the 0005 fixture has no row in %s: the test would be vacuous", tbl)
+		}
+	}
+	before, err := os.ReadFile(fixturePath(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageSize := int(before[16])<<8 | int(before[17])
+	if pageSize == 1 {
+		pageSize = 65536 // the header's encoding of 64 KiB
+	}
+	d := tempDirs(t)
+	copyFile(t, fixturePath(5), mainFile(d))
+	ix := mustOpen(t, opts(t, d, nil))
+	if ix.Schema() < 6 {
+		t.Fatalf("schema %d", ix.Schema())
+	}
+	roots := map[string]int{}
+	for _, tbl := range clientTables {
+		var root int
+		if err := ix.sh.w.QueryRow(`SELECT rootpage FROM sqlite_schema WHERE type = 'table' AND name = ?`, tbl).Scan(&root); err != nil {
+			t.Fatalf("%s: %v", tbl, err)
+		}
+		roots[tbl] = root
+	}
+	mustClose(t, ix) // checkpointed: the pages are in the main file
+	after, err := os.ReadFile(mainFile(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range clientTables {
+		lo, hi := (roots[tbl]-1)*pageSize, roots[tbl]*pageSize
+		if roots[tbl] < 2 || hi > len(before) || hi > len(after) {
+			t.Errorf("%s: root page %d outside the files (%d and %d bytes)", tbl, roots[tbl], len(before), len(after))
+			continue
+		}
+		if !bytes.Equal(before[lo:hi], after[lo:hi]) {
+			t.Errorf("%s: migration 0006 rewrote its root page %d", tbl, roots[tbl])
+		}
 	}
 }
 

@@ -694,13 +694,25 @@ func TestASlowQuickCheckDoesNotFailTheOpen(t *testing.T) {
 	prevRun, prevTimeout := runQuickCheck, quickCheckTimeout
 	t.Cleanup(func() { runQuickCheck, quickCheckTimeout = prevRun, prevTimeout })
 	quickCheckTimeout = 50 * time.Millisecond
+	r := newRecEnv(t)
+	// The index is built first, outside the timed opens: the migrations
+	// and the first ingest take over 2 s under -race on a loaded runner.
+	// The check of that build cannot run (busy): skipped, nothing stamped.
+	runQuickCheck = func(context.Context, *sql.DB) error { return errors.New("database is locked") }
+	ix, err := Open(context.Background(), r.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustClose(t, ix)
+	if st := r.status(); !st.CheckedAt.IsZero() || !st.CheckTriedAt.IsZero() {
+		t.Fatalf("the build stamped the check: %+v", st)
+	}
 	calls := 0
 	runQuickCheck = func(ctx context.Context, _ *sql.DB) error {
 		calls++
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	r := newRecEnv(t)
 	open := func(n, wantCalls int) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

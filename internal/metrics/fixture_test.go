@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
+	"github.com/Barben360/backsight/internal/index/indextest"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
@@ -188,6 +189,7 @@ func (x *fx) source() Source {
 	x.t.Helper()
 	ctx := context.Background()
 	if x.ix == nil {
+		indextest.Seed(x.t, x.dirs) // at the head: the migrations are not what these tests read
 		ix, err := index.Open(ctx, index.Options{
 			Dirs: x.dirs, Home: x.home, Getenv: func(string) string { return "" },
 			Now: func() time.Time { return x.now }, Ledger: fxLedger{x},
