@@ -45,7 +45,7 @@ func TestFreshInstallAsksEverythingWithRecommendations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"provider", "model", "retention", "backups", "backfill", "consent"}
+	want := []string{"provider", "model", "retention", "backups", "briefing_refresh", "backfill", "consent"}
 	if got := strings.Join(ids(qs), ","); got != strings.Join(want, ",") {
 		t.Fatalf("questions %s, want %s", got, strings.Join(want, ","))
 	}
@@ -538,5 +538,91 @@ func TestImportOnTheSubscriptionLaneHasACaveat(t *testing.T) {
 		if o.Caveat != "" {
 			t.Errorf("caveat off the subscription lane: %+v", o)
 		}
+	}
+}
+
+// The briefing refresh floor: 6h by default, three presets priced with
+// the chosen model, any duration typed, refused when it is none.
+func TestBriefingRefreshQuestion(t *testing.T) {
+	var pricedFor string
+	price := func(model string) (float64, string) { pricedFor = model; return 0.04, "USD" }
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "openai"}, RefreshPrice: price})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := find(t, qs, "briefing_refresh")
+	if q.Default != "6h" || q.Recommended != "6h" || !q.Free || q.Required || !q.Asked() {
+		t.Errorf("briefing_refresh: %+v", q)
+	}
+	if pricedFor != "gpt-6-luna" {
+		t.Errorf("priced for %q, want the chosen provider's model", pricedFor)
+	}
+	want := map[string]string{ // typical rewrites a day × 30 × 0.04
+		"1h":  "about 6.00 USD a month per active project (about 5 rewrites a day, 24 at most)",
+		"6h":  "about 2.40 USD a month per active project (about 2 rewrites a day, 4 at most)",
+		"24h": "about 1.20 USD a month per active project (1 rewrite a day at most)",
+	}
+	if len(q.Options) != len(want) {
+		t.Fatalf("options %+v", q.Options)
+	}
+	for _, o := range q.Options {
+		if o.Cost != want[o.Value] {
+			t.Errorf("%s cost %q, want %q", o.Value, o.Cost, want[o.Value])
+		}
+	}
+	if find(t, qs, "briefing_refresh").Options[2].Caveat == "" {
+		t.Error("24h must say a briefing can be a day behind")
+	}
+
+	// No known price: the tokens instead of a sum.
+	qs, _, _ = Resolve(Inputs{RefreshPrice: func(string) (float64, string) { return 0, "" }})
+	if c := find(t, qs, "briefing_refresh").Options[1].Cost; c != "per active project: about 2 rewrites a day, 4 at most, about 105k input tokens each" {
+		t.Errorf("unpriced cost %q", c)
+	}
+
+	// On a Claude subscription: no money, the plan's usage.
+	qs, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "claude-code"}, RefreshPrice: price})
+	if c := find(t, qs, "briefing_refresh").Options[1].Cost; strings.Contains(c, "USD") || !strings.Contains(c, "counted against your Claude plan") {
+		t.Errorf("subscription cost %q", c)
+	}
+
+	// Defaults take 6h; a typed duration is kept in its normal form.
+	qs, _, _ = Resolve(Inputs{})
+	Defaults(qs)
+	if v := Values(qs)["briefing_refresh"]; v != "6h" {
+		t.Errorf("default %q, want 6h", v)
+	}
+	for in, out := range map[string]string{"90m": "90m", "360m": "6h", "0": "0", "24h": "24h"} {
+		qs, _, err := Resolve(Inputs{Answers: map[string]string{"briefing_refresh": in}})
+		if q := find(t, qs, "briefing_refresh"); err != nil || q.Value != out || q.Source != "answer" {
+			t.Errorf("briefing_refresh=%s: %+v %v, want %s", in, q, err, out)
+		}
+	}
+	for _, bad := range []string{"soon", "6", "-1h", "1.5s"} {
+		_, _, err := Resolve(Inputs{Answers: map[string]string{"briefing_refresh": bad}})
+		var ue *UsageError
+		if !errors.As(err, &ue) || !strings.Contains(ue.Msg, "briefing_refresh="+bad) {
+			t.Errorf("briefing_refresh=%s accepted: %v", bad, err)
+		}
+	}
+}
+
+// An existing config answers it, its key named on a contradiction; the
+// same duration written otherwise is no contradiction.
+func TestBriefingRefreshFromAnExistingConfig(t *testing.T) {
+	cfg := adopted(t)
+	qs, _, err := Resolve(Inputs{Config: cfg})
+	if q := find(t, qs, "briefing_refresh"); err != nil || q.Value != "6h" || q.Source != "config" {
+		t.Errorf("default config: %+v %v", q, err)
+	}
+	if err := cfg.Recall.BriefingRefreshInterval.UnmarshalText([]byte("1h")); err != nil {
+		t.Fatal(err)
+	}
+	if qs, _, err := Resolve(Inputs{Config: cfg, Answers: map[string]string{"briefing_refresh": "60m"}}); err != nil || find(t, qs, "briefing_refresh").Value != "1h" {
+		t.Errorf("60m against 1h: %v", err)
+	}
+	_, _, err = Resolve(Inputs{Config: cfg, Answers: map[string]string{"briefing_refresh": "6h"}})
+	if err == nil || !strings.Contains(err.Error(), "recall.briefing_refresh_interval") {
+		t.Errorf("6h against a config's 1h: %v", err)
 	}
 }

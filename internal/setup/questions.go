@@ -133,6 +133,64 @@ type Inputs struct {
 	// send from Codex's own memories, priced for a model; nil or 0 files:
 	// no codex_import question (decision 0085 D10).
 	CodexImport func(model string) (files int, cost string)
+	// RefreshPrice is what one briefing rewrite costs with a model, and
+	// its currency; 0 when no price is known (the option then shows
+	// tokens). nil: no cost on the briefing_refresh options.
+	RefreshPrice func(model string) (cost float64, currency string)
+}
+
+// The briefing refresh floors setup offers (recall.briefing_refresh_interval).
+const (
+	RefreshFresh    = "1h"
+	RefreshBalanced = "6h" // the config default
+	RefreshThrifty  = "24h"
+)
+
+// One briefing rewrite reads the project's memories. Measured on the
+// author's server (2026-11-09 to 2026-11-12, 46 rewrites of 6 pages): about
+// 105,000 input and 3,500 output tokens each, over about 6 LLM calls of
+// at most 47,000 input tokens (below Haiku 5.5's 100,000-token tier), about 2 rewrites a day per
+// active project with the 6 h floor; a replay of the same days put the 1 h
+// floor at about 5 and the 24 h floor at 1. The floor caps them at 24 / hours.
+const (
+	RefreshInputTokens  = 105_000
+	RefreshOutputTokens = 3_500
+)
+
+// typicalRewrites is the measured rewrites a day per active project of
+// each offered floor, in hours.
+var typicalRewrites = map[int]int{1: 5, 6: 2, 24: 1}
+
+// refreshCost is a floor's option cost: the rewrites a day of one active
+// project, typical and at most, and with a price what they typically cost
+// in a month. On a Claude subscription they cost no money but count
+// against the plan.
+func refreshCost(floorHours int, price float64, currency string, subscription bool) string {
+	typical, most := typicalRewrites[floorHours], 24/floorHours
+	rewrites := fmt.Sprintf("about %d rewrites a day, %d at most", typical, most)
+	if most == 1 {
+		rewrites = "1 rewrite a day at most"
+	}
+	if subscription {
+		return fmt.Sprintf("per active project: %s, about %dk input tokens each, counted against your Claude plan", rewrites, RefreshInputTokens/1000)
+	}
+	if price <= 0 {
+		return fmt.Sprintf("per active project: %s, about %dk input tokens each", rewrites, RefreshInputTokens/1000)
+	}
+	return fmt.Sprintf("about %.2f %s a month per active project (%s)", float64(typical*30)*price, currency, rewrites)
+}
+
+// RefreshInterval reads a briefing_refresh answer: a duration of whole
+// seconds, 0 or more, in its normal form ("360m" is "6h").
+func RefreshInterval(v string) (string, error) {
+	var d config.Duration
+	if err := d.UnmarshalText([]byte(v)); err != nil {
+		return "", err
+	}
+	if d.Seconds() < 0 {
+		return "", fmt.Errorf("%q: 0 (no floor) or more", v)
+	}
+	return d.String(), nil
 }
 
 // The coding tools the tools question picks from.
@@ -212,7 +270,7 @@ func (b Backlog) past() string {
 var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth, "runtime": "docker"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "tools", "retention", "backups", "reference", "backfill", "import", "import_path", "codex_import", "codex_memories", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "tools", "retention", "backups", "briefing_refresh", "reference", "backfill", "import", "import_path", "codex_import", "codex_memories", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -225,6 +283,12 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	for k := range in.Answers {
 		if !slices.Contains(known, k) {
 			return nil, nil, &UsageError{fmt.Sprintf("unknown answer %q: setup knows %s", k, strings.Join(known, ", "))}
+		}
+	}
+	if v := in.Answers["briefing_refresh"]; v != "" { // "360m" is the "6h" config.toml may hold
+		if n, err := RefreshInterval(v); err == nil && n != v {
+			in.Answers = maps.Clone(in.Answers)
+			in.Answers["briefing_refresh"] = n
 		}
 	}
 	fromConfig := configAnswers(in.Config)
@@ -404,6 +468,35 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			return nil, nil, err
 		}
 	}
+	// How often the server may rewrite a briefing page: a server-only
+	// host shows no briefing and keeps the default its clients have.
+	if !serverOnly {
+		var price float64
+		var currency string
+		sub := provider == "claude-code"
+		if in.RefreshPrice != nil && !sub {
+			price, currency = in.RefreshPrice(model)
+		}
+		rq := Question{ID: "briefing_refresh", Prompt: "How often may the memory server rewrite a project's briefing, the summary each session starts with? " +
+			"Each rewrite reads the project's memories with the server's LLM. Every PC sharing this memory should use the same value.",
+			Free: true, Default: RefreshBalanced, Recommended: RefreshBalanced,
+			Options: []Option{
+				{Value: RefreshFresh, Label: "every hour at most: the briefing follows your latest work closely", Cost: refreshCost(1, price, currency, sub)},
+				{Value: RefreshBalanced, Label: "every 6 hours at most: balanced", Cost: refreshCost(6, price, currency, sub)},
+				{Value: RefreshThrifty, Label: "once a day at most: the cheapest", Cost: refreshCost(24, price, currency, sub), Caveat: "a session can start on a briefing up to a day behind; memory_search still finds the newest memories"},
+			}}
+		if err := pick(&rq); err != nil {
+			return nil, nil, err
+		}
+		if rq.Value != "" {
+			v, err := RefreshInterval(rq.Value)
+			if err != nil {
+				return nil, nil, &UsageError{fmt.Sprintf("briefing_refresh=%s: %v", rq.Value, err)}
+			}
+			rq.Value = v
+		}
+		qs = append(qs, rq)
+	}
 	if in.ReferencePieces > 0 && claude {
 		if err := add(Question{ID: "reference", Prompt: fmt.Sprintf("%d pieces of an older Hindsight install are wired into Claude Code. Retire them once backsight is installed (undoable; the old server is left untouched)?", in.ReferencePieces),
 			Default: "retire", Recommended: "retire",
@@ -544,7 +637,7 @@ func orDefault(v, def string) string {
 
 // configKey names the config.toml key behind an answer.
 var configKey = map[string]string{"provider": "llm.provider", "model": "llm.model", "base_url": "llm.base_url",
-	"retention": config.RetentionKey, "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role", "runtime": "server.runtime"}
+	"retention": config.RetentionKey, "backups": "backup.enabled", "briefing_refresh": "recall.briefing_refresh_interval", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role", "runtime": "server.runtime"}
 
 // configAnswers are the answers an existing config already gives.
 func configAnswers(c *config.Config) map[string]string {
@@ -560,6 +653,7 @@ func configAnswers(c *config.Config) map[string]string {
 		out["retention"] = strconv.Itoa(c.Clients.ClaudeCode.RetentionDays)
 	}
 	out["backups"] = map[bool]string{true: "on", false: "off"}[c.Backup.Enabled]
+	out["briefing_refresh"] = c.Recall.BriefingRefreshInterval.String()
 	if p, err := c.APIPort(); err == nil {
 		out["api_port"] = strconv.Itoa(p)
 	}
