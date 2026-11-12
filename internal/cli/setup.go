@@ -505,7 +505,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 		}
 	}
 	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, Import: s.importEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime(),
-		Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories, CodexImport: s.codexImportFor()}
+		Codex: s.codexDir != "", ClaudeFound: s.claudeFound, CodexMemories: s.codexMemories, CodexImport: s.codexImportFor(), RefreshPrice: s.refreshPrice}
 	// --reconfigure: the questions the last run answered are asked again,
 	// their answers the defaults; the hidden answers (ports, project) stay.
 	prev := map[string]string{}
@@ -1645,7 +1645,26 @@ func setupConfig(a map[string]string) []byte {
 	if a["backups"] == "off" {
 		raw += "\n[backup]\nenabled = false\n"
 	}
+	// The default floor is never written: the key stays out of a
+	// config.toml that keeps it.
+	if v := a["briefing_refresh"]; v != "" && v != setup.RefreshBalanced {
+		raw += "\n[recall]\nbriefing_refresh_interval = " + strconv.Quote(v) + "\n"
+	}
 	return []byte(raw)
+}
+
+// refreshPrice is what one briefing rewrite costs with model: the
+// configured prices when model is config.toml's, else the built-in
+// table's; 0 when no price is known.
+func (s *setupEnv) refreshPrice(model string) (float64, string) {
+	prices := retain.PricesFor(model, 0, 0, 0, "")
+	if s.cfg != nil && s.cfg.LLM.Model == model {
+		prices = retain.PricesForLLM(s.cfg.LLM)
+	}
+	if !prices.Known() {
+		return 0, ""
+	}
+	return prices.Cost(setup.RefreshInputTokens, 0, setup.RefreshOutputTokens, 0), prices.Currency
 }
 
 func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive bool) (setupResult, error) {
@@ -1908,6 +1927,12 @@ func (s *setupEnv) heartbeat(ctx context.Context, detail string, text bool) (sto
 // planSteps lists what a run would do with these answers.
 func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	cfgDetail := "write " + s.dirs.ConfigFile()
+	if v := a["briefing_refresh"]; v != "" && v != setup.RefreshBalanced {
+		cfgDetail += " (briefing pages rewritten at most every " + v + ")"
+		if v == "0" {
+			cfgDetail = "write " + s.dirs.ConfigFile() + " (briefing pages rewritten after every consolidation: no floor)"
+		}
+	}
 	if s.cfg != nil {
 		cfgDetail = "adopt " + s.dirs.ConfigFile()
 	}
