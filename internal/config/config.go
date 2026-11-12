@@ -207,20 +207,26 @@ type Components struct {
 }
 
 type Recall struct {
-	MinScore           float64 `toml:"min_score" json:"min_score"`
-	GlobalMinScore     float64 `toml:"global_min_score" json:"global_min_score"` // per-prompt global hits (0046)
-	PromptHits         int     `toml:"prompt_hits" json:"prompt_hits"`
-	QueryChars         int     `toml:"query_chars" json:"query_chars"`
-	PromptChars        int     `toml:"prompt_chars" json:"prompt_chars"`
-	MinGap             int     `toml:"min_gap" json:"min_gap"`
-	RecallMinChars     int     `toml:"recall_min_chars" json:"recall_min_chars"`
-	ReminderMinChars   int     `toml:"reminder_min_chars" json:"reminder_min_chars"`
-	QuietPrompts       int     `toml:"quiet_prompts" json:"quiet_prompts"`
-	StickyMax          int     `toml:"sticky_max" json:"sticky_max"`
-	StickyBypass       float64 `toml:"sticky_bypass" json:"sticky_bypass"`
-	StickyWindowH      int     `toml:"sticky_window_h" json:"sticky_window_h"`
-	ProjectBoost       float64 `toml:"project_boost" json:"project_boost"`
-	SessionBudgetChars int     `toml:"session_budget_chars" json:"session_budget_chars"`
+	MinScore       float64 `toml:"min_score" json:"min_score"`
+	GlobalMinScore float64 `toml:"global_min_score" json:"global_min_score"` // per-prompt global hits (0046)
+	PromptHits     int     `toml:"prompt_hits" json:"prompt_hits"`
+	// PromptHitsMax: beyond PromptHits, up to this many memories on one
+	// prompt when each extra one's reranker score is at least
+	// PromptConfidentScore (issue 328). Below PromptHits it adds nothing
+	// (a config that raised prompt_hits stays valid).
+	PromptHitsMax        int     `toml:"prompt_hits_max" json:"prompt_hits_max"`
+	PromptConfidentScore float64 `toml:"prompt_confident_score" json:"prompt_confident_score"`
+	QueryChars           int     `toml:"query_chars" json:"query_chars"`
+	PromptChars          int     `toml:"prompt_chars" json:"prompt_chars"`
+	MinGap               int     `toml:"min_gap" json:"min_gap"`
+	RecallMinChars       int     `toml:"recall_min_chars" json:"recall_min_chars"`
+	ReminderMinChars     int     `toml:"reminder_min_chars" json:"reminder_min_chars"`
+	QuietPrompts         int     `toml:"quiet_prompts" json:"quiet_prompts"`
+	StickyMax            int     `toml:"sticky_max" json:"sticky_max"`
+	StickyBypass         float64 `toml:"sticky_bypass" json:"sticky_bypass"`
+	StickyWindowH        int     `toml:"sticky_window_h" json:"sticky_window_h"`
+	ProjectBoost         float64 `toml:"project_boost" json:"project_boost"`
+	SessionBudgetChars   int     `toml:"session_budget_chars" json:"session_budget_chars"`
 	// Briefing: "model" (a per-project mental model the server keeps,
 	// decision 0060) or "recent" (the 5 latest observations, E8).
 	Briefing string `toml:"briefing" json:"briefing"`
@@ -389,7 +395,7 @@ func Default(d paths.Dirs, home string) Config {
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: DefaultSkipEntrypoints()},
 		Components: Components{Read: true, Write: true},
-		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, StoreCorrectionMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
+		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, StoreSimilarMinScore: 0.8, StoreCorrectionMinScore: 0.6, PromptHits: 3, PromptHitsMax: 5, PromptConfidentScore: 0.8, QueryChars: 300, PromptChars: 1500, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
 			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model", BriefingRefreshInterval: Hours(6)},
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-flash", Currency: "USD"},
@@ -579,13 +585,14 @@ func (c Config) ValidateOn(goos, goarch string) error {
 	unit("recall.store_correction_min_score", r.StoreCorrectionMinScore)
 	unit("recall.sticky_bypass", r.StickyBypass)
 	unit("recall.project_boost", r.ProjectBoost)
+	unit("recall.prompt_confident_score", r.PromptConfidentScore)
 	if r.Briefing != "model" && r.Briefing != "recent" {
 		bad("recall.briefing", "%q: \"model\" or \"recent\"", r.Briefing)
 	}
 	if r.BriefingRefreshInterval.d < 0 {
 		bad("recall.briefing_refresh_interval", "%s: 0 (no floor) or more", r.BriefingRefreshInterval)
 	}
-	for key, v := range map[string]int{"recall.prompt_hits": r.PromptHits, "recall.query_chars": r.QueryChars,
+	for key, v := range map[string]int{"recall.prompt_hits": r.PromptHits, "recall.prompt_hits_max": r.PromptHitsMax, "recall.query_chars": r.QueryChars,
 		"recall.prompt_chars": r.PromptChars, "recall.sticky_max": r.StickyMax, "recall.sticky_window_h": r.StickyWindowH,
 		"recall.session_budget_chars": r.SessionBudgetChars} {
 		atLeast(key, v, 1)

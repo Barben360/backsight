@@ -29,6 +29,13 @@ type Prompt struct {
 	// Empty: why a recall decision injected nothing (error | no_candidates |
 	// below_floor | all_seen | capped); unset when it injected something.
 	Empty string `json:"empty,omitempty"`
+	// What the per-prompt limits left out (issue 328): memories above the
+	// floor cut by recall.prompt_hits (CutCount) or because they no longer
+	// fit recall.prompt_chars (CutSize), and memories shown as a shortened
+	// headline (Shortened).
+	CutCount  int `json:"cut_count,omitempty"`
+	CutSize   int `json:"cut_size,omitempty"`
+	Shortened int `json:"shortened,omitempty"`
 }
 
 // Store is one backsight store or memory_store call: saved, updated (the

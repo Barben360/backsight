@@ -144,6 +144,22 @@ func TestFailureRecallRedactsTheQueryAndKeepsToTheBudget(t *testing.T) {
 	}
 }
 
+// The failure recall keeps its own 800 characters: the prompt's larger
+// budget (issue 328) does not reach it.
+func TestFailureRecallKeepsItsOwnBudget(t *testing.T) {
+	home := hookHome(t)
+	failureOn(t, home)
+	long := func(id string) string {
+		return `{"id":"` + id + `","text":"` + strings.Repeat("npm cannot find module ", 30) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.95}}`
+	}
+	recallAnswer = "[" + long("m1") + "," + long("m2") + "]"
+	h := failure(t, home, "s1", "Bash", npmError, nil)
+	body := strings.TrimPrefix(h.Specific.Context, instructions.FailureHeader+"\n")
+	if n := len([]rune(body)); n == 0 || n > 800 {
+		t.Fatalf("failure recall took %d chars:\n%q", n, h.Specific.Context)
+	}
+}
+
 func TestFailureSignatureIgnoresNumbersPathsHexAndCase(t *testing.T) {
 	a := failureSignature("Bash", "Exit code 1\nENOENT: no such file '/a/b/c.txt' at 0xdeadbeef line 12")
 	b := failureSignature("Bash", "Exit code 9\nenoent: no such file '/x/y.txt' at 0xcafebabe1 line 400")

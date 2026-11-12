@@ -36,8 +36,10 @@ recall.global_min_score            0.6
 recall.min_gap                     3
 recall.min_score                   0.5
 recall.project_boost               0.05
-recall.prompt_chars                800
+recall.prompt_chars                1500
+recall.prompt_confident_score      0.8
 recall.prompt_hits                 3
+recall.prompt_hits_max             5
 recall.query_chars                 300
 recall.quiet_prompts               3
 recall.recall_min_chars            60

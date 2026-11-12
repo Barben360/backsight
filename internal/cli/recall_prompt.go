@@ -54,7 +54,8 @@ func newRecallPromptCmd(e *env) *cobra.Command {
 				return &output.Error{Code: output.Usage, Message: "no prompt: give it as arguments or with --stdin"}
 			}
 			q, res := h.searchPrompt(prompt)
-			block, chosen := selectHits(res.Hits, h.cfg.Recall, func(recall.Hit) bool { return false })
+			sel := selectHits(res.Hits, h.cfg.Recall, func(recall.Hit) bool { return false })
+			block, chosen := sel.Block, sel.Chosen
 			out := recallPromptResult{Project: h.project, Linked: append([]string{}, h.linked...), Family: append([]string{}, familyOf(h.dirs, h.project)...), Query: q, Ranked: res.Hits, Injected: []string{}, Block: block}
 			if len(out.Ranked) > 10 {
 				out.Ranked = out.Ranked[:10]

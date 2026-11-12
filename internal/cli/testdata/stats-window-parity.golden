@@ -6,6 +6,7 @@ Prompts      3 typed, 0 machine messages; recalls 2 (50% injected something); sk
 Recall       p50 800 ms, p95 1200 ms; scope calls failed 0 / 1
 By language  French 1 recalls (100% injected), English 1 (0%)
 Searches     0 of 2 prompts ≥ 40 chars (0%); replies after a search: none
+Per recall   memories injected 1: 1; left out above the floor: 0 by the count, 0 by the size; shortened 0
 Injections   1: followed by a search 0%, credited 0%, contradicted next prompt 0
 Briefings    0 (0 mental-model pages, 0 empty): 0 recent memories, - returned again by a memory tool later
 Detector     fired 0, followed by a save -

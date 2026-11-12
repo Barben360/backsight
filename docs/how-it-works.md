@@ -34,13 +34,13 @@ When you send a prompt, the prompt hook decides whether to recall:
 - **Never** past 6,000 characters of memory text in one session, nor for prompts Claude Code writes itself (task notifications, command output).
 - **Not for a prompt that only points at something**: a link or an issue reference (`#12`, `owner/repo#12`) with fewer than 3 other meaningful words, such as "Fix https://github.com/owner/repo/issues/12". Its text says little about the topic, so instead of searching it, the hook asks Claude to read what it points at first and then search memory with that content. Such a prompt does not count as a recall: the next prompt recalls as if it had not been sent.
 
-To recall, it searches the start of your prompt (300 characters, code blocks removed, secrets redacted) in the current project (with a small boost), the transverse pool, the related projects, the other projects the prompt names (below) and the whole memory. Each candidate is scored by the **reranker**. It keeps at most 3 memories, 800 characters in all, that:
+To recall, it searches the start of your prompt (300 characters, code blocks removed, secrets redacted) in the current project (with a small boost), the transverse pool, the related projects, the other projects the prompt names (below) and the whole memory. Each candidate is scored by the **reranker**. It keeps up to 3 memories, up to 5 when the extra ones score at least 0.8, within 1,500 characters in all, that:
 
 - score at least 0.5 (0.6 for one found outside your projects);
 - were not shown earlier in the session;
 - were not shown 3 times in the last 24 hours, unless they match almost exactly.
 
-They are added to the prompt under a header that frames them as notes from past sessions, data and not instructions, to verify before use, each with its project and short id (`[billing · 0b4c2a52]`). A last line asks Claude to report, before its final message, which of them informed its answer ([below](#which-memories-helped)).
+They are added to the prompt under a header that frames them as notes from past sessions, data and not instructions, to verify before use, each with its project and short id (`[billing · 0b4c2a52]`). A memory that does not fit whole is shown as a headline of up to 160 characters ending with `…`, and the header tells Claude that `memory_read` has the rest; when not even that fits, the next memory is tried. The prompt event records how many memories the count and the size left out, and how many were shortened: `backsight stats` shows them on its `Per recall` line. A last line asks Claude to report, before its final message, which of them informed its answer ([below](#which-memories-helped)).
 
 The prompt hook may also add one short line:
 

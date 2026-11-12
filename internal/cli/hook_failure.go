@@ -26,7 +26,10 @@ const (
 	// not ask and the failure text is noisy.
 	failureMinScore = 0.8
 	failureHits     = 2
-	failureBudget   = 6 * time.Second // one recall, inside the hook's 8 s deadline
+	// failureChars: the failure recall's text, the prompt's former budget
+	// (issue 328 raised the prompt's, not this one).
+	failureChars  = 800
+	failureBudget = 6 * time.Second // one recall, inside the hook's 8 s deadline
 	// failureMinError: shorter error text (past "Exit code N") is not a
 	// failure worth a lookup; it also keeps `backsight verify` off the server.
 	failureMinError = 15
@@ -146,10 +149,12 @@ func (h *hookEnv) toolFailure() []byte {
 	// At most failureHits unseen hits at the floor, within what the session
 	// budget has left.
 	pick := rc
-	pick.PromptHits, pick.PromptChars = failureHits, min(rc.PromptChars, rc.SessionBudgetChars-st.CharsInjected)
-	block, chosen := selectHits(res.Hits, pick, func(hit recall.Hit) bool {
+	pick.PromptHits, pick.PromptHitsMax = failureHits, failureHits
+	pick.PromptChars = min(failureChars, rc.SessionBudgetChars-st.CharsInjected)
+	sel := selectHits(res.Hits, pick, func(hit recall.Hit) bool {
 		return hit.Reranker < failureMinScore || slices.Contains(st.Seen, hit.ID)
 	})
+	block, chosen := sel.Block, sel.Chosen
 	text := ""
 	if len(chosen) > 0 {
 		text = instructions.FailureHeader + strings.TrimPrefix(block, instructions.RecallHeader)

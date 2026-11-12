@@ -223,6 +223,8 @@ func TestValidate(t *testing.T) {
 		{"min_score range", func(c *Config) { c.Recall.MinScore = 1.5 }, "recall.min_score"},
 		{"negative count", func(c *Config) { c.Recall.MinGap = -1 }, "recall.min_gap"},
 		{"zero hits", func(c *Config) { c.Recall.PromptHits = 0 }, "recall.prompt_hits"},
+		{"zero max hits", func(c *Config) { c.Recall.PromptHitsMax = 0 }, "recall.prompt_hits_max"},
+		{"confident score range", func(c *Config) { c.Recall.PromptConfidentScore = 1.2 }, "recall.prompt_confident_score"},
 		{"preset", func(c *Config) { c.Embeddings.Preset = "huge" }, "embeddings.preset"},
 		{"provider empty", func(c *Config) { c.LLM.Provider = "" }, "llm.provider"},
 		{"negative price", func(c *Config) { c.LLM.PriceOutput = -1 }, "llm.price_output"},

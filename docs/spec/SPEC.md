@@ -156,7 +156,7 @@ The Python `memory-retro.py` (`claude -p`, Haiku + Sonnet) is retired without a 
 
 ### 10.1 Briefing and guide — §6.2.
 ### 10.2 Prompt recall (constants ported from C12)
-Query = first 300 chars of the prompt after removing fenced code blocks (shortening further lowers quality, measured 2026-10-23); scopes per §4; ≤ 3 hits with reranker score ≥ 0.5 (the floor sees the reranker score, before the feedback boost), ordered by the merged score with the feedback boost and hidden observations skipped (§4, 0074 block 3; the gate and the failure recall likewise), ≤ 800 chars, framed as cues to verify; skipped for machine messages, prompts < 60 chars, and the same topic within `MIN_GAP` prompts; sticky muting; ids already seen this session skipped; quiet-prompt nudge naming 2-4 terms from the entity index.
+Query = first 300 chars of the prompt after removing fenced code blocks (shortening further lowers quality, measured 2026-10-23); scopes per §4; ≤ 3 hits with reranker score ≥ 0.5, up to 5 when each extra one scores ≥ 0.8 (issue 328) (the floor sees the reranker score, before the feedback boost), ordered by the merged score with the feedback boost and hidden observations skipped (§4, 0074 block 3; the gate and the failure recall likewise), ≤ 1,500 chars, a memory that does not fit whole shown as a headline of ≤ 160 chars ending with … (the header points to memory_read), the next one tried when not even that fits, framed as cues to verify; skipped for machine messages, prompts < 60 chars, and the same topic within `MIN_GAP` prompts; sticky muting; ids already seen this session skipped; quiet-prompt nudge naming 2-4 terms from the entity index.
 ### 10.3 Search, read — §7. Gate — §6.2.
 ### 10.4 Candidates [later]
 **PostToolUseFailure** pitfall recall (hook verified [E15]; once per error signature, score ≥ 0.8); **PreToolUse** `additionalContext` with `if` filters (`Bash(git push *)`…) from a SessionStart cache of `kind:pitfall`/`kind:convention` raw facts; MCP prompts as user slash commands [E15]; composite query for short prompts; PostCompact summary retain; detector loop closed at Stop; status line. Each needs its own experiment.
@@ -354,7 +354,9 @@ global_min_score = 0.6                # per-prompt global hits (0046)
 store_similar_min_score = 0.8         # memory_store shows its most similar memory only at this score after boost (0083 C4)
 prompt_hits = 3
 query_chars = 300                    # recall query length
-prompt_chars = 800                   # injected text per prompt
+prompt_hits_max = 5                  # with confident extras (issue 328)
+prompt_confident_score = 0.8
+prompt_chars = 1500                  # injected text per prompt
 min_gap = 3
 recall_min_chars = 60
 reminder_min_chars = 40

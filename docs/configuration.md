@@ -88,9 +88,11 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | `recall.global_min_score` | `0.6` | A higher floor for prompt memories found in the whole memory, outside the current, transverse and related projects. |
 | `recall.store_similar_min_score` | `0.8` | The score (after boost) the most similar memory needs for `memory_store` to show it beside the fact just stored; below it, the answer is the saved line alone. |
 | `recall.store_correction_min_score` | `0.6` | The same bar for a fact of kind `correction`, which shows up to 2 similar memories: a correction often replaces a memory worded differently, and a memory shown is one Claude can report outdated with `memory_credit`, which retires it. At least 0, at most 1. |
-| `recall.prompt_hits` | `3` | At most this many memories added to one prompt. |
+| `recall.prompt_hits` | `3` | At most this many memories added to one prompt, beyond which only confident ones come (`recall.prompt_hits_max`). |
+| `recall.prompt_hits_max` | `5` | Up to this many memories on one prompt when each one past `recall.prompt_hits` scores at least `recall.prompt_confident_score`. Below `recall.prompt_hits`, it adds nothing. |
+| `recall.prompt_confident_score` | `0.8` | The reranker score a memory past `recall.prompt_hits` needs to be added. At least 0, at most 1. |
 | `recall.query_chars` | `300` | The first characters of your prompt, code blocks removed and secrets redacted, that are searched. |
-| `recall.prompt_chars` | `800` | At most this many characters of memory text added to one prompt. |
+| `recall.prompt_chars` | `1500` | At most this many characters of memory lines added to one prompt. A memory that does not fit whole is shown as a headline of up to 160 characters ending with `…` (Claude reads the rest with `memory_read`); when not even that fits, the next one is tried. |
 | `recall.min_gap` | `3` | After a recall, the next one waits this many prompts, unless the topic changes. |
 | `recall.recall_min_chars` | `60` | Shorter prompts are not searched (the first prompt of a session is, from 25 characters). |
 | `recall.reminder_min_chars` | `40` | Shortest prompt that gets the first-prompt reminder or a quiet-prompt nudge. |
@@ -225,6 +227,7 @@ Quieter recall: fewer, closer memories.
 [recall]
 min_score = 0.6
 prompt_hits = 2
+prompt_hits_max = 2
 ```
 
 A briefing without LLM calls, and backups on another disk:

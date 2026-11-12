@@ -80,7 +80,7 @@ func newFeedbackReplayCmd(e *env) *cobra.Command {
 			}
 			at := now().UTC()
 			p, q := feedbackParams(cfg), feedbackParams(changed)
-			res := compareReplays(events, feedback.Replay(events, p, at), feedback.Replay(events, q, at), p, q, at, cfg.Recall.PromptHits)
+			res := compareReplays(events, feedback.Replay(events, p, at), feedback.Replay(events, q, at), p, q, at, max(cfg.Recall.PromptHits, cfg.Recall.PromptHitsMax))
 			res.Set, res.Skipped = set, skipped
 			return e.emit("feedback replay", res, func() string { return replayText(res) })
 		},
