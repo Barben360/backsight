@@ -57,13 +57,20 @@ func TestGapBoundaryAndShortPromptsAtTheGap(t *testing.T) {
 func TestPromptRecallCapsAndFloors(t *testing.T) {
 	home := hookHome(t)
 	var items []string
-	for i := 0; i < 5; i++ {
-		items = append(items, `{"id":"s`+itoa(i)+`","text":"short memory `+itoa(i)+`","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}}`)
+	for i := 0; i < 7; i++ {
+		score := "0.9"
+		if i >= 3 {
+			score = "0.79" // under recall.prompt_confident_score: no 4th
+		}
+		if i >= 5 {
+			score = "0.95" // confident: the 4th and 5th, no 6th
+		}
+		items = append(items, `{"id":"s`+itoa(i)+`","text":"short memory `+itoa(i)+`","type":"observation","tags":["project:billing"],"scores":{"reranker":`+score+`}}`)
 	}
 	items = append(items, `{"id":"low","text":"just below the floor","type":"observation","tags":["project:billing"],"scores":{"reranker":0.49}}`)
 	recallAnswer = "[" + strings.Join(items, ",") + "]"
 	c := prompt(t, home, "s1", strings.Repeat("Which PostgreSQL version does billing run? ", 12)).Specific.Context
-	if n := strings.Count(c, "short memory"); n != 3 || strings.Contains(c, "just below the floor") {
+	if n := strings.Count(c, "short memory"); n != 5 || strings.Contains(c, "short memory 3") || strings.Contains(c, "short memory 4") || strings.Contains(c, "just below the floor") {
 		t.Errorf("%d hits:\n%s", n, c)
 	}
 	for _, q := range recallQueries {
@@ -71,14 +78,18 @@ func TestPromptRecallCapsAndFloors(t *testing.T) {
 			t.Errorf("query %d chars", len([]rune(q)))
 		}
 	}
-	recallAnswer = `[{"id":"l1","text":"` + strings.Repeat("a", 700) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}},
-		{"id":"l2","text":"` + strings.Repeat("b", 700) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}}]`
+	recallAnswer = `[{"id":"l1","text":"` + strings.Repeat("a", 600) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}},
+		{"id":"l2","text":"` + strings.Repeat("b", 600) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}},
+		{"id":"l3","text":"` + strings.Repeat("c", 600) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}}]`
 	c = prompt(t, home, "s2", longPrompt).Specific.Context
 	block, _, _ := strings.Cut(c, instructions.Reminder)
 	block = strings.TrimPrefix(strings.TrimSpace(block), instructions.RecallHeader)
 	block = strings.TrimSuffix(strings.TrimSpace(block), instructions.CreditAsk)
-	if n := len([]rune(strings.TrimSpace(block))); n > 800 || n < 400 {
-		t.Errorf("recall block %d chars, want ≤ 800 and filled", n)
+	if n := len([]rune(strings.TrimSpace(block))); n > 1500 || n < 1300 {
+		t.Errorf("recall block %d chars, want ≤ 1500 and filled", n)
+	}
+	if !strings.Contains(block, strings.Repeat("a", 600)) || !strings.Contains(block, strings.Repeat("b", 600)) || !strings.Contains(block, "c…") {
+		t.Errorf("want l1 and l2 whole, l3 as a headline:\n%s", block)
 	}
 }
 

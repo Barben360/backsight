@@ -12,6 +12,12 @@
       "machine": 0,
       "recalls": 2,
       "with_hits": 1,
+      "by_injected": {
+        "1": 1
+      },
+      "cut_count": 0,
+      "cut_size": 0,
+      "shortened": 0,
       "skips": {
         "short": 1
       },

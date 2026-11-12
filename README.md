@@ -41,7 +41,7 @@ Coding agents can be given a memory in several ways. Compared on 2026-11-12 from
 | [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) bundles, e.g. [okf-agent-memory](https://github.com/okf-memory/okf-agent-memory) | The agent, during the task, through its tools | Keyword search (BM25) | A validator for links and structure; human review in git | When the agent searches, plus a short rule file at start | Yes, in git |
 | [Dreaming](https://platform.claude.com/docs/en/managed-agents/dreams) (Claude Managed Agents) | The agent, as files in a memory store | The agent reads the files | An offline pass you start through the API: merges, corrects against past transcripts | Files mounted in the session | Yes |
 | [claude-mem](https://github.com/thedotmack/claude-mem) | Automatically: hooks and an LLM observer | Keyword (SQLite FTS5), optional semantic (Chroma) | No merging or contradiction handling documented | Recent observations at session start, search on demand | No (SQLite) |
-| backsight, on Hindsight | Automatically: the server extracts facts when a session ends | By meaning, by keyword, through linked entities and by date, then reranked and adjusted by what helped before | Continuously: duplicates merged, contradictions kept as history, facts retired with their sources | A briefing at session start, up to 3 memories per prompt, search on demand | No (PostgreSQL) |
+| backsight, on Hindsight | Automatically: the server extracts facts when a session ends | By meaning, by keyword, through linked entities and by date, then reranked and adjusted by what helped before | Continuously: duplicates merged, contradictions kept as history, facts retired with their sources | A briefing at session start, up to 3 memories per prompt (5 when confidently relevant, a long one shortened to a headline), search on demand | No (PostgreSQL) |
 
 What sets backsight apart: memory you never have to write, found by meaning (searching "authentication" finds the note about an "expired token"), shared across all your projects and between Claude Code and Codex, and a [record of which memories helped](#how-memory-learns-what-helps) that shapes the next recall. Its defaults come from measuring what recall brought up on real sessions.
 
@@ -68,7 +68,7 @@ Setup wires Claude Code, Codex or both (it asks when it finds Codex). For Claude
 | Kind | Claude Code | Codex | What it brings |
 |---|---|---|---|
 | Hook | `SessionStart` | `SessionStart` | The memory guide (read a linked issue first, answer in your language, never ask you for a key), the project's briefing, the status line. After `/clear`, a resume or a fork: the guide again; after a compaction: the guide, and the briefing again only if the server rewrote it. Codex runs it with your first prompt. |
-| Hook | `UserPromptSubmit` | `UserPromptSubmit` | Up to 3 relevant memories added to the prompt, plus a reminder, a nudge to search, or a save prompt when one fits. |
+| Hook | `UserPromptSubmit` | `UserPromptSubmit` | Up to 3 relevant memories added to the prompt, 5 when the extra ones are confidently relevant, a long one shortened to a headline Claude can open with `memory_read`; plus a reminder, a nudge to search, or a save prompt when one fits. |
 | Hook | `PreToolUse` (`AskUserQuestion`) | `PreToolUse` (`request_user_input`) | The question gate: the agent searches the memory before asking you something it may already know. Codex 0.167.0 offers its question tool in Plan mode only. |
 | Hook | `PostToolUse` (memory tools) | `PostToolUse` (memory tools) | Notes that memory was searched, for the gate and the nudge; records which memories were shown and which the agent credited. |
 | Hook | `PostToolUseFailure` | — | Off by default: when a tool call fails, the pitfalls memory knows about that failure. Codex reports no failed tool call to hooks. |
@@ -110,7 +110,7 @@ sequenceDiagram
     CC->>BS: UserPromptSubmit hook
     BS->>HS: recall (search + local reranker)
     Note over BS: reorder by what helped before (local record)
-    BS-->>CC: up to 3 relevant memories, with short ids
+    BS-->>CC: up to 3 relevant memories (5 if confident), with short ids
     CC->>BS: memory_search, memory_read
     BS->>HS: search
     BS-->>CC: memories, to cite

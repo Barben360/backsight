@@ -291,3 +291,28 @@ func TestComputeCountsVerdicts(t *testing.T) {
 		t.Errorf("retired %d, hidden %d, partly %d; want 3, 3, 1", f.Retired, f.Hidden, f.Partly)
 	}
 }
+
+// What the per-prompt limits left out (issue 328), read back from real
+// events: how many memories each injection carried, and the memories cut
+// by the count, cut by the size and shortened, summed over the recalls.
+func TestComputeCountsWhatThePromptLimitsLeftOut(t *testing.T) {
+	state := t.TempDir()
+	s := telemetry.New(state, telemetry.Common{Session: "s1"})
+	s.Emit(telemetry.Prompt{N: 1, Decision: "recall", Plen: 80, Injected: 1, CutSize: 2, Shortened: 1})
+	s.Emit(telemetry.Prompt{N: 2, Decision: "recall", Plen: 80, Injected: 3, CutCount: 4})
+	s.Emit(telemetry.Prompt{N: 3, Decision: "recall", Plen: 80, Injected: 5, CutCount: 1, Shortened: 1})
+	s.Emit(telemetry.Prompt{N: 4, Decision: "recall", Plen: 80, Empty: "below_floor"})
+	s.Emit(telemetry.Prompt{N: 5, Decision: "skip", Reason: "too_short", Plen: 10, CutCount: 9})
+	now := time.Now()
+	ev, err := Load(filepath.Join(state, "telemetry"), now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Compute(ev, now.Add(-time.Hour), now.Add(time.Hour)).Prompts
+	if p.ByInjected[1] != 1 || p.ByInjected[3] != 1 || p.ByInjected[5] != 1 || len(p.ByInjected) != 3 {
+		t.Errorf("by injected %v", p.ByInjected)
+	}
+	if p.CutCount != 5 || p.CutSize != 2 || p.Shortened != 2 {
+		t.Errorf("cut by count %d, by size %d, shortened %d", p.CutCount, p.CutSize, p.Shortened)
+	}
+}
