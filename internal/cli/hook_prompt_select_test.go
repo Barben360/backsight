@@ -58,12 +58,44 @@ func TestSelectHitsShortensALongMemoryAndKeepsTheNextOnes(t *testing.T) {
 	}
 }
 
-// A memory that fits whole is keepAll shortened, whatever its rank.
+// A memory that fits whole is never shortened, even in a room too small
+// for a headline: the old code stopped as soon as less than 60 characters
+// of text were left.
 func TestSelectHitsShowsWholeWhatFits(t *testing.T) {
-	text := strings.Repeat("x", 600)
-	got := selectHits([]recall.Hit{scored("m1", 0.9, text)}, selectRecall(1500), keepAll)
-	if got.Shortened != 0 || !strings.Contains(got.Block, text) {
-		t.Fatalf("shortened %d, block:\n%s", got.Shortened, got.Block)
+	got := selectHits([]recall.Hit{scored("m1", 0.9, strings.Repeat("a", 300)), scored("m2", 0.9, "Fridays frozen.")}, selectRecall(360), keepAll)
+	if chosenIDs(got.Chosen) != "m1,m2" || got.Shortened != 0 || !strings.Contains(got.Block, "Fridays frozen.") {
+		t.Fatalf("chosen %s, shortened %d, block:\n%s", chosenIDs(got.Chosen), got.Shortened, got.Block)
+	}
+}
+
+// A headline needs 60 characters of text: with 60 it is shown, with 59 the
+// memory is cut by size. Counted in runes, so accented text fits the same.
+func TestSelectHitsHeadlineNeedsSixtyCharacters(t *testing.T) {
+	line := len([]rune("- [billing · m1] \n"))
+	for _, c := range []struct {
+		room      int
+		shortened int
+		cutSize   int
+	}{{60, 1, 0}, {59, 0, 1}} {
+		got := selectHits([]recall.Hit{scored("m1", 0.9, strings.Repeat("é", 300))}, selectRecall(line+c.room), keepAll)
+		if got.Shortened != c.shortened || got.CutSize != c.cutSize {
+			t.Errorf("room %d: shortened %d, cut by size %d", c.room, got.Shortened, got.CutSize)
+		}
+		if c.shortened == 1 && len([]rune(strings.TrimPrefix(got.Block, instructions.RecallHeader+"\n"))) != line-1+c.room {
+			t.Errorf("room %d: the headline does not use the room: %q", c.room, got.Block)
+		}
+	}
+}
+
+// A confident memory cut by size takes no slot: a later confident one
+// still comes.
+func TestSelectHitsSizeCutTakesNoSlot(t *testing.T) {
+	got := selectHits([]recall.Hit{
+		scored("m1", 0.95, "one"), scored("m2", 0.93, "two"), scored("m3", 0.9, "three"),
+		scored("m4", 0.9, strings.Repeat("w", 300)), scored("m5", 0.85, "five"),
+	}, selectRecall(120), keepAll)
+	if chosenIDs(got.Chosen) != "m1,m2,m3,m5" || got.CutSize != 1 || got.CutCount != 0 {
+		t.Fatalf("chosen %s, cut by size %d, by count %d, block:\n%s", chosenIDs(got.Chosen), got.CutSize, got.CutCount, got.Block)
 	}
 }
 

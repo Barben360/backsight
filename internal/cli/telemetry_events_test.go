@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -140,6 +141,23 @@ func TestPromptEventSaysWhatTheLimitsLeftOut(t *testing.T) {
 			t.Fatalf("event %v", ev)
 		}
 	})
+}
+
+// A prompt's memories stay within what the session budget has left, like
+// the failure recall's (review of issue 328).
+func TestPromptRecallKeepsToTheSessionBudget(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9, 0.9, 0.9)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.CharsInjected = 5930; return nil })
+	h := prompt(t, home, "s1", longPrompt)
+	block, _, _ := strings.Cut(h.Specific.Context, "\n"+instructions.CreditAsk)
+	lines := strings.TrimPrefix(block, instructions.RecallHeader+"\n")
+	if n := len([]rune(lines)); n == 0 || n > 70 {
+		t.Fatalf("memory lines take %d chars with 70 left in the session budget:\n%s", n, h.Specific.Context)
+	}
+	if ev := lastPrompt(t, home); ev["injected"] != float64(1) || ev["cut_size"] != float64(2) {
+		t.Errorf("event %v", ev)
+	}
 }
 
 func TestStoreEvents(t *testing.T) {

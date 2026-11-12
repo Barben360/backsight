@@ -602,3 +602,13 @@ func TestStatsSaysWhatThePromptLimitsLeftOut(t *testing.T) {
 		t.Fatalf("stats:\n%s", out)
 	}
 }
+
+// The recalls by injected count read fewest first, and "none" without one.
+func TestByInjectedText(t *testing.T) {
+	if got := byInjectedText(map[int]int{3: 12, 1: 51, 2: 29}); got != "1: 51, 2: 29, 3: 12" {
+		t.Errorf("got %q", got)
+	}
+	if got := byInjectedText(nil); got != "none" {
+		t.Errorf("empty: %q", got)
+	}
+}

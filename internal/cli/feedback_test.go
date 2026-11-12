@@ -543,10 +543,11 @@ func TestReplayCountsSignChangesAndMovers(t *testing.T) {
 
 // Each journaled recall, prompt and gate show is ordered again under both
 // replayed ledgers: a larger weight (k) lifts m2 over b, which flips a
-// recall's and a gate's order and brings m2 into a prompt's top 3
-// (recall.prompt_hits). A recall without scores (an earlier version) is
-// not comparable, one with a score of 0 is; a failure show is not
-// counted.
+// recall's and a gate's order, reorders a prompt that injected 4 (all
+// still injected: up to recall.prompt_hits_max, issue 328) and brings m2
+// into the top 5 of a 6-hit prompt. A recall without scores (an earlier
+// version) is not comparable, one with a score of 0 is; a failure show is
+// not counted.
 func TestReplayCountsChangedRecalls(t *testing.T) {
 	home := isolate(t)
 	at := logStart.Add(6 * time.Hour)
@@ -560,24 +561,25 @@ func TestReplayCountsChangedRecalls(t *testing.T) {
 	replayJournal(t, home,
 		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: scored(repB, 0.80, repM2, 0.785)},
 		feedback.Event{Kind: "shows", Path: "prompt", TS: at, Items: scored(repB, 0.80, repC, 0.798, repD, 0.796, repM2, 0.785)},
+		feedback.Event{Kind: "shows", Path: "prompt", TS: at, Items: scored(repB, 0.80, repC, 0.798, repD, 0.796, "e0000000-0000-4000-8000-000000000005", 0.795, "f0000000-0000-4000-8000-000000000006", 0.7945, repM2, 0.785)},
 		feedback.Event{Kind: "shows", Path: "gate", TS: at, Items: scored(repB, 0.80, repM2, 0.785)},
 		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: []feedback.Item{{ID: repB, Rank: 1, Reranker: 0.8}, {ID: repM2, Rank: 2, Reranker: 0.785}}},
 		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: scored(repM2, 0.90, repB, 0.70)},
 		feedback.Event{Kind: "shows", Path: "failure", TS: at, Items: scored(repB, 0.80, repM2, 0.785)},
 		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: scored(repM2, 0.01, repC, 0.0)}, // a score of 0 is a score
 	)
-	if r := replayJSON(t).Data.Recalls; r.Compared != 20 || r.SetChanged != 0 || r.OrderChanged != 0 || r.NotComparable != 1 {
+	if r := replayJSON(t).Data.Recalls; r.Compared != 21 || r.SetChanged != 0 || r.OrderChanged != 0 || r.NotComparable != 1 {
 		t.Errorf("current parameters: %+v", r)
 	}
-	if r := replayJSON(t, "--set", "boost_weight=0.5").Data.Recalls; r.Compared != 20 || r.SetChanged != 1 || r.OrderChanged != 2 || r.NotComparable != 1 {
-		t.Errorf("k 0.5: %+v, want 20 compared, 1 set changed (the prompt), 2 orders (the recall and the gate), 1 not comparable", r)
+	if r := replayJSON(t, "--set", "boost_weight=0.5").Data.Recalls; r.Compared != 21 || r.SetChanged != 1 || r.OrderChanged != 3 || r.NotComparable != 1 {
+		t.Errorf("k 0.5: %+v, want 21 compared, 1 set changed (the 6-hit prompt), 3 orders (the recall, the gate, the 4-hit prompt), 1 not comparable", r)
 	}
 	// A weight between: m2 (+0.0086) passes neither b nor d.
 	if r := replayJSON(t, "--set", "boost_weight=0.15").Data.Recalls; r.SetChanged != 0 || r.OrderChanged != 0 {
 		t.Errorf("k 0.15: %+v", r)
 	}
 	_, out, _ := run(t, "feedback", "replay", "--set", "boost_weight=0.5")
-	if lineIndex(strings.Split(out, "\n"), "20 compared", "1 would change", "2 their order", "1 journaled by an earlier version") < 0 {
+	if lineIndex(strings.Split(out, "\n"), "21 compared", "1 would change", "3 their order", "1 journaled by an earlier version") < 0 {
 		t.Errorf("recall line:\n%s", out)
 	}
 }

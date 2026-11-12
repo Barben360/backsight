@@ -872,12 +872,12 @@ func TestPromptShowsJournalTheBoost(t *testing.T) {
 }
 
 // A prompt's shows say when the boost changed which memories it injected:
-// m4, used often, rises into the top 3 (recall.prompt_hits) and pushes m3
-// out. Without the boost reaching past the top 3 (TestPromptShowsJournalTheBoost:
+// m4, used often, rises into the top 3 (recall.prompt_hits; none scores
+// the 0.8 that would let a 4th in) and pushes m3 out. Without the boost reaching past the top 3 (TestPromptShowsJournalTheBoost:
 // an order changed alone), no flag.
 func TestPromptShowsFlagTheSetTheBoostChanged(t *testing.T) {
 	home := hookHome(t)
-	recallAnswer = hits(0.84, 0.83, 0.82, 0.80)
+	recallAnswer = hits(0.79, 0.78, 0.77, 0.75)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m4":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
 	h := prompt(t, home, "s1", longPrompt)
@@ -891,7 +891,7 @@ func TestPromptShowsFlagTheSetTheBoostChanged(t *testing.T) {
 	// m3 seen already: without the boost, m1, m2 and m4 would be injected
 	// too, the same set in another order.
 	home = hookHome(t)
-	recallAnswer = hits(0.84, 0.83, 0.82, 0.80)
+	recallAnswer = hits(0.79, 0.78, 0.77, 0.75)
 	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m4":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
 	_ = sessions(home).Update("s1", func(st *session.State) error { st.Seen = []string{"m3"}; return nil })
 	prompt(t, home, "s1", longPrompt)

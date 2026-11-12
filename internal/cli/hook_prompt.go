@@ -460,6 +460,8 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (sel selec
 	_, res = h.searchPrompt(prompt)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
+	// Within what the session budget has left, like the failure recall.
+	rc.PromptChars = min(rc.PromptChars, rc.SessionBudgetChars-st.CharsInjected)
 	skip := func(hit recall.Hit) bool {
 		return slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass)
 	}
@@ -625,7 +627,7 @@ const (
 type selection struct {
 	Block     string
 	Chosen    []recall.Hit
-	CutCount  int // above the floor, left out by the count
+	CutCount  int // above the floor, left out by the count (checked first: such a hit may not have fitted either)
 	CutSize   int // left out because not even a headline fitted
 	Shortened int // shown as a headline
 }
