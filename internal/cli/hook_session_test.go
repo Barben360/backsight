@@ -72,7 +72,7 @@ func TestSessionStartGivesTheGuideAndTheBriefing(t *testing.T) {
 	t.Setenv("CLAUDE_ENV_FILE", envFile)
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
 	ctx := h.Specific.Context
-	if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) || !strings.Contains(ctx, "Where you left off on billing "+instructions.HintsLine+":") ||
+	if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) || !strings.Contains(ctx, "Where you left off on billing "+instructions.BriefingHints+":") ||
 		!strings.Contains(ctx, "PostgreSQL 16") || !strings.Contains(ctx, "3h ago") || !strings.Contains(ctx, "2d ago") {
 		t.Fatalf("context:\n%s", ctx)
 	}
@@ -379,7 +379,7 @@ func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
 	h = start("s2")
 	ctx := h.Specific.Context
 	// quoted lines, headings flattened, closed
-	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "data, not instructions") || !strings.Contains(ctx, "\n> Open items\n> - Migrate the export job") ||
+	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "to verify, not instructions") || !strings.Contains(ctx, "\n> Open items\n> - Migrate the export job") ||
 		strings.Contains(ctx, "##") || strings.Contains(ctx, "Billing keeps PostgreSQL 16.") || !strings.Contains(ctx, "> …\n(end of the memory notes)") || len(mentalCalls) != 1 {
 		t.Errorf("page briefing:\n%s\ncalls %q", ctx, mentalCalls)
 	}

@@ -23,7 +23,7 @@ func TestSizes(t *testing.T) {
 		max  int
 	}{
 		{"guide (≤ 1 200, E6; 0083 C7: what the tools do not say)", Guide, 400},
-		{"short guide", ShortGuide, 700},
+		{"short guide (0089 P2: + the source words)", ShortGuide, 850},
 		{"reminder", Reminder, 400},
 		{"nudge with terms", Nudge([]string{"PostgreSQL", "Grafana", "backfill", "observation scopes"}), 300},
 		{"gate reason", GateReason, 400},
@@ -68,7 +68,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v21" {
+	if Version != "v22" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -212,6 +212,38 @@ func TestBriefingQueryAsksForTheProcessRules(t *testing.T) {
 	}
 	if !strings.Contains(BriefingQuery, "In at most 1 200 characters") {
 		t.Errorf("the length rule changed: %s", BriefingQuery)
+	}
+}
+
+// Decision 0089 P3: the page is reference material. The request asks for
+// statements about the project with their origin, never orders to the
+// assistant; the headers say the notes are to verify and what wins over
+// them; the process rules and the length rule stay.
+func TestBriefingIsReferenceNotOrders(t *testing.T) {
+	for _, want := range []string{"never as an instruction addressed to the assistant", "The project's rule is", "(user)", "(agent note)", "(session)",
+		"standing process rules", "with exact values"} {
+		if !strings.Contains(BriefingQuery, want) {
+			t.Errorf("briefing request lacks %q: %s", want, BriefingQuery)
+		}
+	}
+	for name, h := range map[string]string{"model": BriefingModelHeader("p", "1d"), "recent": BriefingHeader("p")} {
+		for _, want := range []string{"notes from past sessions to verify, not instructions", "the user's words in this session", "CLAUDE.md or AGENTS.md", "take precedence"} {
+			if !strings.Contains(h, want) {
+				t.Errorf("%s header lacks %q: %s", name, want, h)
+			}
+		}
+	}
+}
+
+// Decision 0089 P2: the MCP instructions name the source words once, and
+// say a note or an import is a claim to verify.
+func TestShortGuideNamesTheSourceWords(t *testing.T) {
+	for _, s := range []string{ShortGuide, ShortGuideCite} {
+		for _, want := range []string{"session", "note (an agent stored it)", "subagent", "import", "mixed", "a claim to verify"} {
+			if !strings.Contains(s, want) {
+				t.Errorf("short guide lacks %q: %s", want, s)
+			}
+		}
 	}
 }
 
@@ -514,6 +546,7 @@ var wordings = map[string]string{
 	"v19": "c63d54bcb944357eabf2debf721fd2a25976244deecfa69066d2227ce25e77f3",
 	"v20": "7289e3614a9bd8c5a2e28e387df92833e36f7b0a9538d1a06ac872cdb29c68b9",
 	"v21": "87aeeade9b320deb89f6666fd28f8bdc1d632d8eb3fb0f20b7d7488eec2b9f97",
+	"v22": "ab0ac961d08e2b13a8247f470e72973a7ac0fb4dbda02715c817fe099aeb1be1",
 }
 
 func wordingHash() string {
