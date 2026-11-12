@@ -16,7 +16,9 @@ env:
   BACKSIGHT_CI_SLOT: "1"
 jobs:
   release:
-    timeout-minutes: 40
+    # make test runs internal/cli in one piece (over 20 minutes under -race
+    # on this runner), then the build and the signing.
+    timeout-minutes: 75
     runs-on: ubuntu-latest
     # The signing key is a secret of this environment, which only v* tags
     # may deploy to, with no reviewer (repository settings, not this file).
