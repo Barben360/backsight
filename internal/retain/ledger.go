@@ -90,6 +90,10 @@ func (a Attributor) owners() []string {
 	return slices.DeleteFunc(out, func(o string) bool { return deny[attribution.OwnerOf(o)] })
 }
 
+// OwnOwners are owners: projects.own_owners and the owners learnt, but
+// the denied ones (memory states resolves a bare "PR #N" under them).
+func (a Attributor) OwnOwners() []string { return a.owners() }
+
 // Learnt lists the owners learnt from retained sessions.
 func (a Attributor) Learnt() []string {
 	var learnt []string
