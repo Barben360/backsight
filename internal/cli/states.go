@@ -61,6 +61,8 @@ const (
 	skipSeveral        = "several_projects"     // a bare ref, and the text names several projects
 	skipOtherProject   = "other_project"        // a bare ref, and the text names a project not the fact's own
 	skipClosedUnmerged = "closed_unmerged"      // a pull request closed without a merge: "not merged" may be true
+	skipMixedKind      = "mixed_kind"           // also a decision, convention, pitfall…: retiring it would lose that part
+	skipNewerItem      = "newer_item"           // GitHub's item under that number is newer than the fact: a recreated repository
 	skipNotFound       = "not_found"            // no such item under the user's owners
 	skipAmbiguous      = "several_repositories" // the item exists under several owners
 	skipGitHubError    = "github_error"         // GitHub did not answer
@@ -74,6 +76,8 @@ var skipWords = map[string]string{
 	skipSeveral:        "names several projects",
 	skipOtherProject:   "names a project other than its own",
 	skipClosedUnmerged: "a pull request closed without a merge",
+	skipMixedKind:      "also holds a decision, convention, pitfall or correction",
+	skipNewerItem:      "the item under that number is newer than the memory (a recreated repository)",
 	skipNotFound:       "not found on GitHub under your owners",
 	skipAmbiguous:      "found under several owners",
 	skipGitHubError:    "GitHub did not answer",
@@ -83,6 +87,7 @@ var skipWords = map[string]string{
 // request (the endpoint serves both).
 type ghItem struct {
 	State       string    `json:"state"` // open | closed
+	CreatedAt   time.Time `json:"created_at"`
 	ClosedAt    time.Time `json:"closed_at"`
 	HTMLURL     string    `json:"html_url"`
 	PullRequest *struct {
@@ -262,6 +267,12 @@ func checkStates(ctx context.Context, facts []hindsight.Memory, projects, owners
 			res.Skipped[skipSaysDone]++
 			continue
 		}
+		// A fact that is also a decision, convention, pitfall, lesson or
+		// correction keeps a durable part a retirement would lose.
+		if kinds, _ := recall.KindsOf(m.Tags); !slices.Equal(kinds, []string{"state"}) {
+			res.Skipped[skipMixedKind]++
+			continue
+		}
 		project := recall.ProjectOf(m.Tags)
 		var got []stateRef
 		skip := ""
@@ -290,8 +301,12 @@ func checkStates(ctx context.Context, facts []hindsight.Memory, projects, owners
 				skip = skipNotFound
 			case len(found) > 1:
 				skip = skipAmbiguous
+			case newerThan(found[0].item, m):
+				skip = skipNewerItem
 			default:
-				got = append(got, found[0].stateRef())
+				if s := found[0].stateRef(); !slices.ContainsFunc(got, func(g stateRef) bool { return g.Ref == s.Ref }) {
+					got = append(got, s)
+				}
 			}
 			if skip != "" {
 				break
@@ -311,6 +326,14 @@ func checkStates(ctx context.Context, facts []hindsight.Memory, projects, owners
 		}
 	}
 	return res, nil
+}
+
+// newerThan is whether GitHub's item was created after the fact was
+// written (an hour of slack for the clocks): the fact cannot be about it,
+// its repository was recreated and the number reused.
+func newerThan(it ghItem, m hindsight.Memory) bool {
+	when := m.When()
+	return !when.IsZero() && !it.CreatedAt.IsZero() && it.CreatedAt.After(when.Add(time.Hour))
 }
 
 type ghAnswer struct {

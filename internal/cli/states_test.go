@@ -359,3 +359,43 @@ esac
 		}
 	}
 }
+
+// A fact older than GitHub's item under its number is about another
+// item (the repository was recreated and the number reused): skipped,
+// whereas the same item created before the fact is outdated.
+func TestMemoryStatesSkipsAnItemNewerThanTheFact(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	listAnswer["world"] = `[{"id":"old1","text":"PR https://github.com/acme/tool/pull/258 is not yet merged.","fact_type":"world","tags":["project:tool","kind:state"],"mentioned_at":"2026-10-25T10:00:00Z"},
+		{"id":"new1","text":"PR https://github.com/acme/tool/pull/259 is not yet merged.","fact_type":"world","tags":["project:tool","kind:state"],"mentioned_at":"2026-11-09T12:00:00Z"}]`
+	t.Cleanup(func() { listAnswer["world"] = "" })
+	created, _ := time.Parse(time.RFC3339, "2026-11-09T09:00:00Z")
+	recent := merged("2026-11-09T10:00:00Z")
+	recent.CreatedAt = created
+	fakeGitHub(t, map[string]any{"acme/tool#258": recent, "acme/tool#259": recent})
+	code, res, out := statesJSON(t)
+	if code != output.OK || !slices.Equal(outdatedIDs(res), []string{"new1"}) || res.Skipped[skipNewerItem] != 1 {
+		t.Errorf("exit %d %+v\n%s", code, res, out)
+	}
+}
+
+// A state fact that is also a decision, convention, pitfall or correction
+// is skipped: retiring it would lose its durable part. A ref named twice
+// is shown once.
+func TestMemoryStatesSkipsMixedKindsAndShowsARefOnce(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	learntOwners(t, home, "github.com/acme")
+	stateFacts(t,
+		[3]string{"mix1", "Tool issue #130 remains open: litellm caps filelock below 4.0.", "project:tool,kind:state,kind:pitfall"},
+		[3]string{"two1", "Tool issue #131 is still open; the image is tracked in issue #131.", "project:tool,kind:state"},
+	)
+	calls := fakeGitHub(t, map[string]any{"acme/tool#130": ghItem{State: "closed"}, "acme/tool#131": ghItem{State: "closed"}})
+	code, res, out := statesJSON(t)
+	if code != output.OK || !slices.Equal(outdatedIDs(res), []string{"two1"}) || res.Skipped[skipMixedKind] != 1 || slices.Contains(*calls, "acme/tool#130") {
+		t.Fatalf("exit %d %+v %v\n%s", code, res, *calls, out)
+	}
+	if n := len(res.Outdated[0].Refs); n != 1 {
+		t.Errorf("refs %+v, want #131 once", res.Outdated[0].Refs)
+	}
+}

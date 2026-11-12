@@ -27,7 +27,7 @@ func (r Ref) Bare() bool { return r.Repo == "" }
 var (
 	urlRef  = regexp.MustCompile(`https?://github\.com/([A-Za-z0-9][\w.-]*)/([\w.-]+?)/(?:pull|issues)/(\d+)\b`)
 	slugRef = regexp.MustCompile(`\b([A-Za-z0-9][\w.-]*)/([\w.-]+)#(\d+)\b`)
-	bareRef = regexp.MustCompile(`(?i)(?:\b([a-z][\w.-]*)[ \t]+)?\b(?:PR|pull request|issue)[ \t]*#?(\d+)\b`)
+	bareRef = regexp.MustCompile(`(?i)(?:\b([a-z][\w.-]*)[ \t]+)?\b(?:PR|pull request|issue)[ \t]*(#?)(\d+)\b`)
 	// unitAfter: a number that counts something ("PR 3 days ago", "issue
 	// 2 of the plan") is no ref.
 	unitAfter = regexp.MustCompile(`(?i)^[ \t]*(?:%|(?:days?|weeks?|hours?|minutes?|months?|years?|times?|of|percent)\b)`)
@@ -94,8 +94,11 @@ func Refs(text string) []Ref {
 		}
 	}
 	for _, m := range bareRef.FindAllStringSubmatchIndex(text, -1) {
-		n, err := strconv.Atoi(text[m[4]:m[5]])
-		if err != nil || unitAfter.MatchString(text[m[1]:]) {
+		// "PR 2 for issue #149" (the second one): a single digit is a ref
+		// only after "#"
+		hash, digits := text[m[4]:m[5]], text[m[6]:m[7]]
+		n, err := strconv.Atoi(digits)
+		if err != nil || unitAfter.MatchString(text[m[1]:]) || hash == "" && len(digits) < 2 {
 			continue
 		}
 		r := Ref{Number: n}
@@ -106,7 +109,7 @@ func Refs(text string) []Ref {
 		}
 		pos := m[0]
 		if m[2] >= 0 {
-			pos = m[4] // the sentence of the number, not of a qualifier before a clause break
+			pos = m[6] // the sentence of the number, not of a qualifier before a clause break
 		}
 		if slices.ContainsFunc(full, func(f at) bool {
 			return f.ref.Number == n && sentenceOf(f.pos) == sentenceOf(pos) && (r.Qualifier == "" || r.Qualifier == f.ref.Repo)
@@ -171,7 +174,8 @@ var doneClaims = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bsquash-merged\b`),
 	regexp.MustCompile(`(?i)\bmerged[ \t]+(?:into|to)[ \t]+\w`),
 	regexp.MustCompile(`(?i)\bmerged[ \t]+as[ \t]+(?:commit[ \t]+)?[0-9a-f]{7,}\b`),
-	regexp.MustCompile(`(?i)\bno longer open\b`),
+	regexp.MustCompile(`(?i)\bno longer[ \t]+(?:an?[ \t]+)?open\b`),
+	regexp.MustCompile(`(?i)\b(?:resolved|fixed|superseded|replaced)[ \t]+by\b`),
 	regexp.MustCompile(`(?i)\b(?:was|were|been|is|are|now|later)[ \t]+closed\b`),
 	regexp.MustCompile(`(?i)\bclosed[ \t]+(?:by|as|on|via)\b`),
 	regexp.MustCompile(`(?i)\bdelivered[ \t]+(?:by|in)\b`),
