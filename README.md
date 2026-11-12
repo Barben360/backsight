@@ -21,20 +21,6 @@ Long-term memory for [Claude Code](https://code.claude.com/docs/en/overview) and
 
 backsight is an independent project, not affiliated with or endorsed by Anthropic, OpenAI or Vectorize.
 
-## Why backsight
-
-I have used Claude Code for a long time, and what always wore on me was having to repeat myself: giving the same information again, correcting answers that left out part of the context. My only workaround was to spot what kept coming back and pin it down somewhere: the project's CLAUDE.md, my global CLAUDE.md, skills or plugins built for one project or for me. What I really needed was a memory: something that keeps what has already been said, doesn't fall into the same traps twice, and works the way I work.
-
-I discovered agent memory with [OpenClaw](https://github.com/openclaw/openclaw), but without the power of Claude Code. I found it again with [LifeOS](https://github.com/danielmiessler/LifeOS) (formerly PAI), this time built into Claude Code. Not having to repeat things is a real comfort. But LifeOS installed a host of very invasive skills and principles, which changed completely from one update to the next, not always for the better, and rather opaquely. My setup no longer belonged to me.
-
-I wanted a memory I would never have to act on again, and one that uses one of the real strengths of LLMs: semantic search. LifeOS and [claude-mem](https://github.com/thedotmack/claude-mem) both read a memory laid out in files, with slightly improved greps. With that, if I search for "authentication", the memory about an "expired token" doesn't come up, even though it was exactly the one I needed.
-
-Looking for a system built on embeddings, with proven capabilities, auditable and easy to explore, I came across [Hindsight](https://github.com/vectorize-io/hindsight). I liked its philosophy right away. I plugged it into Claude Code following its recommendations, imported months of memories into it, and was soon disappointed. The memories it injected, at session start as well as along the way, were not always relevant. Above all, each project had its own isolated bank: I felt like I was talking to a different person in each one.
-
-So I experimented. Week after week, I measured the relevance of what was recalled, then adjusted accordingly: Hindsight's configuration, hooks to decide when Claude fetches information, skills to tell it how to search for it and bring it back into context. I kept what improved the measurements and threw out the rest. backsight grew out of these successive trials. Today I use it every day, both for my personal projects and at work, as two independent setups. For that use it beats everything I have tried, and I keep improving it on demanding ground: a large multi-project stack. Whether I start Claude in a project or in my home directory, I talk to the same person, who remembers what we are talking about, the decisions we made and the pitfalls already avoided. And nothing happens behind my back. In real time, each session shows which memories were injected and why, which ones actually informed an answer (credited), and which ones were corrected when they proved wrong or outdated. Afterwards, I can audit the whole history: what was recalled, what was used, what was stored or updated, and whether recall gets better or worse over time. A memory I can't see work is a memory I can't trust. And I keep a clean Claude Code, with only the skills I need.
-
-This memory layer is what I'm sharing here. First so you can benefit from it, but also so you can evaluate it, criticize it, suggest improvements, love it or hate it. And so that together we can make it what I hoped it would be.
-
 ## What it does for you
 
 - **Remembers your sessions.** When a session ends, its text is redacted and sent to your server, which extracts durable facts: decisions, fixes, conventions, pitfalls.
@@ -44,6 +30,36 @@ This memory layer is what I'm sharing here. First so you can benefit from it, bu
 - **Looks after itself.** Daily encrypted backups, signed updates that roll back on failure, and `backsight doctor` to say what is wrong and how to fix it.
 
 New words (bank, observation, transverse…) are in the [glossary](docs/glossary.md).
+
+## How it compares
+
+Coding agents can be given a memory in several ways. Compared on 2026-11-12 from each project's own docs:
+
+| | Written by | Found by | Kept tidy by | Reaches the agent | Readable as files |
+|---|---|---|---|---|---|
+| `CLAUDE.md`, `AGENTS.md`, [Claude Code auto memory](https://code.claude.com/docs/en/memory) | You (`CLAUDE.md`, `AGENTS.md`), or the agent when it decides to (auto memory) | `CLAUDE.md` loaded whole; auto memory: an index loaded at start (`MEMORY.md`, first 200 lines), topic files read when needed | You, or the agent as it writes | Every session; auto memory is per repository and per machine | Yes |
+| [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) bundles, e.g. [okf-agent-memory](https://github.com/okf-memory/okf-agent-memory) | The agent, during the task, through its tools | Keyword search (BM25) | A validator for links and structure; human review in git | When the agent searches, plus a short rule file at start | Yes, in git |
+| [Dreaming](https://platform.claude.com/docs/en/managed-agents/dreams) (Claude Managed Agents) | The agent, as files in a memory store | The agent reads the files | An offline pass you start through the API: merges, corrects against past transcripts | Files mounted in the session | Yes |
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Automatically: hooks and an LLM observer | Keyword (SQLite FTS5), optional semantic (Chroma) | No merging or contradiction handling documented | Recent observations at session start, search on demand | No (SQLite) |
+| backsight, on Hindsight | Automatically: the server extracts facts when a session ends | By meaning, by keyword, through linked entities and by date, then reranked and adjusted by what helped before | Continuously: duplicates merged, contradictions kept as history, facts retired with their sources | A briefing at session start, up to 3 memories per prompt, search on demand | No (PostgreSQL) |
+
+What sets backsight apart: memory you never have to write, found by meaning (searching "authentication" finds the note about an "expired token"), shared across all your projects and between Claude Code and Codex, and a [record of which memories helped](#how-memory-learns-what-helps) that shapes the next recall. Its defaults come from measuring what recall brought up on real sessions.
+
+Where it is behind:
+
+- **It needs a server.** Hindsight with PostgreSQL, in Docker or native. The file approaches need nothing but a folder.
+- **It costs a few cents per session** for extraction ([below](#what-it-costs)). File approaches only use the agent's own tokens.
+- **The memory is not readable as files.** You can't review it in git, and there is no export yet.
+- **No trust or expiry metadata.** okf-agent-memory separates human-verified knowledge from what the agent generated, gives a fact an expiry date, and ties rules to the source files they govern. backsight does none of these.
+- **Old facts are not re-checked.** Dreaming re-reads past transcripts to fix stale notes. backsight relies on the agent reporting a memory wrong or outdated when it sees one.
+
+These gaps, and what backsight could take from these projects, are tracked in [#325](https://github.com/Barben360/backsight/issues/325).
+
+Which to pick:
+
+- **A few rules for one repo that rarely change:** `CLAUDE.md` or `AGENTS.md` is enough.
+- **Curated project knowledge your team reviews in git:** an OKF bundle.
+- **Memory that builds itself from your sessions, across many projects and both agents:** backsight. It doesn't replace your `CLAUDE.md` or `AGENTS.md`; it adds to them.
 
 ## What your coding agent gets
 
@@ -231,7 +247,7 @@ When the agent uses a memory, it cites it:
 
 ## Coming from another tool
 
-Memory files from another tool (LifeOS, a notes vault, an export) or your own notes can go into the memory: `backsight import ~/notes --plan` shows the files and the cost, then `backsight import ~/notes` sends them in the background within a spending cap. [docs/import.md](docs/import.md) has the details and a LifeOS recipe.
+Memory files from another tool ([LifeOS](https://github.com/danielmiessler/LifeOS), a notes vault, an export) or your own notes can go into the memory: `backsight import ~/notes --plan` shows the files and the cost, then `backsight import ~/notes` sends them in the background within a spending cap. [docs/import.md](docs/import.md) has the details and a LifeOS recipe.
 
 ## Pause, turn off, uninstall
 
