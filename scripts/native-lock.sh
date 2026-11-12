@@ -44,6 +44,10 @@
 # network (PyPI). NATIVE_LOCK names another lock file (tests);
 # NATIVE_LOCK_LINUX the Linux lock the Windows one is tied to.
 set -euo pipefail
+# Byte order for every sort and comm, whatever the caller's locale: the
+# header is compared across machines, and uutils' comm (Ubuntu 26.04)
+# checks byte order where its sort follows the locale.
+export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
 linux_lock=${NATIVE_LOCK_LINUX:-$root/internal/server/nativelock/requirements-linux-amd64.txt}
 pg0=0.15.2
