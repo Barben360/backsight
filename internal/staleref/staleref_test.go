@@ -57,6 +57,8 @@ func TestSaysDone(t *testing.T) {
 		{"Issue #143 is no longer open.", true},
 		{"Issue #9 was closed by PR #10.", true},
 		{"Issue #143 was delivered by PR #216.", true},
+		{"The flake is no longer an open item tracked in issue 248; it is resolved by PR 250.", true},
+		{"Issue #9 was superseded by #10.", true},
 		// negated or not a completion
 		{"The branch for backsight PR #189 is kept open and nothing has been merged.", false},
 		{"PR #12 has not been merged.", false},
@@ -89,6 +91,9 @@ func TestRefs(t *testing.T) {
 		{"The ledger has 36 alerts (#130 aside); commit 5d41f21f.", nil},
 		// a number that counts something is no ref
 		{"Merged the PR 3 days ago; issue 2 of the plan.", nil},
+		// a single digit without "#" is a count, not a ref
+		{"PR 2 for backsight issue #149 is open as PR #152.", []Ref{{Qualifier: "backsight", Number: 149}, {Number: 152}}},
+		{"PR #2 is open.", []Ref{{Number: 2}}},
 		// another repository's #12 does not hide this one
 		{"acme/foo#12 merged; backsight PR #12 still open.",
 			[]Ref{{Owner: "acme", Repo: "foo", Number: 12}, {Qualifier: "backsight", Number: 12}}},
