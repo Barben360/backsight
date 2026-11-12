@@ -55,24 +55,28 @@ type statesResult struct {
 
 // Reasons a fact saying an item is still open is left undecided.
 const (
-	skipSaysDone     = "says_done"            // it also says the item was merged or closed since
-	skipNoRepository = "no_repository"        // a bare ref, and no project to find its repository by
-	skipUnknownName  = "unknown_name"         // a bare ref after a name that is no known project
-	skipSeveral      = "several_projects"     // a bare ref, and the text names several projects
-	skipNotFound     = "not_found"            // no such item under the user's owners
-	skipAmbiguous    = "several_repositories" // the item exists under several owners
-	skipGitHubError  = "github_error"         // GitHub did not answer
-	statesTextMax    = 200
+	skipSaysDone       = "says_done"            // it also says the item was merged or closed since
+	skipNoRepository   = "no_repository"        // a bare ref, and no project to find its repository by
+	skipUnknownName    = "unknown_name"         // a bare ref after a name that is no known project
+	skipSeveral        = "several_projects"     // a bare ref, and the text names several projects
+	skipOtherProject   = "other_project"        // a bare ref, and the text names a project not the fact's own
+	skipClosedUnmerged = "closed_unmerged"      // a pull request closed without a merge: "not merged" may be true
+	skipNotFound       = "not_found"            // no such item under the user's owners
+	skipAmbiguous      = "several_repositories" // the item exists under several owners
+	skipGitHubError    = "github_error"         // GitHub did not answer
+	statesTextMax      = 200
 )
 
 var skipWords = map[string]string{
-	skipSaysDone:     "also says it was done since",
-	skipNoRepository: "no project to find the repository by",
-	skipUnknownName:  "names a repository that is no known project",
-	skipSeveral:      "names several projects",
-	skipNotFound:     "not found on GitHub under your owners",
-	skipAmbiguous:    "found under several owners",
-	skipGitHubError:  "GitHub did not answer",
+	skipSaysDone:       "also says it was done since",
+	skipNoRepository:   "no project to find the repository by",
+	skipUnknownName:    "names a repository that is no known project",
+	skipSeveral:        "names several projects",
+	skipOtherProject:   "names a project other than its own",
+	skipClosedUnmerged: "a pull request closed without a merge",
+	skipNotFound:       "not found on GitHub under your owners",
+	skipAmbiguous:      "found under several owners",
+	skipGitHubError:    "GitHub did not answer",
 }
 
 // ghItem is what GitHub's issues endpoint says of an issue or a pull
@@ -91,6 +95,9 @@ var (
 	errGHAuth     = errors.New("gh is not logged in to GitHub")
 )
 
+// ghTimeout bounds one gh call: a stuck one fails that item, not the run.
+const ghTimeout = 30 * time.Second
+
 // ghLookPath and ghIssue reach GitHub through the gh CLI (its login, so
 // private repositories too); variables so tests answer for GitHub.
 var (
@@ -100,6 +107,8 @@ var (
 		if err != nil {
 			return ghItem{}, err
 		}
+		ctx, cancel := context.WithTimeout(ctx, ghTimeout)
+		defer cancel()
 		var stderr bytes.Buffer
 		cmd := exec.CommandContext(ctx, bin, "api", fmt.Sprintf("repos/%s/%s/issues/%d", owner, repo, n))
 		cmd.Stderr = &stderr
@@ -293,6 +302,8 @@ func checkStates(ctx context.Context, facts []hindsight.Memory, projects, owners
 			res.Skipped[skip]++
 		case slices.ContainsFunc(got, func(s stateRef) bool { return s.State == "open" }):
 			res.StillOpen++
+		case slices.ContainsFunc(got, func(s stateRef) bool { return s.State == closedUnmerged }):
+			res.Skipped[skipClosedUnmerged]++
 		default:
 			red, _ := redact.Text(m.Text)
 			res.Outdated = append(res.Outdated, stateFact{ID: m.ID, Project: project, Text: clip(strings.Join(strings.Fields(red), " "), statesTextMax),
@@ -312,12 +323,19 @@ func (a ghAnswer) stateRef() stateRef {
 	s := stateRef{Ref: a.ref, State: a.item.State, URL: a.item.HTMLURL}
 	if a.item.State == "closed" {
 		s.At = a.item.ClosedAt
-		if pr := a.item.PullRequest; pr != nil && pr.MergedAt != nil {
+		switch pr := a.item.PullRequest; {
+		case pr != nil && pr.MergedAt != nil:
 			s.State, s.At = "merged", *pr.MergedAt
+		case pr != nil:
+			s.State = closedUnmerged
 		}
 	}
 	return s
 }
+
+// closedUnmerged: a pull request closed without a merge, which a "not
+// merged" fact may still describe truly; such a fact is skipped.
+const closedUnmerged = "closed_unmerged"
 
 // refRepos are the repositories (owner, repo) r may be in, or why it
 // cannot be told: a URL's own; else, under every owner, the project named
@@ -337,6 +355,10 @@ func refRepos(r staleref.Ref, text, project string, projects, owners []string) (
 		return nil, skipUnknownName
 	case len(named) > 1:
 		return nil, skipSeveral
+	case len(named) == 1 && project != "" && !strings.HasPrefix(project, ".") && named[0] != strings.ToLower(project):
+		// a project named in passing ("waits for the hindsight release")
+		// is no proof the item is in its repository
+		return nil, skipOtherProject
 	case len(named) == 1:
 		name = named[0]
 	case project != "" && !strings.HasPrefix(project, "."):
@@ -368,8 +390,11 @@ func statesText(r statesResult, retire bool) string {
 	var b strings.Builder
 	if len(r.Outdated) > 0 {
 		verb := "GitHub says otherwise"
-		if len(r.Retired) > 0 {
+		switch {
+		case len(r.Retired) == len(r.Outdated):
 			verb = "GitHub says otherwise; retired"
+		case len(r.Retired) > 0:
+			verb = fmt.Sprintf("GitHub says otherwise; the first %d retired, the others not", len(r.Retired))
 		}
 		fmt.Fprintf(&b, "%d %s still open, and %s:\n", len(r.Outdated), forms(len(r.Outdated), "memory says an item is", "memories say an item is"), verb)
 		for _, f := range r.Outdated {
@@ -389,7 +414,7 @@ func statesText(r statesResult, retire bool) string {
 	b.WriteString(".\n")
 	switch {
 	case len(r.Retired) > 0:
-		fmt.Fprintf(&b, "Retired %d; backsight forget --restore <id> undoes one.\n", len(r.Retired))
+		fmt.Fprintf(&b, "Retired %d of %d; backsight forget --restore <id> undoes one.\n", len(r.Retired), len(r.Outdated))
 	case len(r.Outdated) > 0 && !retire:
 		b.WriteString("backsight memory states --retire retires them; backsight forget --restore <id> undoes one.\n")
 	}

@@ -28,6 +28,15 @@ var (
 	urlRef  = regexp.MustCompile(`https?://github\.com/([A-Za-z0-9][\w.-]*)/([\w.-]+?)/(?:pull|issues)/(\d+)\b`)
 	slugRef = regexp.MustCompile(`\b([A-Za-z0-9][\w.-]*)/([\w.-]+)#(\d+)\b`)
 	bareRef = regexp.MustCompile(`(?i)(?:\b([a-z][\w.-]*)[ \t]+)?\b(?:PR|pull request|issue)[ \t]*#?(\d+)\b`)
+	// unitAfter: a number that counts something ("PR 3 days ago", "issue
+	// 2 of the plan") is no ref.
+	unitAfter = regexp.MustCompile(`(?i)^[ \t]*(?:%|(?:days?|weeks?|hours?|minutes?|months?|years?|times?|of|percent)\b)`)
+	// sentenceEnd ends a sentence or a clause: a claim and the ref it is
+	// about sit between two of them.
+	sentenceEnd = regexp.MustCompile(`[.;!?]+(?:\s+|$)|\s+\|\s+|\n+`)
+	// followUp starts a sentence that goes on about the ref the sentence
+	// before names ("PR 318 implements X. It was ready to merge").
+	followUp = regexp.MustCompile(`(?i)^\s*(?:it|the (?:PR|pull request|issue)|this (?:PR|pull request|issue)|that (?:PR|pull request|issue))\b`)
 )
 
 // notQualifier: words that come before "PR #N" without naming a repository.
@@ -39,29 +48,54 @@ var notQualifier = map[string]bool{
 	"then": true, "after": true, "before": true, "into": true, "each": true, "every": true, "one": true, "which": true,
 }
 
+// sentences are text's sentences and clauses, as [start, end) offsets.
+func sentences(text string) [][2]int {
+	var out [][2]int
+	from := 0
+	for _, m := range sentenceEnd.FindAllStringIndex(text, -1) {
+		if m[0] > from {
+			out = append(out, [2]int{from, m[0]})
+		}
+		from = m[1]
+	}
+	if from < len(text) {
+		out = append(out, [2]int{from, len(text)})
+	}
+	return out
+}
+
 // Refs lists the pull requests and issues text names, in order, each
-// once. A bare ref whose number a URL or owner/repo#N ref already has is
-// that ref named again.
+// once. A bare ref is a URL or owner/repo#N ref named again, and dropped,
+// only when one with its number sits in the same sentence and the word
+// before the bare ref names no other repository.
 func Refs(text string) []Ref {
 	type at struct {
 		pos int
 		ref Ref
 	}
-	var found []at
-	full := map[int]bool{}
+	sents := sentences(text)
+	sentenceOf := func(pos int) int {
+		for i, s := range sents {
+			if pos >= s[0] && pos < s[1] {
+				return i
+			}
+		}
+		return -1
+	}
+	var found, full []at
 	for _, re := range []*regexp.Regexp{urlRef, slugRef} {
 		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
 			n, err := strconv.Atoi(text[m[6]:m[7]])
 			if err != nil {
 				continue
 			}
-			found = append(found, at{m[0], Ref{Owner: strings.ToLower(text[m[2]:m[3]]), Repo: strings.ToLower(text[m[4]:m[5]]), Number: n}})
-			full[n] = true
+			f := at{m[0], Ref{Owner: strings.ToLower(text[m[2]:m[3]]), Repo: strings.ToLower(text[m[4]:m[5]]), Number: n}}
+			found, full = append(found, f), append(full, f)
 		}
 	}
 	for _, m := range bareRef.FindAllStringSubmatchIndex(text, -1) {
 		n, err := strconv.Atoi(text[m[4]:m[5]])
-		if err != nil || full[n] {
+		if err != nil || unitAfter.MatchString(text[m[1]:]) {
 			continue
 		}
 		r := Ref{Number: n}
@@ -69,6 +103,15 @@ func Refs(text string) []Ref {
 			if q := strings.ToLower(text[m[2]:m[3]]); !notQualifier[q] {
 				r.Qualifier = q
 			}
+		}
+		pos := m[0]
+		if m[2] >= 0 {
+			pos = m[4] // the sentence of the number, not of a qualifier before a clause break
+		}
+		if slices.ContainsFunc(full, func(f at) bool {
+			return f.ref.Number == n && sentenceOf(f.pos) == sentenceOf(pos) && (r.Qualifier == "" || r.Qualifier == f.ref.Repo)
+		}) {
+			continue
 		}
 		found = append(found, at{m[0], r})
 	}
@@ -83,21 +126,42 @@ func Refs(text string) []Ref {
 }
 
 var openClaims = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:is|was|are|were|still|remains?|remained|stays?|stayed|kept|left)[ \t]+(?:[a-z]+[ \t]+)?open\b`),
+	regexp.MustCompile(`(?i)\b(?:is|are|still|remains?|stays?|kept|left)[ \t]+(?:[a-z]+[ \t]+)?open\b`),
 	regexp.MustCompile(`(?i)\bnot[ \t]+(?:yet[ \t]+)?(?:been[ \t]+)?merged\b`),
 	regexp.MustCompile(`(?i)\bunmerged\b`),
 	regexp.MustCompile(`(?i)\bready to merge\b`),
-	regexp.MustCompile(`(?i)\bawait(?:s|ing)?\b`),
+	regexp.MustCompile(`(?i)\bawait(?:s|ing)?[ \t]+(?:the user's[ \t]+|a[ \t]+|your[ \t]+|its[ \t]+)?(?:review|merge|approval|ci)\b`),
 	regexp.MustCompile(`(?i)\bpending[ \t]+(?:the user's[ \t]+|a[ \t]+|your[ \t]+)?(?:review|merge|approval|ci)\b`),
 }
 
-// ClaimsOpen is whether text says something is not done yet: open, not
-// merged, waiting for a review or a merge.
-func ClaimsOpen(text string) bool {
+var openSource = regexp.MustCompile(`(?i)^[ \t-]*source\b`)
+
+// claimIn is whether a sentence says something is not done yet.
+func claimIn(s string) bool {
 	for _, re := range openClaims {
-		if re.MatchString(text) {
+		for _, m := range re.FindAllStringIndex(s, -1) {
+			if !openSource.MatchString(s[m[1]:]) { // "is open source"
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ClaimsOpen is whether text says a pull request or issue it names is not
+// done yet (open, not merged, waiting for a review or a merge), in the
+// sentence that names it or in the next one when that one goes on about
+// it ("It was ready to merge"). A claim about something else in the same
+// text ("the caching question is still open") does not count.
+func ClaimsOpen(text string) bool {
+	prevRef := false
+	for _, s := range sentences(text) {
+		sent := text[s[0]:s[1]]
+		hasRef := len(Refs(sent)) > 0
+		if claimIn(sent) && (hasRef || prevRef && followUp.MatchString(sent)) {
 			return true
 		}
+		prevRef = hasRef
 	}
 	return false
 }

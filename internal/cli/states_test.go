@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func TestMemoryStatesListsWhatGitHubContradictsAndChangesNothing(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if got := outdatedIDs(res); !slices.Equal(got, []string{"url1", "bare1"}) {
-		t.Errorf("outdated %v, want url1 and bare1\n%s", got, out)
+		t.Fatalf("outdated %v, want url1 and bare1\n%s", got, out)
 	}
 	if res.Read != 5 || res.Checked != 4 || res.StillOpen != 1 || res.Skipped[skipSaysDone] != 1 {
 		t.Errorf("counts: %+v", res)
@@ -239,7 +240,122 @@ func TestMemoryStatesNeedsALoggedInGh(t *testing.T) {
 	}
 	ghLookPath = func(string) (string, error) { return "", errors.New("not found") }
 	before := len(bankCalls)
-	if code, _, out := statesJSON(t); code != output.NeedsUser || !strings.Contains(out, "gh") || len(bankCalls) != before {
+	if code, _, out := statesJSON(t); code != output.NeedsUser || !strings.Contains(out, "memory states checks GitHub with the gh CLI, which is not installed") || len(bankCalls) != before {
 		t.Errorf("no gh: exit %d, %d server calls\n%s", code, len(bankCalls)-before, out)
+	}
+}
+
+// A pull request closed without a merge may be what a "not merged" fact
+// says: skipped. An issue closed is outdated, dated by its closing.
+func TestMemoryStatesClosedItems(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	learntOwners(t, home, "github.com/acme")
+	stateFacts(t,
+		[3]string{"pr1", "Tool PR #1 was not merged; superseded by PR #2.", "project:tool,kind:state"},
+		[3]string{"is1", "Tool issue #3 is still open.", "project:tool,kind:state"},
+	)
+	closedAt, _ := time.Parse(time.RFC3339, "2026-11-05T09:00:00Z")
+	unmerged := ghItem{State: "closed", ClosedAt: closedAt}
+	unmerged.PullRequest = &struct {
+		MergedAt *time.Time `json:"merged_at"`
+	}{}
+	fakeGitHub(t, map[string]any{"acme/tool#1": unmerged, "acme/tool#2": merged("2026-11-04T17:16:40Z"), "acme/tool#3": ghItem{State: "closed", ClosedAt: closedAt}})
+	code, res, out := statesJSON(t)
+	if code != output.OK || !slices.Equal(outdatedIDs(res), []string{"is1"}) || res.Skipped[skipClosedUnmerged] != 1 {
+		t.Fatalf("exit %d %+v\n%s", code, res, out)
+	}
+	if r := res.Outdated[0].Refs[0]; r.State != "closed" || !r.At.Equal(closedAt) {
+		t.Errorf("issue: %+v", r)
+	}
+}
+
+// A project named in passing does not send a bare ref to its repository.
+func TestMemoryStatesSkipsABareRefNamingAnotherProject(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	learntOwners(t, home, "github.com/acme")
+	stateFacts(t, [3]string{"a1", "The fix in PR #330 is not merged until the engine release.", "project:tool,kind:state"})
+	projectEntities["engine"] = "[]"
+	calls := fakeGitHub(t, map[string]any{"acme/engine#330": merged("2026-11-04T17:16:40Z")})
+	if code, res, out := statesJSON(t, "--retire"); code != output.OK || len(*calls) != 0 || len(curation) != 0 || res.Skipped[skipOtherProject] != 1 {
+		t.Errorf("exit %d %+v %v\n%s", code, res, *calls, out)
+	}
+}
+
+// --project keeps one project's facts; experience facts are read too.
+func TestMemoryStatesProjectFilterAndExperienceFacts(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	learntOwners(t, home, "github.com/acme")
+	stateFacts(t, [3]string{"w1", "Tool PR #1 is open and not merged.", "project:tool,kind:state"})
+	listAnswer["experience"] = `[{"id":"e1","text":"Other PR #2 is open and not merged.","fact_type":"experience","tags":["project:other","kind:state"]}]`
+	t.Cleanup(func() { listAnswer["experience"] = "" })
+	projectEntities["other"] = "[]"
+	fakeGitHub(t, map[string]any{"acme/tool#1": merged("2026-11-04T17:16:40Z"), "acme/other#2": merged("2026-11-04T17:16:40Z")})
+	if code, res, out := statesJSON(t); code != output.OK || !slices.Equal(outdatedIDs(res), []string{"w1", "e1"}) {
+		t.Errorf("all: exit %d %+v\n%s", code, res, out)
+	}
+	if code, res, out := statesJSON(t, "--project", "other"); code != output.OK || res.Read != 1 || !slices.Equal(outdatedIDs(res), []string{"e1"}) {
+		t.Errorf("--project other: exit %d %+v\n%s", code, res, out)
+	}
+}
+
+// A retirement the server refuses stops the run: exit Partial, only the
+// ones done reported retired, the rest left.
+func TestMemoryStatesRetireStopsAtARefusedWrite(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	learntOwners(t, home, "github.com/acme")
+	stateFacts(t,
+		[3]string{"a1", "Tool PR #1 is open and not merged.", "project:tool,kind:state"},
+		[3]string{"a2", "Tool PR #2 is open and not merged.", "project:tool,kind:state"},
+		[3]string{"a3", "Tool PR #3 is open and not merged.", "project:tool,kind:state"},
+	)
+	memoryStatus["PATCH a2"] = 500
+	fakeGitHub(t, map[string]any{"acme/tool#1": merged("2026-11-04T17:16:40Z"), "acme/tool#2": merged("2026-11-04T17:16:40Z"), "acme/tool#3": merged("2026-11-04T17:16:40Z")})
+	code, res, out := statesJSON(t, "--retire")
+	if code != output.Partial || !slices.Equal(res.Retired, []string{"a1"}) || strings.Contains(strings.Join(curation, "\n"), "a3") {
+		t.Errorf("exit %d %+v %q\n%s", code, res, curation, out)
+	}
+}
+
+// ghIssue reads gh's answers: the item, a 404, a missing login, a reply
+// that is no item.
+func TestGhIssueReadsGhsAnswers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for gh")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gh")
+	body := `#!/bin/sh
+case "$2" in
+repos/a/b/issues/1) echo '{"state":"closed","closed_at":"2026-11-05T09:00:00Z","html_url":"https://github.com/a/b/pull/1","pull_request":{"merged_at":"2026-11-05T09:00:00Z"}}' ;;
+repos/a/b/issues/2) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+repos/a/b/issues/3) echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4 ;;
+repos/a/b/issues/4) echo 'not json' ;;
+repos/a/b/issues/5) echo 'gh: Server Error (HTTP 502)' >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := ghLookPath
+	ghLookPath = func(string) (string, error) { return script, nil }
+	t.Cleanup(func() { ghLookPath = old })
+	ctx := context.Background()
+	if it, err := ghIssue(ctx, "a", "b", 1); err != nil || (ghAnswer{item: it}).stateRef().State != "merged" {
+		t.Errorf("item: %+v %v", it, err)
+	}
+	if _, err := ghIssue(ctx, "a", "b", 2); !errors.Is(err, errGHNotFound) {
+		t.Errorf("404: %v", err)
+	}
+	if _, err := ghIssue(ctx, "a", "b", 3); !errors.Is(err, errGHAuth) {
+		t.Errorf("login: %v", err)
+	}
+	for _, n := range []int{4, 5} {
+		if _, err := ghIssue(ctx, "a", "b", n); err == nil || errors.Is(err, errGHNotFound) || errors.Is(err, errGHAuth) {
+			t.Errorf("#%d: %v", n, err)
+		}
 	}
 }

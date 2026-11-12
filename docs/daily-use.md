@@ -203,7 +203,7 @@ A memory saying "PR #12 is open, not merged" is true the day it is written and w
 backsight memory states
 ```
 
-It reads the delivered-state memories that name a GitHub pull request or issue and say it is still open, asks GitHub through the `gh` CLI (install it and run `gh auth login` first), and lists those GitHub says were merged or closed since, each with its item, the date and `backsight forget <id>`. A memory it cannot be sure of is skipped and counted, never listed: one that also says the item was merged since, one that names an item still open, or a bare `PR #12` it cannot place in exactly one of your repositories.
+It reads the delivered-state memories that name a GitHub pull request or issue and say it is still open, asks GitHub through the `gh` CLI (install it and run `gh auth login` first), and lists those GitHub says were merged or closed since, each with its item, the date and `backsight forget <id>`. A memory naming an item that is still open is counted as still open. A memory it cannot be sure of is skipped and counted, never listed: one that also says the item was merged since, one about a pull request closed without a merge, or a bare `PR #12` it cannot place in exactly one of your repositories.
 
 To retire everything listed:
 

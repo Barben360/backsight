@@ -27,6 +27,16 @@ func TestClaimsOpen(t *testing.T) {
 		{"PR #12 was opened on 2026-10-25.", false},
 		{"The open items list holds PR #12.", false},
 		{"Release v1.0.1 shipped PR #318.", false},
+		// a claim about something else, or not about now
+		{"PR #12 fixed the parser; the caching question is still open.", false},
+		{"PR #12 fixed the parser. The caching question is still open.", false},
+		{"The fix from PR #12 awaits the v1.4 release.", false},
+		{"backsight is open source; PR #12 adds X.", false},
+		{"PR #12 is open-source tooling.", false},
+		{"PR #12 was open for two weeks before the merge.", false},
+		// the claim in the next sentence, about the same item
+		{"PR #265 holds phase 3. The PR is open and not merged.", true},
+		{"Clinic-App PR 578 failed its checks; it is not merged yet.", true},
 	} {
 		if got := ClaimsOpen(tc.text); got != tc.want {
 			t.Errorf("ClaimsOpen(%q) = %v, want %v", tc.text, got, tc.want)
@@ -77,6 +87,13 @@ func TestRefs(t *testing.T) {
 		{"A merge of PR #255 was queued; pull request #256 and issue 12 too.",
 			[]Ref{{Number: 255}, {Number: 256}, {Number: 12}}},
 		{"The ledger has 36 alerts (#130 aside); commit 5d41f21f.", nil},
+		// a number that counts something is no ref
+		{"Merged the PR 3 days ago; issue 2 of the plan.", nil},
+		// another repository's #12 does not hide this one
+		{"acme/foo#12 merged; backsight PR #12 still open.",
+			[]Ref{{Owner: "acme", Repo: "foo", Number: 12}, {Qualifier: "backsight", Number: 12}}},
+		{"acme/foo#12 is merged and backsight PR #12 is open.",
+			[]Ref{{Owner: "acme", Repo: "foo", Number: 12}, {Qualifier: "backsight", Number: 12}}},
 	} {
 		if got := Refs(tc.text); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("Refs(%q) =\n%+v, want\n%+v", tc.text, got, tc.want)
