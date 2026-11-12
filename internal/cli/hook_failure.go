@@ -136,7 +136,7 @@ func (h *hookEnv) toolFailure() []byte {
 	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
-	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: failureBudget, Now: now, Boost: rc.ProjectBoost,
+	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: h.budget(failureBudget), Now: now, Boost: rc.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Related: related,
 		MinReranker: failureMinScore, GlobalMinReranker: max(failureMinScore, rc.GlobalMinScore), Limit: 20})
@@ -144,7 +144,7 @@ func (h *hookEnv) toolFailure() []byte {
 	for _, m := range res.Scopes {
 		failed = failed && !m.OK
 	}
-	h.breakerRecord(failed)
+	h.breakerRecord(failed, res.TimedOut)
 
 	// At most failureHits unseen hits at the floor, within what the session
 	// budget has left.

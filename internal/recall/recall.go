@@ -125,6 +125,10 @@ type Result struct {
 	// answers held (a hit two queries found counts for both; a blank
 	// query, never sent, 0).
 	QueryHits []int `json:"query_hits"`
+	// TimedOut: a call failed because the search ran out of its budget (a
+	// server that accepted the connection and did not answer in time), not
+	// because it was refused.
+	TimedOut bool `json:"timed_out,omitempty"`
 }
 
 type scope struct {
@@ -218,6 +222,11 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 			}
 		}
 		res.Scopes[a.scope] = m
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		for _, a := range answers {
+			res.TimedOut = res.TimedOut || a.err != nil
+		}
 	}
 	res.Hits = e.adjust(best, q.MinScore)
 	if q.Limit > 0 && len(res.Hits) > q.Limit {

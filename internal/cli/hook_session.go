@@ -28,7 +28,6 @@ const (
 	briefingItems     = 5
 	briefingItemChars = 220
 	briefingChars     = 1200
-	briefingTimeout   = 5 * time.Second
 	// The mental-model briefing (decision 0060): its page is cut at a line
 	// past this many characters; the server writes it within 600 tokens.
 	briefingModelChars  = 1600
@@ -49,6 +48,13 @@ const (
 	// (doctor's server-reach check warns from the same age).
 	unreachableAfter = time.Hour
 )
+
+// briefingTimeout bounds the startup briefing, every read of it
+// (a variable for the tests).
+var briefingTimeout = 5 * time.Second
+
+// errBriefingTimedOut: the briefing ran out of its budget.
+var errBriefingTimedOut = errors.New("briefing timed out")
 
 // briefingModelTimeout bounds the page read, and the page creation,
 // within the briefing's own budget (a var for the tests).
@@ -148,6 +154,12 @@ func (h *hookEnv) sessionStart() []byte {
 		switch {
 		case err != nil:
 			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
+			if errors.Is(err, errBriefingTimedOut) {
+				// A server that does not answer a short list read within
+				// the briefing's budget would cost the first prompt the
+				// whole recall budget: recall pauses at once.
+				h.breakerRecord(true, true)
+			}
 		case !h.cfg.Components.Write:
 			banner = instructions.StatusRecordingOff(name)
 		case optedOut:
@@ -237,6 +249,9 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 		missing = absent
 	}
 	text, items, source, err = h.recentBriefing(ctx)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("%w: %w", errBriefingTimedOut, err)
+	}
 	// A page is created only for a project with memories: an empty or new
 	// one would be summarised from nothing, then pruned, in a loop. Nor on
 	// another server than the joined one: nothing is written to it. Nor

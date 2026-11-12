@@ -343,6 +343,8 @@ var (
 	mentalModels       map[string]string // id → mental model JSON
 	mentalCalls        []string          // POST/PATCH/DELETE on mental models, with the body
 	mentalGetDelay     time.Duration     // a slow page read
+	recallDelay        time.Duration     // a recall that hangs (a saturated reranker)
+	recentDelay        time.Duration     // a memories/list read that hangs
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	mentalPatchStatus  atomic.Int32      // non-zero: answer a page update with this status
 	mentalLists        []string          // the query of each mental-model listing
@@ -386,6 +388,17 @@ var (
 
 // fakeHindsight answers like a started server: health, version, banks and
 // bank config (overrides kept in memory).
+// fakeWait holds a fake answer for d, or until the client gives up
+// (false then).
+func fakeWait(r *http.Request, d time.Duration) bool {
+	select {
+	case <-time.After(d): //nolint:forbidigo // the fake server's slowness is the stimulus, not a check
+		return true
+	case <-r.Context().Done():
+		return false
+	}
+}
+
 func fakeHindsight(t *testing.T) (port int) {
 	t.Helper()
 	// Shared counters start clean for every test.
@@ -418,6 +431,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentDown.Store(false)
 	recentHasEventTime.Store(false)
 	mentalModels, mentalCalls, mentalGetDelay, mentalLists = map[string]string{}, nil, 0, nil
+	recallDelay, recentDelay = 0, 0
 	mentalCreateStatus.Store(0)
 	mentalPatchStatus.Store(0)
 	docDeleteFails.Store(false)
@@ -602,6 +616,9 @@ func fakeHindsight(t *testing.T) (port int) {
 				w.WriteHeader(int(st))
 				return
 			}
+			if recallDelay > 0 && !fakeWait(r, recallDelay) {
+				return
+			}
 			extra := ""
 			if recallSourceFacts != "" {
 				extra = `,"source_facts":` + recallSourceFacts
@@ -623,6 +640,9 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			if recentDown.Load() {
 				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			if recentDelay > 0 && !fakeWait(r, recentDelay) {
 				return
 			}
 			items := recentAnswer[r.URL.Query().Get("type")]

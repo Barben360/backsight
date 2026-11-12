@@ -21,10 +21,19 @@ import (
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
+// recallBudget is a prompt recall's budget (SPEC §6.2). probeBudget is a
+// recall's once the breaker's pause is over, until one answers: above the
+// slowest recalls measured on a CPU-only server, so a server still hanging
+// costs a prompt that much at most, not the whole budget (decision 0091).
+// Variables for the tests.
+var (
+	recallBudget = 17 * time.Second
+	probeBudget  = 8 * time.Second
+)
+
 const (
-	recallBudget   = 17 * time.Second // SPEC §6.2
-	firstMinChars  = 25               // the first prompt recalls from this length (C12)
-	topicShift     = 0.15             // vocabulary overlap below which the topic changed (C12)
+	firstMinChars  = 25   // the first prompt recalls from this length (C12)
+	topicShift     = 0.15 // vocabulary overlap below which the topic changed (C12)
 	stickyWindow   = 24 * time.Hour
 	nudgeTerms     = 4
 	approvalMaxLen = 40
@@ -327,7 +336,7 @@ func (h *hookEnv) userPrompt() []byte {
 			ev.Scopes[name] = telemetry.ScopeResult{OK: m.OK, MS: m.MS, Raw: m.Raw}
 			failed = failed && !m.OK
 		}
-		h.breakerRecord(failed)
+		h.breakerRecord(failed, res.TimedOut)
 		ev.Above = len(res.Hits)
 		if len(res.Hits) > 0 {
 			ev.Top = res.Hits[0].Reranker
@@ -457,7 +466,7 @@ func (h *hookEnv) sticky() session.Sticky {
 // error (the search failed, whatever the bank holds), no_candidates,
 // below_floor, all_seen or capped; "" when something was.
 func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (sel selection, flags []string, items []session.Injection, res recall.Result, empty string) {
-	_, res = h.searchPrompt(prompt)
+	_, res = h.searchPrompt(prompt, h.budget(recallBudget))
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
 	// Within what the session budget has left, like the failure recall.
@@ -562,7 +571,7 @@ func (h *hookEnv) namedSkip() []string {
 
 // searchPrompt is the prompt path's query and recall (SPEC §10.2), shared
 // with `recall-prompt` so the replay gate measures exactly the hook.
-func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
+func (h *hookEnv) searchPrompt(prompt string, budget time.Duration) (string, recall.Result) {
 	rc := h.cfg.Recall
 	q := h.recallQuery(prompt)
 	var related, named []string
@@ -570,7 +579,7 @@ func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 		named = idx.Named(q, h.namedSkip()) // searched as if asked for: no floor for other projects
 	}
-	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
+	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: budget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Projects: named, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
 }

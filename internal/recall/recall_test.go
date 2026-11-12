@@ -193,6 +193,9 @@ func TestAFailingScopeIsSkippedNotFatal(t *testing.T) {
 	if res.Scopes["project"].OK || res.Scopes["project"].Err == "" || len(res.Hits) != 1 {
 		t.Errorf("%+v", res)
 	}
+	if res.TimedOut {
+		t.Error("a refused scope is marked timed out: only a search out of its budget is")
+	}
 }
 
 // A scope with no observation yet (a project still being backfilled) is
@@ -258,6 +261,9 @@ func TestSearchStaysWithinItsBudget(t *testing.T) {
 		if res.Scopes["project"].OK || res.Scopes["global"].OK || len(res.Hits) != 0 {
 			t.Errorf("%+v, want both scopes failed and no hit", res)
 		}
+		if !res.TimedOut {
+			t.Error("a search its budget ended is not marked timed out")
+		}
 	})
 
 	// The search's context ends once the global scope answered, never
@@ -275,6 +281,9 @@ func TestSearchStaysWithinItsBudget(t *testing.T) {
 		res := e.Search(ctx, q)
 		if res.Scopes["project"].OK || !res.Scopes["global"].OK || len(res.Hits) != 1 || res.Hits[0].ID != "g" {
 			t.Errorf("%+v, want the global hit and the project scope failed", res)
+		}
+		if res.TimedOut {
+			t.Error("a search its caller cancelled is marked timed out")
 		}
 	})
 }
