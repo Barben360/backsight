@@ -179,7 +179,7 @@ type ProjectLine struct {
 	Project                                       Ref
 	Label                                         string // the pooled row's name
 	Sessions, Prompts, Got, Used, Wrong, Memories Cell
-	Last                                          format.Time
+	Last, LastMemory                              format.Time
 	Spark                                         template.HTML
 }
 
@@ -224,7 +224,7 @@ func projectsOf(d PageData) ProjectsPage {
 			Sessions: Cell{Text: l.Int(row.Sessions)}, Prompts: Cell{Text: l.Int(row.Prompts)},
 			Got: share(l, row.PromptsWithMemory, row.Prompts, minN), Used: Cell{Text: l.Int(row.UsedTurns)},
 			Wrong: Cell{Text: l.Int(row.ReportedWrong)}, Memories: memories,
-			Last: d.rel(r.GeneratedAt, row.LastActivity),
+			Last: d.rel(r.GeneratedAt, row.LastActivity), LastMemory: d.rel(r.GeneratedAt, row.LastMemory),
 		}
 	}
 	for _, row := range r.Tables.Projects {
@@ -235,7 +235,7 @@ func projectsOf(d PageData) ProjectsPage {
 	}
 	if po := r.Tables.Pooled; po != nil {
 		ln := line(po.Totals)
-		ln.Label, ln.Last = po.Label, format.Time{}
+		ln.Label, ln.Last, ln.LastMemory = po.Label, format.Time{}, format.Time{}
 		if ln.Label == "" {
 			ln.Label = "all projects pooled"
 		}
@@ -250,7 +250,7 @@ func projectsOf(d PageData) ProjectsPage {
 		p.Note = NoData{Text: "No project has any activity in this window."}
 		return p
 	}
-	p.Foot = "Pooled row: the whole window at once; beside each total, the lowest and highest project count. Memories come from the server and are not filtered by window."
+	p.Foot = "Every project holding memories is listed, with no activity when it had none in the window. Pooled row: the whole window at once; beside each total, the lowest and highest count among the active projects. Memories and Last memory come from the server and are not filtered by window."
 	return p
 }
 

@@ -150,6 +150,80 @@ func TestProjectsSessionsWithoutProjectAreLeftOut(t *testing.T) {
 	}
 }
 
+// TestProjectsListEveryProjectHoldingMemories (issue 326): the rows are the
+// projects the server holds memories for plus those active in the window.
+// gamma and delta hold memories but had no session in the window: they
+// get a row with no activity, after the active ones (latest memory first),
+// and they leave the pooled totals and extremes alone. Last memory is the
+// server's date of each project's latest memory, null when its read failed
+// or it has none dated; the pooled row's is the latest of them.
+func TestProjectsListEveryProjectHoldingMemories(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "a", fxNow.Add(-2*time.Hour), 3, nil)
+	x.prompts("beta", "b", fxNow.Add(-30*time.Hour), 5, nil)
+	x.prompts("gamma", "old", fxNow.Add(-20*24*time.Hour), 4, nil) // before the window
+	x.server.set(func(d *fakeData) {
+		d.Tags = []hindsight.TagCount{{Tag: "project:alpha", Count: 120}, {Tag: "project:gamma", Count: 7},
+			{Tag: "project:delta", Count: 2}, {Tag: "project:epsilon", Count: 1}, {Tag: "kind:decision", Count: 9}}
+		d.Last = map[string]time.Time{"alpha": fxNow.Add(-time.Hour), "gamma": fxNow.Add(-10 * 24 * time.Hour),
+			"delta": fxNow.Add(-2 * 24 * time.Hour)}
+	})
+	r := x.run("projects", x.query(7))
+	rows := r.Tables.Projects
+	// epsilon has no dated memory: last among the quiet ones, then by name.
+	if got := projectNames(rows); !slices.Equal(got, []string{"alpha", "beta", "delta", "gamma", "epsilon"}) {
+		t.Fatalf("projects = %v, want the active alpha, beta, then the quiet delta, gamma, epsilon", got)
+	}
+	g := rows[3]
+	if g.Sessions != 0 || g.Prompts != 0 || g.LastActivity != nil || g.MemoriesOnServer == nil || *g.MemoriesOnServer != 7 {
+		t.Errorf("gamma = %+v, want no activity in the window and 7 memories", g)
+	}
+	if want := fxNow.Add(-10 * 24 * time.Hour); g.LastMemory == nil || !g.LastMemory.Equal(want) {
+		t.Errorf("gamma last memory %v, want %v", g.LastMemory, want)
+	}
+	if len(g.Series) != 8 || *g.Series[0].Value != 0 {
+		t.Errorf("gamma series %v, want 8 empty days", g.Series)
+	}
+	if rows[4].LastMemory != nil || rows[1].LastMemory != nil {
+		t.Errorf("last memory: epsilon %v, beta %v, want null for both (none dated, no tag)", rows[4].LastMemory, rows[1].LastMemory)
+	}
+	p := r.Tables.Pooled
+	if p.Totals.Sessions != 8 || p.Totals.Prompts != 8 || p.Min["prompts"] != 3 || p.Max["prompts"] != 5 || p.Min["sessions"] != 3 {
+		t.Errorf("pooled %+v min %v max %v, want 8 sessions and prompts, extremes 3..5 over the active projects", p.Totals, p.Min, p.Max)
+	}
+	if want := fxNow.Add(-time.Hour); p.Totals.LastMemory == nil || !p.Totals.LastMemory.Equal(want) {
+		t.Errorf("pooled last memory %v, want alpha's %v", p.Totals.LastMemory, want)
+	}
+	if pg := r.Tables.Page; pg.Total != 5 {
+		t.Errorf("page total %d, want 5 rows", pg.Total)
+	}
+
+	q := x.query(7)
+	q.Project = "gamma"
+	if got := projectNames(x.run("projects", q).Tables.Projects); !slices.Equal(got, []string{"gamma"}) {
+		t.Errorf("--project gamma lists %v, want gamma alone", got)
+	}
+
+	// One project's date failing leaves its row and the others' dates.
+	x.server.fail("ProjectLastMemory:project:delta", hindsight.ErrUnreachable)
+	rows = x.run("projects", x.query(7)).Tables.Projects
+	if got := projectNames(rows); !slices.Contains(got, "delta") {
+		t.Fatalf("projects = %v, want delta still listed", got)
+	}
+	for _, row := range rows {
+		if row.Project == "delta" && row.LastMemory != nil || row.Project == "gamma" && row.LastMemory == nil {
+			t.Errorf("%s last memory %v, want null for delta (its read failed) and gamma's date", row.Project, row.LastMemory)
+		}
+	}
+
+	// Without the server's tags, only the active projects are known.
+	x.server.fail("ProjectTags", hindsight.ErrUnreachable)
+	rows = x.run("projects", x.query(7)).Tables.Projects
+	if got := projectNames(rows); !slices.Equal(got, []string{"alpha", "beta"}) || rows[0].MemoriesOnServer != nil || rows[0].LastMemory != nil {
+		t.Errorf("tags down: projects %v, alpha memories %v, last memory %v, want alpha, beta with both null", got, rows[0].MemoriesOnServer, rows[0].LastMemory)
+	}
+}
+
 // TestProjectUsedTurnsAndWrong: used_turns counts the main-agent turns
 // whose final stop declared a used credit, reported_wrong the wrong and
 // outdated credits, both by the session's project (alpha's turns are not
@@ -1456,7 +1530,9 @@ func TestBrowseOneTransaction(t *testing.T) {
 
 // TestBrowseNeverPrintsFreeText: memory text, server error messages and the
 // prompts' content are nowhere in the JSON of any browse view, with or
-// without a failing server.
+// without a failing server. A project tag's name is listed as a project
+// (issue 326), as the bank view lists it: only that exact field may hold
+// the canary.
 func TestBrowseNeverPrintsFreeText(t *testing.T) {
 	x := browseFx(t)
 	const canary = "CANARY-FREE-TEXT"
@@ -1473,7 +1549,7 @@ func TestBrowseNeverPrintsFreeText(t *testing.T) {
 			q := x.query(7)
 			q.ID = c.id
 			r := x.run(c.view, q)
-			raw := string(mustJSON(t, r))
+			raw := strings.ReplaceAll(string(mustJSON(t, r)), `"project":"`+canary+`"`, "")
 			if strings.Contains(raw, canary) || strings.Contains(raw, "fake") {
 				t.Errorf("%s %q (failing server %v) holds the memory text or the server's message", c.view, c.id, failing)
 			}

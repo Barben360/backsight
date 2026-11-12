@@ -35,6 +35,7 @@ type ServerReader interface {
 	BankStats(ctx context.Context) (hindsight.BankStats, error)
 	Memory(ctx context.Context, id string) (hindsight.MemoryDetail, error)
 	ProjectTags(ctx context.Context) ([]hindsight.TagCount, error)
+	ProjectLastMemory(ctx context.Context, project string) (time.Time, error)
 	MemoriesTimeseries(ctx context.Context, period string) (hindsight.Timeseries, error)
 	LLMStats(ctx context.Context, period, operation string) ([]hindsight.LLMBucket, error)
 	OperationsPage(ctx context.Context, status, typ string, limit, offset int) (hindsight.OperationPage, error)

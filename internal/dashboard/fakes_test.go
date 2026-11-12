@@ -264,6 +264,10 @@ func (f *fakeServer) ProjectTags(ctx context.Context) ([]hindsight.TagCount, err
 	return nil, f.enter(ctx, "ProjectTags")
 }
 
+func (f *fakeServer) ProjectLastMemory(ctx context.Context, _ string) (time.Time, error) {
+	return time.Time{}, f.enter(ctx, "ProjectLastMemory")
+}
+
 func (f *fakeServer) MemoriesTimeseries(ctx context.Context, period string) (hindsight.Timeseries, error) {
 	return hindsight.Timeseries{Period: period}, f.enter(ctx, "MemoriesTimeseries")
 }

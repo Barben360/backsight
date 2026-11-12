@@ -290,9 +290,12 @@ type fakeData struct {
 	StatsRaw string // when set, the /stats body as is (Stats ignored)
 	Memories map[string]hindsight.MemoryDetail
 	Tags     []hindsight.TagCount // every tag of the bank; ProjectTags keeps "project:"
-	Series   hindsight.Timeseries
-	LLM      map[string][]hindsight.LLMBucket // by operation, "" = all
-	Ops      []hindsight.Operation            // most recent first; filtered and paged by the fake
+	// Last is when each project's latest memory happened, by project name
+	// (ProjectLastMemory); a project absent from it holds no dated memory.
+	Last   map[string]time.Time
+	Series hindsight.Timeseries
+	LLM    map[string][]hindsight.LLMBucket // by operation, "" = all
+	Ops    []hindsight.Operation            // most recent first; filtered and paged by the fake
 }
 
 // errBadBody makes a fake method answer 200 with a body that is not JSON.
@@ -366,7 +369,7 @@ func (s *fakeServer) called() []string {
 	return slices.Clone(s.calls)
 }
 
-var fakeMethods = []string{"Version", "BankStats", "Memory", "ProjectTags", "MemoriesTimeseries", "LLMStats", "OperationsPage"}
+var fakeMethods = []string{"Version", "BankStats", "Memory", "ProjectTags", "ProjectLastMemory", "MemoriesTimeseries", "LLMStats", "OperationsPage"}
 
 var kindStatus = map[hindsight.Kind]int{
 	hindsight.Unauthorized: http.StatusUnauthorized, hindsight.NotFound: http.StatusNotFound,
@@ -410,6 +413,8 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 		method = "OperationsPage"
 	case p == bp+"/tags":
 		method = "ProjectTags"
+	case p == bp+"/memories/list":
+		method = "ProjectLastMemory"
 	case strings.HasPrefix(p, bp+"/memories/"):
 		method = "Memory"
 	default:
@@ -422,6 +427,9 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 	err, blocked, d := s.errs[method], s.blocks[method], s.data
 	if err == nil && method == "LLMStats" { // fail("LLMStats:<operation>") fails one operation
 		err = s.errs["LLMStats:"+q.Get("operation")]
+	}
+	if err == nil && method == "ProjectLastMemory" { // fail("ProjectLastMemory:<tag>") fails one project
+		err = s.errs["ProjectLastMemory:"+q.Get("tags")]
 	}
 	s.mu.Unlock()
 
@@ -469,6 +477,14 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body = m
+	case "ProjectLastMemory":
+		// One memory at most, its event time only: the server lists by the
+		// time field asked, and a memory without that time is not listed.
+		items := []map[string]any{}
+		if at, ok := d.Last[strings.TrimPrefix(q.Get("tags"), "project:")]; ok && q.Get("time_field") == "mentioned_at" {
+			items = append(items, map[string]any{"id": "m", "text": "", "mentioned_at": at.UTC().Format(time.RFC3339Nano)})
+		}
+		body = map[string]any{"items": items}
 	case "ProjectTags":
 		prefix := strings.TrimSuffix(q.Get("q"), "*")
 		var items []hindsight.TagCount

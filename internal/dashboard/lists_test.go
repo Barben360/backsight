@@ -112,7 +112,7 @@ func TestPooledRowShowsExtremes(t *testing.T) {
 	table := listTable(t, n)
 	rows, total := bodyRows(table)
 	last := table.find("tbody tr")
-	if total == nil || last[len(last)-1] != total || len(rows) != 2 {
+	if total == nil || last[len(last)-1] != total || len(rows) != 3 {
 		t.Fatalf("the pooled row is not the last of %d rows", len(last))
 	}
 	cells := total.find("td")
@@ -446,6 +446,39 @@ func TestPagerKeepsTheFiltersAndWindow(t *testing.T) {
 	}
 }
 
+// TestProjectsQuietRow (issue 326): p3 holds memories but had no session
+// in the window: its row says so (no sessions, no last activity) and gives
+// when its latest memory happened, as a time element; p1's date unknown
+// reads "—".
+func TestProjectsQuietRow(t *testing.T) {
+	table := listTable(t, pageNode(t, "projects", false, nil))
+	rows, _ := bodyRows(table)
+	byName := map[string]*node{}
+	for _, r := range rows {
+		byName[r.find("td")[colOf(t, table, "Project")].text()] = r
+	}
+	p3, p1 := byName["p3"], byName["p1"]
+	if p3 == nil || p1 == nil {
+		t.Fatalf("rows %v, want p1 and p3", byName)
+	}
+	cell := func(r *node, head string) *node { return r.find("td")[colOf(t, table, head)] }
+	if got := cell(p3, "Sessions").text(); got != "0" {
+		t.Errorf("p3 sessions %q, want 0", got)
+	}
+	if got := cell(p3, "Memories").text(); got != "4" {
+		t.Errorf("p3 memories %q, want 4", got)
+	}
+	if got := cell(p3, "Last activity").text(); got != "—" {
+		t.Errorf("p3 last activity %q, want —", got)
+	}
+	if tm := cell(p3, "Last memory").first("time"); tm == nil || !strings.HasPrefix(tm.attr("datetime"), "2026-09-20") {
+		t.Errorf("p3 last memory %v, want a time on 2026-09-20", tm)
+	}
+	if got := cell(p1, "Last memory").text(); got != "—" {
+		t.Errorf("p1 last memory %q, want — (unknown)", got)
+	}
+}
+
 func TestProjectRows(t *testing.T) {
 	long := strings.Repeat("p", 30)
 	page := pageHTML(t, "projects", func(d *PageData) {
@@ -455,6 +488,7 @@ func TestProjectRows(t *testing.T) {
 		r.Tables.Projects[0].MemoriesOnServer = ip(1284)
 		r.Tables.Projects[1].Project, r.Tables.Projects[1].MemoriesOnServer = hostile, nil
 		r.Tables.Projects[1].Prompts, r.Tables.Projects[1].PromptsWithMemory = 7, 5
+		r.Tables.Projects = r.Tables.Projects[:2] // the golden's third row is TestProjectsQuietRow's
 		r.Tables.Projects = append(r.Tables.Projects, metrics.ProjectRow{Project: "..", Prompts: 0})
 		r.Tables.Projects = append(r.Tables.Projects, metrics.ProjectRow{Project: "", Prompts: 20, PromptsWithMemory: 20})
 	})

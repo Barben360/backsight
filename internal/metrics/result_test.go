@@ -166,7 +166,7 @@ func TestTablesRowNames(t *testing.T) {
 	wantKeys(t, "backup", sub(t, sys, "backup"), "ok")
 	wantKeys(t, "update", sub(t, sys, "update"), "check_failed newer")
 	wantKeys(t, "index info", sub(t, sys, "index"), "lag_seconds partial schema")
-	wantKeys(t, "project row", first("projects"), "last_activity memories_on_server project prompts prompts_with_memory reported_wrong series sessions used_turns")
+	wantKeys(t, "project row", first("projects"), "last_activity last_memory memories_on_server project prompts prompts_with_memory reported_wrong series sessions used_turns")
 	wantKeys(t, "pooled", sub(t, m, "pooled"), "label max min totals")
 	wantKeys(t, "project page", sub(t, m, "project"), "attribution_disagreements command never_used no_memories project sessions top_used")
 	wantKeys(t, "session page", sub(t, m, "session"), "totals turns")

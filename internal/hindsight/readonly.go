@@ -59,6 +59,32 @@ func (r *ReadOnly) ProjectTags(ctx context.Context) ([]TagCount, error) {
 	return r.c.Tags(ctx, r.bank, "project:")
 }
 
+// ProjectLastMemory is when project's latest memory happened: its event
+// time (mentioned_at), else, when no memory of the project has one, when
+// the server last wrote the latest; the zero time when it holds none. It
+// asks for one memory and decodes its times only, never its text.
+func (r *ReadOnly) ProjectLastMemory(ctx context.Context, project string) (time.Time, error) {
+	for _, field := range []string{"mentioned_at", "updated_at"} {
+		var out struct {
+			Items []struct {
+				MentionedAt time.Time `json:"mentioned_at"`
+				UpdatedAt   time.Time `json:"updated_at"`
+			} `json:"items"`
+		}
+		q := url.Values{"time_field": {field}, "limit": {"1"}, "tags": {"project:" + project}, "tags_match": {"any_strict"}}
+		if err := r.c.get(ctx, bankPath(r.bank, "/memories/list"), q, &out); err != nil {
+			return time.Time{}, err
+		}
+		if len(out.Items) > 0 {
+			if m := out.Items[0]; !m.MentionedAt.IsZero() {
+				return m.MentionedAt, nil
+			}
+			return out.Items[0].UpdatedAt, nil
+		}
+	}
+	return time.Time{}, nil
+}
+
 // SeriesBucket is the memories created in one bucket, by fact type.
 type SeriesBucket struct {
 	Time                           time.Time

@@ -221,6 +221,12 @@ func (c *cachedServer) ProjectTags(ctx context.Context) ([]hindsight.TagCount, e
 	return cachedRead(c, ctx, "project_tags", c.next.ProjectTags)
 }
 
+func (c *cachedServer) ProjectLastMemory(ctx context.Context, project string) (time.Time, error) {
+	return cachedRead(c, ctx, "project_last_memory "+strconv.Quote(project), func(ctx context.Context) (time.Time, error) {
+		return c.next.ProjectLastMemory(ctx, project)
+	})
+}
+
 func (c *cachedServer) MemoriesTimeseries(ctx context.Context, period string) (hindsight.Timeseries, error) {
 	return cachedRead(c, ctx, "memories_timeseries "+strconv.Quote(period), func(ctx context.Context) (hindsight.Timeseries, error) {
 		return c.next.MemoriesTimeseries(ctx, period)

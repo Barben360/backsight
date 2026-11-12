@@ -110,10 +110,11 @@ func browseFixture(t *testing.T) {
 // The browse views and the id pages, as text and as JSON, on the same
 // fixture plus one declared turn of sess-long-1 that showed mem-long-1 at
 // its third prompt (credited used), two releases (the older one in p2) and
-// a ledger: the projects list and p1's page, the
-// sessions page with its turn rail, the memories list and mem-long-1's
-// page (its showings by session and prompt), a day's page and the
-// releases.
+// a ledger: the projects list (where the server also holds memories for
+// p1 and for p3, quiet in the window, its latest written 2026-09-20: issue
+// 326) and p1's page, the sessions page with its turn rail, the memories
+// list and mem-long-1's page (its showings by session and prompt), a day's
+// page and the releases.
 func TestStatsBrowseViewsGolden(t *testing.T) {
 	viewsFixture(t)
 	fixedDoctor(t)
@@ -126,6 +127,16 @@ func TestStatsBrowseViewsGolden(t *testing.T) {
 		{"releases", "releases", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			if c.name == "projects" {
+				projectEntities["p1"], tagCounts["p1"] = "[]", 12
+				projectEntities["p3"], tagCounts["p3"] = "[]", 4
+				recentByTag["project:p3"] = `[{"id":"m-p3","text":"t","updated_at":"2026-09-20T10:00:00Z"}]`
+				t.Cleanup(func() {
+					delete(projectEntities, "p1")
+					delete(projectEntities, "p3")
+					delete(recentByTag, "project:p3")
+				})
+			}
 			args := []string{"stats", c.view}
 			if c.id != "" {
 				args = append(args, c.id)
