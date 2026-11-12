@@ -260,7 +260,8 @@ type ProjectRow struct {
 	UsedTurns         int64      `json:"used_turns"`
 	ReportedWrong     int64      `json:"reported_wrong"`
 	MemoriesOnServer  *int64     `json:"memories_on_server"`
-	LastActivity      *time.Time `json:"last_activity"` // null for the pooled row of no project
+	LastActivity      *time.Time `json:"last_activity"` // null for the pooled row of no project, and for a project with no activity in the window
+	LastMemory        *time.Time `json:"last_memory"`   // when its latest memory happened, from the server; null when unknown
 	Series            []Point    `json:"series"`
 }
 

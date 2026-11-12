@@ -1,13 +1,13 @@
 {{/* views: projects */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widget: projects. Reads .V.projects.Tables.Projects (Project, Sessions, Prompts, PromptsWithMemory, UsedTurns, ReportedWrong, MemoriesOnServer, LastActivity, Series), .Pooled (Label, Totals, Min, Max) and .Page, through projectspage (ProjectsPage: Head, Note, Rows, Pooled, Foot; ProjectLine: Project, Label, Sessions, Prompts, Got, Used, Wrong, Memories, Last, Spark; Cell: Text, N, Class, Range). */}}
+{{/* widget: projects. Reads .V.projects.Tables.Projects (Project, Sessions, Prompts, PromptsWithMemory, UsedTurns, ReportedWrong, MemoriesOnServer, LastActivity, LastMemory, Series), .Pooled (Label, Totals, Min, Max) and .Page, through projectspage (ProjectsPage: Head, Note, Rows, Pooled, Foot; ProjectLine: Project, Label, Sessions, Prompts, Got, Used, Wrong, Memories, Last, LastMemory, Spark; Cell: Text, N, Class, Range). */}}
 {{with projectspage .}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if or .Rows .Pooled}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Project</th><th class="r">Sessions</th><th class="r">Prompts</th><th class="r">Got memory</th><th class="r">Used</th><th class="r">Reported wrong</th><th class="r">Memories</th><th>Last activity</th><th>Prompts per day</th></tr></thead>
+<thead><tr><th>Project</th><th class="r">Sessions</th><th class="r">Prompts</th><th class="r">Got memory</th><th class="r">Used</th><th class="r">Reported wrong</th><th class="r">Memories</th><th>Last activity</th><th>Last memory</th><th>Prompts per day</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr><td>{{template "projlink" .Project}}</td><td class="r">{{template "pcell" .Sessions}}</td><td class="r">{{template "pcell" .Prompts}}</td><td class="r">{{template "pcell" .Got}}</td><td class="r">{{template "pcell" .Used}}</td><td class="r">{{template "pcell" .Wrong}}</td><td class="r">{{template "pcell" .Memories}}</td><td>{{template "reltime" .Last}}</td><td>{{.Spark}}</td></tr>
-{{end}}{{with .Pooled}}<tr class="total"><td>{{.Label}}</td><td class="r">{{template "pcell" .Sessions}}</td><td class="r">{{template "pcell" .Prompts}}</td><td class="r">{{template "pcell" .Got}}</td><td class="r">{{template "pcell" .Used}}</td><td class="r">{{template "pcell" .Wrong}}</td><td class="r">{{template "pcell" .Memories}}</td><td></td><td></td></tr>
+{{range .Rows}}<tr><td>{{template "projlink" .Project}}</td><td class="r">{{template "pcell" .Sessions}}</td><td class="r">{{template "pcell" .Prompts}}</td><td class="r">{{template "pcell" .Got}}</td><td class="r">{{template "pcell" .Used}}</td><td class="r">{{template "pcell" .Wrong}}</td><td class="r">{{template "pcell" .Memories}}</td><td>{{template "reltime" .Last}}</td><td>{{template "reltime" .LastMemory}}</td><td>{{.Spark}}</td></tr>
+{{end}}{{with .Pooled}}<tr class="total"><td>{{.Label}}</td><td class="r">{{template "pcell" .Sessions}}</td><td class="r">{{template "pcell" .Prompts}}</td><td class="r">{{template "pcell" .Got}}</td><td class="r">{{template "pcell" .Used}}</td><td class="r">{{template "pcell" .Wrong}}</td><td class="r">{{template "pcell" .Memories}}</td><td></td><td></td><td></td></tr>
 {{end}}</tbody></table></div>
 {{end}}{{with .Foot}}<p class="xs muted">{{.}}</p>
 {{end}}{{template "card-close" .Head}}{{end}}

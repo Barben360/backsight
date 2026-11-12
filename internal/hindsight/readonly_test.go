@@ -102,7 +102,7 @@ func TestReadOnlyExposesOnlyReads(t *testing.T) {
 		got = append(got, typ.Method(i).Name)
 	}
 	sort.Strings(got)
-	want := []string{"BankStats", "DocumentUnits", "LLMStats", "LLMStatsWindow", "ListCreatedMemories", "MemoriesTimeseries", "Memory", "OperationsPage", "ProjectTags", "RetainOperations", "Version"}
+	want := []string{"BankStats", "DocumentUnits", "LLMStats", "LLMStatsWindow", "ListCreatedMemories", "MemoriesTimeseries", "Memory", "OperationsPage", "ProjectLastMemory", "ProjectTags", "RetainOperations", "Version"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("methods = %v, want %v", got, want)
 	}
@@ -627,5 +627,58 @@ func TestNewReadsAreGETOnly(t *testing.T) {
 	defer rec.mu.Unlock()
 	if !reflect.DeepEqual(rec.methods, []string{"GET", "GET", "GET"}) {
 		t.Fatalf("methods = %v, want three GETs", rec.methods)
+	}
+}
+
+// TestProjectLastMemory (issue 326): a project's latest memory by event
+// time, asked for one memory of its tag only; when none has an event time
+// the server lists none, and the latest by write time answers; a project
+// with no memory answers the zero time. Only the times are decoded.
+func TestProjectLastMemory(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		got []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.Path+"?"+q.Encode())
+		mu.Unlock()
+		switch q.Get("tags") + " " + q.Get("time_field") {
+		case "project:alpha mentioned_at":
+			_, _ = w.Write([]byte(`{"items":[{"id":"m1","text":"CANARY","mentioned_at":"2026-11-10T22:27:21.880695+00:00","updated_at":"2026-11-11T08:00:00Z"}]}`))
+		case "project:beta updated_at":
+			_, _ = w.Write([]byte(`{"items":[{"id":"m2","text":"CANARY","mentioned_at":null,"updated_at":"2026-11-09T07:00:00Z"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		}
+	}))
+	defer srv.Close()
+	ro, _ := NewReadOnly(srv.URL, "", "b", time.Second)
+	ctx := context.Background()
+	for _, c := range []struct {
+		project string
+		want    time.Time
+	}{
+		{"alpha", time.Date(2026, 11, 10, 22, 27, 21, 880695000, time.UTC)},
+		{"beta", time.Date(2026, 11, 9, 7, 0, 0, 0, time.UTC)},
+		{"gamma", time.Time{}},
+	} {
+		at, err := ro.ProjectLastMemory(ctx, c.project)
+		if err != nil || !at.Equal(c.want) {
+			t.Errorf("%s: last memory %v, %v; want %v", c.project, at, err, c.want)
+		}
+	}
+	want := []string{
+		"GET /v1/default/banks/b/memories/list?limit=1&tags=project%3Aalpha&tags_match=any_strict&time_field=mentioned_at",
+		"GET /v1/default/banks/b/memories/list?limit=1&tags=project%3Abeta&tags_match=any_strict&time_field=mentioned_at",
+		"GET /v1/default/banks/b/memories/list?limit=1&tags=project%3Abeta&tags_match=any_strict&time_field=updated_at",
+		"GET /v1/default/banks/b/memories/list?limit=1&tags=project%3Agamma&tags_match=any_strict&time_field=mentioned_at",
+		"GET /v1/default/banks/b/memories/list?limit=1&tags=project%3Agamma&tags_match=any_strict&time_field=updated_at",
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("requests = %q, want %q", got, want)
 	}
 }

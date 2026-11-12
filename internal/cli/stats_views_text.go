@@ -587,10 +587,19 @@ func projectRow(p metrics.ProjectRow, loc *time.Location) []string {
 	if p.Project == "" {
 		name = "(no project)"
 	}
-	return []string{name, n64(p.Sessions), n64(p.Prompts), n64(p.PromptsWithMemory), n64(p.UsedTurns), n64(p.ReportedWrong), mem, whenPtr(p.LastActivity, loc)}
+	// A project listed for its memories alone has no activity in the
+	// window, and a date the server did not give is unknown: "—", not
+	// "never" (issue 326).
+	when := func(t *time.Time) string {
+		if t == nil || t.IsZero() {
+			return "—"
+		}
+		return whenText(*t, loc)
+	}
+	return []string{name, n64(p.Sessions), n64(p.Prompts), n64(p.PromptsWithMemory), n64(p.UsedTurns), n64(p.ReportedWrong), mem, when(p.LastActivity), when(p.LastMemory)}
 }
 
-var projectHead = []string{"Project", "Sessions", "Prompts", "With memory", "Used turns", "Reported wrong", "Memories", "Last activity"}
+var projectHead = []string{"Project", "Sessions", "Prompts", "With memory", "Used turns", "Reported wrong", "Memories", "Last activity", "Last memory"}
 
 func projectsText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 	if t.Projects != nil {

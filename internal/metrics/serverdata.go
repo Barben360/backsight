@@ -23,6 +23,7 @@ type serverData struct {
 	YieldSeries         hindsight.Timeseries             // the series over the yield's span (yieldSeriesKey)
 	YieldLLM            map[string][]hindsight.LLMBucket // by operation, over the yield's span (yieldLLMPrefix)
 	Tags                []hindsight.TagCount
+	LastMemory          map[string]time.Time // lastMemoryKey: by project, the projects whose date was read (a project with none dated is absent)
 	Version             hindsight.Version
 	Pending, Processing int
 	Failed              []hindsight.Operation // newest first (sorted by updated time on read)
@@ -36,6 +37,49 @@ type serverData struct {
 	DoctorErr           error
 	Err                 map[string]error
 	Have                map[string]bool // the keys read successfully; a key in neither Have nor Err was not asked for
+}
+
+// lastMemoryKey is the server read of when each project's latest memory
+// happened: its tags, then one read per project, lastMemoryReads at a time.
+// A project whose read fails has no date; the key fails only when its tags
+// do.
+const (
+	lastMemoryKey   = "last_memory"
+	lastMemoryReads = 4
+)
+
+// lastMemories reads s's projects and when each one's latest memory
+// happened (see lastMemoryKey).
+func lastMemories(ctx context.Context, s ServerReader) (map[string]time.Time, error) {
+	tags, err := s.ProjectTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		out = map[string]time.Time{}
+		sem = make(chan struct{}, lastMemoryReads)
+	)
+	for _, t := range tags {
+		p, ok := strings.CutPrefix(t.Tag, projectTagPrefix)
+		if !ok || p == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if at, err := s.ProjectLastMemory(ctx, p); err == nil && !at.IsZero() {
+				mu.Lock()
+				out[p] = at
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return out, nil
 }
 
 // memoryKeyPrefix starts the server read of one memory: memory:<id>.
@@ -263,6 +307,11 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 			calls[key] = func(ctx context.Context) error {
 				v, err := s.ProjectTags(ctx)
 				return keep(err, func() { d.Tags = v })
+			}
+		case lastMemoryKey:
+			calls[key] = func(ctx context.Context) error {
+				v, err := lastMemories(ctx, s)
+				return keep(err, func() { d.LastMemory = v })
 			}
 		case "version":
 			calls[key] = func(ctx context.Context) error {

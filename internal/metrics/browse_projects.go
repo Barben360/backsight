@@ -9,14 +9,16 @@ import (
 	"github.com/Barben360/backsight/internal/shellword"
 )
 
-// Projects is the projects view: one row per project the window's sessions
-// belong to (the session's project, as the activity metrics read it), with
-// the pooled totals. With q.ID it is one project's page.
+// Projects is the projects view: one row per project the server holds
+// memories for and per project the window's sessions belong to (the
+// session's project, as the activity metrics read it), with the pooled
+// totals (issue 326). With q.ID it is one project's page.
 //
 // Order: --sort last_activity (the default), sessions or prompts, largest
-// or latest first, then by project name; or project, by name. Rows are
-// paged by limit and offset; the pooled row covers every project, not the
-// page.
+// or latest first, then by project name; or project, by name. Under
+// last_activity the projects with no activity in the window come last,
+// latest memory first. Rows are paged by limit and offset; the pooled row
+// covers every project, not the page.
 func Projects(ctx context.Context, s Source, q Query) (Result, error) {
 	if id := strings.TrimSpace(q.ID); id != "" {
 		return projectPage(ctx, s, q, id)
@@ -25,7 +27,7 @@ func Projects(ctx context.Context, s Source, q Query) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return runView(ctx, s, q, "projects", []string{"tags"}, func(e env, r *Result) error {
+	return runView(ctx, s, q, "projects", []string{"tags", lastMemoryKey}, func(e env, r *Result) error {
 		rows, err := projectRows(e, e.q.Window)
 		if err != nil {
 			return err
@@ -54,6 +56,9 @@ func sortProjects(rows []ProjectRow, key string) {
 			if c := cmpTimeDesc(a.LastActivity, b.LastActivity); c != 0 {
 				return c
 			}
+			if c := cmpTimeDesc(a.LastMemory, b.LastMemory); c != 0 {
+				return c
+			}
 		}
 		return strings.Compare(a.Project, b.Project)
 	})
@@ -75,11 +80,20 @@ var pooledColumns = []struct {
 // pooledLabel names the pooled row.
 const pooledLabel = "all projects pooled"
 
-// pooledRow totals rows (the projects with at least one session) and gives
-// each numeric column's smallest and largest value among them.
+// pooledRow totals rows and gives each numeric column's smallest and
+// largest value among the projects with at least one session in the
+// window (a project listed for its memories alone would make every lowest
+// 0); its last memory is the latest of the rows'.
 func pooledRow(rows []ProjectRow) PooledRow {
 	p := PooledRow{Label: pooledLabel, Min: map[string]float64{}, Max: map[string]float64{}}
+	var active []ProjectRow
 	for _, r := range rows {
+		if r.Sessions > 0 {
+			active = append(active, r)
+		}
+		if r.LastMemory != nil && (p.Totals.LastMemory == nil || r.LastMemory.After(*p.Totals.LastMemory)) {
+			p.Totals.LastMemory = r.LastMemory
+		}
 		p.Totals.Sessions += r.Sessions
 		p.Totals.Prompts += r.Prompts
 		p.Totals.PromptsWithMemory += r.PromptsWithMemory
@@ -99,7 +113,7 @@ func pooledRow(rows []ProjectRow) PooledRow {
 		p.Totals.Series = []Point{}
 	}
 	for _, c := range pooledColumns {
-		for i, r := range rows {
+		for i, r := range active {
 			v := float64(c.of(r))
 			if i == 0 || v < p.Min[c.name] {
 				p.Min[c.name] = v
@@ -113,11 +127,15 @@ func pooledRow(rows []ProjectRow) PooledRow {
 }
 
 // projectRows are the window's projects, one per project of its sessions
-// (a session with no project is in none): its sessions, typed prompts and
-// those that got memory, the turns where Claude used memory, the memories
-// reported wrong or outdated, the latest activity, the memories the server
-// holds for it (null when the tags were not read), and a series of its
-// typed prompts per bucket (value; the sum of the series is the prompts).
+// (a session with no project is in none) and one per project the server
+// holds memories for (none when the tags were not read; under a project
+// filter, that project's alone): its sessions, typed prompts and those
+// that got memory, the turns where Claude used memory, the memories
+// reported wrong or outdated, the latest activity (null with none in the
+// window), the memories the server holds for it (null when the tags were
+// not read), when its latest memory happened (null when unknown), and a
+// series of its typed prompts per bucket (value; the sum of the series is
+// the prompts).
 func projectRows(e env, w Window) ([]ProjectRow, error) {
 	sessions, err := sessionRows(e, w)
 	if err != nil {
@@ -125,21 +143,25 @@ func projectRows(e env, w Window) ([]ProjectRow, error) {
 	}
 	buckets := w.Buckets()
 	byProject := map[string]*ProjectRow{}
-	of := map[string]*ProjectRow{} // session → its project's row
-	for _, s := range sessions {
-		if s.Project == "" {
-			continue
-		}
-		r := byProject[s.Project]
+	rowOf := func(project string) *ProjectRow {
+		r := byProject[project]
 		if r == nil {
-			r = &ProjectRow{Project: s.Project, Series: make([]Point, len(buckets))}
+			r = &ProjectRow{Project: project, Series: make([]Point, len(buckets))}
 			for i, b := range buckets {
 				r.Series[i] = pointOf(w, b.Key)
 				r.Series[i].Value = ptr(0.0)
 				r.Series[i].Partial = b.Partial
 			}
-			byProject[s.Project] = r
+			byProject[project] = r
 		}
+		return r
+	}
+	of := map[string]*ProjectRow{} // session → its project's row
+	for _, s := range sessions {
+		if s.Project == "" {
+			continue
+		}
+		r := rowOf(s.Project)
 		of[s.ID] = r
 		r.Sessions++
 		r.Prompts += s.Prompts
@@ -183,10 +205,23 @@ WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND (reason IS NULL OR 
 		}
 	}
 	tags := tagCounts(e)
+	for p := range tags {
+		if p != "" && (e.q.Project == "" || p == e.q.Project) {
+			rowOf(p)
+		}
+	}
+	var last map[string]time.Time
+	if serverReason(e, lastMemoryKey) == "" {
+		last = e.srv.LastMemory
+	}
 	out := make([]ProjectRow, 0, len(byProject))
 	for _, r := range byProject {
 		if tags != nil {
 			r.MemoriesOnServer = ptr(tags[r.Project])
+		}
+		if at, ok := last[r.Project]; ok {
+			at = at.In(viewLoc(e))
+			r.LastMemory = &at
 		}
 		out = append(out, *r)
 	}
