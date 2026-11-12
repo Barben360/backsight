@@ -44,7 +44,8 @@ import (
 // the first-session notice in Codex's words, $backsight:<name>, none of Claude Code's syntax, AGENTS.md
 // for the retro; Claude Code's texts unchanged; v20 (issue 328): the recall header says a line
 // ending in … is shortened and memory_read has the rest; v21 (issue 325 point 10): a project's own
-// convention, decision or correction wins over a conflicting user-wide rule in that project.
+// standing convention, decision or correction wins over a conflicting user-wide rule in that project, a
+// past event never does.
 const Version = "v21"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
@@ -69,7 +70,7 @@ const (
 	shortGuideHead = "The user's long-term memory of past sessions, all projects; each tool's description says when and how to use it. " +
 		"Search before a factual question, a recommendation or a new task. "
 	shortGuideTail = "Store decisions, corrections, conventions, pitfalls and lessons with `memory_store`. " +
-		"User-wide rules override conflicting project facts, except a project's own convention, decision or correction, which wins in that project."
+		"User-wide rules override conflicting project facts, except a project's own standing convention, decision or correction, which wins there; a past event never does."
 	emptySearch  = "An empty search: one line «" + NothingLine + "». "
 	reminderHead = "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, " +
 		"call `memory_search` first (an issue, PR or link in it: read it first, then search its content)"

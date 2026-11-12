@@ -135,7 +135,7 @@ func TestTextsFollowFeedback(t *testing.T) {
 // override in the MCP instructions, the conversation's rules in the guide.
 // exceptionRule is the precedence's exception (v21, issue 325 point 10):
 // a project's own rule wins over a conflicting user-wide one there.
-const exceptionRule = "except a project's own convention, decision or correction, which wins in that project"
+const exceptionRule = "except a project's own standing convention, decision or correction, which wins there; a past event never does"
 
 func TestGuideCoversTheSpecPoints(t *testing.T) {
 	for _, c := range []struct {
@@ -513,7 +513,7 @@ var wordings = map[string]string{
 	"v18": "e3d71eb6c1dbb23e1ea4c64b3c8e60d322798803ff0f86d21c4fb762fce7b7c6",
 	"v19": "c63d54bcb944357eabf2debf721fd2a25976244deecfa69066d2227ce25e77f3",
 	"v20": "7289e3614a9bd8c5a2e28e387df92833e36f7b0a9538d1a06ac872cdb29c68b9",
-	"v21": "31a2b7766313000b53988e1d9ac5dde0ba1c4e43935f85a1bba5b92a4cd262d2",
+	"v21": "87aeeade9b320deb89f6666fd28f8bdc1d632d8eb3fb0f20b7d7488eec2b9f97",
 }
 
 func wordingHash() string {
