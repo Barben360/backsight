@@ -877,6 +877,21 @@ func TestStaleCounts(t *testing.T) {
 	}
 }
 
+// The never-used count says the shows it needs (feedback.stale_shows):
+// a memory shown 8 times and never used, the most shown of a window, is
+// not counted at 10, and the count must say why.
+func TestStaleNeverUsedSaysItsThreshold(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"eight": {Shown: 8}, "ten": {Shown: 10}}})
+	s := qualityOf(x, x.query(7))["stale.never_used"]
+	if val(s) != 1 {
+		t.Errorf("never used = %v, want 1 (shown 10 times; 8 is under the threshold)", val(s))
+	}
+	if got, ok := s.Extra["min_shows"].(int64); !ok || got != 10 {
+		t.Errorf("extra.min_shows = %#v, want 10 (feedback.stale_shows)", s.Extra["min_shows"])
+	}
+}
+
 // TestFeedbackOff: with feedback off, or on a server-only host, every
 // quality metric reads no_data with its reason, whatever the journal holds.
 func TestFeedbackOff(t *testing.T) {

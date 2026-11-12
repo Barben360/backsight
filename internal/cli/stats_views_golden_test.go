@@ -699,7 +699,7 @@ func TestStatsBlockText(t *testing.T) {
 	wantLines(t, "cost", text("cost", "--days", "60"),
 		"week of 2026-08-31: 3 of 21 (14 %, 5 to 35 %), 10,500 tokens, 3,500 tokens per useful memory",
 		"older days come from the days this PC recorded, from 2026-08-31",
-		"week of 2026-09-07: not complete yet",
+		"week of 2026-09-07: not complete until 2026-10-11 (its last day, 2026-09-13, plus 28 days)",
 		"week of 2026-08-24: the new memories of that week were not recorded",
 	)
 
@@ -826,9 +826,19 @@ func TestStatsBlockTextShapes(t *testing.T) {
 	wantLines(t, "yield", viewText(noColor, y, false),
 		"week of 2026-09-21: 12 of 40 (30 %, 18 to 45 %), 52,000 tokens, 4,333 tokens per useful memory",
 		"week of 2026-09-28: 3 of 15, too few for a share",
-		"week of 2026-10-05: not complete yet",
+		"week of 2026-10-05: not complete until 2026-11-08 (its last day, 2026-10-11, plus 28 days)",
 		"week of 2026-09-14: the new memories of that week were not recorded",
 		"shares withheld: the list of which memories are new is still catching up (3 not placed yet)",
+	)
+
+	// no week old enough yet: the headline says so and the weeks still say
+	// when each can be judged
+	young := result("cost", "memory.yield", metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonNoCompleteWeek, Series: []metrics.Point{
+		{Week: "2026-10-19", Complete: &[]bool{false}[0]},
+	}})
+	wantLines(t, "young yield", viewText(noColor, young, false),
+		"Memories that proved useful — (no data: no week is old enough yet)",
+		"week of 2026-10-19: not complete until 2026-11-22 (its last day, 2026-10-25, plus 28 days)",
 	)
 
 	// a typical time from 20 sessions, the slowest 1 in 20 from 100

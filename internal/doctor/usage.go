@@ -179,7 +179,7 @@ func checkSearchRate(r, p stats.Report) Check {
 		return c
 	}
 	now, before := float64(r.Injections.Searched)/float64(ni), float64(p.Injections.Searched)/float64(np)
-	c.Summary = fmt.Sprintf("search after injection %.0f%% this week, %.0f%% last week", 100*now, 100*before)
+	c.Summary = fmt.Sprintf("injections followed by a search %.0f%% this week, %.0f%% last week", 100*now, 100*before)
 	if now < before/2 {
 		c.Status, c.Fix = Warn, "backsight stats 14 and backsight why: check what recall injects"
 	}

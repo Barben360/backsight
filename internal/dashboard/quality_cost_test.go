@@ -1274,8 +1274,8 @@ func TestCostThisPCIsUnchanged(t *testing.T) {
 			t.Errorf("the main of this PC's page changed: sha256 %s, want %s", sum, want)
 		}
 	}
-	pin(plain, "55b9c03126f9366c8fdcc9fd847fe5ee9f07c7ad3a5ee4bc35372850458a8bd9")
-	pin(render(false, nil), "4ef72f7269615a3f05c94cd28782f65e9b65d6a1d035bc42bdc02864b75ae7c0")
+	pin(plain, "751382b1bc15ff98a8a3988dd6c460e2f4966e1694434805e07747cf80b12fb8")
+	pin(render(false, nil), "7ab9cc687f2ecad7226e6646a6847c1fece20d173e693e59f56e77097852f4ba")
 	// The latency card of this PC's page is still two lines and the limit.
 	n := parseHTML(t, plain)
 	if got := len(cardOf(t, n, "w-recall-latency").find("polyline")); got != 2 {
