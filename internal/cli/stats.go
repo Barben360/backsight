@@ -499,6 +499,8 @@ func statsLines(st termstyle.Style, r statsResult) string {
 	}
 	fmt.Fprintf(&b, "Searches     %d of %d prompts ≥ %d chars (%s); replies after a search: %s\n",
 		r.Turns.Searched, r.Turns.Long, stats.LongPrompt, pct(r.Turns.Searched, r.Turns.Long), counts(r.Turns.Credit))
+	fmt.Fprintf(&b, "Per recall   memories injected %s; left out above the floor: %d by the count, %d by the size; shortened %d\n",
+		byInjectedText(p.ByInjected), p.CutCount, p.CutSize, p.Shortened)
 	i := r.Injections
 	fmt.Fprintf(&b, "Injections   %d: followed by a search %s, credited %s, contradicted next prompt %d\n",
 		i.N, pct(i.Searched, i.N), pct(i.Credited, i.N), i.Contradicted)
@@ -580,4 +582,18 @@ func statsLines(st termstyle.Style, r statsResult) string {
 		fmt.Fprintf(&b, "Parity       %s\n", stats.ParityOverall(r.Parity))
 	}
 	return b.String()
+}
+
+// byInjectedText is the recalls by how many memories they injected, the
+// fewest first: "1: 51, 2: 29, 3: 12"; "none" without an injection.
+func byInjectedText(by map[int]int) string {
+	if len(by) == 0 {
+		return "none"
+	}
+	ns := slices.Sorted(maps.Keys(by))
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = fmt.Sprintf("%d: %d", n, by[n])
+	}
+	return strings.Join(parts, ", ")
 }

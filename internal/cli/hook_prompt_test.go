@@ -922,7 +922,7 @@ func TestBoostChangedSetFromTheHits(t *testing.T) {
 		{"pushed out of the list", []recall.Hit{hit("m1", 1, 0), hit("m3", 3, 0), hit("m4", 4, 0)}, true},
 		{"pushed out after the picks", []recall.Hit{hit("m1", 1, 0), hit("m2", 2, 0), hit("m3", 3, 0), hit("m5", 5, 0)}, false},
 	} {
-		_, chosen := selectHits(c.hits, rc, none)
+		chosen := selectHits(c.hits, rc, none).Chosen
 		if got := boostChangedSet(c.hits, chosen, rc, none); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}

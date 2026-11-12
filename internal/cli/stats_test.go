@@ -589,3 +589,16 @@ func TestStatsCountsConfirmedApartFromUsed(t *testing.T) {
 		t.Errorf("json: %d\n%s", code, out)
 	}
 }
+
+// The report says how many memories each recall injected and what the
+// per-prompt limits left out (issue 328), from what the prompt hook wrote.
+func TestStatsSaysWhatThePromptLimitsLeftOut(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.6, 0.6, 0.6, 0.6, 0.6)
+	prompt(t, home, "s1", longPrompt)
+	withClock(t, time.Now().Add(time.Minute)) // the window ends after the event
+	_, out, _ := run(t, "stats", "1", "--no-splash", "--color", "never")
+	if !strings.Contains(out, "Per recall   memories injected 3: 1; left out above the floor: 2 by the count, 0 by the size; shortened 0") {
+		t.Fatalf("stats:\n%s", out)
+	}
+}

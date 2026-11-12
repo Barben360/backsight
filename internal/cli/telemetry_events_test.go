@@ -102,6 +102,46 @@ func TestPromptEmptyReasons(t *testing.T) {
 	})
 }
 
+// The prompt event says what the limits left out (issue 328): memories
+// cut by the count, by the size, and shown as a shortened headline.
+func TestPromptEventSaysWhatTheLimitsLeftOut(t *testing.T) {
+	t.Run("by the count", func(t *testing.T) {
+		home := hookHome(t)
+		recallAnswer = hits(0.6, 0.6, 0.6, 0.6, 0.6)
+		prompt(t, home, "s1", longPrompt)
+		ev := lastPrompt(t, home)
+		if ev["injected"] != float64(3) || ev["cut_count"] != float64(2) {
+			t.Fatalf("event %v", ev)
+		}
+		if _, has := ev["cut_size"]; has {
+			t.Errorf("nothing was cut by size: %v", ev)
+		}
+	})
+	t.Run("by the size", func(t *testing.T) {
+		home := hookHome(t)
+		appendConfig(t, home, "[recall]\nprompt_chars = 70")
+		recallAnswer = hits(0.9, 0.9, 0.9, 0.9)
+		prompt(t, home, "s1", longPrompt)
+		ev := lastPrompt(t, home)
+		if ev["injected"] != float64(1) || ev["cut_size"] != float64(3) {
+			t.Fatalf("event %v", ev)
+		}
+		if _, has := ev["cut_count"]; has {
+			t.Errorf("nothing was cut by the count: %v", ev)
+		}
+	})
+	t.Run("shortened", func(t *testing.T) {
+		home := hookHome(t)
+		recallAnswer = `[{"id":"m1","text":"` + strings.Repeat("billing keeps PostgreSQL 16 ", 80) + `","type":"observation","tags":["project:billing"],"scores":{"reranker":0.9}},
+			{"id":"m2","text":"Billing deploys are frozen on Fridays.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`
+		prompt(t, home, "s1", longPrompt)
+		ev := lastPrompt(t, home)
+		if ev["injected"] != float64(2) || ev["shortened"] != float64(1) {
+			t.Fatalf("event %v", ev)
+		}
+	})
+}
+
 func TestStoreEvents(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))

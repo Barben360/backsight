@@ -41,6 +41,9 @@ type Event struct {
 		OK bool `json:"ok"`
 	}
 	Injected     int
+	CutCount     int `json:"cut_count"` // prompt (issue 328)
+	CutSize      int `json:"cut_size"`
+	Shortened    int
 	MS           int
 	Detector     *string
 	Chars        int
@@ -181,10 +184,17 @@ type Report struct {
 	To   time.Time `json:"to"`
 
 	Prompts struct {
-		Human         int            `json:"human"`
-		Machine       int            `json:"machine"`
-		Recalls       int            `json:"recalls"`
-		WithHits      int            `json:"with_hits"` // recalls that injected something
+		Human    int `json:"human"`
+		Machine  int `json:"machine"`
+		Recalls  int `json:"recalls"`
+		WithHits int `json:"with_hits"` // recalls that injected something
+		// ByInjected: recalls by how many memories they injected; CutCount,
+		// CutSize, Shortened: what the per-prompt limits left out, summed
+		// over the recalls (issue 328).
+		ByInjected    map[int]int    `json:"by_injected"`
+		CutCount      int            `json:"cut_count"`
+		CutSize       int            `json:"cut_size"`
+		Shortened     int            `json:"shortened"`
 		Skips         map[string]int `json:"skips"`
 		P50MS         int            `json:"p50_ms"` // prompt hook, recalls only
 		P95MS         int            `json:"p95_ms"`
@@ -324,7 +334,7 @@ func isMemoryTool(name string) bool {
 func Compute(events []Event, from, to time.Time) Report {
 	var r Report
 	r.From, r.To = from, to
-	r.Prompts.Skips, r.Turns.Credit, r.Prompts.ByLang = map[string]int{}, map[string]int{}, map[string][2]int{}
+	r.Prompts.Skips, r.Turns.Credit, r.Prompts.ByLang, r.Prompts.ByInjected = map[string]int{}, map[string]int{}, map[string][2]int{}, map[int]int{}
 	r.Gate, r.Tools, r.Live, r.Retains, r.HookFailures, r.Unknown = map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
 	r.Feedback.Checks, r.Feedback.Verdicts, r.Feedback.Flags = map[string]int{}, map[string]int{}, map[string]int{}
 	searched, stored, bySearch := map[turn]bool{}, map[turn]bool{}, map[turn]bool{}
@@ -386,7 +396,11 @@ func Compute(events []Event, from, to time.Time) Report {
 			if e.Injected > 0 {
 				r.Prompts.WithHits++
 				l[1]++
+				r.Prompts.ByInjected[e.Injected]++
 			}
+			r.Prompts.CutCount += e.CutCount
+			r.Prompts.CutSize += e.CutSize
+			r.Prompts.Shortened += e.Shortened
 			if e.Lang != "" {
 				r.Prompts.ByLang[e.Lang] = l
 			}

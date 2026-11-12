@@ -317,8 +317,10 @@ func (h *hookEnv) userPrompt() []byte {
 	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
-		text, chosen, flags, items, res, empty := h.promptRecall(st, prompt, reason)
+		sel, flags, items, res, empty := h.promptRecall(st, prompt, reason)
+		text, chosen := sel.Block, sel.Chosen
 		ev.Empty = empty
+		ev.CutCount, ev.CutSize, ev.Shortened = sel.CutCount, sel.CutSize, sel.Shortened
 		ev.Scopes = map[string]telemetry.ScopeResult{}
 		failed := len(res.Scopes) > 0
 		for name, m := range res.Scopes {
@@ -454,14 +456,15 @@ func (h *hookEnv) sticky() session.Sticky {
 // empty says why nothing was chosen (the prompt event's empty field):
 // error (the search failed, whatever the bank holds), no_candidates,
 // below_floor, all_seen or capped; "" when something was.
-func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block string, chosen []recall.Hit, flags []string, items []session.Injection, res recall.Result, empty string) {
+func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (sel selection, flags []string, items []session.Injection, res recall.Result, empty string) {
 	_, res = h.searchPrompt(prompt)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
 	skip := func(hit recall.Hit) bool {
 		return slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass)
 	}
-	block, chosen = selectHits(res.Hits, rc, skip)
+	sel = selectHits(res.Hits, rc, skip)
+	chosen := sel.Chosen
 	if len(chosen) == 0 {
 		switch {
 		case len(res.Hits) == 0 && searchFailed(res):
@@ -475,7 +478,7 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block str
 		default:
 			empty = "capped"
 		}
-		return "", nil, nil, nil, res, empty
+		return sel, nil, nil, res, empty
 	}
 	if boostChangedSet(res.Hits, chosen, rc, skip) {
 		flags = []string{feedback.FlagSetChanged}
@@ -485,7 +488,7 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block str
 	for _, hit := range chosen {
 		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
 	}
-	return block, chosen, flags, items, res, ""
+	return sel, flags, items, res, ""
 }
 
 // searchFailed: every scope failed (server error, timeout, refused key), so
@@ -530,7 +533,7 @@ func boostChangedSet(hits, chosen []recall.Hit, rc config.Recall, skip func(reca
 		return false
 	}
 	slices.SortFunc(plain, func(a, b recall.Hit) int { return cmp.Compare(a.RankWithoutBoost, b.RankWithoutBoost) })
-	_, picked := selectHits(plain, rc, skip)
+	picked := selectHits(plain, rc, skip).Chosen
 	if len(picked) != len(chosen) {
 		return true
 	}
@@ -609,31 +612,63 @@ func promptLang(prompt string) string {
 	return "en"
 }
 
-// selectHits keeps up to PromptHits hits that skip does not drop, within
-// PromptChars, and renders the injected block.
-func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool) (string, []recall.Hit) {
+// headlineChars is the text of a memory shown shortened: about a
+// sentence, enough to tell what it is about, its id kept for memory_read.
+// minTextChars is the least text a line is worth.
+const (
+	headlineChars = 160
+	minTextChars  = 60
+)
+
+// selection is what selectHits kept and what the limits left out (issue
+// 328): the prompt event's cut_count, cut_size and shortened.
+type selection struct {
+	Block     string
+	Chosen    []recall.Hit
+	CutCount  int // above the floor, left out by the count
+	CutSize   int // left out because not even a headline fitted
+	Shortened int // shown as a headline
+}
+
+// selectHits keeps, in rank order, the hits that skip does not drop: up to
+// PromptHits, and up to PromptHitsMax when each extra one's reranker score
+// is at least PromptConfidentScore, within PromptChars. A hit that does
+// not fit whole is shown as a headline ending with "…" (memory_read has
+// the rest); when not even that fits, the next one is still tried.
+func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool) selection {
+	var s selection
 	var b strings.Builder
-	var chosen []recall.Hit
+	used := 0
 	for _, hit := range hits {
-		if len(chosen) == rc.PromptHits {
-			break
-		}
 		if skip(hit) {
 			continue
 		}
-		room := rc.PromptChars - len([]rune(b.String()))
-		prefix, suffix := "- "+memoryTag(hit.Project, hit.ID)+" ", age(hit.Age)+"\n"
-		textRoom := room - len([]rune(prefix)) - len([]rune(suffix))
-		if textRoom < 60 {
-			break
+		if n := len(s.Chosen); n >= rc.PromptHits && (n >= rc.PromptHitsMax || hit.Reranker < rc.PromptConfidentScore) {
+			s.CutCount++
+			continue
 		}
-		b.WriteString(prefix + clip(hit.Text, textRoom) + suffix)
-		chosen = append(chosen, hit)
+		prefix, suffix := "- "+memoryTag(hit.Project, hit.ID)+" ", age(hit.Age)+"\n"
+		textRoom := rc.PromptChars - used - len([]rune(prefix)) - len([]rune(suffix))
+		text := strings.Join(strings.Fields(hit.Text), " ")
+		switch {
+		case len([]rune(text)) <= textRoom:
+		case textRoom >= minTextChars:
+			text = clip(text, min(textRoom, headlineChars))
+			s.Shortened++
+		default:
+			s.CutSize++
+			continue
+		}
+		line := prefix + text + suffix
+		b.WriteString(line)
+		used += len([]rune(line))
+		s.Chosen = append(s.Chosen, hit)
 	}
-	if len(chosen) == 0 {
-		return "", nil
+	if len(s.Chosen) == 0 {
+		return selection{CutCount: s.CutCount, CutSize: s.CutSize}
 	}
-	return instructions.RecallHeader + "\n" + strings.TrimRight(b.String(), "\n"), chosen
+	s.Block = instructions.RecallHeader + "\n" + strings.TrimRight(b.String(), "\n")
+	return s
 }
 
 var (
