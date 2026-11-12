@@ -195,6 +195,24 @@ A hidden or reported memory that a session of another project retired shows both
 
 `backsight forget --restore <id>` undoes a retirement. The command reads local files only and changes nothing in the memory; `--json` gives the same lists.
 
+## Checking memories of pull requests and issues
+
+A memory saying "PR #12 is open, not merged" is true the day it is written and wrong once the pull request is merged; nothing in the memory notices. This command checks them against GitHub:
+
+```sh
+backsight memory states
+```
+
+It reads the delivered-state memories that name a GitHub pull request or issue and say it is still open, asks GitHub through the `gh` CLI (install it and run `gh auth login` first), and lists those GitHub says were merged or closed since, each with its item, the date and `backsight forget <id>`. A memory naming an item that is still open is counted as still open. A memory it cannot be sure of is skipped and counted, never listed: one that also says the item was merged since, one about a pull request closed without a merge, or a bare `PR #12` it cannot place in exactly one of your repositories.
+
+To retire everything listed:
+
+```sh
+backsight memory states --retire
+```
+
+Each one is retired as `backsight forget` would, with GitHub's answer as the reason; `backsight forget --restore <id>` undoes one. Nothing runs on its own: the command changes the memory only with `--retire`.
+
 ## Pausing memory
 
 | Command | Effect |

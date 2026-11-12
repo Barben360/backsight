@@ -58,6 +58,7 @@ backsight memory	full
 backsight memory notes	full
 backsight memory scan	full
 backsight memory stale	full
+backsight memory states	full
 backsight paths	full
 backsight pause	full
 backsight projects	full
