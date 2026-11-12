@@ -1217,3 +1217,62 @@ func TestPointerLineOnlyWhereARecallWasDue(t *testing.T) {
 		t.Error("a follow-up was logged as a pointer skip")
 	}
 }
+
+// A key straddling a cut is redacted whole before the cut: its prefix
+// never leaves as a recall query nor stays in the session's vocabulary
+// (decision 0088).
+func TestAKeyAcrossTheCutIsRedactedBeforeIt(t *testing.T) {
+	key := "gh" + "p_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	// recall.query_chars is 300: the key starts at 289, 11 characters in.
+	prompt(t, home, "s1", strings.Repeat("billing postgres ", 17)+key+" which version?")
+	if len(recallQueries) == 0 {
+		t.Fatal("the prompt was not searched")
+	}
+	for _, q := range recallQueries {
+		if strings.Contains(q, "ghp_") || strings.Contains(q, "a1B2c3") {
+			t.Errorf("the key's prefix left as a query: %q", q)
+		}
+	}
+	// The vocabulary is the first 4000 characters: the key starts at 3980.
+	prompt(t, home, "s2", strings.Repeat("billing ", 497)+"pgx "+key+" which version?")
+	st, _ := sessions(home).Load("s2")
+	if len(st.LastWords) == 0 {
+		t.Fatal("no vocabulary recorded")
+	}
+	for _, w := range st.LastWords {
+		if strings.Contains(w, "a1b2c3") {
+			t.Errorf("the key's prefix kept in the session: %q", w)
+		}
+	}
+}
+
+// The end of the last reply is redacted before it is cut: a key across
+// the cut leaves no tail behind (decision 0088).
+func TestStopRedactsTheReplyBeforeCuttingIt(t *testing.T) {
+	key := "gh" + "p_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	home := hookHome(t)
+	// The last 1000 characters hold the key's last 20.
+	fire(t, "stop", map[string]any{"session_id": "s1", "cwd": home, "last_assistant_message": "use " + key + " " + strings.Repeat("y", 979)})
+	st, _ := sessions(home).Load("s1")
+	if !strings.HasSuffix(st.LastAssistant, "yyy") || strings.Contains(st.LastAssistant, "e5F6a1B2") {
+		t.Errorf("the key's tail was kept: %q", st.LastAssistant[:40])
+	}
+}
+
+// When redaction shrinks the window (a long key replaced), it grows: a
+// key at the window's first end is then seen whole, not cut there.
+func TestRedactHeadGrowsAWindowRedactionShrank(t *testing.T) {
+	pem := "-----BEGIN " + "RSA PRIVATE KEY-----\n" + strings.Repeat("MIIEowIBAAKCAQEAx7Lm3XwP7rT0vN8yB2cD4eF6gH1jK5lM9nQ0sU7wY0aZ3bE6\n", 108) + "-----END " + "RSA PRIVATE KEY-----"
+	key := "gh" + "p_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	// The first window, 4000+4096 runes, ends 6 characters into the key.
+	s := pem + " " + strings.Repeat("x", 4000+redactMargin-len(pem)-1-6) + " " + key + " end"
+	got := redactHead(s, 4000)
+	if strings.Contains(got, "ghp_") || strings.Contains(got, "MIIEow") || !strings.Contains(got, "[redacted:github_token]") {
+		t.Errorf("%q", got[max(0, len(got)-60):])
+	}
+	if got := redactTail("a "+key, 10); strings.Contains(got, "e5F6") {
+		t.Errorf("tail %q", got)
+	}
+}

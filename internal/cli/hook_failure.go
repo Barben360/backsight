@@ -130,8 +130,10 @@ func (h *hookEnv) toolFailure() []byte {
 	}
 
 	// The query: what failed, then why. recallQuery strips code fences,
-	// cuts to recall.query_chars and redacts secrets.
-	q := h.recallQuery(tool + " failed: " + clip(failureCommand(h.in.ToolInput), failureCmdChars) + "\n" + body)
+	// cuts to recall.query_chars and redacts secrets; the command is
+	// redacted before its own cut (a key across it would leave its prefix).
+	cmd := clip(redactHead(strings.Join(strings.Fields(failureCommand(h.in.ToolInput)), " "), failureCmdChars), failureCmdChars)
+	q := h.recallQuery(tool + " failed: " + cmd + "\n" + body)
 	var related []string
 	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
@@ -114,6 +115,43 @@ func head(s string, n int) string {
 	return s
 }
 
+// redactMargin is how far past a cut the text is redacted with what is
+// kept: a secret straddling the cut is seen whole, and one longer than
+// that is still past its pattern's minimum length where it is cut.
+// Redacting a whole long paste would cost a hook too much.
+const redactMargin = 4096
+
+// redactHead is s's first n runes, redacted before the cut so that a key
+// straddling it never stays as its prefix (decision 0088). The window
+// grows when redaction shrank it to near n runes (long keys replaced),
+// so that the cut never lands within redactMargin/2 of its end.
+func redactHead(s string, n int) string {
+	for w := n + redactMargin; ; w *= 2 {
+		cut := head(s, w)
+		red, _ := redact.Text(cut)
+		if len(cut) == len(s) || utf8.RuneCountInString(red) >= n+redactMargin/2 {
+			return head(red, n)
+		}
+	}
+}
+
+// redactTail is s's last n runes, redacted before the cut, as redactHead.
+func redactTail(s string, n int) string {
+	tail := func(s string, n int) string {
+		if r := []rune(s); len(r) > n {
+			return string(r[len(r)-n:])
+		}
+		return s
+	}
+	for w := n + redactMargin; ; w *= 2 {
+		cut := tail(s, w)
+		red, _ := redact.Text(cut)
+		if len(cut) == len(s) || utf8.RuneCountInString(red) >= n+redactMargin/2 {
+			return tail(red, n)
+		}
+	}
+}
+
 func words(s string) []string {
 	s = head(s, maxWordChars)
 	var out []string
@@ -171,14 +209,11 @@ func pointerRefs(prompt string) []string {
 	return refs
 }
 
-// recallQuery: the prompt without fenced code, first QueryChars runes.
+// recallQuery: the prompt without fenced code, first QueryChars runes,
+// redacted before the cut: a pasted key never leaves as a query, nor as
+// its prefix.
 func (h *hookEnv) recallQuery(prompt string) string {
-	q := strings.TrimSpace(fenceRE.ReplaceAllString(prompt, " "))
-	if r := []rune(q); len(r) > h.cfg.Recall.QueryChars {
-		q = string(r[:h.cfg.Recall.QueryChars])
-	}
-	q, _ = redact.Text(q) // a pasted key never leaves as a query
-	return q
+	return redactHead(strings.TrimSpace(fenceRE.ReplaceAllString(prompt, " ")), h.cfg.Recall.QueryChars)
 }
 
 // decide is when to recall (C12): the first prompt, then after MinGap
@@ -409,8 +444,7 @@ func (h *hookEnv) userPrompt() []byte {
 		if ev.Decision == "recall" {
 			// Every recall decision restarts the gap, hit or not (C12):
 			// otherwise each prompt recalls again until something is found.
-			red, _ := redact.Text(head(prompt, maxWordChars))
-			s.LastInject, s.LastWords = n, words(red)
+			s.LastInject, s.LastWords = n, words(redactHead(prompt, maxWordChars))
 		}
 		for _, in := range injected {
 			if !slices.Contains(s.Seen, in.ID) {

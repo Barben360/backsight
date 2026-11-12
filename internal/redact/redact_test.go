@@ -395,3 +395,177 @@ func TestValuesReplacesKnownSecretsAndTheirURLForms(t *testing.T) {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
+
+// Decision 0088: the prefixed formats of gitleaks' default rules and of
+// the AI providers, the bare AWS secret key and the whole Telegram token.
+var (
+	sendgrid  = "SG" + "." + rep("aB3dE5gH9k", 2) + "Zx" + "." + rep("q8Zr4Lm2Vn7T", 3) + "Kp9wX2y"
+	tailscale = "tskey" + "-auth-" + "kXGGu7Ra7v11CNTRL-" + rep("Zx9kLmQ2wP", 3) + "ab"
+	awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	telegram  = "1234567" + "89:AA" + "HdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ"
+	hfToken   = "hf" + "_" + rep("QwErTyUiOpAsDfGhJk", 2)
+	groq      = "gs" + "k_" + rep("a1B2c3D4e5F6g7H8i9J0", 3)
+	pypi      = "pypi" + "-AgEIcHlwaS5vcmc" + rep("Zx9-kLmQ2_wP", 6)
+	vaultTok  = "hv" + "s." + rep("CAESIJ9x2kLmQ2wPzX", 5)
+	mailgun   = "key" + "-" + rep("3f9a1c7e", 4)
+)
+
+func TestPrefixedFormatsAndWholeTokens(t *testing.T) {
+	cases := []struct {
+		name, in, kind string
+		gone           []string
+	}{
+		{"sendgrid", "SENDGRID " + sendgrid + " in CI", "sendgrid_key", []string{sendgrid[:10], sendgrid[26:]}},
+		{"tailscale auth key", "tailscale up --authkey " + tailscale, "tailscale_key", []string{"kXGGu7Ra7v11CNTRL", "Zx9kLmQ2wP"}},
+		{"tailscale api key", "key tskey" + "-api-" + "k123456CNTRL-" + rep("aB3dE5gH9k", 3), "tailscale_key", []string{"k123456CNTRL", "aB3dE5gH9k"}},
+		{"aws secret bare", "aws configure set aws_secret " + awsSecret + " done", "aws_secret_key", []string{awsSecret[:12], awsSecret[20:]}},
+		{"aws secret in a csv", "AKIA-less row," + awsSecret + "\n", "aws_secret_key", []string{"bPxRfiCY"}},
+		{"aws secret quoted", `secret '` + awsSecret + `'`, "aws_secret_key", []string{"bPxRfiCY"}},
+		{"aws secret at the end of a sentence", "the secret is " + awsSecret + ".", "aws_secret_key", []string{"bPxRfiCY"}},
+		{"telegram", "bot token " + telegram + " ok", "telegram_token", []string{"123456789", "HdqTcvCH1v"}},
+		{"telegram in a url", "https://api.telegram.org/bot" + telegram + "/sendMessage", "telegram_token", []string{"123456789", "HdqTcvCH1v"}},
+		{"huggingface", "HF " + hfToken, "huggingface_token", []string{"QwErTyUiOp"}},
+		{"groq", "export X=1 " + groq, "groq_key", []string{"a1B2c3D4e5"}},
+		{"pypi", "twine upload -p " + pypi, "pypi_token", []string{"AgEIcHlwaS5vcmc", "kLmQ2"}},
+		{"vault service", "VAULT " + vaultTok, "vault_token", []string{"CAESIJ9x2k"}},
+		{"vault batch", "hv" + "b." + rep("AAAAAQKq9zLm3XwP7rT0", 8), "vault_token", []string{"AAAAAQKq9z"}},
+		{"mailgun", "mg " + mailgun + " sent", "mailgun_key", []string{"3f9a1c7e"}},
+		{"slack app token", "xa" + "pp-1-A0123BCDEF-1234567890123-" + rep("0a1b2c3d4e", 6), "slack_token", []string{"0a1b2c3d4e"}},
+		{"slack refresh token", "xo" + "xe-1-" + rep("ABCDEF0123", 15), "slack_token", []string{"ABCDEF0123"}},
+		{"stripe prod", "sk" + "_prod_" + rep("4eC39HqLyj", 2), "stripe_key", []string{"4eC39HqLyj"}},
+		{"stripe webhook", "wh" + "sec_" + rep("4eC39HqLyjWDarjt", 2), "stripe_key", []string{"4eC39HqLyjWDarjt"}},
+		{"aws temporary id", "A3T" + "X" + "Q3EGRA7HZ6FK4M2X", "aws_access_key", []string{"Q3EGRA7HZ6FK4M2X"}},
+		{"gitlab feed token", "gl" + "ft-" + rep("xY7kQ2mZ9p", 2), "gitlab_token", []string{"xY7kQ2mZ9p"}},
+		{"gitlab runner registration", "GR13" + "48941" + rep("xY7kQ2mZ9p", 2), "gitlab_token", []string{"xY7kQ2mZ9p"}},
+		{"xai", "xa" + "i-" + rep("a1B2c3D4e5", 8), "xai_key", []string{"a1B2c3D4e5"}},
+		{"replicate", "r8" + "_" + rep("a1B2c3D4e5", 4), "replicate_token", []string{"a1B2c3D4e5"}},
+		{"doppler", "dp" + ".pt." + rep("a1B2c3D4e5", 4) + "abc", "doppler_token", []string{"a1B2c3D4e5"}},
+		{"linear", "lin" + "_api_" + rep("a1B2c3D4e5", 4), "linear_key", []string{"a1B2c3D4e5"}},
+		{"notion", "nt" + "n_" + "12345678901" + rep("a1B2c3D4e5", 3) + "abcde", "notion_token", []string{"a1B2c3D4e5"}},
+		{"perplexity", "pp" + "lx-" + rep("a1B2c3D4e5F6", 4), "perplexity_key", []string{"a1B2c3D4e5"}},
+		{"databricks", "da" + "pi" + hex32, "databricks_token", []string{hex32}},
+		{"pulumi", "pu" + "l-" + hex64[:40], "pulumi_token", []string{hex64[:40]}},
+		{"postman", "PM" + "AK-" + hex64[:24] + "-" + hex64[:34], "postman_key", []string{hex64[:24]}},
+		{"rubygems", "ruby" + "gems_" + hex64[:48], "rubygems_key", []string{hex64[:48]}},
+		{"sentry user", "sntr" + "yu_" + hex64, "sentry_token", []string{hex64}},
+		{"planetscale", "pscale" + "_tkn_" + rep("a1B2c3D4e5", 4), "planetscale_token", []string{"a1B2c3D4e5"}},
+		{"prefect", "pn" + "u_" + rep("a1B2c3D4e5F6", 3), "prefect_key", []string{"a1B2c3D4e5"}},
+		{"grafana cloud", "gl" + "c_" + rep("a1B2c3D4e5F6", 4), "grafana_token", []string{"a1B2c3D4e5"}},
+		{"grafana service account", "gl" + "sa_" + rep("a1B2c3D4", 4) + "_" + hex32[:8], "grafana_token", []string{"a1B2c3D4"}},
+		{"heroku", "HR" + "KU-AA" + rep("a1B2c3D4e5", 6), "heroku_key", []string{"a1B2c3D4e5"}},
+		{"brevo", "xkey" + "sib-" + hex64 + "-" + rep("a1B2c3D4", 2), "brevo_key", []string{hex64}},
+		{"square", "sq0" + "atp-" + rep("a1B2c3D4e5F", 2), "square_token", []string{"a1B2c3D4e5F"}},
+		{"artifactory", "AK" + "Cp" + rep("a1B2c3D4e5", 7)[:69], "artifactory_key", []string{"a1B2c3D4e5"}},
+		{"fly.io", "fo" + "1_" + rep("a1B2c3D4e5", 5)[:43], "flyio_token", []string{"a1B2c3D4e5"}},
+		{"openshift", "sha256" + "~" + rep("a1B2c3D4e5", 5)[:43], "openshift_token", []string{"a1B2c3D4e5"}},
+		{"1password service account", "op" + "s_eyJ" + rep("a1B2c3D4e5", 26), "onepassword_token", []string{"a1B2c3D4e5"}},
+		{"1password secret key", "A3" + "-ABCDEF-ABCDEFGHIJK-ABCDE-ABCDE-ABCDE", "onepassword_token", []string{"ABCDEFGHIJK"}},
+		{"newrelic user key", "NR" + "AK-" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0", "newrelic_key", []string{"ABCDEFGHIJKLMNOP"}},
+		{"alibaba", "LT" + "AI" + rep("a1B2c3D4e5", 2), "alibaba_key", []string{"a1B2c3D4e5"}},
+		{"atlassian", "ATAT" + "T3" + rep("xFfGF0a1B2c3D4e5", 12), "atlassian_token", []string{"xFfGF0a1B2"}},
+		{"azure ad client secret", "secret ab" + "c8Q~" + rep("a1B2c3D4e5", 4)[:34] + " end", "azure_client_secret", []string{"a1B2c3D4e5"}},
+		{"bedrock", "AB" + "SK" + rep("QmVkcm9ja0FQSUtleS", 7), "bedrock_key", []string{"QmVkcm9ja0FQSUtleS"}},
+		{"supabase", "sb" + "p_" + hex64[:40], "supabase_key", []string{hex64[:40]}},
+		{"supabase secret", "sb" + "_secret_" + rep("a1B2c3D4e5", 3), "supabase_key", []string{"a1B2c3D4e5"}},
+		{"sourcegraph", "sg" + "p_" + hex64[:16] + "_" + hex64[:40], "sourcegraph_token", []string{hex64[:40]}},
+		{"cloudflare origin ca", "v1" + ".0-" + hex64[:24] + "-" + rep(hex64, 3)[:146], "cloudflare_key", []string{hex64[:24]}},
+		{"typeform", "tf" + "p_" + rep("a1B2c3D4e5", 6)[:59], "typeform_token", []string{"a1B2c3D4e5"}},
+		{"easypost", "EZ" + "AK" + rep("a1B2c3D4e5", 6)[:54], "easypost_key", []string{"a1B2c3D4e5"}},
+		{"shippo", "shippo" + "_live_" + hex64[:40], "shippo_token", []string{hex64[:40]}},
+		{"clojars", "CLOJARS" + "_" + rep("a1b2c3d4e5", 6), "clojars_token", []string{"a1b2c3d4e5"}},
+		{"facebook page token", "EA" + "AC" + rep("a1B2c3D4e5", 11), "facebook_token", []string{"a1B2c3D4e5"}},
+		{"nuget password", `<add key="ClearTextPassword" value="hunter2hunter2" />`, "nuget_password", []string{"hunter2hunter2"}},
+		{"teams webhook", "https://acme.webhook.office.com/webhookb2/" + "88cf850f-c82e-4b79-b1d7-ecc3af0e50a9@88cf850f-c82e-4b79-b1d7-ecc3af0e50a9/IncomingWebhook/" + hex32 + "/88cf850f-c82e-4b79-b1d7-ecc3af0e50a9", "teams_webhook", []string{hex32}},
+	}
+	for _, c := range cases {
+		out, kinds := Text(c.in)
+		for _, g := range c.gone {
+			if strings.Contains(out, g) {
+				t.Errorf("%s: %q survived: %q", c.name, g, out)
+			}
+		}
+		if !strings.Contains(out, "[redacted:"+c.kind+"]") || !contains(kinds, c.kind) {
+			t.Errorf("%s: want kind %s, got %q %v", c.name, c.kind, out, kinds)
+		}
+	}
+}
+
+// The new rules leave what only looks like them alone: a bare 40-character
+// value is an AWS secret only with '/' or '+', random, and between
+// separators; identifiers made of words are no high-entropy token.
+func TestPrefixedLookAlikesSurvive(t *testing.T) {
+	for _, s := range []string{
+		"commit " + hex64[:40] + " fixed it",
+		"commit " + strings.ToUpper(hex64[:40]) + " fixed it",
+		"see internal/cli/hook_prompt.go and internal/redact/redact.go",
+		"github.com/Barben360/backsight/internal/hindsight/client",
+		"open https://github.com/Barben360/backsight/blob/main/internal/cli/x.go",
+		"the path src/components/Header/HeaderMenuItem2/index is long",
+		"cd /home/annuser/Workspace/github.com/Barben360/backsight",
+		"/usr/lib/x86_64-linux-gnu/libQt5WebEngineCore.so.5",
+		"const CamelCaseIdentifier2Version3FooBar9Baz = 1",
+		"func TestServerInstallComposeFailureRecovery2(t *testing.T)",
+		"type HTTPServerConfigurationForTheBillingService2 struct{}",
+		"call newClientWithRetryPolicyAndBackoff2Jitter3 now",
+		"hf_hub_download and hf_transfer are installed",
+		"use key-value pairs and key-rotation",
+		"pubkey-" + hex32 + " is the public one",
+		"the hvs. prefix marks a Vault service token",
+		"SG.1 and SG.2 are sections",
+		"tskey-auth- is the prefix of Tailscale auth keys",
+		"gsk_ is Groq's prefix, pypi- PyPI's",
+		"port 123456789:AAA is not a token",
+		"log 12345:AssertionErrorInTheBillingServiceModule",
+		"timestamps 1731400000:42 and 12:30",
+		"-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBGXk8bQBCADn\n-----END PGP PUBLIC KEY BLOCK-----",
+	} {
+		out, kinds := Text(s)
+		if out != s || len(kinds) != 0 {
+			t.Errorf("look-alike changed: %q -> %q %v", s, out, kinds)
+		}
+	}
+}
+
+// A private key header without its END line swallows only the key
+// material after it (base64 lines, armour headers), not the rest of the
+// text; a key pasted without its END line is still masked whole.
+func TestUnterminatedPrivateKeyHeader(t *testing.T) {
+	hdr := "-----BEGIN " + "RSA PRIVATE KEY-----"
+	body := "MIIEowIBAAKCAQEAx7Lm3XwP7rT0vN8yB2cD4eF6gH1jK5lM9nQ0sU7wY0aZ3bE6\niO/K1SZFPTOtr/KBHBeksoGMGwKq9zLm3XwP7rT0vN8yB2cD4eF6gH1jK5lM9nQ+\nsU7wY0aZ3bE6iO=="
+	keep := []string{
+		"grep -rn '" + hdr + "' ~/.ssh\nthen we fixed the config and pushed",
+		"files starting with " + hdr + " are private keys; never commit them, the CI refuses them",
+		`if strings.HasPrefix(s, "` + hdr + `\n") { return errKey } // then the rest of the code`,
+		hdr + "\nNote: this is only a header, the key was removed",
+	}
+	for _, s := range keep {
+		out, _ := Text(s)
+		if out != s {
+			t.Errorf("text after a bare header was eaten:\n%q\n-> %q", s, out)
+		}
+	}
+	for _, c := range []struct{ name, in, after string }{
+		{"lines", "my key:\n" + hdr + "\n" + body + "\nthen I deleted it", "\nthen I deleted it"},
+		{"lines to the end", hdr + "\n" + body, ""},
+		{"a word line after", hdr + "\n" + body[:64] + "\nThanks\nbye", "\nThanks\nbye"},
+		{"short last line", hdr + "\n" + body[:64] + "\nx7Lm3XwP\nbye", "\nbye"},
+		{"armour headers", hdr + "\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,3F17F5316E2BAC89\n\n" + body + "\nend of paste", "\nend of paste"},
+		{"escaped in json", `{"private_key": "` + hdr + `\n` + strings.ReplaceAll(body, "\n", `\n`) + `", "x": 1}`, `", "x": 1}`},
+		{"flattened", "KEY=" + hdr + " " + strings.ReplaceAll(body, "\n", " ") + "\nnext line", "\nnext line"},
+		{"glued word after", hdr + "\n" + body[:64] + "\nabcdefghijklmnopq(x) said", "\nabcdefghijklmnopq(x) said"},
+		{"crlf", hdr + "\r\n" + strings.ReplaceAll(body, "\n", "\r\n") + "\r\nbye now", "\r\nbye now"},
+	} {
+		out, kinds := Text(c.in)
+		if strings.Contains(out, "MIIEow") || strings.Contains(out, "iO/K1SZFPTOtr") || strings.Contains(out, "sU7wY0aZ3bE6iO") || !contains(kinds, "private_key") {
+			t.Errorf("%s: key material survived: %q %v", c.name, out, kinds)
+		}
+		if !strings.HasSuffix(out, "[redacted:private_key]"+c.after) {
+			t.Errorf("%s: the text after the key changed: %q", c.name, out)
+		}
+	}
+	// A header quoted before a real key: the real key alone is masked.
+	out, _ := Text("grep '" + hdr + "' found:\n" + privKey + "\nok")
+	if !strings.HasPrefix(out, "grep '"+hdr+"' found:\n[redacted:private_key]\nok") {
+		t.Errorf("%q", out)
+	}
+}
