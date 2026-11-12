@@ -68,7 +68,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v20" {
+	if Version != "v21" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -133,6 +133,10 @@ func TestTextsFollowFeedback(t *testing.T) {
 // reads (0083 C7): the search triggers and recipes in the search tool's
 // description, the credit, the empty-search line, what to store and the
 // override in the MCP instructions, the conversation's rules in the guide.
+// exceptionRule is the precedence's exception (v21, issue 325 point 10):
+// a project's own rule wins over a conflicting user-wide one there.
+const exceptionRule = "except a project's own convention, decision or correction, which wins in that project"
+
 func TestGuideCoversTheSpecPoints(t *testing.T) {
 	for _, c := range []struct {
 		name, text string
@@ -140,8 +144,8 @@ func TestGuideCoversTheSpecPoints(t *testing.T) {
 	}{
 		{"guide", Guide, []string{"issue, PR or link", "user's language", "Never ask the user for a key"}},
 		{"short guide", ShortGuide, []string{CreditAsk, NothingLine, "Store decisions, corrections, conventions, pitfalls and lessons with `memory_store`",
-			"User-wide rules override conflicting project facts", "each tool's description says when and how to use it"}},
-		{"short guide, feedback off", ShortGuideCite, []string{Credit, NothingLine, "memory_store", "override"}},
+			"User-wide rules override conflicting project facts", exceptionRule, "each tool's description says when and how to use it"}},
+		{"short guide, feedback off", ShortGuideCite, []string{Credit, NothingLine, "memory_store", "override", exceptionRule}},
 		{"search description", SearchDescription, []string{"BEFORE asking the user a factual question", "recommending", "starting a task or topic",
 			"refers to the past", "writing a test or changing something shared", "Skip it for trivial edits", "verify"}},
 	} {
@@ -509,6 +513,7 @@ var wordings = map[string]string{
 	"v18": "e3d71eb6c1dbb23e1ea4c64b3c8e60d322798803ff0f86d21c4fb762fce7b7c6",
 	"v19": "c63d54bcb944357eabf2debf721fd2a25976244deecfa69066d2227ce25e77f3",
 	"v20": "7289e3614a9bd8c5a2e28e387df92833e36f7b0a9538d1a06ac872cdb29c68b9",
+	"v21": "31a2b7766313000b53988e1d9ac5dde0ba1c4e43935f85a1bba5b92a4cd262d2",
 }
 
 func wordingHash() string {
