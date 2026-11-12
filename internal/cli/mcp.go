@@ -689,7 +689,9 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		}
 	}
 	if len(problems) > 0 && !cfg.Feedback.CrossProjectRetire {
-		return "", errors.New("nothing stored: the user can retire these memories from a terminal; " + printLines(problems) + "\n" + strings.Join(problems, "\n"))
+		return "", errors.New("nothing stored: retiring another project's memory is off on this machine (feedback.cross_project_retire = false in config.toml); " +
+			"the user can retire these memories from a terminal, or set cross_project_retire = true under [feedback] in config.toml to let you do it; " +
+			printLines(problems) + "\n" + strings.Join(problems, "\n"))
 	}
 	// The note goes to the memories' project when they share one (the
 	// pool when every one is transverse), so that the right fact reaches
