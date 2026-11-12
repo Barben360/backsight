@@ -53,12 +53,13 @@ check:
 
 # atexit_sleep_ms=0: no race runtime sleep (1 s) as each test binary and
 # hook child exits; a GORACE of the caller's wins. internal/cli alone runs
-# about 9 minutes under -race on the CI runner: go test's default 10-minute
-# bound per package would cut it. The tests on a year of generated history
+# about 10 minutes under -race here and over 20 on the release runner, where
+# it runs in one piece (CI shards it): the bound is a hang guard only, so it
+# sits far above that (45 minutes; the release job allows 75). The tests on a year of generated history
 # read content, not concurrency: they skip under -race and run in the
 # second line (test-sweep).
 test:
-	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m ./...
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 45m ./...
 	@$(MAKE) --no-print-directory test-sweep
 
 # One slice of make test's -race line, SHARD of SHARDS (from 0): CI runs
