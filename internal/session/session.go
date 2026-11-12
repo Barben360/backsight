@@ -149,14 +149,17 @@ func InSpans(spans []Span, t time.Time) bool {
 // Injection is one memory a hook put in the context, and the rule that let
 // it through (what `why` shows).
 type Injection struct {
-	ID      string    `json:"id"`
-	Text    string    `json:"text"`
-	Project string    `json:"project"`
-	Score   float64   `json:"score"`
-	Scope   string    `json:"scope"`
-	Prompt  int       `json:"prompt"` // 0: the startup briefing
-	Rule    string    `json:"rule"`   // briefing | first | gap | topic_shift | gate
-	At      time.Time `json:"at"`
+	ID      string `json:"id"`
+	Text    string `json:"text"`
+	Project string `json:"project"`
+	// Source: the memory's source word (decision 0089 P2), "" unknown or
+	// recorded by an older binary.
+	Source string    `json:"source,omitempty"`
+	Score  float64   `json:"score"`
+	Scope  string    `json:"scope"`
+	Prompt int       `json:"prompt"` // 0: the startup briefing
+	Rule   string    `json:"rule"`   // briefing | first | gap | topic_shift | gate
+	At     time.Time `json:"at"`
 }
 
 // Store is the sessions directory and its locks.

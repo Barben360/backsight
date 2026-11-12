@@ -903,7 +903,7 @@ func storeReply(res storeResult, err error, hits []recall.Hit, bar float64, limi
 	}
 	b.WriteString(header + "\n")
 	for _, h := range shown {
-		fmt.Fprintf(&b, "[%s]\n- %s (%s ago, %s)\n", singleLine(h.Project), clip(singleLine(h.Text), storeSimilarChars), h.Age, h.ID)
+		fmt.Fprintf(&b, "[%s]\n- %s (%s ago, %s)\n", tagProject(h.Project), clip(singleLine(h.Text), storeSimilarChars), h.Age, h.ID)
 	}
 	if credit {
 		b.WriteString(hint + "\n")

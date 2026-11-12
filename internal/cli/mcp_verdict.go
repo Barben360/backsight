@@ -39,7 +39,7 @@ const (
 )
 
 // sourceFact is one fact an observation is drawn from, as listed.
-type sourceFact struct{ id, project, text string }
+type sourceFact struct{ id, project, source, text string }
 
 // retirePlan is what a verdict does with each id it names: retire (a raw
 // fact), hide (no listable sources; unread among them when the server
@@ -125,7 +125,7 @@ func (d mcpDeps) classify(ctx context.Context, key *mcpKey, ids []string, owner 
 				if p == "" {
 					p = fallback
 				}
-				facts = append(facts, sourceFact{id: s.ID, project: p, text: s.Text})
+				facts = append(facts, sourceFact{id: s.ID, project: p, source: recall.SourceOf(s.Tags), text: s.Text})
 			}
 			if named {
 				plan.skip = append(plan.skip, id)
@@ -154,7 +154,7 @@ func sourcesText(p retirePlan) string {
 	for _, obs := range p.listed {
 		fmt.Fprintf(&b, "%s is drawn from:\n", safeProject(obs))
 		for _, s := range p.sources[obs] {
-			fmt.Fprintf(&b, "- %s %s (%s)\n", memoryTag(s.project, s.id), clip(singleLine(s.text), sourceTextChars), safeProject(s.id))
+			fmt.Fprintf(&b, "- %s %s (%s)\n", memoryTag(s.project, s.source, s.id), clip(singleLine(s.text), sourceTextChars), safeProject(s.id))
 		}
 	}
 	b.WriteString(sourcesAsk)

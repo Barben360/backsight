@@ -651,3 +651,62 @@ func TestSearchCountsHitsPerQuery(t *testing.T) {
 		t.Errorf("limit 1: per query %v", res.QueryHits)
 	}
 }
+
+// A memory's source is one word from the source: tags of the fact, or of
+// an observation's source facts: two different words are mixed, an
+// unknown source is other, no source tag no word.
+func TestSourceOf(t *testing.T) {
+	for _, c := range []struct {
+		tags [][]string
+		want string
+	}{
+		{[][]string{{"project:p", "source:chat"}}, "session"},
+		{[][]string{{"source:note", "kind:decision"}}, "note"},
+		{[][]string{{"source:subagent"}}, "subagent"},
+		{[][]string{{"source:import"}}, "import"},
+		{[][]string{{"source:verify"}}, "other"},
+		{[][]string{{"source:"}}, "other"},
+		{[][]string{{"project:p"}, {"source:note"}, {"source:note"}}, "note"},
+		{[][]string{{"project:p"}, {"source:chat", "source:note"}}, "mixed"},
+		{[][]string{{"source:chat"}, {"source:subagent"}}, "mixed"},
+		{[][]string{{"project:p", "kind:state"}}, ""},
+		{nil, ""},
+	} {
+		if got := SourceOf(c.tags...); got != c.want {
+			t.Errorf("SourceOf(%v) = %q, want %q", c.tags, got, c.want)
+		}
+	}
+}
+
+// Provenance asks for the source facts, as Kinds does, and fills each
+// hit's Source; a raw fact's comes from its own tags on any search; an
+// observation whose source facts were cut has none.
+func TestSearchProvenance(t *testing.T) {
+	obs := `{"results":[
+		{"id":"o1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2"],"scores":{"reranker":0.8}},
+		{"id":"o2","text":"Other.","type":"observation","tags":["project:billing"],"source_fact_ids":["gone"],"scores":{"reranker":0.7}},
+		{"id":"o3","text":"Noted.","type":"observation","tags":["project:billing"],"source_fact_ids":["f3"],"scores":{"reranker":0.6}}],
+		"source_facts":{"f1":{"tags":["kind:state","source:chat"]},"f2":{"tags":["source:note"]},"f3":{"tags":["source:note"]}}}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	got := map[string]string{}
+	for _, h := range res.Hits {
+		got[h.ID] = h.Source
+		if h.Kinds != nil {
+			t.Errorf("provenance alone filled the kinds: %+v", h)
+		}
+	}
+	if got["o1"] != "mixed" || got["o2"] != "" || got["o3"] != "note" {
+		t.Errorf("sources %v", got)
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, "source_facts") {
+			t.Errorf("a call did not ask for the source facts: %s", b)
+		}
+	}
+	raw := `{"results":[{"id":"w1","text":"A raw fact.","type":"world","tags":["project:billing","source:import"],"scores":{"reranker":0.9}}]}`
+	res = kindsEngine(t, `{"results":[]}`, raw, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "import" {
+		t.Errorf("raw fact: %+v", res.Hits)
+	}
+}

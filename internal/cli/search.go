@@ -138,26 +138,32 @@ func searchText(r recall.Result) string {
 		groups[h.Project] = append(groups[h.Project], i)
 	}
 	for _, p := range order {
-		fmt.Fprintf(&b, "[%s]\n", p)
+		fmt.Fprintf(&b, "[%s]\n", tagProject(p))
 		for _, i := range groups[p] {
 			h := r.Hits[i]
-			fmt.Fprintf(&b, "- #%d %s (%s%s, %s ago, %s, %.2f)\n", i+1, oneLine.Replace(h.Text), h.Date.Format("2006-01-02"), kindLabel(h), h.Age, h.ID, h.Score)
+			fmt.Fprintf(&b, "- #%d %s (%s%s%s, %s ago, %s, %.2f)\n", i+1, oneLine.Replace(h.Text), h.Date.Format("2006-01-02"), kindLabel(h), sourceLabel(h.Source), h.Age, h.ID, h.Score)
 		}
 	}
 	return b.String()
 }
 
 // kindLabel is " [pitfall, state]" after the date: the kinds of the facts
-// behind a hit, "subagent" added when one came from a subagent's report.
+// behind a hit (a subagent's report is named by sourceLabel since
+// decision 0089).
 func kindLabel(h recall.Hit) string {
-	parts := h.Kinds
-	if h.Subagent {
-		parts = append(parts[:len(parts):len(parts)], "subagent")
-	}
-	if len(parts) == 0 {
+	if len(h.Kinds) == 0 {
 		return ""
 	}
-	return " [" + strings.Join(parts, ", ") + "]"
+	return " [" + strings.Join(h.Kinds, ", ") + "]"
+}
+
+// sourceLabel is ", from <source>" after the kinds, "" when the memory's
+// tags do not say (decision 0089 P2).
+func sourceLabel(source string) string {
+	if source == "" {
+		return ""
+	}
+	return ", from " + tagProject(source)
 }
 
 func newReadCmd(e *env) *cobra.Command {
@@ -220,7 +226,11 @@ func readCmdID(ref string) (string, error) {
 
 func readText(m hindsight.MemoryDetail) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n%s · project %s · mentioned %s", m.Text, m.Type, recall.ProjectOf(m.Tags), m.MentionedAt)
+	tags := [][]string{m.Tags}
+	for _, s := range m.Sources {
+		tags = append(tags, s.Tags)
+	}
+	fmt.Fprintf(&b, "%s\n\n%s · project %s%s · mentioned %s", m.Text, m.Type, tagProject(recall.ProjectOf(m.Tags)), strings.Replace(sourceLabel(recall.SourceOf(tags...)), ",", " ·", 1), m.MentionedAt)
 	if m.OccurredStart != "" {
 		fmt.Fprintf(&b, " · occurred %s", m.OccurredStart)
 		if m.OccurredEnd != "" && m.OccurredEnd != m.OccurredStart {

@@ -75,9 +75,12 @@ type Query struct {
 	// defence: recall.global_min_score).
 	GlobalMinReranker float64
 	// Kinds asks the server, in the same calls, for the source facts of each
-	// observation to fill Hit.Kinds: for searches a reader sees, not for the
-	// prompt hook (larger responses).
+	// observation to fill Hit.Kinds (memory_search, backsight search).
 	Kinds bool
+	// Provenance asks for the same source facts to fill only Hit.Source:
+	// the recalls whose hits are injected with their source (decision
+	// 0089 P2). A raw fact's Source comes from its own tags either way.
+	Provenance bool
 }
 
 // Hit is one merged result.
@@ -102,6 +105,9 @@ type Hit struct {
 	// a subagent's report.
 	Kinds    []string `json:"kinds,omitempty"`
 	Subagent bool     `json:"subagent,omitempty"`
+	// Source: where the memory came from, one word (SourceOf), "" when
+	// its tags do not say (decision 0089 P2).
+	Source string `json:"source,omitempty"`
 }
 
 // ScopeMeta is how one scope's calls went (telemetry, A.4).
@@ -172,7 +178,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		defer cancel()
 	}
 	scopes := e.scopes(q)
-	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds, q.MaxTokens)
+	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds || q.Provenance, q.MaxTokens)
 	res := Result{Scopes: map[string]ScopeMeta{}}
 	var empty []scope
 	for _, s := range scopes {
@@ -210,6 +216,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 			if q.Kinds {
 				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
 			}
+			h.Source = SourceOf(r.Tags, r.SourceTags)
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
@@ -425,6 +432,36 @@ func KindsOf(tagSets ...[]string) (kinds []string, subagent bool) {
 	}
 	sort.Strings(kinds)
 	return kinds, subagent
+}
+
+// sourceWords are the words of the source: tags the binary writes
+// (decision 0089 P2): a conversation's facts are a session's.
+var sourceWords = map[string]string{"chat": "session", "note": "note", "subagent": "subagent", "import": "import"}
+
+// SourceOf is the one word for where a memory came from, from the source:
+// tags found in the tags given (a raw fact passes its own, an observation
+// its source facts' too): session, note, subagent, import, other for a
+// source the binary does not write, mixed for two different ones, "" when
+// no tag says.
+func SourceOf(tagSets ...[]string) string {
+	word := ""
+	for _, tags := range tagSets {
+		for _, t := range tags {
+			s, ok := strings.CutPrefix(t, "source:")
+			if !ok {
+				continue
+			}
+			w := sourceWords[s]
+			if w == "" {
+				w = "other"
+			}
+			if word != "" && word != w {
+				return "mixed"
+			}
+			word = w
+		}
+	}
+	return word
 }
 
 // ProjectOf is the project tag of a memory, "" when it has none.

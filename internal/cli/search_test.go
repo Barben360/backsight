@@ -141,7 +141,7 @@ func TestSearchShowsTheKindsOfEachMemory(t *testing.T) {
 	recallSourceFacts = `{"f1":{"tags":["kind:state","project:billing"]},"f2":{"tags":["kind:pitfall","source:subagent"]},"f3":{"tags":["kind:decision","source:chat"]}}`
 	t.Setenv("BACKSIGHT_PROJECT", "billing")
 	_, out, _ := run(t, "search", "postgres version")
-	for _, want := range []string{"(2026-10-20 [pitfall, state, subagent],", "(2026-10-20 [decision],", "No source facts. (2026-10-20, "} {
+	for _, want := range []string{"(2026-10-20 [pitfall, state], from subagent,", "(2026-10-20 [decision], from session,", "No source facts. (2026-10-20, "} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
