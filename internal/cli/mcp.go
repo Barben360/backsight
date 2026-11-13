@@ -686,7 +686,8 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	// the address, or a connect since, leaves the journaled projects, and
 	// the checks below refuse the call anyway.
 	read := d.memoryReader(ctx, key, ids)
-	if otherServerRefusal(d.dirs, cfg) != nil || sendsGate(d.dirs, d.generation)() != nil {
+	gated := otherServerRefusal(d.dirs, cfg) != nil || sendsGate(d.dirs, d.generation)() != nil
+	if gated {
 		read = func(string) (hindsight.MemoryDetail, error) { return hindsight.MemoryDetail{}, errors.New("not read") }
 	}
 	journaled := owner
@@ -699,6 +700,23 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		return journaled(id)
 	}
 	near := func(p string) bool { return p == live.Project || isPool(cfg, p) || slices.Contains(linked, p) }
+	// A memory the server could not read has only its journaled name,
+	// which another project's name may share: only one that is exactly a
+	// near project's goes on, whatever cross_project_retire says (the
+	// unread memory is then hidden on this PC).
+	if !gated {
+		var unconfirmed []string
+		for _, id := range ids {
+			if _, err := read(id); err != nil && !near(journaled(id)) {
+				unconfirmed = append(unconfirmed, instructions.NotRetiredLine(safeProject(journaled(id)), id,
+					"the memory server could not be read to confirm whose memory it is", true))
+			}
+		}
+		if len(unconfirmed) > 0 {
+			return "", errors.New("nothing stored: the memory server could not be read to confirm whose memory it is; the user can retire it with `backsight forget <id>`; " +
+				printLines(unconfirmed) + "\n" + strings.Join(unconfirmed, "\n"))
+		}
+	}
 	var projects, problems []string // projects: the memories', the pool as one
 	for _, id := range ids {
 		p := owner(id)

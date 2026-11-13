@@ -306,3 +306,23 @@ func TestForeignProjectWithTheSameShownNameIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A memory the server cannot read has only its journaled project, which a
+// search header may show for another project's name too: unless that name
+// is exactly the session's project, a linked one or the pool, the call is
+// refused, even with cross_project_retire on: nothing stored, nothing
+// hidden (0089 review round 3).
+func TestUnreadableMemoryUnderAForeignShownNameIsRefused(t *testing.T) {
+	cs, home := creditSessionWith(t, crossOn)
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "foo#1", At: time.Now()})
+	showItems(t, home, "S", "search", "foo#1", feedback.Item{ID: foreignA, Rank: 1, Project: "foo_1"})
+	delete(memories, foreignA) // the server cannot read it
+	before := retained.Load()
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "cccccccc"))
+	if !isErr || !strings.Contains(out, "could not be read to confirm whose memory it is") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) || len(patches()) != 0 || len(retireEvents(t, home, feedback.KindHide)) != 0 {
+		t.Errorf("stored %d, patches %q, hides %+v", retained.Load()-before, patches(), retireEvents(t, home, feedback.KindHide))
+	}
+}
