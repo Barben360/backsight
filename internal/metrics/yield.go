@@ -257,10 +257,27 @@ GROUP BY d.created_day ORDER BY d.created_day`, first, last, int64(yieldReach)*8
 }
 
 // latestComplete is the latest complete week, nil when none.
-func (r *yieldRun) latestComplete() *yieldWeek {
-	for _, wk := range slices.Backward(r.weeks) {
+func (r *yieldRun) latestComplete() *yieldWeek { return latestComplete(r.weeks) }
+
+func latestComplete(weeks []*yieldWeek) *yieldWeek {
+	for _, wk := range slices.Backward(weeks) {
 		if wk.complete {
 			return wk
+		}
+	}
+	return nil
+}
+
+// reported are the weeks memory.yield reports: from the first one that may
+// hold a memory. The weeks before it, which the server or the record says
+// made none and none of whose memories was used, came before the memory
+// began: as cohorts they would read "0 of 0", and the latest complete one
+// would stand as the headline while every week with memories is still
+// within its 28 days. A week with none after the first memory stays.
+func (r *yieldRun) reported() []*yieldWeek {
+	for i, wk := range r.weeks {
+		if wk.den == nil || *wk.den > 0 || wk.num > 0 {
+			return r.weeks[i:]
 		}
 	}
 	return nil
@@ -343,7 +360,8 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 	if e.q.Project != "" { // the weeks count the whole bank's new memories
 		m.Tags = append(m.Tags, tagNotFiltered)
 	}
-	for _, wk := range run.weeks {
+	weeks := run.reported()
+	for _, wk := range weeks {
 		p := Point{Week: wk.monday, Source: wk.source, Complete: ptr(wk.complete)}
 		if wk.complete && wk.den != nil {
 			p.Num, p.Den = i64(wk.num), wk.den
@@ -363,7 +381,10 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 	// record still catching up, a week the server and the record do not
 	// hold; too_few only for a real small number of new memories.
 	o := Observation{Absent: true, Reason: ReasonNoCompleteWeek}
-	if wk := run.latestComplete(); wk != nil {
+	if len(weeks) == 0 { // no week of the span made a memory
+		o.Reason = ReasonNoEvents
+	}
+	if wk := latestComplete(weeks); wk != nil {
 		p := m.Series[slices.IndexFunc(m.Series, func(p Point) bool { return p.Week == wk.monday })]
 		m.Value, m.Num, m.Den = p.Value, p.Num, p.Den
 		extra["tokens"], extra["tokens_per_used"] = p.Tokens, p.TokensPerUsed

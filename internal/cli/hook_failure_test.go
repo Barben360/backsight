@@ -188,3 +188,19 @@ func TestFailureRecallJournalsItsShows(t *testing.T) {
 		t.Errorf("shows %+v", shows)
 	}
 }
+
+// The failed command is redacted before it is cut to 100 characters: a
+// key across the cut never leaves as its prefix (decision 0088).
+func TestFailureQueryRedactsTheCommandBeforeCuttingIt(t *testing.T) {
+	home := hookHome(t)
+	failureOn(t, home)
+	recallAnswer = hits(0.95)
+	key := "gh" + "p_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	failure(t, home, "s1", "Bash", npmError, map[string]any{"tool_input": map[string]any{"command": "echo " + strings.Repeat("x", 85) + " " + key}})
+	if len(recallQueries) == 0 {
+		t.Fatal("the failure was not searched")
+	}
+	if q := recallQueries[0]; strings.Contains(q, "ghp_") || strings.Contains(q, "a1B2") || !strings.Contains(q, "Cannot find module") {
+		t.Errorf("query %q", q)
+	}
+}

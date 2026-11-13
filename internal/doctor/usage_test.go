@@ -201,6 +201,12 @@ func TestUsageComparesWithLastWeek(t *testing.T) {
 			t.Errorf("%s: %s (%s), want %s", c.name, got.Status, got.Summary, c.want)
 		}
 	}
+	// The words of stats' Injections line: the share of injections, not of
+	// prompts (stats' Searches line and quality's searched prompts).
+	dir := events(t, map[time.Duration][]string{2 * day: searched(2, 10), 9 * day: searched(6, 10)})
+	if got := byID(checkUsage(dir, usageNow, false))["searches"].Summary; got != "injections followed by a search 20% this week, 60% last week" {
+		t.Errorf("searches summary %q", got)
+	}
 }
 
 func TestUsageLearningFilters(t *testing.T) {

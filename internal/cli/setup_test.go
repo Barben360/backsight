@@ -458,8 +458,9 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 	withLLMKey(t, home)
 	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
 	// provider: 3 (openai), model: Enter, base URL: Enter, retention: keep,
-	// backups: 2 (off), backfill: no, import: Enter (no), then the go.
-	withStdin(t, "3\n\n\nkeep\n2\nno\n\ny\n")
+	// backups: 2 (off), briefing refresh: 1 (1h), backfill: no, import:
+	// Enter (no), then the go.
+	withStdin(t, "3\n\n\nkeep\n2\n1\nno\n\ny\n")
 	stdinIsTerminal = func() bool { return true }
 	oldOut := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
@@ -469,7 +470,8 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
 	}
 	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
-	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-6-luna"`) || !strings.Contains(string(raw), "enabled = false") {
+	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-6-luna"`) || !strings.Contains(string(raw), "enabled = false") ||
+		!strings.Contains(string(raw), "[recall]\nbriefing_refresh_interval = \"1h\"") {
 		t.Errorf("answers not applied:\n%s", raw)
 	}
 	if !strings.Contains(out, "[recommended]") || !strings.Contains(out, "setup will:") || !strings.Contains(out, "backsight is set up") {
@@ -484,7 +486,7 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 
 func TestSetupAtATerminalDeclines(t *testing.T) {
 	home, f := setupMachine(t)
-	withStdin(t, "1\n\n\n\n\nn\n")
+	withStdin(t, "1\n\n\n\n\n\nn\n")
 	stdinIsTerminal = func() bool { return true }
 	oldOut := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
@@ -977,8 +979,8 @@ func TestSetupAsksAgainAfterAnInvalidAnswer(t *testing.T) {
 	home, _ := setupMachine(t)
 	withLLMKey(t, home)
 	// provider 1, model Enter, retention Enter, backups "maybe" then 2,
-	// import Enter, go.
-	withStdin(t, "1\n\n\nmaybe\n2\n\ny\n")
+	// briefing refresh Enter, import Enter, go.
+	withStdin(t, "1\n\n\nmaybe\n2\n\n\ny\n")
 	stdinIsTerminal = func() bool { return true }
 	oldOut := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
@@ -1655,7 +1657,7 @@ func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
 	withLLMKey(t, home)
 	// The server step fails: the config stays setup's own, its answers open.
 	f.fail["server install"] = &output.Error{Code: output.NeedsUser, Message: "the deepseek API rejected the key in llm_api_key", Secrets: []string{"llm_api_key"}}
-	atATerminal(t, "1\n\n\n\n\ny\n") // deepseek, its model, retention, backups, import, go
+	atATerminal(t, "1\n\n\n\n\n\ny\n") // deepseek, its model, retention, backups, briefing refresh, import, go
 	if code, out, errOut := run(t, "setup"); code != output.NeedsUser {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
@@ -1670,8 +1672,8 @@ func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
 
 	// --reconfigure asks again; Enter keeps the saved answer, a new one
 	// replaces it: openai (3), its model, its base URL, retention kept,
-	// backups off (2), import kept (no), go.
-	atATerminal(t, "3\n\n\n\n2\n\ny\n")
+	// backups off (2), briefing refresh kept, import kept (no), go.
+	atATerminal(t, "3\n\n\n\n2\n\n\ny\n")
 	code, out, errOut := run(t, "setup", "--reconfigure")
 	if code != output.OK || !strings.Contains(out, "Which LLM") {
 		t.Fatalf("reconfigure: exit %d\n%s%s", code, out, errOut)
@@ -2221,9 +2223,9 @@ func TestSetupAsksAgainForAnImportFolder(t *testing.T) {
 	home, f := setupMachine(t)
 	withLLMKey(t, home)
 	notes := importFolder(t, home)
-	// deepseek, its model, retention, backups, import yes, a missing
-	// folder then the notes, go.
-	atATerminal(t, "1\n\n\n\nyes\n"+filepath.Join(home, "missing")+"\n"+notes+"\ny\n")
+	// deepseek, its model, retention, backups, briefing refresh, import
+	// yes, a missing folder then the notes, go.
+	atATerminal(t, "1\n\n\n\n\nyes\n"+filepath.Join(home, "missing")+"\n"+notes+"\ny\n")
 	code, out, errOut := run(t, "setup")
 	if code != output.OK || !strings.Contains(out, "import_path=") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
@@ -2306,4 +2308,101 @@ func TestSetupGoesOnWhenTheImportCannotBeQueued(t *testing.T) {
 	if strings.Contains(out, "being imported in the background") {
 		t.Error("next steps announce an import that was not queued")
 	}
+}
+
+// The briefing refresh answer lands in config.toml, which the jobs read:
+// 24h is written under [recall] and shown in the plan, the default 6h
+// leaves the key out (an older binary reads the file as before).
+func TestSetupWritesTheBriefingRefreshFloor(t *testing.T) {
+	home, _ := setupMachine(t)
+	withLLMKey(t, home)
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "briefing_refresh=24h", "--plan", "--json")
+	if code != output.OK {
+		t.Fatalf("plan: exit %d\n%s", code, out)
+	}
+	var cfgStep setup.Step
+	for _, st := range parseSetup(t, out).Data.Steps {
+		if st.Name == "config" {
+			cfgStep = st
+		}
+	}
+	if !strings.Contains(cfgStep.Detail, "briefing pages rewritten at most every 24h") {
+		t.Errorf("config step %+v", cfgStep)
+	}
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "briefing_refresh=24h", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	cfg, err := config.Parse(raw, "config.toml", pathsOf(home), home)
+	if err != nil || cfg.Recall.BriefingRefreshInterval.String() != "24h" {
+		t.Fatalf("floor %v %v\n%s", cfg.Recall.BriefingRefreshInterval, err, raw)
+	}
+
+	home, _ = setupMachine(t)
+	withLLMKey(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("default: exit %d\n%s", code, out)
+	}
+	raw, _ = os.ReadFile(pathsOf(home).ConfigFile())
+	if strings.Contains(string(raw), "briefing_refresh_interval") || strings.Contains(string(raw), "[recall]") {
+		t.Errorf("the default floor was written:\n%s", raw)
+	}
+}
+
+// The option costs are the configured model's prices: deepseek-flash at
+// the table's 0.30 / 1.20 USD per million, 105k + 3.5k tokens a rewrite.
+func TestSetupPricesTheBriefingRefreshForTheModel(t *testing.T) {
+	setupMachine(t)
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--questions", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, q := range parseSetup(t, out).Data.Questions {
+		if q.ID == "briefing_refresh" {
+			if c := q.Options[1].Cost; c != "about 2.14 USD a month per active project (about 2 rewrites a day, 4 at most)" {
+				t.Errorf("6h cost %q", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("no briefing_refresh question:\n%s", out)
+}
+
+// A config.toml's own [llm] prices price the options when its model is
+// the one asked about: 105k × 1 + 3.5k × 2 per million = 0.112 a rewrite.
+func TestSetupPricesTheBriefingRefreshWithTheConfiguredPrices(t *testing.T) {
+	home, _ := setupMachine(t)
+	if err := os.MkdirAll(filepath.Dir(pathsOf(home).ConfigFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nurl = \"http://127.0.0.1:18888\"\nui_port = 19999\n"+
+		"[llm]\nprovider = \"openai\"\nmodel = \"house-model\"\nprice_input = 1.0\nprice_output = 2.0\ncurrency = \"EUR\"\n"), 0o600)
+	code, out, errOut := run(t, "setup", "--questions", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	for _, q := range parseSetup(t, out).Data.Questions {
+		if q.ID == "briefing_refresh" {
+			if c := q.Options[1].Cost; c != "about 6.72 EUR a month per active project (about 2 rewrites a day, 4 at most)" {
+				t.Errorf("6h cost %q, want the config's prices", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("no briefing_refresh question:\n%s", out)
+}
+
+// No floor ("0") says so in the plan.
+func TestSetupPlanSaysNoBriefingFloor(t *testing.T) {
+	setupMachine(t)
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "briefing_refresh=0", "--plan", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, st := range parseSetup(t, out).Data.Steps {
+		if st.Name == "config" && strings.HasSuffix(st.Detail, "(briefing pages rewritten after every consolidation: no floor)") {
+			return
+		}
+	}
+	t.Errorf("no floor not in the plan:\n%s", out)
 }

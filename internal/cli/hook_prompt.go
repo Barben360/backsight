@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
@@ -21,14 +22,27 @@ import (
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
+// recallBudget is a prompt recall's budget (SPEC §6.2). probeBudget is a
+// recall's once the breaker's pause is over, until one answers: above the
+// slowest recalls measured on a CPU-only server, so a server still hanging
+// costs a prompt that much at most, not the whole budget (decision 0091).
+// Variables for the tests.
+var (
+	recallBudget = 17 * time.Second
+	probeBudget  = 8 * time.Second
+)
+
 const (
-	recallBudget   = 17 * time.Second // SPEC §6.2
-	firstMinChars  = 25               // the first prompt recalls from this length (C12)
-	topicShift     = 0.15             // vocabulary overlap below which the topic changed (C12)
+	firstMinChars  = 25   // the first prompt recalls from this length (C12)
+	topicShift     = 0.15 // vocabulary overlap below which the topic changed (C12)
 	stickyWindow   = 24 * time.Hour
 	nudgeTerms     = 4
 	approvalMaxLen = 40
 )
+
+// searchBudget gives the hooks' recalls their budget: nil, the engine's
+// own deadline (tests end it on cue).
+var searchBudget func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 
 // machinePrompter is a harness that tells the prompts it writes itself
 // apart (Codex), beside the ones machineRE knows.
@@ -114,6 +128,87 @@ func head(s string, n int) string {
 	return s
 }
 
+// redactMargin is how far past a cut the text is redacted with what is
+// kept: a secret straddling the cut is seen whole, and one longer than
+// that is still past its pattern's minimum length where it is cut.
+// Redacting a whole long paste would cost a hook too much.
+const redactMargin = 4096
+
+// redactMaxWindow caps the window redactHead and redactTail redact: the
+// rules run at about half a megabyte a second, and a hook calls them
+// twice per prompt.
+const redactMaxWindow = 1 << 16
+
+// redactText is redact.Text; tests watch what it is given.
+var redactText = redact.Text
+
+// redactHead is s's first n runes, redacted before the cut so that a key
+// straddling it never stays as its prefix (decision 0088). The window
+// grows when redaction shrank it to near n runes (long keys replaced), so
+// that the cut never lands within redactMargin/2 of its end, up to
+// redactMaxWindow. Still short there, it fails closed: the window's last
+// redactMargin runes, where a key cut at the cap would sit, are dropped.
+func redactHead(s string, n int) string {
+	maxW := max(redactMaxWindow, n+redactMargin)
+	for w := n + redactMargin; ; w = min(2*w, maxW) {
+		cut := head(s, w)
+		red, _ := redactText(cut)
+		rn := utf8.RuneCountInString(red)
+		switch {
+		case len(cut) == len(s) || rn >= n+redactMargin/2:
+			return head(red, n)
+		case w >= maxW:
+			return head(red, min(n, max(0, rn-redactMargin)))
+		}
+	}
+}
+
+// redactTail is s's last n runes, redacted before the cut, as redactHead,
+// the window's first runes dropped when it fails closed. A window that
+// starts inside a private key block starts at its header instead, when
+// that is within redactMaxWindow; else it starts after the block's END
+// line, or is empty: a key's body without its header is not recognised
+// as one.
+func redactTail(s string, n int) string {
+	maxW := max(redactMaxWindow, n+redactMargin)
+	for w := n + redactMargin; ; w = min(2*w, maxW) {
+		from := tailStart(s, w)
+		if b := redact.OpenKeyBefore(s, from); b >= 0 {
+			if utf8.RuneCountInString(s[b:from]) <= redactMaxWindow {
+				from = b
+			} else {
+				cut := s[from:]
+				if e := redact.KeyEnd(cut); e >= 0 {
+					red, _ := redactText(cut[e:])
+					return runeTail(red, n)
+				}
+				return ""
+			}
+		}
+		red, _ := redactText(s[from:])
+		rn := utf8.RuneCountInString(red)
+		switch {
+		case from == 0 || rn >= n+redactMargin/2:
+			return runeTail(red, n)
+		case w >= maxW:
+			return runeTail(red, min(n, max(0, rn-redactMargin)))
+		}
+	}
+}
+
+// tailStart is where s's last n runes start.
+func tailStart(s string, n int) int {
+	i := len(s)
+	for ; n > 0 && i > 0; n-- {
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		i -= size
+	}
+	return i
+}
+
+// runeTail is s's last n runes.
+func runeTail(s string, n int) string { return s[tailStart(s, n):] }
+
 func words(s string) []string {
 	s = head(s, maxWordChars)
 	var out []string
@@ -171,14 +266,11 @@ func pointerRefs(prompt string) []string {
 	return refs
 }
 
-// recallQuery: the prompt without fenced code, first QueryChars runes.
+// recallQuery: the prompt without fenced code, first QueryChars runes,
+// redacted before the cut: a pasted key never leaves as a query, nor as
+// its prefix.
 func (h *hookEnv) recallQuery(prompt string) string {
-	q := strings.TrimSpace(fenceRE.ReplaceAllString(prompt, " "))
-	if r := []rune(q); len(r) > h.cfg.Recall.QueryChars {
-		q = string(r[:h.cfg.Recall.QueryChars])
-	}
-	q, _ = redact.Text(q) // a pasted key never leaves as a query
-	return q
+	return redactHead(strings.TrimSpace(fenceRE.ReplaceAllString(prompt, " ")), h.cfg.Recall.QueryChars)
 }
 
 // decide is when to recall (C12): the first prompt, then after MinGap
@@ -317,7 +409,8 @@ func (h *hookEnv) userPrompt() []byte {
 	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
-		sel, flags, items, res, empty := h.promptRecall(st, prompt, reason)
+		budget := h.budget(recallBudget)
+		sel, flags, items, res, empty := h.promptRecall(st, prompt, reason, budget)
 		text, chosen := sel.Block, sel.Chosen
 		ev.Empty = empty
 		ev.CutCount, ev.CutSize, ev.Shortened = sel.CutCount, sel.CutSize, sel.Shortened
@@ -327,7 +420,7 @@ func (h *hookEnv) userPrompt() []byte {
 			ev.Scopes[name] = telemetry.ScopeResult{OK: m.OK, MS: m.MS, Raw: m.Raw}
 			failed = failed && !m.OK
 		}
-		h.breakerRecord(failed)
+		h.breakerRecord(failed, res.TimedOut && budget >= probeBudget)
 		ev.Above = len(res.Hits)
 		if len(res.Hits) > 0 {
 			ev.Top = res.Hits[0].Reranker
@@ -409,8 +502,7 @@ func (h *hookEnv) userPrompt() []byte {
 		if ev.Decision == "recall" {
 			// Every recall decision restarts the gap, hit or not (C12):
 			// otherwise each prompt recalls again until something is found.
-			red, _ := redact.Text(head(prompt, maxWordChars))
-			s.LastInject, s.LastWords = n, words(red)
+			s.LastInject, s.LastWords = n, words(redactHead(prompt, maxWordChars))
 		}
 		for _, in := range injected {
 			if !slices.Contains(s.Seen, in.ID) {
@@ -456,8 +548,8 @@ func (h *hookEnv) sticky() session.Sticky {
 // empty says why nothing was chosen (the prompt event's empty field):
 // error (the search failed, whatever the bank holds), no_candidates,
 // below_floor, all_seen or capped; "" when something was.
-func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (sel selection, flags []string, items []session.Injection, res recall.Result, empty string) {
-	_, res = h.searchPrompt(prompt)
+func (h *hookEnv) promptRecall(st session.State, prompt, rule string, budget time.Duration) (sel selection, flags []string, items []session.Injection, res recall.Result, empty string) {
+	_, res = h.searchPrompt(prompt, budget)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
 	// Within what the session budget has left, like the failure recall.
@@ -562,7 +654,7 @@ func (h *hookEnv) namedSkip() []string {
 
 // searchPrompt is the prompt path's query and recall (SPEC §10.2), shared
 // with `recall-prompt` so the replay gate measures exactly the hook.
-func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
+func (h *hookEnv) searchPrompt(prompt string, budget time.Duration) (string, recall.Result) {
 	rc := h.cfg.Recall
 	q := h.recallQuery(prompt)
 	var related, named []string
@@ -570,7 +662,7 @@ func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 		named = idx.Named(q, h.namedSkip()) // searched as if asked for: no floor for other projects
 	}
-	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
+	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: budget, Budget: searchBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Projects: named, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20, Provenance: true})
 }

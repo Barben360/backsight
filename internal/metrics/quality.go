@@ -532,6 +532,11 @@ func qualityStale(e env, _ Window, obs map[string]Observation, met map[string]Me
 		obs[id] = Observation{Den: int64(len(ids)), Value: &v}
 		met[id] = Metric{Value: &v, Tags: tags}
 	}
+	// The shows a memory needs to be counted: a memory shown less, however
+	// often in the window, is not "often shown".
+	m := met["stale.never_used"]
+	m.Extra = map[string]any{"min_shows": int64(e.src.Config.Feedback.StaleShows)}
+	met["stale.never_used"] = m
 	return nil
 }
 

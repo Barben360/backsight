@@ -40,8 +40,11 @@ type Engine struct {
 	Bank       string
 	Transverse []string      // aliases; the first is canonical
 	Timeout    time.Duration // the whole search: every call and the raw fallback
-	Now        func() time.Time
-	Boost      float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
+	// Budget gives the search its Timeout; nil is context.WithTimeout
+	// (tests end the budget on cue).
+	Budget func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	Now    func() time.Time
+	Boost  float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
 	// Adjust is what this machine learned of the memories a search found,
 	// asked once per search with every merged hit's id: a boost added to
 	// a memory's score, or Hidden to drop it; an id it leaves out has
@@ -131,6 +134,11 @@ type Result struct {
 	// answers held (a hit two queries found counts for both; a blank
 	// query, never sent, 0).
 	QueryHits []int `json:"query_hits"`
+	// TimedOut: a call failed because the search ran out of its own budget
+	// (a server that accepted the connection and did not answer in time),
+	// not because it was refused or the caller's context ended; another
+	// scope may have answered.
+	TimedOut bool `json:"timed_out,omitempty"`
 }
 
 type scope struct {
@@ -172,9 +180,14 @@ func (e *Engine) scopes(q Query) []scope {
 // merges the hits. A scope that answered without any observation is asked
 // again for raw facts, still within the budget.
 func (e *Engine) Search(ctx context.Context, q Query) Result {
+	parent := ctx
 	if e.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, e.Timeout)
+		with := e.Budget
+		if with == nil {
+			with = context.WithTimeout
+		}
+		ctx, cancel = with(ctx, e.Timeout)
 		defer cancel()
 	}
 	scopes := e.scopes(q)
@@ -232,6 +245,12 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 			}
 		}
 		res.Scopes[a.scope] = m
+	}
+	// The search's own deadline, not one its caller's context brought.
+	if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		for _, a := range answers {
+			res.TimedOut = res.TimedOut || a.err != nil
+		}
 	}
 	res.Hits = e.adjust(best, q.MinScore)
 	if q.Limit > 0 && len(res.Hits) > q.Limit {

@@ -20,9 +20,14 @@ var reachIDs = []string{"recall.hit_rate", "recall.empty_reasons", "recall.by_la
 
 func init() { register("reach", reachIDs, reach) }
 
-// memoryTools are the tool names (as suffixes: the MCP server prefixes
-// them) whose use in a turn counts as Claude looking at memory.
-var memoryTools = []string{"memory_search", "memory_read", "memory_store"}
+// memoryTools are the memory tool names (as suffixes: the MCP server
+// prefixes them); searchTools, those whose use in a turn counts as Claude
+// searching memory (search.rate): a store is not a search, as in stats'
+// Searches line and its injections followed by a search.
+var (
+	memoryTools = []string{"memory_search", "memory_read", "memory_store"}
+	searchTools = []string{"memory_search", "memory_read"}
+)
 
 // unknownKey labels a reason or a language the line did not carry.
 const unknownKey = "unknown"
@@ -142,7 +147,7 @@ func reach(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 }
 
 // promptRow is one prompt as reachPrompts reads it. lastSearch is the time
-// of the latest main-agent memory-tool use of the prompt (session, n), 0
+// of the latest main-agent search (searchTools) of the prompt (session, n), 0
 // for none: the prompt is searched for a window when it is at or after
 // the window's start.
 type promptRow struct {
@@ -189,12 +194,12 @@ func readPrompts(e env, w Window) (*promptRead, error) {
 }
 
 // loadPrompts reads the prompts of [lo, hi) with the time of their last
-// memory-tool use. The tool uses are read to the end of time, not to hi: a
+// search (searchTools). The tool uses are read to the end of time, not to hi: a
 // prompt's search may come after the end of its window.
 func loadPrompts(e env, lo, hi int64) (*promptRead, error) {
 	var names, args []any
 	var cond []string
-	for _, n := range memoryTools {
+	for _, n := range searchTools {
 		cond = append(cond, fmt.Sprintf(`substr(name, -%d) = ?`, len(n)))
 		names = append(names, n)
 	}
