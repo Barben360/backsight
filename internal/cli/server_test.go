@@ -195,8 +195,10 @@ var (
 	fakeOperations []string
 	fakeSeriesDown bool
 	// fakeQueuedOps are the pending operations the fake lists (each a
-	// JSON object, as fakeOp writes one), beside the queued count.
-	fakeQueuedOps []string
+	// JSON object, as fakeOp writes one), beside the queued count;
+	// fakeQueueStatus non-zero: listing the queue answers it.
+	fakeQueuedOps   []string
+	fakeQueueStatus int
 )
 
 // The created-day listing of the memory-docs step: fakeCreated is the bank
@@ -436,7 +438,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	refusedCalls.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	fakeHook = nil
-	fakeOperations, fakeSeriesDown, fakeQueuedOps = nil, false, nil
+	fakeOperations, fakeSeriesDown, fakeQueuedOps, fakeQueueStatus = nil, false, nil, 0
 	fakeCreated, fakeListCap, fakeListFilter, fakeListStatus, fakeListPage, fakeListLog = nil, 0, "", 0, nil, nil
 	documentNoUnits, fakeCalls = map[string]bool{}, map[string]int{}
 	fakeInFlight.Store(0)
@@ -947,6 +949,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				items = items[min(off, len(items)):min(off+lim, len(items))]
 			}
 			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(total) + `,"operations":[` + strings.Join(items, ",") + `]}`))
+		case strings.HasSuffix(r.URL.Path, "/operations") && fakeQueueStatus != 0 && (r.URL.Query().Get("status") == "pending" || r.URL.Query().Get("status") == "processing"):
+			w.WriteHeader(fakeQueueStatus)
 		case strings.HasSuffix(r.URL.Path, "/operations"):
 			// Pending and processing are reported separately, like Hindsight;
 			// only pending drains as it is polled.

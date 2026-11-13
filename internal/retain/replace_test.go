@@ -927,9 +927,10 @@ func TestAMarkPastPendingLimitWaitsForARunWithReads(t *testing.T) {
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
 }
 
-// The parts a pending replace remembers stay few: consecutive segments
-// sent to its document (a long first send, in chunks) are one range.
-func TestConsecutiveSegmentsAreOnePart(t *testing.T) {
+// A pending replace remembers one range per segment (each its own
+// document since decision 0090, read and judged a window at a time), and
+// the segments sent.
+func TestEachSegmentIsOneRange(t *testing.T) {
 	old := maxSegmentRecords
 	maxSegmentRecords = 2
 	t.Cleanup(func() { maxSegmentRecords = old })
@@ -938,8 +939,9 @@ func TestConsecutiveSegmentsAreOnePart(t *testing.T) {
 	expect(t, e.flush("sp1", Options{}), Sent, 5, 3)
 	e.turns(5, "r6")
 	expect(t, e.flush("sp1", Options{}), Sent, 1, 4)
-	if p := e.replaces()["billing"]; !reflect.DeepEqual(p.Parts, []RecordRange{{First: "r1", Last: "r6"}}) {
-		t.Errorf("parts %+v", p.Parts)
+	want := []RecordRange{{First: "r1", Last: "r2", Segment: 1}, {First: "r3", Last: "r4", Segment: 2}, {First: "r5", Last: "r5", Segment: 3}, {First: "r6", Last: "r6", Segment: 4}}
+	if p := e.replaces()["billing"]; !reflect.DeepEqual(p.Parts, want) || !slices.Equal(p.Segments, []int{1, 2, 3, 4}) {
+		t.Errorf("parts %+v, segments %v", p.Parts, p.Segments)
 	}
 }
 

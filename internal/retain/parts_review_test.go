@@ -113,32 +113,39 @@ func TestAPartTheServerNeverStoredIsSentAgain(t *testing.T) {
 	}
 }
 
-// A look reads the documents its sends wrote, and never more than the
-// run's budget: a check whose parts outnumber what is left is not looked
-// at in this run (never a partial read); one that can never fit a run is
-// given up at its limit, reported.
-func TestALookNeverReadsPastTheRunsBudget(t *testing.T) {
+// A look reads the documents its sends wrote, never more than the run's
+// budget: a long send (here five parts, two reads a run) is checked a
+// window at a time across runs, each window confirmed by two looks, and
+// a part lost in a later window is still sent again.
+func TestALongSendIsCheckedAWindowAtATime(t *testing.T) {
 	old := maxReplaceReads
 	maxReplaceReads = 2
 	t.Cleanup(func() { maxReplaceReads = old })
 	e := newEnv(t)
-	for i, u := range []string{"r1", "r2", "r3"} {
+	for i, u := range []string{"r1", "r2", "r3", "r4", "r5"} {
 		e.turns(i, u)
-		e.clock = e.clock.Add(3 * time.Hour)
+		e.clock = e.clock.Add(time.Minute)
 		expect(t, e.flush("sp1", Options{}), Sent, 1, i+1)
 	}
-	reads := e.hs.gets
-	e.tick()
-	if n := e.hs.gets - reads; n > maxReplaceReads {
-		t.Errorf("one run read %d documents (%v), the budget is %d", n, e.hs.reads[reads:], maxReplaceReads)
+	e.hs.mu.Lock()
+	delete(e.hs.docs, "conversation:sp1#part4")
+	delete(e.hs.content, "conversation:sp1#part4")
+	e.hs.mu.Unlock()
+	for range 12 {
+		reads := e.hs.gets
+		r := e.tick()
+		// A run that sends again also reads the chain's end (the resend's
+		// position, not a look).
+		if n := e.hs.gets - reads; r.Status != Sent && n > maxReplaceReads {
+			t.Errorf("one run read %d documents (%v), the budget is %d", n, e.hs.reads[reads:], maxReplaceReads)
+		}
+		if len(r.Unconfirmed) != 0 {
+			t.Fatalf("given up: %+v", r.Unconfirmed)
+		}
 	}
-	if _, ok := e.replaces()["billing"]; !ok {
-		t.Fatalf("the check was dropped unread: %+v", e.replaces())
-	}
-	e.clock = e.clock.Add(PendingLimit)
-	r := e.tick()
-	if _, ok := e.replaces()["billing"]; ok || len(r.Unconfirmed) != 1 {
-		t.Errorf("past its limit: pending %+v, unconfirmed %+v", e.replaces(), r.Unconfirmed)
+	e.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "r4", "r5")
+	if len(e.replaces()) != 0 {
+		t.Errorf("still pending: %+v", e.replaces())
 	}
 }
 

@@ -305,7 +305,7 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		case len(holes) > 0:
 			return fail("session "+s.sid+": the server has no "+strings.Join(holes, ", ")+", between parts it holds",
 				"nothing is queued on the server, so its retain failed or a restore lost it: the turns it held are not on the server",
-				"backsight jobs tick: within a day of the send, the session's check of its sends sends them again")
+				holeFix(s.cur, sd.Document, in.Now))
 		}
 		if i == 0 {
 			homeSegment = seg
@@ -463,4 +463,19 @@ func seconds(d time.Duration) int {
 		d = time.Minute
 	}
 	return int((d + time.Minute - 1).Truncate(time.Minute) / time.Second)
+}
+
+// holeFix is what sends again the turns of a part missing from doc's
+// chain: the session's pending check of its sends, while one is pending
+// for doc (jobs tick looks at it); otherwise retain resend-failed, which
+// lists the session when the server's failed retain names the part, and
+// sends it again whole.
+func holeFix(cur retain.Cursor, doc string, now time.Time) string {
+	for _, pr := range cur.Replaces {
+		if pr.Document == doc && now.Sub(pr.SentAt) < retain.PendingLimit {
+			return "nothing to do: the next jobs tick sends them again (this machine's check of the session's sends is pending until " +
+				pr.SentAt.Add(retain.PendingLimit).UTC().Format("2006-01-02 15:04") + " UTC)"
+		}
+	}
+	return "backsight retain resend-failed --plan: it lists the session when the server's failed retain names that part, and --answer resend=yes sends the session again whole"
 }

@@ -734,7 +734,20 @@ func TestLiveCheckFailsOnAPartMissingBetweenStoredOnes(t *testing.T) {
 	w.srv.docs["conversation:s#part3"] = hindsight.Document{ID: "conversation:s#part3", Metadata: map[string]string{"segment": "3", "last_uuid": "s-a3"}}
 	w.srv.memories = append(w.srv.memories, hindsight.Memory{ID: "f1", FactType: "world", DocumentID: "conversation:s", ConsolidatedAt: "2026-10-25T11:00:00+00:00"})
 	w.observation("o1", now.Add(-80*time.Minute), "f1")
-	want(t, w.checkAs("this-pc"), Fail, "conversation:s#part2")
+	// No check of the session's sends pending: the remedy is the resend.
+	r := w.checkAs("this-pc")
+	want(t, r, Fail, "conversation:s#part2")
+	if !strings.Contains(r.Fix, "retain resend-failed") || strings.Contains(r.Fix, "jobs tick") {
+		t.Errorf("fix without a pending check: %q", r.Fix)
+	}
+	// A check pending for the document: the next tick sends them again.
+	c.Replaces = map[string]retain.PendingReplace{"": {Document: "conversation:s", Segments: []int{2, 3}, SentAt: now.Add(-90 * time.Minute)}}
+	if err := retain.SaveCursor(w.cursors, "s", c); err != nil {
+		t.Fatal(err)
+	}
+	if r := w.checkAs("this-pc"); r.Status != Fail || !strings.Contains(r.Fix, "jobs tick") {
+		t.Errorf("fix with a pending check: %+v", r)
+	}
 	// An older build's appended document holds segments 1-2: no hole.
 	w.srv.docs["conversation:s"].Metadata["segment"] = "2"
 	want(t, w.checkAs("this-pc"), Pass, "")

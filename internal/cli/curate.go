@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,8 +130,11 @@ type purgeDoc struct {
 	ID       string `json:"id"`
 	Memories int    `json:"memories"`
 	Selected int    `json:"selected,omitempty"` // forget --project: the selected raw facts in it
-	// tomb: the document's tombstone, read from its metadata.
-	tomb state.Tombstone
+	// tomb: the document's tombstone, read from its metadata; segment:
+	// the last segment it holds (an older build's appended document holds
+	// several), 0 when unread or not a number.
+	tomb    state.Tombstone
+	segment int
 }
 
 // newForgetCmd is `forget <id> [--purge [--yes]] [--restore]` and `forget
@@ -359,32 +364,61 @@ func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, fact
 // a session's document reads, per status.
 const queuePagesBeforePurge = 5
 
-// queuedPartRefusal refuses a purge of a session's document while the
-// server's queue holds a retain that may write one of its parts (decision
-// 0090: a part is a document of its own; one whose retain is still queued
-// would land after the purge, under an id no tombstone names), or cannot
-// tell: the queue unread, longer than read, or holding a retain of no
-// single document. Nothing is deleted; the same command, run once the
-// queue is clear, purges it all.
-func queuedPartRefusal(ctx context.Context, cl *hindsight.Client, bank string, docs []purgeDoc) error {
-	chains := map[string]bool{}
+// lateParts are the tombstones of the parts of the sessions' documents in
+// docs that may still land after the purge (decision 0090: a part is a
+// document of its own, and one whose retain is still queued is stored
+// after the delete): the two after each chain's last part (its segment:
+// an older build's appended document holds several), and any the
+// server's queue names. Each copies the tombstone of its chain's last
+// part (the records it covers are the purge's, no more). note is for the
+// user when one may land: the queue names one, or cannot tell (unread,
+// longer than read, a retain of no single document). A purge is never
+// held for it: what exists goes now, and the look for recreated documents
+// purges a late part when it lands (jobs tick), or names it and waits
+// for retain purge-again when the user's consent is needed (hold).
+func lateParts(ctx context.Context, cl *hindsight.Client, bank string, docs []purgeDoc, hold string, at time.Time) ([]state.Tombstone, string) {
+	type chain struct {
+		last int
+		tomb state.Tombstone
+	}
+	chains := map[string]*chain{}
+	have := map[string]bool{}
 	for _, d := range docs {
-		if retain.HasConversation([]string{d.ID}) {
-			doc, _ := retain.ChainOf(d.ID)
-			chains[doc] = true
+		have[d.ID] = true
+		if !retain.HasConversation([]string{d.ID}) {
+			continue
+		}
+		doc, part := retain.ChainOf(d.ID)
+		c := chains[doc]
+		if c == nil {
+			c = &chain{}
+			chains[doc] = c
+		}
+		if part = max(part, d.segment, 1); part >= c.last {
+			c.last, c.tomb = part, d.tomb
+			if c.tomb.Document == "" {
+				c.tomb = retain.TombstoneOf(bank, d.ID, nil, at)
+			}
 		}
 	}
 	if len(chains) == 0 {
-		return nil
+		return nil, ""
 	}
-	again := ": nothing was deleted; run the same command again once the server's queue is clear (a few minutes)"
+	ids := map[string]string{} // part id → its chain
+	for doc, c := range chains {
+		for n := c.last + 1; n <= c.last+2; n++ {
+			ids[retain.PartID(doc, n)] = doc
+		}
+	}
+	queued, unsure := false, ""
 	for _, status := range []string{"pending", "processing"} {
 		ops, complete, err := cl.QueuedOperationsOf(ctx, bank, status, queuePagesBeforePurge)
-		switch {
-		case err != nil:
-			return &output.Error{Code: output.Blocked, Message: "the server's queue cannot be read, so a part of a session's document may still be on its way (" + err.Error() + ")" + again}
-		case !complete:
-			return &output.Error{Code: output.Blocked, Message: "the server's queue is longer than backsight reads, so a part of a session's document may still be on its way" + again}
+		if err != nil {
+			unsure = "the server's queue could not be read"
+			break
+		}
+		if !complete {
+			unsure = "the server's queue is longer than backsight reads"
 		}
 		for _, op := range ops {
 			if !strings.Contains(op.Type, "retain") {
@@ -393,13 +427,35 @@ func queuedPartRefusal(ctx context.Context, cl *hindsight.Client, bank string, d
 			doc, _ := retain.ChainOf(op.DocumentID)
 			switch {
 			case op.DocumentID == "":
-				return &output.Error{Code: output.Blocked, Message: "the server's queue holds a retain of several documents, which may write a part of a session's document" + again}
-			case chains[doc]:
-				return &output.Error{Code: output.Blocked, Message: "a retain of " + op.DocumentID + " is still queued on the server: it would land after the purge" + again}
+				unsure = "the server's queue holds a retain of several documents"
+			case chains[doc] != nil && !have[op.DocumentID]:
+				queued, ids[op.DocumentID] = true, doc
 			}
 		}
 	}
-	return nil
+	tombs := make([]state.Tombstone, 0, len(ids))
+	for id, doc := range ids {
+		if have[id] {
+			continue
+		}
+		t := chains[doc].tomb
+		t.Document, t.PurgedAt = id, at
+		tombs = append(tombs, t)
+	}
+	sort.Slice(tombs, func(i, j int) bool { return tombs[i].Document < tombs[j].Document })
+	note := ""
+	switch {
+	case queued:
+		note = "a part of this session that the server is still storing"
+	case unsure != "":
+		note = unsure + ", so a part of this session may still be on its way to it: such a part"
+	default:
+		return tombs, ""
+	}
+	if hold != "" {
+		return tombs, note + " is found when it lands, and waits for you (backsight doctor names it): " + hold
+	}
+	return tombs, note + " is purged automatically when it lands (backsight jobs tick)"
 }
 
 // purgeDocumentsByID reads each document for its memory count and
@@ -419,7 +475,8 @@ func purgeDocumentsByID(ctx context.Context, cl *hindsight.Client, bank string, 
 		if strings.HasPrefix(d, "note:") && doc.OriginalText != "" {
 			tomb.ContentSHA256 = retain.ContentHash(doc.OriginalText) // a backfill replays it under another id
 		}
-		out = append(out, purgeDoc{ID: d, Memories: doc.MemoryUnits, tomb: tomb})
+		seg, _ := strconv.Atoi(doc.Metadata["segment"])
+		out = append(out, purgeDoc{ID: d, Memories: doc.MemoryUnits, tomb: tomb, segment: seg})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -475,14 +532,14 @@ func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, gate fun
 	if err := gate(); err != nil {
 		return nil, "", err
 	}
-	if err := queuedPartRefusal(ctx, cl, bank, docs); err != nil {
-		return nil, "", err
-	}
 	// Before any delete: a purge stopped half way still holds what it
 	// deleted. A tombstone of a document left in place costs nothing (the
-	// server holds those records anyway).
+	// server holds those records anyway), nor does one of a part that never
+	// lands.
 	at := now().UTC().Truncate(time.Second)
-	tombs := make([]state.Tombstone, 0, len(docs))
+	late, lateNote := lateParts(ctx, cl, bank, docs, guardHold(cfg), at)
+	tombs := make([]state.Tombstone, 0, len(docs)+len(late))
+	tombs = append(tombs, late...)
 	for _, doc := range docs {
 		t := doc.tomb
 		if t.Document == "" { // not read through purgeDocuments
@@ -501,7 +558,8 @@ func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, gate fun
 	if err != nil {
 		return pages, "", err
 	}
-	return pages, mirrorTombstones(ctx, cl, d, bank), nil
+	notes := slices.DeleteFunc([]string{lateNote, mirrorTombstones(ctx, cl, d, bank)}, func(n string) bool { return n == "" })
+	return pages, strings.Join(notes, "; "), nil
 }
 
 // mirrorTombstones writes this client's tombstones of bank into its control

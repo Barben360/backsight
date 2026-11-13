@@ -245,12 +245,17 @@ func ChainEnd(ctx context.Context, get DocumentReader, doc string, from int) (en
 	return end, id, true, nil
 }
 
+// chainHoleReads bounds ChainHoles' reads (one per part).
+const chainHoleReads = 100
+
 // ChainHoles lists the parts of doc's chain before segment upTo that the
 // server does not hold: from the segment after doc's own (an appended
 // document from an older build holds its first segments) to upTo - 1.
 // ChainEnd steps over such a hole (parts may be stored out of order); a
 // hole that stays, nothing queued, is a part whose retain failed or was
 // lost. Nothing when doc is not stored or its segment is not a number.
+// One read per part, at most chainHoleReads in all (the parts nearest
+// upTo): verify --live's bound on a session of very many parts.
 func ChainHoles(ctx context.Context, get DocumentReader, doc string, upTo int) ([]string, error) {
 	d, err := get(ctx, doc)
 	var apiErr *hindsight.APIError
@@ -265,7 +270,7 @@ func ChainHoles(ctx context.Context, get DocumentReader, doc string, upTo int) (
 		return nil, nil
 	}
 	var holes []string
-	for s := seg + 1; s < upTo; s++ {
+	for s := max(seg+1, upTo-chainHoleReads); s < upTo; s++ {
 		_, err := get(ctx, PartID(doc, s))
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
