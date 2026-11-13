@@ -708,3 +708,141 @@ func TestSearchCountsHitsPerQuery(t *testing.T) {
 		t.Errorf("limit 1: per query %v", res.QueryHits)
 	}
 }
+
+// A memory's source is one word from the source: tags of the fact, or of
+// an observation's source facts: two different words are mixed, an
+// unknown source is other, no source tag no word.
+func TestSourceOf(t *testing.T) {
+	for _, c := range []struct {
+		tags [][]string
+		want string
+	}{
+		{[][]string{{"project:p", "source:chat"}}, "session"},
+		{[][]string{{"source:note", "kind:decision"}}, "note"},
+		{[][]string{{"source:subagent"}}, "subagent"},
+		{[][]string{{"source:import"}}, "import"},
+		{[][]string{{"source:verify"}}, "other"},
+		{[][]string{{"source:"}}, "other"},
+		{[][]string{{"project:p"}, {"source:note"}, {"source:note"}}, "note"},
+		{[][]string{{"project:p"}, {"source:chat", "source:note"}}, "mixed"},
+		{[][]string{{"source:chat"}, {"source:subagent"}}, "mixed"},
+		{[][]string{{"project:p", "kind:state"}}, ""},
+		{nil, ""},
+	} {
+		if got := SourceOf(c.tags...); got != c.want {
+			t.Errorf("SourceOf(%v) = %q, want %q", c.tags, got, c.want)
+		}
+	}
+}
+
+// Provenance asks for the source facts, as Kinds does, and fills each
+// hit's Source; a raw fact's comes from its own tags on any search; an
+// observation whose source facts were cut has none.
+func TestSearchProvenance(t *testing.T) {
+	obs := `{"results":[
+		{"id":"o1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2"],"scores":{"reranker":0.8}},
+		{"id":"o2","text":"Other.","type":"observation","tags":["project:billing"],"source_fact_ids":["gone"],"scores":{"reranker":0.7}},
+		{"id":"o3","text":"Noted.","type":"observation","tags":["project:billing"],"source_fact_ids":["f3"],"scores":{"reranker":0.6}}],
+		"source_facts":{"f1":{"tags":["kind:state","source:chat"]},"f2":{"tags":["source:note"]},"f3":{"tags":["source:note"]}}}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	got := map[string]string{}
+	for _, h := range res.Hits {
+		got[h.ID] = h.Source
+		if h.Kinds != nil {
+			t.Errorf("provenance alone filled the kinds: %+v", h)
+		}
+	}
+	// o2's one fact is missing from an answer without the truncation flag
+	// (an older server): truncated, so unknown, so mixed
+	if got["o1"] != "mixed" || got["o2"] != "mixed" || got["o3"] != "note" {
+		t.Errorf("sources %v", got)
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, "source_facts") {
+			t.Errorf("a call did not ask for the source facts: %s", b)
+		}
+	}
+	raw := `{"results":[{"id":"w1","text":"A raw fact.","type":"world","tags":["project:billing","source:import"],"scores":{"reranker":0.9}}]}`
+	res = kindsEngine(t, `{"results":[]}`, raw, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "import" {
+		t.Errorf("raw fact: %+v", res.Hits)
+	}
+}
+
+// The source facts are capped per response: an observation some or all of
+// whose facts the response left out may rest on any source, so its word
+// is mixed, a claim to verify (0089 review S2 and round 2: lower-ranked
+// hits are the ones that lose their facts).
+func TestSearchProvenanceWithFactsPastTheCap(t *testing.T) {
+	obs := `{"results":[
+		{"id":"o1","text":"Mostly chat.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2","f9"],"scores":{"reranker":0.8}},
+		{"id":"o2","text":"All cut.","type":"observation","tags":["project:billing"],"source_fact_ids":["g1","g2"],"scores":{"reranker":0.7}},
+		{"id":"o3","text":"All there.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2"],"scores":{"reranker":0.6}}],
+		"source_facts":{"f1":{"tags":["source:chat"]},"f2":{"tags":["source:chat"]}},"source_facts_truncated":true}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	got := map[string]string{}
+	for _, h := range res.Hits {
+		got[h.ID] = h.Source
+	}
+	if got["o1"] != "mixed" || got["o2"] != "mixed" || got["o3"] != "session" {
+		t.Errorf("sources %v", got)
+	}
+}
+
+// Provenance alone (the hook recalls) asks a smaller source-facts budget
+// than a search showing kinds: only the tags are read, and the server
+// spends the budget in rank order (0089 review S6).
+func TestProvenanceAsksTheHookBudget(t *testing.T) {
+	var bodies []string
+	kindsEngine(t, `{"results":[]}`, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	for _, b := range bodies {
+		if strings.Contains(b, "observation") && !strings.Contains(b, `"source_facts":{"max_tokens":2048}`) {
+			t.Errorf("provenance call: %s", b)
+		}
+	}
+	bodies = nil
+	kindsEngine(t, `{"results":[]}`, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Kinds: true, Provenance: true})
+	for _, b := range bodies {
+		if strings.Contains(b, "observation") && !strings.Contains(b, `"source_facts":{"max_tokens":8192}`) {
+			t.Errorf("kinds call: %s", b)
+		}
+	}
+}
+
+// A fact missing from a response the server says it did not truncate did
+// not resolve (gone): it leaves the word as the other facts give it.
+func TestSearchProvenanceIgnoresGoneFactsWhenNotTruncated(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"Chat.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","gone"],"scores":{"reranker":0.8}}],
+		"source_facts":{"f1":{"tags":["source:chat"]}},"source_facts_truncated":false}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "session" {
+		t.Errorf("%+v", res.Hits)
+	}
+}
+
+// A recall that asked no source facts knows nothing of them: its
+// observations get no word, not mixed.
+func TestSearchWithoutSourceFactsLabelsNothing(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"t","type":"observation","tags":["project:billing"],"source_fact_ids":["f1"],"scores":{"reranker":0.8}}]}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "" {
+		t.Errorf("%+v", res.Hits)
+	}
+}
+
+// An observation without source facts has only its own tags, which hold
+// the source tags of some of its facts at most: mixed, as the briefing's
+// listed observations; a raw fact keeps its exact tags (0089 review
+// round 3).
+func TestObservationWithoutSourceFactsIsMixed(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"t","type":"observation","tags":["project:billing","source:chat"],"scores":{"reranker":0.8}}]}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "mixed" {
+		t.Errorf("%+v", res.Hits)
+	}
+}

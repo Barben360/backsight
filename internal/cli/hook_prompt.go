@@ -580,7 +580,7 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string, budget tim
 	at := now()
 	items = make([]session.Injection, 0, len(chosen))
 	for _, hit := range chosen {
-		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
+		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Source: hit.Source, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
 	}
 	return sel, flags, items, res, ""
 }
@@ -664,7 +664,7 @@ func (h *hookEnv) searchPrompt(prompt string, budget time.Duration) (string, rec
 	}
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: budget, Budget: searchBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
-	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Projects: named, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
+	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Projects: named, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20, Provenance: true})
 }
 
 var (
@@ -741,7 +741,7 @@ func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool)
 			s.CutCount++
 			continue
 		}
-		prefix, suffix := "- "+memoryTag(hit.Project, hit.ID)+" ", age(hit.Age)+"\n"
+		prefix, suffix := "- "+memoryTag(hit.Project, hit.Source, hit.ID)+" ", age(hit.Age)+"\n"
 		textRoom := rc.PromptChars - used - len([]rune(prefix)) - len([]rune(suffix))
 		text := strings.Join(strings.Fields(hit.Text), " ")
 		switch {

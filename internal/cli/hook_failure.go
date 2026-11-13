@@ -141,7 +141,7 @@ func (h *hookEnv) toolFailure() []byte {
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: h.budget(failureBudget), Budget: searchBudget, Now: now, Boost: rc.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Related: related,
-		MinReranker: failureMinScore, GlobalMinReranker: max(failureMinScore, rc.GlobalMinScore), Limit: 20})
+		MinReranker: failureMinScore, GlobalMinReranker: max(failureMinScore, rc.GlobalMinScore), Limit: 20, Provenance: true})
 	failed := len(res.Scopes) > 0
 	for _, m := range res.Scopes {
 		failed = failed && !m.OK
@@ -177,7 +177,7 @@ func (h *hookEnv) toolFailure() []byte {
 			if !slices.Contains(s.Seen, hit.ID) {
 				s.Seen = append(s.Seen, hit.ID)
 			}
-			s.Injected = append(s.Injected, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: s.Prompts, Rule: "failure", At: at})
+			s.Injected = append(s.Injected, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Source: hit.Source, Score: hit.Score, Scope: hit.Scope, Prompt: s.Prompts, Rule: "failure", At: at})
 		}
 		s.KeepShownTexts(hitTexts(chosen))
 		s.CharsInjected += len([]rune(text))

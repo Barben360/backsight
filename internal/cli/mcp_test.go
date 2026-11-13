@@ -1070,7 +1070,10 @@ func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
 	)
 	showItems(t, home, "S", "search", "proj", feedback.Item{ID: creditA, Rank: 1, Project: "proj"}, feedback.Item{ID: foreign, Rank: 2, Project: "other"},
 		feedback.Item{ID: linked, Rank: 3, Project: "atlas-spec"}, feedback.Item{ID: pool, Rank: 4, Project: alias})
-	rawFact(creditA, foreign, linked, pool)
+	rawFact(creditA)
+	rawFactIn("other", foreign)
+	rawFactIn("atlas-spec", linked)
+	rawFactIn(alias, pool)
 	before := retained.Load()
 	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "ffffffff")); !isErr || !strings.Contains(out, "ffffffff: not shown in this session") {
 		t.Errorf("unshown: %v %s", isErr, out)
@@ -1091,7 +1094,7 @@ func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
 		t.Errorf("linked: note tags %q", last)
 	}
 	// a linked project's memory alone: its project
-	rawFact(linked)
+	rawFactIn("atlas-spec", linked)
 	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "dddddddd")); isErr || !retiredRE.MatchString(out) {
 		t.Errorf("linked alone: %v %s", isErr, out)
 	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:atlas-spec,") {
@@ -1271,9 +1274,13 @@ func TestVerdictRefusedOnAnotherServer(t *testing.T) {
 }
 
 // rawFact makes each id a world fact of project proj on the fake server.
-func rawFact(ids ...string) {
+func rawFact(ids ...string) { rawFactIn("proj", ids...) }
+
+// rawFactIn makes ids raw facts of project on the fake server: the server
+// is what memory_credit asks whose memory it is.
+func rawFactIn(project string, ids ...string) {
 	for _, id := range ids {
-		memories[id] = `{"id":"` + id + `","text":"Billing runs PostgreSQL 14.","type":"world","tags":["project:proj"]}`
+		memories[id] = `{"id":"` + id + `","text":"Billing runs PostgreSQL 14.","type":"world","tags":["project:` + project + `"]}`
 	}
 }
 

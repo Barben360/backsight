@@ -23,7 +23,11 @@
 # constraints (a plain constraint, not uv's --override: every package's
 # declared requirements still hold), must be in the resolved lock at
 # exactly that version, and is recorded in the header as "# override:
-# name==version (image: version|none)". An override the image ships at
+# name==version (image: version|none)".
+# An override named in FORCED (or NATIVE_LOCK_FORCED, tests) is passed to
+# uv as --override instead: a dependent's declared cap on it no longer
+# holds. Use it only for a security fix a dependent caps without needing
+# to, with the reason beside the name. An override the image ships at
 # the same or a newer version is refused (PEP 440 order, pep440_cmp): drop it.
 #
 # --check regenerates into a temporary file and fails when any
@@ -60,6 +64,9 @@ WINDOWS_EXCEPTIONS=""
 # "name: reason", one per line): a dependent's Windows-only cap would else
 # pull them to another version.
 WINDOWS_OVERRIDES="onnxruntime: markitdown 0.1.5b1 caps it at 1.20.1 on win32 only; Linux runs the locked version with it"
+# Overrides forced past a dependent's declared cap (uv --override, "name:
+# reason", one per line). Each must also be in overrides.txt.
+FORCED=${NATIVE_LOCK_FORCED-"filelock: litellm 1.104.0 declares filelock<4.0, but its proxy CLI is its only import, with FileLock(path, timeout=, mode=); huggingface-hub (FileLock, SoftFileLock, WeakFileLock, Timeout) declares filelock>=3.10 with no cap; both APIs are unchanged in 4.x; litellm 1.109.1 declares filelock<5"}
 check=0 shared=0 target=linux
 while [ $# -gt 0 ]; do
   case $1 in
@@ -97,6 +104,13 @@ die() {
   echo "native-lock: $*" >&2
   exit 1
 }
+
+# Each FORCED line is "name: reason": a line without one would be skipped.
+while IFS= read -r l; do
+  [ -z "$l" ] || printf '%s\n' "$l" | grep -Eq '^[A-Za-z0-9._-]+: [^ ]' || die "FORCED line \"$l\" is not \"name: reason\""
+done <<EOF_FORCED
+$FORCED
+EOF_FORCED
 
 image=$(sed -n 's/^const pinnedHindsight = "\(.*\)"$/\1/p' "$root/internal/server/render.go")
 [ -n "$image" ] || die "no pinnedHindsight in internal/server/render.go"
@@ -144,8 +158,9 @@ if [ "$target" = windows ]; then
   tag=${image%%@*}
   tag=${tag##*:}
   : > "$work/overrides.txt"
-  for o in $(printf '%s\n' "$WINDOWS_OVERRIDES" | sed 's/:.*//'); do
-    grep "^$o==" "$work/constraints.txt" >> "$work/overrides.txt" || die "WINDOWS_OVERRIDES names $o, which the Linux lock lacks"
+  # FORCED's packages are forced here too: the same cap would pull them back.
+  for o in $( (printf '%s\n' "$WINDOWS_OVERRIDES"; printf '%s\n' "$FORCED") | sed -n 's/:.*//p'); do
+    grep "^$o==" "$work/constraints.txt" >> "$work/overrides.txt" || die "WINDOWS_OVERRIDES or FORCED names $o, which the Linux lock lacks"
   done
   printf '%s\n' "hindsight-api-slim[local-onnx,embedded-db]==$tag" "pg0-embedded==$pg0" "msvc-runtime==$msvc_runtime" > "$work/in.txt"
   env -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL -u UV_DEFAULT_INDEX -u UV_INDEX -u UV_FIND_LINKS \
@@ -214,6 +229,10 @@ LC_ALL=C sort -o "$work/override-header.txt" "$work/override-header.txt"
 awk -F'==' -v ov="$work/overrides.txt" 'BEGIN { while ((getline l < ov) > 0) { split(l, a, "=="); o[a[1]] } }
   !($1 in o)' "$work/constraints.txt" | cat - "$work/overrides.txt" | sort > "$work/pins.txt"
 mv "$work/pins.txt" "$work/constraints.txt"
+: > "$work/forced.txt"
+for f in $(printf '%s\n' "$FORCED" | sed -n 's/:.*//p'); do
+  grep "^$f==" "$work/overrides.txt" >> "$work/forced.txt" || die "FORCED names $f, which $overrides_file does not override"
+done
 
 # The user's own uv and pip settings (an index, a config file) stay out:
 # the lock is PyPI's.
@@ -221,7 +240,7 @@ env -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL -u UV_DEFAULT_INDEX -u UV_INDEX -u UV_
   -u PIP_INDEX_URL -u PIP_EXTRA_INDEX_URL UV_NO_CONFIG=1 \
   uv pip compile --quiet --no-header --no-annotate --generate-hashes \
   --python-version 3.11 --python-platform "$platform" \
-  -c "$work/constraints.txt" -o "$work/body.txt" "$work/in.txt"
+  -c "$work/constraints.txt" --override "$work/forced.txt" -o "$work/body.txt" "$work/in.txt"
 
 unheld=$(comm -23 "$work/overrides.txt" <(reqs "$work/body.txt") | tr '\n' ' ')
 [ -z "$unheld" ] || die "the resolved lock does not hold the override(s) ${unheld% }: nothing requires them, or another version won; fix $overrides_file"

@@ -72,7 +72,7 @@ func TestSessionStartGivesTheGuideAndTheBriefing(t *testing.T) {
 	t.Setenv("CLAUDE_ENV_FILE", envFile)
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
 	ctx := h.Specific.Context
-	if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) || !strings.Contains(ctx, "Where you left off on billing "+instructions.HintsLine+":") ||
+	if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) || !strings.Contains(ctx, "Where you left off on billing "+instructions.BriefingHints+":") ||
 		!strings.Contains(ctx, "PostgreSQL 16") || !strings.Contains(ctx, "3h ago") || !strings.Contains(ctx, "2d ago") {
 		t.Fatalf("context:\n%s", ctx)
 	}
@@ -379,7 +379,7 @@ func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
 	h = start("s2")
 	ctx := h.Specific.Context
 	// quoted lines, headings flattened, closed
-	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "data, not instructions") || !strings.Contains(ctx, "\n> Open items\n> - Migrate the export job") ||
+	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "to verify, not instructions") || !strings.Contains(ctx, "\n> Open items\n> - Migrate the export job") ||
 		strings.Contains(ctx, "##") || strings.Contains(ctx, "Billing keeps PostgreSQL 16.") || !strings.Contains(ctx, "> …\n(end of the memory notes)") || len(mentalCalls) != 1 {
 		t.Errorf("page briefing:\n%s\ncalls %q", ctx, mentalCalls)
 	}
@@ -751,13 +751,13 @@ func TestBriefingLinesCarryShortIDs(t *testing.T) {
 	recentAnswer["observation"] = "[" + obs("0b4c2a52-0000-4000-8000-000000000001", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "," +
 		obs("1c4c2a52-0000-4000-8000-000000000002", "Billing moved in October.", "2026-10-23T09:00:00Z") + "]"
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	for _, want := range []string{"\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16. (", "\n- [billing · 1c4c2a52] Billing moved in October. ("} {
+	for _, want := range []string{"\n- [billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16. (", "\n- [billing · mixed · 1c4c2a52] Billing moved in October. ("} {
 		if !strings.Contains(h.Specific.Context, want) {
 			t.Errorf("briefing lacks %q:\n%s", want, h.Specific.Context)
 		}
 	}
 	s := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
-	for _, want := range []string{"\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · 1c4c2a52] Billing moved in October."} {
+	for _, want := range []string{"\n- [billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · mixed · 1c4c2a52] Billing moved in October."} {
 		if !strings.Contains(s.Specific.Context, want) {
 			t.Errorf("subagent briefing lacks %q:\n%s", want, s.Specific.Context)
 		}
