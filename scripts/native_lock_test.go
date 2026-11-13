@@ -142,7 +142,7 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 		if string(got) != lockHeader+lockBody {
 			t.Errorf("lock:\n%s\nwant:\n%s", got, lockHeader+lockBody)
 		}
-		for _, want := range []string{"uv pip compile ", "--generate-hashes", "--python-version 3.11 ", "--python-platform x86_64-manylinux_2_28"} {
+		for _, want := range []string{"uv pip compile ", "--generate-hashes", "--python-version 3.11.17 --python-platform x86_64-manylinux_2_28"} {
 			if !strings.Contains(calls, want) {
 				t.Errorf("uv pip compile lacks %q:\n%s", want, calls)
 			}
@@ -397,7 +397,7 @@ func TestNativeLockScriptWindows(t *testing.T) {
 			t.Errorf("roots %q, want %q", in, want)
 		}
 		calls, _ := os.ReadFile(filepath.Join(lastFake, "calls"))
-		for _, want := range []string{"--python-platform x86_64-pc-windows-msvc", "--python-version 3.11 ", "--generate-hashes", "--override "} {
+		for _, want := range []string{"--python-version 3.11.17 --python-platform x86_64-pc-windows-msvc", "--generate-hashes", "--override "} {
 			if !strings.Contains(string(calls), want) {
 				t.Errorf("uv pip compile lacks %q:\n%s", want, calls)
 			}
