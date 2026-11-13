@@ -95,7 +95,7 @@ func (c *Client) Recall(ctx context.Context, bank string, req RecallRequest) ([]
 		for _, id := range h.SourceFactIDs {
 			// a fact missing from an untruncated response did not resolve
 			// (gone); one missing from a truncated one is unknown
-			if _, ok := out.SourceFacts[id]; !ok && (out.SourceFactsTruncated == nil || *out.SourceFactsTruncated) {
+			if _, ok := out.SourceFacts[id]; !ok && req.SourceFacts && (out.SourceFactsTruncated == nil || *out.SourceFactsTruncated) {
 				out.Results[i].SourceFactsMissing++
 			}
 			for _, t := range out.SourceFacts[id].Tags {

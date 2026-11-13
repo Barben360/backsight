@@ -696,7 +696,9 @@ func TestSearchProvenance(t *testing.T) {
 			t.Errorf("provenance alone filled the kinds: %+v", h)
 		}
 	}
-	if got["o1"] != "mixed" || got["o2"] != "" || got["o3"] != "note" {
+	// o2's one fact is missing from an answer without the truncation flag
+	// (an older server): truncated, so unknown, so mixed
+	if got["o1"] != "mixed" || got["o2"] != "mixed" || got["o3"] != "note" {
 		t.Errorf("sources %v", got)
 	}
 	for _, b := range bodies {
@@ -711,10 +713,10 @@ func TestSearchProvenance(t *testing.T) {
 	}
 }
 
-// The source facts are capped per response: an observation some of whose
-// facts the response left out may rest on any source, so its word is
-// mixed, a claim to verify (0089 review S2); one none of whose facts came
-// back keeps no word.
+// The source facts are capped per response: an observation some or all of
+// whose facts the response left out may rest on any source, so its word
+// is mixed, a claim to verify (0089 review S2 and round 2: lower-ranked
+// hits are the ones that lose their facts).
 func TestSearchProvenanceWithFactsPastTheCap(t *testing.T) {
 	obs := `{"results":[
 		{"id":"o1","text":"Mostly chat.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2","f9"],"scores":{"reranker":0.8}},
@@ -727,7 +729,7 @@ func TestSearchProvenanceWithFactsPastTheCap(t *testing.T) {
 	for _, h := range res.Hits {
 		got[h.ID] = h.Source
 	}
-	if got["o1"] != "mixed" || got["o2"] != "" || got["o3"] != "session" {
+	if got["o1"] != "mixed" || got["o2"] != "mixed" || got["o3"] != "session" {
 		t.Errorf("sources %v", got)
 	}
 }
@@ -760,6 +762,17 @@ func TestSearchProvenanceIgnoresGoneFactsWhenNotTruncated(t *testing.T) {
 	var bodies []string
 	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
 	if len(res.Hits) != 1 || res.Hits[0].Source != "session" {
+		t.Errorf("%+v", res.Hits)
+	}
+}
+
+// A recall that asked no source facts knows nothing of them: its
+// observations get no word, not mixed.
+func TestSearchWithoutSourceFactsLabelsNothing(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"t","type":"observation","tags":["project:billing"],"source_fact_ids":["f1"],"scores":{"reranker":0.8}}]}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "" {
 		t.Errorf("%+v", res.Hits)
 	}
 }

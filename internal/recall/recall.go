@@ -224,7 +224,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
 			}
 			h.Source = SourceOf(r.Tags, r.SourceTags)
-			if h.Source != "" && r.SourceFactsMissing > 0 {
+			if r.SourceFactsMissing > 0 {
 				h.Source = "mixed" // the facts past the cap may rest on any source (decision 0089)
 			}
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {

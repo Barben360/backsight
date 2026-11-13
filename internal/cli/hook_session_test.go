@@ -751,13 +751,13 @@ func TestBriefingLinesCarryShortIDs(t *testing.T) {
 	recentAnswer["observation"] = "[" + obs("0b4c2a52-0000-4000-8000-000000000001", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "," +
 		obs("1c4c2a52-0000-4000-8000-000000000002", "Billing moved in October.", "2026-10-23T09:00:00Z") + "]"
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	for _, want := range []string{"\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16. (", "\n- [billing · 1c4c2a52] Billing moved in October. ("} {
+	for _, want := range []string{"\n- [billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16. (", "\n- [billing · mixed · 1c4c2a52] Billing moved in October. ("} {
 		if !strings.Contains(h.Specific.Context, want) {
 			t.Errorf("briefing lacks %q:\n%s", want, h.Specific.Context)
 		}
 	}
 	s := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
-	for _, want := range []string{"\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · 1c4c2a52] Billing moved in October."} {
+	for _, want := range []string{"\n- [billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · mixed · 1c4c2a52] Billing moved in October."} {
 		if !strings.Contains(s.Specific.Context, want) {
 			t.Errorf("subagent briefing lacks %q:\n%s", want, s.Specific.Context)
 		}

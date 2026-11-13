@@ -5,9 +5,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/session"
 )
 
 // A memory's tag names its source between the project and the short id;
@@ -165,5 +167,36 @@ func TestRawBriefingTagsTheSource(t *testing.T) {
 	sub := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
 	if !strings.Contains(sub.Specific.Context, "- [billing · note · f1aaaaaa] We keep PostgreSQL 16.") {
 		t.Errorf("subagent:\n%s", sub.Specific.Context)
+	}
+}
+
+// The recent briefing lists observations without their facts: an
+// observation's own tags hold its scope and only some facts' source tags
+// (the server merges a fact's tags on update, not at creation), so its
+// source is unknown and it shows mixed, a claim to verify (0089 review
+// round 2). A raw fact's own tags are exact (TestRawBriefingTagsTheSource).
+func TestRecentBriefingObservationsAreMixed(t *testing.T) {
+	home := hookHome(t)
+	recentAnswer["observation"] = `[{"id":"0a0a0a0a-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","fact_type":"observation","tags":["project:billing","source:chat"],"updated_at":"2026-10-24T09:00:00Z"}]`
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "- [billing · mixed · 0a0a0a0a] Billing keeps PostgreSQL 16.") {
+		t.Errorf("briefing:\n%s", h.Specific.Context)
+	}
+}
+
+// After a compaction, the memories replayed carry the same tag as
+// everywhere else: project, source and short id.
+func TestCompactReplayTagsCarryTheID(t *testing.T) {
+	home := hookHome(t)
+	compactSession(t, home)
+	_ = sessions(home).Update("s1", func(st *session.State) error {
+		st.Injected[len(st.Injected)-1].Source = "note"
+		return nil
+	})
+	id := briefingModelID("billing")
+	mentalModels[id] = pageAt(id, "## Open items\n- Ship the invoice export", time.Now().Add(-2*time.Hour).UTC().Format("2006-01-02T15:04:05.000000+00:00"))
+	c := compact(t, home)
+	if !strings.Contains(c, "- [billing · note · m8] memory 8") || !strings.Contains(c, "- [billing · m7] memory 7") {
+		t.Errorf("compact:\n%s", c)
 	}
 }
