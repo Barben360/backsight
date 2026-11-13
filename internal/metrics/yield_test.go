@@ -684,3 +684,86 @@ func TestYieldIgnoresBriefingPages(t *testing.T) {
 		t.Errorf("unresolved %v gone %v resolved_used %v, want 0, 0 and 14", m.Extra["unresolved"], m.Extra["gone"], m.Extra["resolved_used"])
 	}
 }
+
+// ydEmptyUntil records every day of the yield span before first as a day
+// with no new memory (what the server's series says of the days before the
+// bank began).
+func (x *fx) ydEmptyUntil(first string) {
+	x.t.Helper()
+	for d := ydDate("2026-07-27"); d.Before(ydDate(first)); d = d.AddDate(0, 0, 7) {
+		x.ydDays(d.Format("2006-01-02"), 0)
+	}
+}
+
+// Memory began in the middle of the span (a bank started 2026-09-23): the
+// weeks before held no memory, and are no cohort to report. The headline
+// is the latest complete week that held memories, with its credited ones.
+func TestYieldLeavesOutTheWeeksBeforeTheFirstMemory(t *testing.T) {
+	x := ydFx(t)
+	x.ydEmptyUntil(ydWeek)
+	x.mrec(rcBase, metricsfile.ServerDay{Bucket: ydDate("2026-09-21"), New: &metricsfile.KindCounts{}})
+	x.mrec(rcBase, metricsfile.ServerDay{Bucket: ydDate("2026-09-22"), New: &metricsfile.KindCounts{}})
+	for i := 2; i < 7; i++ {
+		x.ydDay(ydDate(ydWeek).AddDate(0, 0, i).Format("2006-01-02"), 9, nil)
+	}
+	x.ydDays("2026-09-28", 40)
+	x.ydListed()
+	x.ydMemory("c1", "2026-09-23")
+	x.ydUsed("c1", ydDate("2026-10-02"), "")
+	x.ydMemory("c2", "2026-09-26")
+	x.ydUsed("c2", ydDate("2026-10-20"), "")
+	m := yieldOf(x, x.query(30))
+	if len(m.Series) == 0 || m.Series[0].Week != ydWeek {
+		var weeks []string
+		for _, p := range m.Series {
+			weeks = append(weeks, p.Week)
+		}
+		t.Fatalf("weeks %v, want them to start at the first week with memories, %s", weeks, ydWeek)
+	}
+	p := m.Series[0]
+	if p.Complete == nil || !*p.Complete {
+		t.Errorf("the week of %s complete = %v, want true", ydWeek, p.Complete)
+	}
+	wantInt(t, "week num", p.Num, 2)
+	wantInt(t, "week den", p.Den, 45)
+	wantInt(t, "metric num", m.Num, 2)
+	wantInt(t, "metric den", m.Den, 45)
+	if q := weekOf(t, m, "2026-09-28"); q.Complete == nil || *q.Complete {
+		t.Errorf("the current week reads complete: %v", q.Complete)
+	}
+}
+
+// Memory began in a week whose 28 days are not over: no week is old enough
+// to judge, whatever the empty weeks before say ("0 of 0" read as a
+// result).
+func TestYieldWithOnlyRecentMemoriesHasNoCompleteWeek(t *testing.T) {
+	x := ydFx(t)
+	x.ydEmptyUntil("2026-09-28")
+	x.ydDays("2026-09-28", 40)
+	x.ydDays("2026-10-05", 40)
+	x.ydListed()
+	x.ydMemory("c1", "2026-09-29")
+	x.ydUsed("c1", ydDate("2026-10-02"), "")
+	m := yieldOf(x, x.query(30))
+	if m.Status != StatusNoData || m.Reason != ReasonNoCompleteWeek || m.Num != nil || m.Den != nil {
+		t.Errorf("status %q reason %q num %v den %v, want no_data, no_complete_week and no figures", m.Status, m.Reason, m.Num, m.Den)
+	}
+	if len(m.Series) == 0 || m.Series[0].Week != "2026-09-28" {
+		t.Errorf("series %v, want it to start at 2026-09-28", m.Series)
+	}
+}
+
+// A week with no new memory after memory began is a real zero, and stays.
+func TestYieldKeepsAnEmptyWeekAfterTheFirstMemory(t *testing.T) {
+	x := ydFx(t)
+	x.ydEmptyUntil("2026-09-14")
+	x.ydDays("2026-09-14", 30)
+	x.ydDays(ydWeek, 0)
+	x.ydListed()
+	m := yieldOf(x, x.query(30))
+	p := weekOf(t, m, ydWeek)
+	wantInt(t, "empty week den", p.Den, 0)
+	if m.Series[0].Week != "2026-09-14" {
+		t.Errorf("first week %s, want 2026-09-14", m.Series[0].Week)
+	}
+}

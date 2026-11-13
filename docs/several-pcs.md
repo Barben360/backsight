@@ -133,7 +133,7 @@ backsight stats cost --machines all --days 30
 
 With a tailnet address, a laptop reaches the host from anywhere Tailscale is up; with a LAN address, only at home. A laptop that cannot reach the host, or a host that is off, costs you recall, not data:
 
-- **Prompts.** backsight gives the server 3 s to accept a connection. Each prompt then costs at most about 3 s, until 3 prompts in a row failed: recall pauses for 5 minutes and prompts are no longer delayed (`network.breaker_*` in [configuration.md](configuration.md#network)). Hooks keep their time limits.
+- **Prompts.** backsight gives the server 3 s to accept a connection. Each prompt then costs at most about 3 s, until 3 prompts in a row failed: recall pauses for 5 minutes and prompts are no longer delayed (`network.breaker_*` in [configuration.md](configuration.md#network)). A server that takes the call and does not answer pauses recall after one prompt, which waited the recall's 17 s. Hooks keep their time limits.
 - **Notes** Claude stores wait in this PC's queue, and **sessions** in Claude Code's transcripts or Codex's sessions.
 - **After an hour** without an answer, the next session's start line adds "⚠️ memory server silent since …", and doctor's `server-reach` check warns: when the server last answered, whether recall is paused, how many notes are queued and how many sessions wait. The `Server` line of `backsight stats` shows the same record, read on this PC without asking the server.
 - **Back home**, the next `backsight jobs tick` (every 15 minutes) sends everything that waited.

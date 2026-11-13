@@ -114,7 +114,7 @@ A purge (`forget --purge`) of a session's document deletes every part of it. Aft
 
 ## Time and context it costs
 
-**Time.** Only prompts that recall wait for the server; the others add a few milliseconds. On a CPU, nearly all of a recall is the reranker: about 1.5 s typical and 2 to 2.5 s at worst, measured on a desktop CPU with a memory of several thousand items. It grows with the memory. doctor's `latency` check warns when the prompt hook's 95th percentile is over 2.5 s across 7 days (not once the last 24 h, from 20 recalls, are back under it: it then reads info, "improving"); [troubleshooting.md](troubleshooting.md#slow-recall-and-gpu-acceleration) has the levers. After 3 recalls in a row fail, recall pauses for 5 minutes (`network.breaker_*`).
+**Time.** Only prompts that recall wait for the server; the others add a few milliseconds. On a CPU, nearly all of a recall is the reranker: about 1.5 s typical and 2 to 2.5 s at worst, measured on a desktop CPU with a memory of several thousand items. It grows with the memory. doctor's `latency` check warns when the prompt hook's 95th percentile is over 2.5 s across 7 days (not once the last 24 h, from 20 recalls, are back under it: it then reads info, "improving"); [troubleshooting.md](troubleshooting.md#slow-recall-and-gpu-acceleration) has the levers. After 3 recalls in a row fail at once (the server refuses, or is not there), or after one prompt recall that ran out of its time (the server took the call and did not answer, for part of the search or all of it: its reranker busy with a large extraction, for example), recall pauses for 5 minutes (`network.breaker_*`). After the pause, a recall gets 8 s instead of the usual 17 s until one answers, so a server still stuck costs a prompt 8 s every 5 minutes at most.
 
 **Context.** What backsight adds to Claude's context window:
 
@@ -130,7 +130,7 @@ A purge (`forget --purge`) of a session's document deletes every part of it. Aft
 
 At about 4 characters per token, a full session costs at most 3,000 to 4,000 tokens of context. `backsight stats` shows what the prompt hook actually added per session.
 
-**The server's LLM.** Besides extraction and consolidation, the server rewrites a project's briefing page after a consolidation of its memories, at most once per `recall.briefing_refresh_interval` (6 h by default): one rewrite reads the project's memories (about 130,000 input tokens on a well-filled memory). Memories consolidated sooner wait for the next rewrite; the page is only read at session start, never rewritten then. Pages made by an earlier version get this floor, and the current request, at the first `jobs tick` after an update, a restore or a bank change, `jobs maintain` sets both again every day, and doctor's `bank` check names a page without it.
+**The server's LLM.** Besides extraction and consolidation, the server rewrites a project's briefing page after a consolidation of its memories, at most once per `recall.briefing_refresh_interval` (6 h by default, asked at setup): one rewrite reads the project's memories (about 105,000 input tokens over about 6 calls on a well-filled memory, measured on one install). Memories consolidated sooner wait for the next rewrite; the page is only read at session start, never rewritten then. Pages made by an earlier version get this floor, and the current request, at the first `jobs tick` after an update, a restore or a bank change, `jobs maintain` sets both again every day, and doctor's `bank` check names a page without it.
 
 ## Hooks
 

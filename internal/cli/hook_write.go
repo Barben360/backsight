@@ -16,7 +16,6 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
-	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -162,15 +161,10 @@ func (h *hookEnv) stop() []byte {
 	if k := replyKind(full); k != nil {
 		credit = *k // over the whole reply: a citation may sit early in a long one
 	}
-	last := []rune(full)
-	if len(last) > lastReplyChars {
-		last = last[len(last)-lastReplyChars:]
-	}
-	tail, _ := redact.Text(string(last))
-	last = []rune(tail)
+	last := redactTail(full, lastReplyChars)
 	ev := telemetry.Reply{Credit: credit}
 	h.updateSession(func(s *session.State) error {
-		s.LastAssistant, s.LastCredit = string(last), credit
+		s.LastAssistant, s.LastCredit = last, credit
 		ev.N, ev.Searched = s.Prompts, s.Prompts > 0 && s.SearchedPromptID == s.Prompts
 		return nil
 	})
