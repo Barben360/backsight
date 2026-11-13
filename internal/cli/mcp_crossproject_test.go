@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -68,16 +69,17 @@ func TestCrossProjectRetireStoresTheCorrectionInTheMemorysProject(t *testing.T) 
 }
 
 // By default (no key) another project's memory is refused: nothing
-// stored, nothing invalidated, and the answer says plainly that the
-// setting is off and how the user turns it on.
+// stored, nothing invalidated, and the answer says plainly that it is off
+// and what the user runs; it never tells a possibly injected agent how to
+// lift the guard (that is in the docs only).
 func TestCrossProjectRetireIsOffByDefault(t *testing.T) {
 	cs, home := creditSession(t)
 	showForeign(t, home)
 	before := retained.Load()
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "cccccccc"))
 	if !isErr || !strings.Contains(out, foreignRefusal) ||
-		!strings.Contains(out, "retiring another project's memory is off on this machine (feedback.cross_project_retire = false in config.toml)") ||
-		!strings.Contains(out, "cross_project_retire = true under [feedback]") {
+		!strings.Contains(out, "retiring another project's memory is off on this machine; the user can retire it with `backsight forget <id>`") ||
+		strings.Contains(out, "cross_project_retire") || strings.Contains(out, "let you") {
 		t.Errorf("%v %s", isErr, out)
 	}
 	if !nothingStored(t, home, before) || len(patches()) != 0 {
@@ -261,4 +263,22 @@ func lineWith(s, sub string) string {
 		}
 	}
 	return ""
+}
+
+// A project whose name the memory lines show through the charset (foo#1
+// shown foo_1): its memory, journaled under the shown name by a search, is
+// still the session's own, so it is retired, and the correction goes to
+// the real project, not to foo_1 (0089 review S7).
+func TestOwnProjectWithAShownNameIsStillOwn(t *testing.T) {
+	cs, home := creditSession(t)
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "foo#1", At: time.Now()})
+	showItems(t, home, "S", "search", "foo#1", feedback.Item{ID: creditA, Rank: 1, Project: "foo_1"})
+	rawFact(creditA)
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa"))
+	if isErr || !retiredRE.MatchString(out) || strings.Contains(out, "off on this machine") {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:foo#1,") {
+		t.Errorf("the correction went to %q, want project foo#1", last)
+	}
 }

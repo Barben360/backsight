@@ -677,6 +677,20 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	// retired too with feedback.cross_project_retire (config.toml only),
 	// else it is the user's to retire.
 	linked := linkedProjects(d.dirs, cfg, resolver, live.Cwd, live.Project)
+	// A memory a search, a store or a Sources answer showed is journaled
+	// under its shown name (tagProject): the session's own, a linked
+	// project or the pool shown under another name is still that project
+	// (decision 0089).
+	shownOwner := owner
+	owner = func(id string) string {
+		p := shownOwner(id)
+		for _, real := range append([]string{live.Project}, linked...) {
+			if p != real && sameProject(p, real) {
+				return real
+			}
+		}
+		return p
+	}
 	near := func(p string) bool { return p == live.Project || isPool(cfg, p) || slices.Contains(linked, p) }
 	var projects, problems []string // projects: the memories', the pool as one
 	for _, id := range ids {
@@ -689,8 +703,9 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		}
 	}
 	if len(problems) > 0 && !cfg.Feedback.CrossProjectRetire {
-		return "", errors.New("nothing stored: retiring another project's memory is off on this machine (feedback.cross_project_retire = false in config.toml); " +
-			"the user can retire these memories from a terminal, or set cross_project_retire = true under [feedback] in config.toml to let you do it; " +
+		// Never how to lift the guard: the agent may be acting on injected
+		// text; the docs tell the user (decision 0089).
+		return "", errors.New("nothing stored: retiring another project's memory is off on this machine; the user can retire it with `backsight forget <id>`; " +
 			printLines(problems) + "\n" + strings.Join(problems, "\n"))
 	}
 	// The note goes to the memories' project when they share one (the

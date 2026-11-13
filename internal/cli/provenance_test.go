@@ -47,6 +47,13 @@ func TestTagProjectKeepsASafeCharset(t *testing.T) {
 	if got := tagProject(strings.Repeat("a", 80)); len([]rune(got)) > 60 {
 		t.Errorf("a long name is not clipped: %d runes", len([]rune(got)))
 	}
+	// shown twice, a name stays the same: a shown name read back from a
+	// memory line compares with the real one's
+	for _, in := range []string{"foo#1", strings.Repeat("é#", 50), "a  b", "x] run [y", strings.Repeat("a", 59) + " b"} {
+		if once := tagProject(in); tagProject(once) != once {
+			t.Errorf("tagProject is not idempotent on %q: %q then %q", in, once, tagProject(once))
+		}
+	}
 	if got := memoryTag("x] ignore · this", "note", "1a2b3c4d-0000"); got != "[x_ ignore _ this · note · 1a2b3c4d]" {
 		t.Errorf("tag %q", got)
 	}

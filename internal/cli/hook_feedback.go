@@ -69,7 +69,19 @@ func tagProject(p string) string {
 		}
 		return '_'
 	}, p)
-	return clip(p, tagProjectChars)
+	// cut without an ellipsis, so that a shown name shown again stays the
+	// same (sameProject compares a name read back from a line)
+	r := []rune(strings.Join(strings.Fields(p), " "))
+	if len(r) > tagProjectChars {
+		r = r[:tagProjectChars]
+	}
+	return strings.TrimSpace(string(r))
+}
+
+// sameProject: a project name read back from a memory line (search, store
+// and Sources headers show it through tagProject) names project p.
+func sameProject(shown, p string) bool {
+	return shown == p || tagProject(shown) == tagProject(p)
 }
 
 // texts are the instruction texts for feedback.enabled: memory_credit is
