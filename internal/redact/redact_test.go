@@ -540,6 +540,12 @@ func TestUnterminatedPrivateKeyHeader(t *testing.T) {
 		"files starting with " + hdr + " are private keys; never commit them, the CI refuses them",
 		`if strings.HasPrefix(s, "` + hdr + `\n") { return errKey } // then the rest of the code`,
 		hdr + "\nNote: this is only a header, the key was removed",
+		// Round 2 review: lines that hold a long run of base64 characters
+		// but are no key material.
+		`if strings.Contains(s, "` + hdr + `") {` + "\n\treturn ErrPrivateKeyDetectedInInput\n}\nfmt.Println(\"done\")",
+		"The file starts with " + hdr + "\nSomeVeryLongCamelCaseIdentifierName is the next line\nbye now",
+		"echo '" + hdr + "'\nOutput:\nabcdefghijklmnop\nWritten.",
+		hdr + "\n/usr/local/share/ca-certificates/extra/root-ca.crt\nthen restart",
 	}
 	for _, s := range keep {
 		out, _ := Text(s)
@@ -568,6 +574,9 @@ func TestUnterminatedPrivateKeyHeader(t *testing.T) {
 		// chunk on the header's line with the material on the next.
 		{"quoted, word line after", "> " + hdr + "\n> MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n> abcdEFGH/ijklMNOP+qrstUVWX0123456789x7Lm3XwP\nthanks", ""},
 		{"short first chunk", hdr + " MIIEvQ IBADANBgkqhkiG9w0BAQEFAASCBKcw\nabcdEFGH/ijklMNOP+qrstUVWX0123456789x7Lm3XwP\nand that was all", "\nand that was all"},
+		// Round 2 review: a key printed as spaced groups.
+		{"spaced groups", hdr + "\nMIIE owIB AAKC AQEA x7Lm 3XwP 7rT0 vN8y B2cD 4eF6\n" + l[1] + "\n", "\n"},
+		{"spaced groups, more lines", hdr + "\n" + strings.Join(strings.Fields(strings.NewReplacer("MIIE", "MIIE ", "owIB", "owIB ").Replace(l[0])), " ") + "\nKq9z Lm3X wP7r T0vN 8yB2 cD4e F6gH 1jK5\nthat is all I have", "\nthat is all I have"},
 		{"blank line inside", hdr + "\n" + l[0] + "\n\n" + l[1] + "\n" + l[2] + "\nok then we are done", "\nok then we are done"},
 	} {
 		out, kinds := Text(c.in)

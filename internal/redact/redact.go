@@ -278,8 +278,8 @@ func KeyEnd(s string) int {
 // pemMaterialEnd is where a key cut before its END line ends, read from i
 // (the end of its header): fail-closed, every line up to the first line of
 // prose (three words or more, each under 16 characters) or the end of s,
-// once a line held key material (a base64 run of 16 characters or more);
-// i when none did. Lines break at a newline, real or escaped (\n, \\n,
+// once a line held key material (keyMaterial); i when none did. Lines of
+// one or two short words after the key are taken with it (fail-closed). Lines break at a newline, real or escaped (\n, \\n,
 // \r\n); a quote, comment or diff prefix (>, #, //, *, |) and a trailing
 // backslash or $ (cat -A) are no part of a line's words. Before the
 // material, armour headers (Proc-Type:, Version:, Comment: …) are read
@@ -296,13 +296,14 @@ func pemMaterialEnd(s string, i int) int {
 				return i + off + p
 			case !material && armourRE.MatchString(core):
 				end = j
+			case keyMaterial(core):
+				material, end = true, j
 			case pemProse(core):
 				if !material {
 					return start
 				}
 				return end
 			default:
-				material = material || longRun(core, 16)
 				end = j
 			}
 		}
@@ -357,19 +358,57 @@ func base64Run(core string) (int, int) {
 	return b, p
 }
 
-// longRun: core holds a base64 run of n characters or more.
-func longRun(core string, n int) bool {
-	run := 0
-	for k := 0; k < len(core); k++ {
-		if !isBase64(core[k]) {
-			run = 0
-			continue
-		}
-		if run++; run >= n {
+// keyMaterial: core looks like a line of a key, not like code, a path or
+// an identifier: a base64 run, not made of words, of 40 characters or
+// more mixing upper case, lower case and digits (key lines are 64 or 76)
+// or of 16 or more that looks random (randomish); or eight groups or
+// more of 4 to 8 base64 characters, together mixing all three (a key
+// printed in spaced groups).
+func keyMaterial(core string) bool {
+	for _, run := range base64Runs(core) {
+		if !wordy(run) && (len(run) >= 40 && mixed(run) || len(run) >= 16 && randomish(run)) {
 			return true
 		}
 	}
-	return false
+	f := strings.Fields(core)
+	if len(f) < 8 {
+		return false
+	}
+	for _, g := range f {
+		if b, p := base64Run(g); p != len(g) || b < 4 || b > 8 {
+			return false
+		}
+	}
+	return mixed(strings.Join(f, ""))
+}
+
+// base64Runs is core's runs of base64 characters.
+func base64Runs(core string) []string {
+	var out []string
+	start := -1
+	for k := 0; k <= len(core); k++ {
+		if k < len(core) && isBase64(core[k]) {
+			if start < 0 {
+				start = k
+			}
+			continue
+		}
+		if start >= 0 {
+			out = append(out, core[start:k])
+			start = -1
+		}
+	}
+	return out
+}
+
+// mixed: v holds upper case, lower case and a digit.
+func mixed(v string) bool {
+	var u, l, d bool
+	for k := 0; k < len(v); k++ {
+		c := v[k]
+		u, l, d = u || c >= 'A' && c <= 'Z', l || c >= 'a' && c <= 'z', d || isDigit(c)
+	}
+	return u && l && d
 }
 
 // pemLineEnd is the end of the line starting at i, before its break, and
@@ -701,9 +740,12 @@ func credentialLike(v string) bool {
 // words (a path).
 func keepAWSSecret(h hit) bool {
 	v := h.value
-	if !strings.ContainsAny(v, "/+") || wordy(v) {
-		return true
-	}
+	return !strings.ContainsAny(v, "/+") || wordy(v) || !randomish(v)
+}
+
+// randomish: upper and lower case (two of each), a digit and a change of
+// character class on 30% of v's characters, separators not counted.
+func randomish(v string) bool {
 	var upper, lower, digit, changes int
 	prev := 0
 	for _, r := range v {
@@ -724,7 +766,7 @@ func keepAWSSecret(h hit) bool {
 		}
 		prev = c
 	}
-	return upper < 2 || lower < 2 || digit < 1 || float64(changes)/float64(len(v)) < 0.3
+	return upper >= 2 && lower >= 2 && digit >= 1 && float64(changes)/float64(len(v)) >= 0.3
 }
 
 // awsEnd: no base64, '=', '_', '-' or '.' right after a bare AWS secret
