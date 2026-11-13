@@ -27,6 +27,7 @@ Held turns that then credited a memory       —                        (no data
 
 To review
 Often shown, never used                      1                        (info, no change vs previous)
+  memories shown 10 times or more (feedback.stale_shows) and never used, over all time, not the window
 Hidden                                       0                        (info, no change vs previous)
 Reported wrong                               0                        (info, no change vs previous)
 

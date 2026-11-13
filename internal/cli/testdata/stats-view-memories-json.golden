@@ -76,7 +76,10 @@
         "mdc": null,
         "previous": 1,
         "delta": 0,
-        "drill": "backsight memory stale"
+        "drill": "backsight memory stale",
+        "extra": {
+          "min_shows": 10
+        }
       },
       "stale.reported": {
         "value": 0,

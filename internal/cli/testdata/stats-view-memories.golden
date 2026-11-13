@@ -2,6 +2,7 @@ Which memories does recall show? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/
 
 To review
 Often shown, never used                      1                        (info, no change vs previous)
+  memories shown 10 times or more (feedback.stale_shows) and never used, over all time, not the window
 Hidden                                       0                        (info, no change vs previous)
 Reported wrong                               0                        (info, no change vs previous)
 

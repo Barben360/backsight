@@ -135,8 +135,8 @@ On a client of another PC's server (`server.mode = "remote"`), the server's host
 |---|---|---|
 | `network.exposure` | `"loopback"` | `"loopback"`: the server listens on `127.0.0.1` only. `"private"`: it listens on `network.bind_ip` as well, so other machines of your network can reach it, over plain HTTP; its API and UI still need their keys. `backsight server expose` sets both keys and restarts the server. |
 | `network.bind_ip` | `""` | With `"private"` exposure, the address to listen on: a private LAN or tailnet address (10/8, 172.16/12, 192.168/16, 100.64/10, IPv6 ULA), never a public one. |
-| `network.breaker_failures` | `3` | After this many prompts in a row where the server could not be reached, recall pauses… |
-| `network.breaker_pause_min` | `5` | …for this many minutes, so an unreachable server does not slow every prompt. |
+| `network.breaker_failures` | `3` | After this many prompts in a row where the server could not be reached, recall pauses… (a single prompt recall that ran out of its time, on a server that took the call and did not answer, pauses it at once; a session start's briefing or a tool-failure lookup that ran out of its time counts as one failure) |
+| `network.breaker_pause_min` | `5` | …for this many minutes, so an unreachable server does not slow every prompt. After the pause, recalls get 8 s instead of 17 s until one answers. |
 
 ## `[hooks]`
 
