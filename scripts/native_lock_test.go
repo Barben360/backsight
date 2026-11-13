@@ -25,15 +25,17 @@ cat "$d/listing.txt"
 const fakeLockUV = `#!/bin/sh
 d=$(dirname "$0")
 printf 'uv %s\n' "$*" >> "$d/calls"
-o= c=
+o= c= ov=
 for a; do in=$a; done
 cp "$in" "$d/in.txt"
 while [ $# -gt 0 ]; do
   [ "$1" = -o ] && o=$2
   [ "$1" = -c ] && c=$2
+  [ "$1" = --override ] && ov=$2
   shift
 done
 cp "$c" "$d/constraints.txt"
+[ -z "$ov" ] || cp "$ov" "$d/forced.txt"
 cat "$d/body.txt" > "$o"
 `
 
@@ -75,6 +77,15 @@ func runNativeLockIn(t *testing.T, listing, body, lock string, args ...string) (
 // committed overrides.txt).
 func runNativeLockOv(t *testing.T, overrides, listing, body, lock string, args ...string) (calls, out, constraints string, err error) {
 	t.Helper()
+	calls, out, constraints, _, err = runNativeLockForced(t, overrides, "", listing, body, lock, args...)
+	return calls, out, constraints, err
+}
+
+// runNativeLockForced is runNativeLockOv with forced as FORCED
+// (NATIVE_LOCK_FORCED; the others run with none), and returns the
+// --override file the Linux compile was given.
+func runNativeLockForced(t *testing.T, overrides, forced, listing, body, lock string, args ...string) (calls, out, constraints, overridden string, err error) {
+	t.Helper()
 	root, _ := filepath.Abs("..")
 	fake := t.TempDir()
 	lastFake = fake
@@ -84,13 +95,14 @@ func runNativeLockOv(t *testing.T, overrides, listing, body, lock string, args .
 		}
 	}
 	cmd := exec.Command(filepath.Join(root, "scripts", "native-lock.sh"), args...)
-	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK="+lock, "NATIVE_LOCK_OVERRIDES="+filepath.Join(fake, "overrides.txt"))
+	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK="+lock, "NATIVE_LOCK_OVERRIDES="+filepath.Join(fake, "overrides.txt"), "NATIVE_LOCK_FORCED="+forced)
 	var b bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &b, &b
 	err = cmd.Run()
 	c, _ := os.ReadFile(filepath.Join(fake, "calls"))
 	cons, _ := os.ReadFile(filepath.Join(fake, "constraints.txt"))
-	return string(c), b.String(), string(cons), err
+	ov, _ := os.ReadFile(filepath.Join(fake, "forced.txt"))
+	return string(c), b.String(), string(cons), string(ov), err
 }
 
 func TestNativeLockScriptChecksThePin(t *testing.T) {
@@ -202,6 +214,30 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 		}
 	})
 
+	// FORCED: an override passed to uv as --override, past a dependent's
+	// cap; plain overrides are not, and a forced name must be overridden.
+	t.Run("a forced override goes to uv as --override, the others do not", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_, out, _, ov, err := runNativeLockForced(t, overrides, "zope-interface: a cap it does not need", imageListing(tag), overBody, lock)
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		if ov != "zope-interface==7.1\n" {
+			t.Errorf("--override file %q, want only zope-interface==7.1", ov)
+		}
+		_, _, _, ov, err = runNativeLockForced(t, overrides, "", imageListing(tag), overBody, lock)
+		if err != nil || ov != "" {
+			t.Errorf("no FORCED: --override file %q (err %v), want empty", ov, err)
+		}
+	})
+	t.Run("a forced name the overrides lack is refused", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "lock.txt")
+		_, out, _, _, err := runNativeLockForced(t, overrides, "not-overridden: a reason", imageListing(tag), overBody, lock)
+		if err == nil || !strings.Contains(out, "FORCED names not-overridden") {
+			t.Errorf("want a refusal naming not-overridden, got %v:\n%s", err, out)
+		}
+	})
+
 	// --check compares the header across machines: its order is bytes',
 	// not the locale's (en_US puts zope-interface before zope-interface-x,
 	// C after).
@@ -288,6 +324,12 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 // linux and the Windows one at win.
 func runWindowsLock(t *testing.T, body, linux, win string, args ...string) (out string, err error) {
 	t.Helper()
+	return runWindowsLockForced(t, "", body, linux, win, args...)
+}
+
+// runWindowsLockForced is runWindowsLock with forced as FORCED.
+func runWindowsLockForced(t *testing.T, forced, body, linux, win string, args ...string) (out string, err error) {
+	t.Helper()
 	root, _ := filepath.Abs("..")
 	fake := t.TempDir()
 	lastFake = fake
@@ -297,7 +339,7 @@ func runWindowsLock(t *testing.T, body, linux, win string, args ...string) (out 
 		}
 	}
 	cmd := exec.Command(filepath.Join(root, "scripts", "native-lock.sh"), append([]string{"--platform", "windows"}, args...)...)
-	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK_LINUX="+linux, "NATIVE_LOCK="+win)
+	cmd.Env = append(os.Environ(), "PATH="+fake+":"+os.Getenv("PATH"), "NATIVE_LOCK_LINUX="+linux, "NATIVE_LOCK="+win, "NATIVE_LOCK_FORCED="+forced)
 	var b bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &b, &b
 	err = cmd.Run()
@@ -344,6 +386,20 @@ func TestNativeLockScriptWindows(t *testing.T) {
 			if !strings.Contains(string(calls), want) {
 				t.Errorf("uv pip compile lacks %q:\n%s", want, calls)
 			}
+		}
+	})
+
+	t.Run("a FORCED package is forced on Windows too, at the Linux version", func(t *testing.T) {
+		win := filepath.Join(t.TempDir(), "win.txt")
+		if out, err := runWindowsLockForced(t, "pg0-embedded: a cap", winBody, linux, win); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		forced, _ := os.ReadFile(filepath.Join(lastFake, "forced.txt"))
+		if !strings.Contains(string(forced), "pg0-embedded==0.15.2\n") || !strings.Contains(string(forced), "onnxruntime==1.31.0\n") {
+			t.Errorf("--override file lacks the forced or the Windows override:\n%s", forced)
+		}
+		if out, err := runWindowsLockForced(t, "absent-pkg: a cap", winBody, linux, filepath.Join(t.TempDir(), "w.txt")); err == nil || !strings.Contains(out, "absent-pkg") {
+			t.Errorf("a FORCED name the Linux lock lacks = %v:\n%s", err, out)
 		}
 	})
 
