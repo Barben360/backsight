@@ -108,18 +108,69 @@ func DocumentID(sid, home, project string) string {
 // recreates a deleted document on append (measured for issue 285), and a
 // restore deletes a tombstoned id again, which must not take the turns
 // sent since with it.
+//
+// A tombstone of any part of a document (PartID) purges the document: a
+// purge deletes every part, and one that deleted a single part (an older
+// binary's) left a chain whose next part would be written to a purged id.
 func LiveDocumentID(sid, home, project string, tombs []state.Tombstone) string {
 	base := DocumentID(sid, home, project)
 	id := base
-	for n := 2; slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == id }); n++ {
+	for n := 2; slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return chainOf(t.Document) == id }); n++ {
 		id = base + "#" + strconv.Itoa(n)
 	}
 	return id
 }
 
-// BaseDocumentID is the DocumentID a successor id (LiveDocumentID) follows:
-// id without its #<n>, n ≥ 2; any other id as it is.
+// partMark joins a session's document and the number of one of its later
+// segments (PartID).
+const partMark = "#part"
+
+// PartID is the document that holds segment seg of a session's document
+// doc (decision 0090): doc itself for its first segment, doc#part<seg>
+// for each later one, a document of its own. Hindsight retains an append
+// by chunking the whole document again and extracting every chunk whose
+// text changed, the tail one each time; a new document only extracts
+// its own text. #<n> alone (digits) is a purge's successor, @ a project:
+// #part<seg> is neither, and every reader of a session's id stops at the
+// first @ or #.
+func PartID(doc string, seg int) string {
+	if seg <= 1 {
+		return doc
+	}
+	return doc + partMark + strconv.Itoa(seg)
+}
+
+// ChainOf is the session's document a part belongs to and the segment it
+// holds: a conversation id ending in #part<s>, s ≥ 2 written without a
+// sign or a leading zero, is part s of the id before it; any other id is
+// its own document, part 0.
+func ChainOf(id string) (doc string, part int) {
+	i := strings.LastIndex(id, partMark)
+	if i < 0 || !strings.HasPrefix(id, "conversation:") {
+		return id, 0
+	}
+	digits := id[i+len(partMark):]
+	if digits == "" || digits[0] == '0' || strings.Trim(digits, "0123456789") != "" {
+		return id, 0
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n < 2 {
+		return id, 0
+	}
+	return id[:i], n
+}
+
+// chainOf is ChainOf's document.
+func chainOf(id string) string {
+	doc, _ := ChainOf(id)
+	return doc
+}
+
+// BaseDocumentID is the DocumentID a successor id (LiveDocumentID) or a
+// part of one (PartID) follows: id without its #part<s>, then without its
+// #<n>, n ≥ 2; any other id as it is.
 func BaseDocumentID(id string) string {
+	id = chainOf(id)
 	i := strings.LastIndexByte(id, '#')
 	if i < 0 {
 		return id
@@ -130,10 +181,19 @@ func BaseDocumentID(id string) string {
 	return id[:i]
 }
 
+// olderBuild makes BuildSegmentOf send a later segment as builds before
+// decision 0090 did, appended to the document: the tests of what such a
+// build leaves on a server (migration) set it.
+var olderBuild = false
+
 // BuildSegment turns records of one session and one project into a retain
-// item of document doc (DocumentID); segment 1 creates the document, later
-// ones append (decision 0050). sid is the transcript file's session id,
-// used whatever the records say (a resumed or forked file keeps one
+// item of document doc (DocumentID, LiveDocumentID): segment 1 is doc
+// itself, every later one its own document, PartID(doc, segment) (decision
+// 0090; an older build appended them to doc, decision 0050). The
+// operation id is over doc whatever the part: the same records sent again
+// collapse on the server, one an older build appended included. sid is
+// the transcript file's session id, used whatever the records say (a
+// resumed or forked file keeps one
 // identity). The item is Claude Code's (its harness: tag and id): a
 // caller sending another harness's conversation uses BuildSegmentOf.
 func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
@@ -169,8 +229,11 @@ func BuildSegmentOf(h Identity, bank, sid, doc string, recs []transcript.Record,
 	if ep := first.Entrypoint; ep != "" {
 		item.Metadata["entrypoint"] = ep
 	}
-	if segment > 1 {
+	switch {
+	case segment > 1 && olderBuild:
 		item.UpdateMode = "append"
+	case segment > 1:
+		item.DocumentID = PartID(doc, segment)
 	}
 	sum := sha256.Sum256([]byte(content))
 	op := uuid5(nsBacksight, bank+"\n"+doc+"\n"+first.UUID+"\n"+last.UUID+"\n"+hex.EncodeToString(sum[:]))

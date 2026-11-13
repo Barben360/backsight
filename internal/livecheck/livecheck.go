@@ -6,7 +6,6 @@ package livecheck
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -261,10 +260,13 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	homeSegment := 0
 	for i, sd := range docs {
 		r.Document, r.Segment = sd.Document, sd.Segment
-		doc, err := in.Server.GetDocument(ctx, in.Bank, sd.Document)
-		var apiErr *hindsight.APIError
+		// The server's position: the end of the document's chain of parts,
+		// read from the part of this machine's last segment.
+		doc, _, found, err := retain.ChainEnd(ctx, func(ctx context.Context, id string) (hindsight.Document, error) {
+			return in.Server.GetDocument(ctx, in.Bank, id)
+		}, sd.Document, sd.Segment)
 		switch {
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		case err == nil && !found:
 			if mayWork() {
 				return waiting(fmt.Sprintf("session %s was sent but %s is not stored yet%s", s.sid, sd.Document, queuedNote()))
 			}
@@ -374,15 +376,20 @@ func continuedNote(r Result) string {
 	return "; continued on another PC: " + strings.Join(r.ContinuedElsewhere, ", ")
 }
 
-// sessionFacts lists the facts extracted from every document of a session.
+// sessionFacts lists the facts extracted from every document of a session:
+// each one's first segment and its later parts up to this machine's last
+// (an appended document from an older build holds them in the first; its
+// parts list nothing).
 func sessionFacts(ctx context.Context, in Input, s session) ([]hindsight.Memory, error) {
 	var out []hindsight.Memory
 	for _, sd := range s.cur.SentDocuments(s.sid) {
-		f, err := factsOf(ctx, in, sd.Document)
-		if err != nil {
-			return nil, err
+		for seg := 1; seg <= max(sd.Segment, 1); seg++ {
+			f, err := factsOf(ctx, in, retain.PartID(sd.Document, seg))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, f...)
 		}
-		out = append(out, f...)
 	}
 	return out, nil
 }

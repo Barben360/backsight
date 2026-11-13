@@ -141,7 +141,7 @@ func TestCodexThreadsBecomeTheirDocuments(t *testing.T) {
 	_ = fh.Close()
 	expect(t, e.f.FlushFile(ctx, paths["root.jsonl"], Options{}), Sent, 2, 2)
 	items = e.hs.itemsOf("conversation:" + codexRoot)
-	if last := items[len(items)-1]; len(items) != 2 || last.UpdateMode != "append" ||
+	if last := items[len(items)-1]; len(items) != 2 || !isPart(last, "conversation:"+codexRoot, 2) ||
 		!slices.Equal(segLines(t, last), []string{"user: one more after the resume", "assistant: MORE"}) {
 		t.Errorf("the resume's segment %+v", last)
 	}
@@ -305,7 +305,7 @@ func TestCodexCompressionInPlaceContinuesTheSession(t *testing.T) {
 	r = e.f.FlushFile(ctx, plain, Options{}) // a queue or a cursor still names the plain file
 	expect(t, r, Sent, 4, 2)
 	items := e.hs.itemsOf("conversation:" + codexRoot)
-	if last := items[len(items)-1]; len(items) != 2 || last.UpdateMode != "append" ||
+	if last := items[len(items)-1]; len(items) != 2 || !isPart(last, "conversation:"+codexRoot, 2) ||
 		!slices.Equal(segLines(t, last), []string{`user: third turn after compaction <<fake [{"say":"T3-DONE"}]>>`, "assistant: T3-DONE", `user: resumed turn <<fake [{"say":"RESUMED"}]>>`, "assistant: RESUMED"}) {
 		t.Errorf("the tail's segment %+v", items[len(items)-1])
 	}

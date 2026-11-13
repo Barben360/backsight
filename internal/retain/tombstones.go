@@ -247,8 +247,9 @@ func (f *Flusher) tombstones() ([]state.Tombstone, error) {
 func lostToPurged(sid string, cur Cursor, tombs []state.Tombstone) map[string]time.Time {
 	purged := map[string]time.Time{}
 	for _, t := range tombs {
-		if at, ok := purged[t.Document]; !ok || t.PurgedAt.After(at) {
-			purged[t.Document] = t.PurgedAt
+		doc := chainOf(t.Document) // a part's tombstone purges its whole document (LiveDocumentID)
+		if at, ok := purged[doc]; !ok || t.PurgedAt.After(at) {
+			purged[doc] = t.PurgedAt
 		}
 	}
 	out := map[string]time.Time{}

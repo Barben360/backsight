@@ -114,7 +114,7 @@ func TestAppendAfterAnotherPCMovedTheDocument(t *testing.T) {
 	a, b := continuedOnTwoPCs(t)
 	expect(t, b.flush("sp1", Options{}), Sent, 2, 3)
 	it := a.hs.retains[len(a.hs.retains)-1]
-	if it.DocumentID != "conversation:sp1" || it.UpdateMode != "append" || it.Metadata["segment"] != "3" || it.Metadata["machine_id"] != "m2" {
+	if !isPart(it, "conversation:sp1", 3) || it.Metadata["machine_id"] != "m2" {
 		t.Errorf("B's segment: %s %q segment %s machine %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Metadata["machine_id"])
 	}
 	a.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "a4", "a5", "b4", "b5")
@@ -178,7 +178,7 @@ func TestAppendWhenTheServerIsUnchangedSendsAsBefore(t *testing.T) {
 	if len(e.hs.retains) != 2 {
 		t.Fatalf("%d items: %+v", len(e.hs.retains), e.hs.retains)
 	}
-	if it := e.hs.retains[1]; it.UpdateMode != "append" || it.Metadata["segment"] != "2" {
+	if it := e.hs.retains[1]; !isPart(it, "conversation:sp1", 2) {
 		t.Errorf("%q segment %s", it.UpdateMode, it.Metadata["segment"])
 	}
 	if n := e.hs.readsOf("conversation:sp1") - reads; n != 1 {
@@ -245,7 +245,7 @@ func TestAFirstSegmentOfADocumentAnotherPCStartedFollowsIt(t *testing.T) {
 	expect(t, a.flush("sp1", Options{}), Sent, 1, 1)
 	b.recordIn(beta, "sp1", "b2", "user", 1, "turn b2")
 	expect(t, b.flush("sp1", Options{}), Sent, 1, 2)
-	if it := a.hs.retains[len(a.hs.retains)-1]; it.DocumentID != "conversation:sp1@beta" || it.UpdateMode != "append" || it.Metadata["segment"] != "2" {
+	if it := a.hs.retains[len(a.hs.retains)-1]; !isPart(it, "conversation:sp1@beta", 2) {
 		t.Errorf("B's segment: %s %q segment %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"])
 	}
 	a.hs.expectEachOnce(t, "conversation:sp1@beta", "a2", "b2")

@@ -170,7 +170,7 @@ jq -e '.ok and .data.ok and ([.data.restored[]] | add > 0)' "$work/backup-verify
 # 8. Restore (decision 0044): a session sent after the backup is lost by
 # restoring it; the next jobs tick reconciles to the new epoch and sends it
 # again, once, while the one the backup holds is not sent again; the live
-# session's second segment, lost too, is appended again, alone.
+# session's second segment, lost too, is sent again, alone.
 rc_send restore-proof-lost
 rc_live restore-proof-live 3 4 >/dev/null
 
@@ -469,4 +469,4 @@ for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/
 done
 backups_after=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 [ "$backups_after" = "$backups_before" ] || { echo "before: $backups_before" >&2; echo "after:  $backups_after" >&2; fail "uninstall changed the backups"; }
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-appended and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, ${priv_ip:+exposure on $priv_ip with token and rotation, }undo, set up again over kept data, client and jobs wired again, uninstall) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-sent and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, ${priv_ip:+exposure on $priv_ip with token and rotation, }undo, set up again over kept data, client and jobs wired again, uninstall) on project $project"

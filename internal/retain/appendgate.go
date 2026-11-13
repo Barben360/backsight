@@ -9,13 +9,13 @@ import (
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
-// AppendGate holds back an append to a conversation document the server
-// already has until enough text waits, or long enough (decision 0083 C1):
-// Hindsight re-chunks a whole document on append and extracts again every
-// chunk whose text changed, so each small append recreates the tail
-// chunk's facts and the observations drawn from them. The first send of a
-// document, a resync and a forced flush (SessionEnd, retain flush) are
-// never held.
+// AppendGate holds back an append (a later segment of a conversation
+// document the server already has) until enough text waits, or long
+// enough (decision 0083 C1). Since decision 0090 a later segment is a part
+// of its own (PartID), which re-extracts nothing; the gate now bounds the
+// number of parts, each one retain operation and one more consolidation
+// pass. The first send of a document, a resync and a forced flush
+// (SessionEnd, retain flush) are never held.
 type AppendGate struct {
 	MinChars int           // retain.append_min_chars; 0: no gate
 	MaxWait  time.Duration // retain.append_max_wait; 0: no gate

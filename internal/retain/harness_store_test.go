@@ -100,7 +100,7 @@ func TestTheFlusherReadsThroughItsHarness(t *testing.T) {
 	e.record("s1", "u2", "user", 60, "second")
 	path = e.archive("s1")
 	expect(t, e.f.FlushFile(context.Background(), path, Options{}), Sent, 1, 2)
-	if it := e.hs.retains[len(e.hs.retains)-1]; strings.Contains(it.Content, "pages by 1000") || it.UpdateMode != "append" {
-		t.Errorf("the append resent the start: %+v", it)
+	if it := e.hs.retains[len(e.hs.retains)-1]; strings.Contains(it.Content, "pages by 1000") || !isPart(it, "conversation:s1", 2) {
+		t.Errorf("the later part resent the start: %+v", it)
 	}
 }

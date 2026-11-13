@@ -131,6 +131,48 @@ func TestPurgeOrderForAFactAndAnObservation(t *testing.T) {
 	}
 }
 
+// A session's later segments are documents of their own (decision 0090):
+// a purge of a fact from one of them deletes the session's document
+// whole, its first segment and every part, each with its tombstone, and
+// nothing of another session.
+func TestPurgeDeletesEveryPartOfASessionsDocument(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	var items []string
+	for i, d := range []string{"conversation:s9", "conversation:s9#part2", "conversation:s9#part3", "conversation:s8#part2", "conversation:s9#2"} {
+		items = append(items, `{"document_id":"`+d+`","content":"turns","tags":["project:billing"],"metadata":{"session_id":"s9","project":"billing","segment":"`+strconv.Itoa(max(i, 1))+`","last_uuid":"u`+strconv.Itoa(i)+`"}}`)
+	}
+	resp, err := http.Post("http://127.0.0.1:"+strconv.Itoa(port)+"/v1/default/banks/claude-memory/memories", "application/json",
+		strings.NewReader(`{"items":[`+strings.Join(items, ",")+`],"async":true}`))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("seeding the documents: %v %v", resp, err)
+	}
+	_ = resp.Body.Close()
+	memories["f9"] = fact("f9", "conversation:s9#part2")
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	got := strings.Join(curation, "\n")
+	for _, d := range []string{"conversation%3As9 ", "conversation%3As9%23part2 ", "conversation%3As9%23part3 "} {
+		if !strings.Contains(got, "DELETE /v1/default/banks/claude-memory/documents/"+d) {
+			t.Errorf("%s not deleted:\n%s", d, got)
+		}
+	}
+	if strings.Contains(got, "s8") || strings.Contains(got, "conversation%3As9%232") {
+		t.Errorf("another session's document, or the successor, deleted:\n%s", got)
+	}
+	st, _ := state.Load(pathsOf(home).StateFile())
+	var tombs []string
+	for _, ts := range st.Tombstones {
+		tombs = append(tombs, ts.Document+"@"+ts.LastUUID)
+	}
+	if strings.Join(tombs, " ") != "conversation:s9@u0 conversation:s9#part2@u1 conversation:s9#part3@u2" {
+		t.Errorf("tombstones %v", tombs)
+	}
+}
+
 // Like the real API, an observation's source list carries no document: the
 // purge reads each source fact for it.
 func TestPurgeAnObservationDeletesItsSourcesDocuments(t *testing.T) {

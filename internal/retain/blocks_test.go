@@ -1,6 +1,8 @@
 package retain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -66,10 +68,61 @@ func TestFirstSegment(t *testing.T) {
 	}
 }
 
-func TestLaterSegmentAppendsWithoutHeader(t *testing.T) {
-	seg := BuildSegment("claude-memory", "s1", "conversation:s1", recs()[1:], 3, "billing", "m", "v")
-	if seg.Item.UpdateMode != "append" || strings.Contains(seg.Item.Content, "REF-ID") || seg.Item.Metadata["segment"] != "3" {
-		t.Errorf("%+v", seg.Item)
+// A later segment is a document of its own, the document's part (decision
+// 0090): created, never appended (an append makes Hindsight extract the
+// document's tail chunk again), with no REF-ID line. Its operation id is
+// the one an older build gave the same records appended to the document:
+// a resend across an update collapses on the server.
+func TestLaterSegmentIsItsOwnDocumentWithoutHeader(t *testing.T) {
+	r := recs()[1:]
+	seg := BuildSegment("claude-memory", "s1", "conversation:s1", r, 3, "billing", "m", "v")
+	if it := seg.Item; it.DocumentID != "conversation:s1#part3" || it.UpdateMode != "" || strings.Contains(it.Content, "REF-ID") ||
+		it.Metadata["segment"] != "3" || it.Metadata["session_id"] != "s1" || it.Metadata["project"] != "billing" || it.Tags[0] != "project:billing" {
+		t.Errorf("%+v", it)
+	}
+	sum := sha256.Sum256([]byte(seg.Item.Content))
+	if want := uuid5(nsBacksight, "claude-memory\nconversation:s1\n"+r[0].UUID+"\n"+r[len(r)-1].UUID+"\n"+hex.EncodeToString(sum[:])); seg.OperationID != want {
+		t.Errorf("operation %s, want %s (the appended segment's)", seg.OperationID, want)
+	}
+	if first := BuildSegment("claude-memory", "s1", "conversation:s1@infra#2", recs(), 1, "infra", "m", "v").Item; first.DocumentID != "conversation:s1@infra#2" {
+		t.Errorf("segment 1 of a successor: %s", first.DocumentID)
+	}
+	if later := BuildSegment("claude-memory", "s1", "conversation:s1@infra#2", r, 2, "infra", "m", "v").Item; later.DocumentID != "conversation:s1@infra#2#part2" {
+		t.Errorf("segment 2 of a successor: %s", later.DocumentID)
+	}
+}
+
+// ChainOf reads back what PartID writes, and nothing else: a purge's
+// successor, a project, a non-conversation id or a malformed number stay
+// documents of their own.
+func TestChainOfReadsOnlyParts(t *testing.T) {
+	for _, c := range []struct {
+		id   string
+		doc  string
+		part int
+	}{
+		{"conversation:s1#part2", "conversation:s1", 2},
+		{"conversation:s1@beta#3#part12", "conversation:s1@beta#3", 12},
+		{"conversation:s1", "conversation:s1", 0},
+		{"conversation:s1#2", "conversation:s1#2", 0},
+		{"conversation:s1#part1", "conversation:s1#part1", 0},
+		{"conversation:s1#part02", "conversation:s1#part02", 0},
+		{"conversation:s1#part+3", "conversation:s1#part+3", 0},
+		{"conversation:s1#part", "conversation:s1#part", 0},
+		{"conversation:s1#partx", "conversation:s1#partx", 0},
+		{"import:notes/a#part2", "import:notes/a#part2", 0},
+	} {
+		if doc, part := ChainOf(c.id); doc != c.doc || part != c.part {
+			t.Errorf("ChainOf(%s) = %s %d, want %s %d", c.id, doc, part, c.doc, c.part)
+		}
+	}
+	for seg := 1; seg <= 3; seg++ {
+		if doc, part := ChainOf(PartID("conversation:s1@beta#2", seg)); doc != "conversation:s1@beta#2" || (seg > 1 && part != seg) {
+			t.Errorf("segment %d: %s %d", seg, doc, part)
+		}
+	}
+	if got := BaseDocumentID("conversation:s1@beta#2#part4"); got != "conversation:s1@beta" {
+		t.Errorf("BaseDocumentID of a successor's part: %s", got)
 	}
 }
 

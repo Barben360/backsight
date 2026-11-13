@@ -339,6 +339,19 @@ func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, fact
 		ids = append(ids, d)
 	}
 	out, err := purgeDocumentsByID(ctx, cl, bank, ids, false)
+	if err != nil || !retain.HasConversation(ids) {
+		return out, undeletable, err
+	}
+	// A session's document goes whole: its first segment and every later
+	// part, whichever one a fact came from (each one read, with its
+	// tombstone); a part gone since the listing is left out.
+	listed, err := cl.ListDocuments(ctx, bank)
+	if err != nil {
+		return out, undeletable, fmt.Errorf("listing the documents of %s for the parts of a session: %w", bank, err)
+	}
+	more, err := purgeDocumentsByID(ctx, cl, bank, retain.WholeChains(ids, listed)[len(ids):], true)
+	out = append(out, more...)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, undeletable, err
 }
 

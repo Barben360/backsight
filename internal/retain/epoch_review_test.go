@@ -193,10 +193,10 @@ func TestRestoreRebuildsAParentAndItsForkInEitherOrder(t *testing.T) {
 			for _, sid := range order {
 				expect(t, e.flush(sid, Options{}), Sent, want[sid], 1)
 			}
-			if c := e.hs.content["conversation:fork"]; strings.Contains(c, "parent's") || !strings.Contains(c, "fork's own") {
+			if c := e.hs.text("conversation:fork"); strings.Contains(c, "parent's") || !strings.Contains(c, "fork's own") {
 				t.Errorf("fork on the server: %q", c)
 			}
-			if c := e.hs.content["conversation:parent"]; !strings.Contains(c, "parent's question") || !strings.Contains(c, "parent's answer") {
+			if c := e.hs.text("conversation:parent"); !strings.Contains(c, "parent's question") || !strings.Contains(c, "parent's answer") {
 				t.Errorf("parent on the server: %q", c)
 			}
 			for _, sid := range order {

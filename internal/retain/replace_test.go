@@ -76,8 +76,8 @@ func betaReplacedByB(t *testing.T) (a, b *env) {
 }
 
 // The I-1 race on a new side document: A's tick, with no new record,
-// sends A's records B's segment 1 replaced as the next segment, appended
-// after B's; the split is recorded on A. B's ticks find B's own records
+// sends A's records B's segment 1 replaced as the next segment, the
+// document's part after B's segment (decision 0090); the split is recorded on A. B's ticks find B's own records
 // there and send nothing. Every record of both PCs is stored once.
 func TestAFirstSegmentAnotherPCReplacedIsSentAgainByTheTick(t *testing.T) {
 	a, b := betaReplacedByB(t)
@@ -87,7 +87,7 @@ func TestAFirstSegmentAnotherPCReplacedIsSentAgainByTheTick(t *testing.T) {
 		t.Fatalf("%d items sent, want 1", len(a.hs.retains)-sent)
 	}
 	it := a.hs.retains[sent]
-	if it.DocumentID != betaDoc || it.UpdateMode != "append" || it.Metadata["segment"] != "2" || it.Metadata["machine_id"] != "m1" {
+	if !isPart(it, betaDoc, 2) || it.Metadata["machine_id"] != "m1" {
 		t.Errorf("A's repair: %s %q segment %s machine %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Metadata["machine_id"])
 	}
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
@@ -291,7 +291,7 @@ func TestARaceBeforeARestoredBackupIsRepairedAfterTheRestore(t *testing.T) {
 	if len(a.hs.retains) != sent+1 {
 		t.Fatalf("%d items sent, want 1", len(a.hs.retains)-sent)
 	}
-	if it := a.hs.retains[sent]; it.DocumentID != betaDoc || it.UpdateMode != "append" || it.Metadata["segment"] != "2" {
+	if it := a.hs.retains[sent]; !isPart(it, betaDoc, 2) {
 		t.Errorf("A's repair: %s %q segment %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"])
 	}
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
@@ -602,11 +602,14 @@ func TestReplaceChecksAreBoundedPerRun(t *testing.T) {
 	for _, sid := range []string{"s1", "s2"} {
 		f.FlushFile(context.Background(), filepath.Join(e.dir, sid+".jsonl"), Options{})
 	}
-	if n := e.hs.gets - reads; n != 1 {
-		t.Errorf("one run read %d documents, want 1", n)
+	// One look: the document, then its next parts until chainGap+1 are
+	// missing (decision 0090); the other session waits.
+	if n := e.hs.gets - reads; n != chainEndReads {
+		t.Errorf("one run read %d documents (%v), want %d", n, e.hs.reads[reads:], chainEndReads)
 	}
-	if last := e.hs.reads[len(e.hs.reads)-1]; !slices.Contains([]string{"conversation:s1", "conversation:s2"}, last) {
-		t.Errorf("read %s", last)
+	if first := chainOf(e.hs.reads[reads]); !slices.Contains([]string{"conversation:s1", "conversation:s2"}, first) ||
+		slices.ContainsFunc(e.hs.reads[reads:], func(id string) bool { return chainOf(id) != first }) {
+		t.Errorf("read %v", e.hs.reads[reads:])
 	}
 }
 
@@ -627,8 +630,10 @@ func TestAPendingReplaceSurvivesAResync(t *testing.T) {
 	a.splitOn(betaDoc)
 }
 
-// A appends to beta before B's segment 1 is applied (A1, A2, then B1):
-// B's replace takes A's append with it. Both parts go again.
+// A sends beta's segment 2 before B's segment 1 is applied (A1, A2, then
+// B1): B's replace takes A's segment 1 alone, A's segment 2 being its own
+// document (decision 0090). The tick sends again what B replaced, after
+// A's part.
 func TestAnAppendBeforeTheOtherPCsReplaceIsSentAgainToo(t *testing.T) {
 	a := newEnv(t)
 	a.f.MachineID = "m1"
@@ -646,10 +651,10 @@ func TestAnAppendBeforeTheOtherPCsReplaceIsSentAgainToo(t *testing.T) {
 	b.recordIn(beta, "sp1", "b2", "user", 1, "turn b2")
 	expect(t, b.flush("sp1", Options{}), Sent, 1, 1)
 	a.hs.hide = nil
-	if n := a.hs.countIn(betaDoc, "turn a3"); n != 0 {
-		t.Fatalf("B's segment 1 did not replace A's append: a3 stored %d times", n)
+	if n, m := a.hs.countIn(betaDoc, "turn a2"), a.hs.countIn(betaDoc, "turn a3"); n != 0 || m != 1 {
+		t.Fatalf("B's segment 1 did not replace A's alone: a2 stored %d times, a3 %d", n, m)
 	}
-	expect(t, a.tick(), Sent, 2, 2)
+	expect(t, a.tick(), Sent, 1, 3)
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
 }
 
@@ -712,9 +717,11 @@ func TestAnAbsentReplacedDocumentIsNeverRecreated(t *testing.T) {
 	expectUnconfirmed(t, r, "not on the server")
 }
 
-// Only A's append is missing (the shared r1-r3 are in B's segment 1): the
-// part sent again holds the same records as that append, and must not
-// carry its operation id, which the server collapses as a repeat.
+// Only A's append is missing (the shared r1-r3 are in B's segment 1):
+// an older build appended a4 to the document (before decision 0090), and
+// this build, after the update, sends it again as the document's part.
+// That part holds the same records as the append, and must not carry its
+// operation id, which the server collapses as a repeat.
 func TestAResentAppendIsNotCollapsedWithTheOriginal(t *testing.T) {
 	a := newEnv(t)
 	a.f.MachineID = "m1"
@@ -724,7 +731,12 @@ func TestAResentAppendIsNotCollapsedWithTheOriginal(t *testing.T) {
 	a.hs.hide = map[string]bool{"conversation:sp1": true}
 	expect(t, a.flush("sp1", Options{}), Sent, 3, 1)
 	a.turns(3, "a4")
+	olderBuild = true
 	expect(t, a.flush("sp1", Options{}), Sent, 1, 2)
+	olderBuild = false
+	if it := a.hs.retains[len(a.hs.retains)-1]; it.DocumentID != "conversation:sp1" || it.UpdateMode != "append" {
+		t.Fatalf("not an older build's append: %+v", it)
+	}
 	b.turns(3, "b4")
 	expect(t, b.flush("sp1", Options{}), Sent, 4, 1)
 	a.hs.hide = nil
@@ -732,6 +744,9 @@ func TestAResentAppendIsNotCollapsedWithTheOriginal(t *testing.T) {
 		t.Fatalf("B's segment 1 did not replace A's append: a4 stored %d times", n)
 	}
 	expect(t, a.tick(), Sent, 1, 2)
+	if it := a.hs.retains[len(a.hs.retains)-1]; !isPart(it, "conversation:sp1", 2) {
+		t.Errorf("the resend: %+v", it)
+	}
 	a.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "a4", "b4")
 }
 
@@ -786,7 +801,7 @@ func TestAShortTurnLostUnderTheSameWordsIsSentAgain(t *testing.T) {
 			}
 			line := `{"role":"user","content":` + strconv.Quote(text) + `,"timestamp":"2026-10-24T09:01:00Z"}`
 			if n := a.hs.countIn(betaDoc, line); n != 1 {
-				t.Errorf("A's %q (09:01) stored %d times:\n%s", text, n, a.hs.content[betaDoc])
+				t.Errorf("A's %q (09:01) stored %d times:\n%s", text, n, a.hs.text(betaDoc))
 			}
 		})
 	}
@@ -994,10 +1009,11 @@ func TestTheWinnerConfirmsByTextAfterTheLosersRepair(t *testing.T) {
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
 }
 
-// Out-of-order workers leave each PC's records partly missing (B's append
-// applied before its own segment 1, A's segment 1 under B's): each PC
-// sends again only its own missing records; the part both share (the
-// copied r1-r3) is not sent again by either.
+// Out-of-order workers leave A's records partly missing (B's part 2
+// applied before its own segment 1, A's segment 1 under B's): A sends
+// again only its own missing records, after B's part; B, whose part is a
+// document of its own (decision 0090), lost nothing and sends nothing.
+// The part both share (the copied r1-r3) is not sent again by either.
 func TestBothPCsRepairingSendOnlyTheirOwn(t *testing.T) {
 	a := newEnv(t)
 	a.f.MachineID = "m1"
@@ -1013,11 +1029,11 @@ func TestBothPCsRepairingSendOnlyTheirOwn(t *testing.T) {
 	expect(t, b.flush("sp1", Options{}), Sent, 1, 2)
 	a.hs.hide = nil
 	// What the server holds: A's segment 1 replaced by B's, which itself
-	// arrived after B's append b5 (lost with A's).
+	// arrived after B's part 2 (b5, kept: its own document).
 	items := a.hs.itemsOf("conversation:sp1")
 	a.hs.content["conversation:sp1"] = items[1].Content
 	a.hs.docs["conversation:sp1"] = items[1].Metadata
-	expect(t, a.tick(), Sent, 1, 2)
-	expect(t, b.tick(), Sent, 1, 3)
+	expect(t, a.tick(), Sent, 1, 3)
+	expect(t, b.tick(), Nothing, 0, 0)
 	a.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "a4", "b4", "b5")
 }

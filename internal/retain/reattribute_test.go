@@ -137,6 +137,7 @@ func TestReattributeResendsAMixedSession(t *testing.T) {
 	// what an older build left instead: one mixed document tagged beta
 	e.hs.mu.Lock()
 	delete(e.hs.docs, "conversation:s1@beta")
+	delete(e.hs.docs, "conversation:s1#part2")
 	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u3", "segment": "1"}
 	e.hs.tags["conversation:s1"] = []string{"project:beta", "source:chat", "harness:claude-code"}
 	e.hs.mu.Unlock()
@@ -161,7 +162,7 @@ func TestReattributeResendsAMixedSession(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, it := range e.hs.retains[sent:] {
-		got[it.DocumentID] += it.Tags[0] + " "
+		got[chainOf(it.DocumentID)] += it.Tags[0] + " "
 	}
 	if !reflect.DeepEqual(got, map[string]string{"conversation:s1": "project:alpha project:alpha ", "conversation:s1@beta": "project:beta "}) {
 		t.Errorf("re-sent %v", got)

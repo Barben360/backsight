@@ -326,7 +326,7 @@ func TestLongOpenSessionSendsItsOldPart(t *testing.T) {
 	}
 	e.clock = e.clock.Add(time.Hour)
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	if e.hs.retains[1].UpdateMode != "append" || !strings.Contains(e.hs.retains[1].Content, "fresh question") {
+	if !isPart(e.hs.retains[1], "conversation:s1", 2) || !strings.Contains(e.hs.retains[1].Content, "fresh question") {
 		t.Errorf("%+v", e.hs.retains[1])
 	}
 }
@@ -394,14 +394,14 @@ func splitSession(t *testing.T) *env {
 }
 
 // expectSplitSend checks the one item sent: the home document's next
-// segment (5, appended), holding the records of sent and none of held.
+// segment (5, its part), holding the records of sent and none of held.
 func (e *env) expectSplitSend(sent, held []string) {
 	e.t.Helper()
 	if len(e.hs.retains) != 1 {
 		e.t.Fatalf("%d items: %+v", len(e.hs.retains), e.hs.retains)
 	}
 	it := e.hs.retains[0]
-	if it.DocumentID != "conversation:s1" || it.UpdateMode != "append" || it.Metadata["segment"] != "5" {
+	if !isPart(it, "conversation:s1", 5) {
 		e.t.Errorf("%s %q segment %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"])
 	}
 	for _, u := range sent {
@@ -630,8 +630,8 @@ func TestCwdChangeIntoExcludedPathMidSession(t *testing.T) {
 			t.Errorf("an excluded turn was sent: %s", it.Content)
 		}
 	}
-	if e.hs.retains[1].UpdateMode != "append" || e.hs.retains[1].Metadata["segment"] != "2" {
-		t.Errorf("the run after the excluded part must append: %+v", e.hs.retains[1])
+	if !isPart(e.hs.retains[1], "conversation:s1", 2) {
+		t.Errorf("the run after the excluded part must be the document's part 2: %+v", e.hs.retains[1])
 	}
 }
 
@@ -662,15 +662,70 @@ func (e *env) repo(name string) string {
 	return dir
 }
 
-// itemsOf lists the retained items of document doc.
+// chainEndReads: the reads of one chain's end when its last part is the
+// first one read (ChainEnd): that one, then chainGap+1 missing.
+const chainEndReads = chainGap + 2
+
+// isItem says whether it is segment seg (a number) of document doc: doc
+// itself with mode "" (segment 1, created), or with mode "part" doc's own
+// part (PartID, decision 0090).
+func isItem(it hindsight.RetainItem, doc, mode, seg string) bool {
+	n, _ := strconv.Atoi(seg)
+	switch mode {
+	case "part":
+		return isPart(it, doc, n)
+	case "":
+		return it.DocumentID == doc && it.UpdateMode == "" && it.Metadata["segment"] == seg
+	}
+	return false
+}
+
+// isPart says whether it is segment seg of the session's document doc as
+// decision 0090 sends it: doc itself for segment 1, else its own document
+// PartID(doc, seg); never an append.
+func isPart(it hindsight.RetainItem, doc string, seg int) bool {
+	return it.DocumentID == PartID(doc, seg) && it.UpdateMode == "" && it.Metadata["segment"] == strconv.Itoa(seg)
+}
+
+// itemsOf lists the retained items of document doc and of its parts
+// (PartID).
 func (h *fakeHS) itemsOf(doc string) []hindsight.RetainItem {
 	var out []hindsight.RetainItem
 	for _, it := range h.retains {
-		if it.DocumentID == doc {
+		if chainOf(it.DocumentID) == doc {
 			out = append(out, it)
 		}
 	}
 	return out
+}
+
+// text is what the server holds of document doc and its parts (PartID),
+// in segment order: the session's text, whichever build sent it.
+func (h *fakeHS) text(doc string) string {
+	parts := []string{h.content[doc]}
+	ids := []int{}
+	for id := range h.content {
+		if d, n := ChainOf(id); d == doc && n > 0 {
+			ids = append(ids, n)
+		}
+	}
+	sort.Ints(ids)
+	for _, n := range ids {
+		parts = append(parts, h.content[PartID(doc, n)])
+	}
+	return strings.Join(parts, "\n")
+}
+
+// end is the metadata of the last stored document of doc's chain (the
+// server's position, ChainEnd).
+func (h *fakeHS) end(doc string) map[string]string {
+	meta, at := h.docs[doc], 1
+	for id, m := range h.docs {
+		if d, n := ChainOf(id); d == doc && n > at {
+			meta, at = m, n
+		}
+	}
+	return meta
 }
 
 // A→B→A: each project's records go to its own document with its own
@@ -684,7 +739,7 @@ func TestEachProjectGetsItsOwnDocument(t *testing.T) {
 	e.recordIn(beta, "s1", "a2", "assistant", 3, "beta answer")
 	e.recordIn(alpha, "s1", "u3", "user", 4, "back in alpha")
 	r := e.flush("s1", Options{})
-	if r.Status != Sent || r.Records != 5 || !reflect.DeepEqual(r.Documents, []string{"conversation:s1", "conversation:s1@beta"}) {
+	if r.Status != Sent || r.Records != 5 || !reflect.DeepEqual(r.Documents, []string{"conversation:s1", "conversation:s1@beta", "conversation:s1#part2"}) {
 		t.Fatalf("%+v", r)
 	}
 	home, side := e.hs.itemsOf("conversation:s1"), e.hs.itemsOf("conversation:s1@beta")
@@ -697,14 +752,14 @@ func TestEachProjectGetsItsOwnDocument(t *testing.T) {
 		}
 	}
 	if home[0].UpdateMode != "" || !strings.Contains(home[0].Content, "REF-ID: conversation:s1\"") ||
-		home[1].UpdateMode != "append" || home[1].Metadata["segment"] != "2" || !strings.Contains(home[1].Content, "back in alpha") {
+		!isPart(home[1], "conversation:s1", 2) || !strings.Contains(home[1].Content, "back in alpha") {
 		t.Errorf("alpha's segments: %+v", home)
 	}
 	if s := side[0]; s.UpdateMode != "" || s.Tags[0] != "project:beta" || !strings.Contains(s.Content, "REF-ID: conversation:s1@beta") ||
 		strings.Contains(s.Content, "alpha") || s.Metadata["segment"] != "1" {
 		t.Errorf("beta's segment: %+v", s)
 	}
-	if m := e.hs.docs["conversation:s1"]; m["last_uuid"] != "u3" || m["segment"] != "2" {
+	if m := e.hs.end("conversation:s1"); m["last_uuid"] != "u3" || m["segment"] != "2" {
 		t.Errorf("alpha's metadata %v", m)
 	}
 	if m := e.hs.docs["conversation:s1@beta"]; m["last_uuid"] != "a2" || m["segment"] != "1" {
@@ -718,7 +773,7 @@ func TestEachProjectGetsItsOwnDocument(t *testing.T) {
 	// A later flush, starting mid-file, appends to beta's own document.
 	e.recordIn(beta, "s1", "u4", "user", 60, "beta again")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	if side = e.hs.itemsOf("conversation:s1@beta"); len(side) != 2 || side[1].UpdateMode != "append" || side[1].Metadata["segment"] != "2" ||
+	if side = e.hs.itemsOf("conversation:s1@beta"); len(side) != 2 || !isPart(side[1], "conversation:s1@beta", 2) ||
 		side[1].Metadata["last_uuid"] != "u4" || len(e.hs.itemsOf("conversation:s1")) != 2 {
 		t.Errorf("%+v", e.hs.retains)
 	}
@@ -752,7 +807,7 @@ func TestANonRepoDirectoryKeepsThePreviousProject(t *testing.T) {
 	e.flush("s1", Options{})
 	e.recordIn(tmp, "s1", "u3", "user", 60, "beta scratch file in tmp")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	want := []struct{ doc, tag string }{{"conversation:s1", "project:Welcome"}, {"conversation:s1@beta", "project:beta"}, {"conversation:s1@beta", "project:beta"}}
+	want := []struct{ doc, tag string }{{"conversation:s1", "project:Welcome"}, {"conversation:s1@beta", "project:beta"}, {"conversation:s1@beta#part2", "project:beta"}}
 	if len(e.hs.retains) != len(want) {
 		t.Fatalf("%+v", e.hs.retains)
 	}
@@ -773,11 +828,11 @@ func TestResyncResumesEachDocumentAfterItsOwnPosition(t *testing.T) {
 		want []item
 	}{
 		{"only the side document", map[string]map[string]string{"conversation:s1@beta": {"last_uuid": "u2", "segment": "1", "project": "beta"}},
-			[]item{{"conversation:s1", "alpha 1", "", "1"}, {"conversation:s1", "alpha 3", "append", "2"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
+			[]item{{"conversation:s1", "alpha 1", "", "1"}, {"conversation:s1", "alpha 3", "part", "2"}, {"conversation:s1@beta", "beta 4", "part", "2"}}},
 		{"side further than home", map[string]map[string]string{"conversation:s1": {"last_uuid": "u1", "segment": "1", "project": "alpha"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1", "project": "beta"}},
-			[]item{{"conversation:s1", "alpha 3", "append", "2"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
+			[]item{{"conversation:s1", "alpha 3", "part", "2"}, {"conversation:s1@beta", "beta 4", "part", "2"}}},
 		{"home further than side", map[string]map[string]string{"conversation:s1": {"last_uuid": "u3", "segment": "2", "project": "alpha"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1", "project": "beta"}},
-			[]item{{"conversation:s1@beta", "beta 4", "append", "2"}}},
+			[]item{{"conversation:s1@beta", "beta 4", "part", "2"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -795,7 +850,7 @@ func TestResyncResumesEachDocumentAfterItsOwnPosition(t *testing.T) {
 			}
 			for i, w := range c.want {
 				it := e.hs.retains[i]
-				if it.DocumentID != w.doc || it.UpdateMode != w.mode || it.Metadata["segment"] != w.segment || !strings.Contains(it.Content, w.text) {
+				if !isItem(it, w.doc, w.mode, w.segment) || !strings.Contains(it.Content, w.text) {
 					t.Errorf("item %d: %s %q segment %s %s", i, it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content)
 				}
 			}
@@ -832,7 +887,7 @@ func TestSplitSideDocument(t *testing.T) {
 	if len(e.hs.retains) != 1 {
 		t.Fatalf("%d items: %+v", len(e.hs.retains), e.hs.retains)
 	}
-	if it := e.hs.retains[0]; it.DocumentID != "conversation:s1@beta" || it.UpdateMode != "append" || it.Metadata["segment"] != "3" ||
+	if it := e.hs.retains[0]; !isPart(it, "conversation:s1@beta", 3) ||
 		!strings.Contains(it.Content, "beta turn") || strings.Contains(it.Content, "home turn") {
 		t.Errorf("%s %q segment %s: %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content)
 	}
@@ -860,10 +915,11 @@ func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	e.record("s1", "u2", "user", 60, "second")
 	gets := e.hs.gets
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	if e.hs.gets != gets+1 {
-		t.Errorf("%d document reads, want one resync", e.hs.gets-gets)
+	// The document, then its next parts until chainGap+1 are missing.
+	if e.hs.gets != gets+chainEndReads {
+		t.Errorf("%d document reads, want one resync (%d)", e.hs.gets-gets, chainEndReads)
 	}
-	if it := e.hs.retains[1]; it.DocumentID != "conversation:s1" || it.UpdateMode != "append" || strings.Contains(it.Content, "first") {
+	if it := e.hs.retains[1]; !isPart(it, "conversation:s1", 2) || strings.Contains(it.Content, "first") {
 		t.Errorf("%+v", it)
 	}
 	if cur, _, _ = LoadCursor(e.f.Dirs.CursorsDir(), "s1"); cur.Home != "billing" || cur.Segments["billing"] != 2 {
@@ -872,8 +928,9 @@ func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	e.record("s1", "u3", "user", 120, "third")
 	gets = e.hs.gets
 	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
-	if e.hs.gets != gets+1 {
-		t.Errorf("%d document reads, want the append's one check (movedElsewhere)", e.hs.gets-gets)
+	// From the cursor's own part 2, not from the document.
+	if e.hs.gets != gets+chainEndReads || e.hs.reads[len(e.hs.reads)-chainEndReads] != "conversation:s1#part2" {
+		t.Errorf("%d document reads (%v), want the append's one check (movedElsewhere, %d)", e.hs.gets-gets, e.hs.reads[gets:], chainEndReads)
 	}
 	// A resync rebuilds the cursor, its record count from zero: an
 	// incremental append adds to the count the resync left (1).
@@ -900,7 +957,7 @@ func TestASideDocumentsPendingFirstSegmentWaits(t *testing.T) {
 	if r := e.flush("s1", Options{}); r.Status != Sent || len(e.hs.retains) != 3 {
 		t.Fatalf("%+v", r)
 	}
-	if it := e.hs.retains[2]; it.DocumentID != "conversation:s1@beta" || it.UpdateMode != "append" || it.Metadata["segment"] != "2" ||
+	if it := e.hs.retains[2]; !isPart(it, "conversation:s1@beta", 2) ||
 		strings.Contains(it.Content, "beta first") {
 		t.Errorf("%+v", it)
 	}
@@ -985,7 +1042,7 @@ func TestReleaseQuarantineResyncs(t *testing.T) {
 // countLines counts how many stored lines of session s1's document contain text.
 func (h *fakeHS) countLines(text string) int {
 	n := 0
-	for _, l := range strings.Split(h.content["conversation:s1"], "\n") {
+	for _, l := range strings.Split(h.text("conversation:s1"), "\n") {
 		if strings.Contains(l, text) {
 			n++
 		}
@@ -1005,7 +1062,7 @@ func TestLargeBacklogGoesOutInCappedSegments(t *testing.T) {
 	if r.Status != Sent || r.Records != 5 || r.Segment != 3 || len(e.hs.retains) != 3 {
 		t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
 	}
-	if e.hs.retains[0].UpdateMode != "" || e.hs.retains[1].UpdateMode != "append" || e.hs.retains[2].Metadata["segment"] != "3" {
+	if !isItem(e.hs.retains[0], "conversation:s1", "", "1") || !isPart(e.hs.retains[1], "conversation:s1", 2) || !isPart(e.hs.retains[2], "conversation:s1", 3) {
 		t.Errorf("%+v", e.hs.retains)
 	}
 	for i := 0; i < 5; i++ {
@@ -1153,7 +1210,7 @@ func TestLostCursorBeforeTheFirstSegmentLandsWaits(t *testing.T) {
 	}
 	e.hs.hidden = false // the first retain lands
 	r = e.flush("s1", Options{})
-	if r.Status != Sent || len(e.hs.retains) != 2 || e.hs.retains[1].UpdateMode != "append" {
+	if r.Status != Sent || len(e.hs.retains) != 2 || !isPart(e.hs.retains[1], "conversation:s1", 2) {
 		t.Fatalf("%+v, %+v", r, e.hs.retains)
 	}
 	for _, text := range []string{"first", "second"} {
@@ -1172,7 +1229,7 @@ func TestForkStillCreatesItsDocument(t *testing.T) {
 	e.record("fork", "u1", "user", 0, "shared turn")
 	e.record("fork", "u9", "user", 30, "fork turn")
 	r := e.flush("fork", Options{})
-	if r.Status != Sent || r.Records != 1 || e.hs.retains[len(e.hs.retains)-1].UpdateMode == "append" {
+	if r.Status != Sent || r.Records != 1 || !isItem(e.hs.retains[len(e.hs.retains)-1], "conversation:fork", "", "1") {
 		t.Fatalf("%+v %+v", r, e.hs.retains)
 	}
 }
@@ -1200,7 +1257,7 @@ func TestAFirstSegmentThatNeverLandsIsQuarantined(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := e.flush("s1", Options{})
-	if r.Status != Sent || len(e.hs.retains) != 1 || e.hs.retains[0].UpdateMode == "append" || e.hs.countLines("first") != 1 || e.hs.countLines("second") != 1 {
+	if r.Status != Sent || len(e.hs.retains) != 1 || !isItem(e.hs.retains[0], "conversation:s1", "", "1") || e.hs.countLines("first") != 1 || e.hs.countLines("second") != 1 {
 		t.Errorf("%+v %+v", r, e.hs.retains)
 	}
 	if _, err := os.Stat(filepath.Join(e.f.Dirs.CursorsDir(), "s1.pending")); !os.IsNotExist(err) {
@@ -1218,7 +1275,7 @@ func TestBankSwitchSendsTheSessionToTheNewBank(t *testing.T) {
 	e.f.Bank = "other-bank"
 	e.record("s1", "u2", "user", 30, "second")
 	r := e.flush("s1", Options{})
-	if r.Status != Sent || e.hs.retains[len(e.hs.retains)-1].UpdateMode == "append" {
+	if r.Status != Sent || !isItem(e.hs.retains[len(e.hs.retains)-1], "conversation:s1", "", "1") {
 		t.Fatalf("%+v %+v", r, e.hs.retains)
 	}
 }
@@ -1438,7 +1495,7 @@ func (e *env) expectItems(from int, want ...[4]string) {
 	}
 	for i, w := range want {
 		it := got[i]
-		if it.DocumentID != w[0] || it.UpdateMode != w[1] || it.Metadata["segment"] != w[2] || !strings.Contains(it.Content, w[3]) {
+		if !isItem(it, w[0], w[1], w[2]) || !strings.Contains(it.Content, w[3]) {
 			e.t.Errorf("item %d: %s %q segment %s\n%s\nwant %v", i, it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content, w)
 		}
 	}
@@ -1461,7 +1518,7 @@ func TestAPendingHomeDocumentIsNotReplacedByAFurtherSideDocument(t *testing.T) {
 	if r := e.releaseAndResend("conversation:s1"); r.Status != Sent {
 		t.Fatalf("%+v", r)
 	}
-	e.expectItems(2, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha three"})
+	e.expectItems(2, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "part", "2", "alpha three"})
 	if strings.Contains(e.hs.retains[2].Content, "alpha three") || strings.Contains(e.hs.retains[3].Content, "beta") {
 		t.Errorf("%+v", e.hs.retains[2:])
 	}
@@ -1484,7 +1541,7 @@ func TestALostSideDocumentIsResentFromItsFirstSegment(t *testing.T) {
 	if r := e.releaseAndResend(); r.Status != Sent {
 		t.Fatalf("%+v", r)
 	}
-	e.expectItems(3, [4]string{"conversation:s1@beta", "", "1", "beta two"}, [4]string{"conversation:s1", "append", "3", "alpha four"})
+	e.expectItems(3, [4]string{"conversation:s1@beta", "", "1", "beta two"}, [4]string{"conversation:s1", "part", "3", "alpha four"})
 	if strings.Contains(e.hs.retains[4].Content, "alpha three") {
 		t.Errorf("resent: %s", e.hs.retains[4].Content)
 	}
@@ -1516,7 +1573,7 @@ func TestAPlainDirectoryAfterAnExcludedRepositoryStaysOut(t *testing.T) {
 	e.recordIn(scratch, "s1", "u3", "user", 2, "confidential scratch")
 	e.recordIn(alpha, "s1", "u4", "user", 3, "alpha again")
 	expect(t, e.flush("s1", Options{}), Sent, 2, 2)
-	e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha again"})
+	e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "part", "2", "alpha again"})
 	e.noSecret()
 	for _, id := range e.hs.reads {
 		if strings.Contains(id, "secret") {
@@ -1575,7 +1632,7 @@ func TestAResyncWithNothingToSendKeepsTheLastProject(t *testing.T) {
 	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
 	e.recordIn(scratch, "s1", "u3", "user", 60, "beta scratch")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	e.expectItems(2, [4]string{"conversation:s1@beta", "append", "2", "beta scratch"})
+	e.expectItems(2, [4]string{"conversation:s1@beta", "part", "2", "beta scratch"})
 }
 
 // A fork copies parent records of two projects: it sends only its own
@@ -1636,14 +1693,14 @@ func TestALegacyMixedDocumentIsNotResent(t *testing.T) {
 	e, alpha, _ := legacySession(t)
 	e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
-	e.expectItems(0, [4]string{"conversation:s1", "append", "3", "alpha three"})
+	e.expectItems(0, [4]string{"conversation:s1", "part", "3", "alpha three"})
 	if m := e.hs.retains[0].Metadata; m["legacy_last_uuid"] != "u2" || m["project"] != "alpha" {
 		t.Errorf("metadata %v", m)
 	}
 	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
 	e.recordIn(alpha, "s1", "u4", "user", 120, "alpha four")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 4)
-	e.expectItems(1, [4]string{"conversation:s1", "append", "4", "alpha four"})
+	e.expectItems(1, [4]string{"conversation:s1", "part", "4", "alpha four"})
 }
 
 // The cursor is saved after each segment: when the second document's send
@@ -1789,7 +1846,7 @@ func TestReconcileCountsWhatAnEarlierRunDropped(t *testing.T) {
 	}
 	sent := len(e.hs.retains)
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	e.expectItems(sent, [4]string{"conversation:s1", "append", "2", "alpha two"})
+	e.expectItems(sent, [4]string{"conversation:s1", "part", "2", "alpha two"})
 }
 
 // A fork's copied parent records are never marked as the fork's own, not
@@ -1831,7 +1888,7 @@ func TestAForksCopiedRecordsStayTheParentsAfterARestore(t *testing.T) {
 // countIn counts the stored lines of doc that contain text.
 func (h *fakeHS) countIn(doc, text string) int {
 	n := 0
-	for _, l := range strings.Split(h.content[doc], "\n") {
+	for _, l := range strings.Split(h.text(doc), "\n") {
 		if strings.Contains(l, text) {
 			n++
 		}
@@ -1891,7 +1948,7 @@ func TestAResyncKeepsTheSessionsHome(t *testing.T) {
 			lose(e)
 			e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
 			expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-			e.expectItems(1, [4]string{"conversation:s1", "append", "2", "alpha three"})
+			e.expectItems(1, [4]string{"conversation:s1", "part", "2", "alpha three"})
 		})
 	}
 }
@@ -1956,7 +2013,7 @@ func TestARefusedResendIsResentOnTheNextRelease(t *testing.T) {
 	if r := e.releaseAndResend(); r.Status != Sent {
 		t.Fatalf("%+v", r)
 	}
-	e.expectItems(2, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha three"})
+	e.expectItems(2, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "part", "2", "alpha three"})
 }
 
 // sentDocsMatch: what the cursor says it sent to each document is what
@@ -1970,8 +2027,9 @@ func (e *env) sentDocsMatch(step string) {
 		got[d.Document] = [2]string{strconv.Itoa(d.Segment), d.LastUUID}
 	}
 	want := map[string][2]string{}
-	for id, m := range e.hs.docs {
-		if strings.HasPrefix(id, "conversation:s1") {
+	for id := range e.hs.docs {
+		if _, part := ChainOf(id); strings.HasPrefix(id, "conversation:s1") && part == 0 {
+			m := e.hs.end(id) // the server's position: its chain's end
 			want[id] = [2]string{m["segment"], m["last_uuid"]}
 		}
 	}

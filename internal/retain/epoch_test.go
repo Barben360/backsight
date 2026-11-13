@@ -90,11 +90,11 @@ func TestRestoreResendsWhatTheBackupLacks(t *testing.T) {
 	expect(t, e.flush("s3", Options{}), Nothing, 0, 0)
 	again := e.hs.retains[sent:]
 	if len(again) != 2 || !strings.Contains(again[0].Content, "sent after the backup") || strings.Contains(again[0].Content, "page size") ||
-		again[0].UpdateMode != "append" || !strings.Contains(again[1].Content, "first sent after the backup") {
+		!isPart(again[0], "conversation:s1", 2) || !strings.Contains(again[1].Content, "first sent after the backup") {
 		t.Errorf("resent: %+v", again)
 	}
-	if !strings.Contains(e.hs.content["conversation:s1"], "page size") || !strings.Contains(e.hs.content["conversation:s1"], "sent after the backup") {
-		t.Errorf("s1 on the server: %q", e.hs.content["conversation:s1"])
+	if !strings.Contains(e.hs.text("conversation:s1"), "page size") || !strings.Contains(e.hs.text("conversation:s1"), "sent after the backup") {
+		t.Errorf("s1 on the server: %q", e.hs.text("conversation:s1"))
 	}
 	if st, _ := state.Load(e.f.Dirs.StateFile()); st.EpochOf("claude-memory") != 1 {
 		t.Errorf("epoch not recorded: %+v", st.RestoreEpoch)
@@ -253,7 +253,7 @@ func TestRestoreResendsAnOldSessionWithoutBackfillQueue(t *testing.T) {
 	}
 	sent := len(e.hs.retains)
 	expect(t, e.flush("old", Options{}), Sent, 2, 1) // the next jobs tick
-	if len(e.hs.retains) != sent+1 || !strings.Contains(e.hs.content["conversation:old"], "before live retain") {
+	if len(e.hs.retains) != sent+1 || !strings.Contains(e.hs.text("conversation:old"), "before live retain") {
 		t.Errorf("not resent whole: %+v", e.hs.retains[sent:])
 	}
 	expect(t, e.flush("old", Options{}), Nothing, 0, 0)
@@ -299,7 +299,7 @@ func TestReconcileAcrossTwoDocumentsDropsOnlyWhatFollowsTheFurthest(t *testing.T
 	}
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
 	again := e.hs.retains[sent:]
-	if len(again) != 1 || again[0].DocumentID != "conversation:s1" || again[0].UpdateMode != "append" ||
+	if len(again) != 1 || !isPart(again[0], "conversation:s1", 2) ||
 		!strings.Contains(again[0].Content, "alpha after the backup") || strings.Contains(again[0].Content, "before the backup") {
 		t.Errorf("resent: %+v", again)
 	}
@@ -390,8 +390,8 @@ func TestRestoreResendsThisPCsPartOfASplitSession(t *testing.T) {
 		t.Fatalf("%+v, %d items", r, len(e.hs.retains))
 	}
 	for _, u := range []string{"u3", "b1", "b2"} {
-		if !strings.Contains(e.hs.content["conversation:s1"], "turn "+u) {
-			t.Errorf("%s lost: %q", u, e.hs.content["conversation:s1"])
+		if !strings.Contains(e.hs.text("conversation:s1"), "turn "+u) {
+			t.Errorf("%s lost: %q", u, e.hs.text("conversation:s1"))
 		}
 	}
 }
@@ -463,8 +463,8 @@ func TestAFreshHostRestoredToTheSameEpochIsReconciled(t *testing.T) {
 	sent := len(e.hs.retains)
 	expect(t, e.flush("s2", Options{}), Sent, 1, 1)
 	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
-	if len(e.hs.retains) != sent+1 || !strings.Contains(e.hs.content["conversation:s2"], "after the old host's restore") {
-		t.Errorf("s2 on the server: %q", e.hs.content["conversation:s2"])
+	if len(e.hs.retains) != sent+1 || !strings.Contains(e.hs.text("conversation:s2"), "after the old host's restore") {
+		t.Errorf("s2 on the server: %q", e.hs.text("conversation:s2"))
 	}
 	st, _ := state.Load(e.f.Dirs.StateFile())
 	if re := st.RestoreEpoch; re == nil || re.Epoch != 1 || !re.RestoredAt.Equal(clockAt(15, 0)) {
