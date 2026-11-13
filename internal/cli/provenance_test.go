@@ -75,7 +75,8 @@ func TestSelectHitsTagsTheSource(t *testing.T) {
 
 // The prompt recall asks the server for the source facts in the same call
 // and tags each memory with its source; one without a source tag keeps the
-// former tag (an old memory, or source facts past the cap).
+// former tag only when its tags say nothing; an observation the server lists
+// without source facts is mixed.
 func TestPromptRecallTagsEachMemoryWithItsSource(t *testing.T) {
 	home := hookHome(t)
 	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1"],"scores":{"reranker":0.9}},
@@ -84,7 +85,7 @@ func TestPromptRecallTagsEachMemoryWithItsSource(t *testing.T) {
 	recallSourceFacts = `{"f1":{"tags":["source:note"]},"f2":{"tags":["source:chat"]},"f3":{"tags":["source:import"]}}`
 	asked := recallAskedSources
 	h := prompt(t, home, "s1", longPrompt)
-	for _, want := range []string{"\n- [billing · note · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · mixed · 0c4c2a52] Deploys run on Fridays.", "\n- [billing · 0d4c2a52] The cron runs at 02:00."} {
+	for _, want := range []string{"\n- [billing · note · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · mixed · 0c4c2a52] Deploys run on Fridays.", "\n- [billing · mixed · 0d4c2a52] The cron runs at 02:00."} {
 		if !strings.Contains(h.Specific.Context, want) {
 			t.Errorf("missing %q in:\n%s", want, h.Specific.Context)
 		}
@@ -110,13 +111,13 @@ func TestSearchNamesEachHitsSource(t *testing.T) {
 	recallSourceFacts = `{"f1":{"tags":["kind:state","source:chat"]},"f2":{"tags":["kind:pitfall","source:subagent"]},"f3":{"tags":["kind:decision","source:note"]}}`
 	t.Setenv("BACKSIGHT_PROJECT", "billing")
 	_, out, _ := run(t, "search", "postgres version", "--all")
-	for _, want := range []string{"(2026-10-20 [pitfall, state], from mixed,", "(2026-10-20 [decision], from note,", "No source facts. (2026-10-20, ", "[x_ run _y]\n", "Odd project. (2026-10-20, from note,"} {
+	for _, want := range []string{"(2026-10-20 [pitfall, state], from mixed,", "(2026-10-20 [decision], from note,", "No source facts. (2026-10-20, from mixed,", "[x_ run _y]\n", "Odd project. (2026-10-20, from note,"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "No source facts. (2026-10-20, from") || strings.Contains(out, "subagent]") {
-		t.Errorf("a hit without a source tag names one, or subagent is still listed among the kinds:\n%s", out)
+	if strings.Contains(out, "subagent]") {
+		t.Errorf("subagent is still listed among the kinds:\n%s", out)
 	}
 	// the rank parser still reads every hit
 	if got := searchShows(out); len(got) != 4 {

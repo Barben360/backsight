@@ -223,10 +223,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 			if q.Kinds {
 				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
 			}
-			h.Source = SourceOf(r.Tags, r.SourceTags)
-			if r.SourceFactsMissing > 0 {
-				h.Source = "mixed" // the facts past the cap may rest on any source (decision 0089)
-			}
+			h.Source = hitSource(r, sourceTokens > 0)
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
@@ -443,6 +440,24 @@ func KindsOf(tagSets ...[]string) (kinds []string, subagent bool) {
 	}
 	sort.Strings(kinds)
 	return kinds, subagent
+}
+
+// hitSource is a hit's source word (decision 0089). A raw fact's own tags
+// are exact. An observation's own tags hold its scope and the source tags
+// of some of its facts at most (the server merges them on update only), so
+// only its facts decide: none asked, no word; none listed, or some a
+// truncated answer left out, mixed (they may be notes).
+func hitSource(r hindsight.RecallHit, asked bool) string {
+	if r.Type != "observation" {
+		return SourceOf(r.Tags)
+	}
+	switch {
+	case !asked:
+		return ""
+	case len(r.SourceFactIDs) == 0 || r.SourceFactsMissing > 0:
+		return "mixed"
+	}
+	return SourceOf(r.SourceTags)
 }
 
 // sourceWords are the words of the source: tags the binary writes

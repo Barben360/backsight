@@ -180,7 +180,7 @@ func TestFailureRecallJournalsItsShows(t *testing.T) {
 	failureOn(t, home)
 	recallAnswer = hits(0.95, 0.85, 0.82)
 	h := failure(t, home, "s1", "Bash", npmError, map[string]any{"prompt_id": "p-1"})
-	if !strings.Contains(h.Specific.Context, "[billing · m1] memory m1") {
+	if !strings.Contains(h.Specific.Context, "[billing · mixed · m1] memory m1") {
 		t.Fatalf("context:\n%s", h.Specific.Context)
 	}
 	shows := eventsOf(journalEvents(t, home), "shows")

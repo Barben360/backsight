@@ -109,8 +109,8 @@ func TestGateJournalsItsHits(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := gate(t, home)
-	if g.Specific.Decision != "deny" || !strings.Contains(g.Specific.Reason, "\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16.") ||
-		!strings.Contains(g.Specific.Reason, "\n- [billing · 1c4c2a52] Billing moved in October.") {
+	if g.Specific.Decision != "deny" || !strings.Contains(g.Specific.Reason, "\n- [billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16.") ||
+		!strings.Contains(g.Specific.Reason, "\n- [billing · mixed · 1c4c2a52] Billing moved in October.") {
 		t.Fatalf("%+v", g)
 	}
 	shows := eventsOf(journalEvents(t, home), "shows")

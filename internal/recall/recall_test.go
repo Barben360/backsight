@@ -776,3 +776,16 @@ func TestSearchWithoutSourceFactsLabelsNothing(t *testing.T) {
 		t.Errorf("%+v", res.Hits)
 	}
 }
+
+// An observation without source facts has only its own tags, which hold
+// the source tags of some of its facts at most: mixed, as the briefing's
+// listed observations; a raw fact keeps its exact tags (0089 review
+// round 3).
+func TestObservationWithoutSourceFactsIsMixed(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"t","type":"observation","tags":["project:billing","source:chat"],"scores":{"reranker":0.8}}]}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "mixed" {
+		t.Errorf("%+v", res.Hits)
+	}
+}

@@ -302,13 +302,13 @@ func TestRecallHeaderEndsWithTheCreditLine(t *testing.T) {
 	recallAnswer = hits(0.9)
 	c := prompt(t, home, "s1", longPrompt).Specific.Context
 	block, _, _ := strings.Cut(c, instructions.Reminder)
-	if !strings.HasPrefix(block, instructions.RecallHeader+"\n- [billing · m1] memory m1 about billing") || !strings.HasSuffix(strings.TrimSpace(block), "\n"+instructions.CreditAsk) {
+	if !strings.HasPrefix(block, instructions.RecallHeader+"\n- [billing · mixed · m1] memory m1 about billing") || !strings.HasSuffix(strings.TrimSpace(block), "\n"+instructions.CreditAsk) {
 		t.Errorf("first prompt's block:\n%s", c)
 	}
 	recallAnswer = hits(0, 0.9)
 	_ = sessions(home).Update("s1", func(st *session.State) error { st.LastInject = -10; return nil }) // the gap has passed
 	c = prompt(t, home, "s1", "Which deployment pipeline does the billing service use for its nightly releases?").Specific.Context
-	if !strings.HasPrefix(c, instructions.RecallHeader+"\n- [billing · m2] memory m2") || !strings.HasSuffix(c, "\n"+instructions.CreditAsk) {
+	if !strings.HasPrefix(c, instructions.RecallHeader+"\n- [billing · mixed · m2] memory m2") || !strings.HasSuffix(c, "\n"+instructions.CreditAsk) {
 		t.Errorf("later block:\n%s", c)
 	}
 }
@@ -566,7 +566,7 @@ func TestInjectedLinesCarryShortIDs(t *testing.T) {
 	home := hookHome(t)
 	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.8}}]`
 	h := prompt(t, home, "s1", longPrompt)
-	if !strings.Contains(h.Specific.Context, "\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16. (") {
+	if !strings.Contains(h.Specific.Context, "\n- [billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16. (") {
 		t.Errorf("context:\n%s", h.Specific.Context)
 	}
 	if shortID("m1") != "m1" || shortID("0b4c2a52-0000") != "0b4c2a52" {
@@ -834,7 +834,7 @@ func TestFeedbackOffJournalsNothing(t *testing.T) {
 	h := fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
 	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt": "<task-notification>x</task-notification>", "cwd": filepath.Join(home, "billing")})
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_read", "tool_input": map[string]string{"id": "0b4c2a52-0000-4000-8000-000000000001"}})
-	if !strings.Contains(h.Specific.Context, "[billing · 0b4c2a52] Billing keeps PostgreSQL 16.") {
+	if !strings.Contains(h.Specific.Context, "[billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16.") {
 		t.Errorf("context:\n%s", h.Specific.Context)
 	}
 	if _, err := os.Stat(pathsOf(home).FeedbackDir()); !errors.Is(err, fs.ErrNotExist) {
