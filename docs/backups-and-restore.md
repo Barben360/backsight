@@ -77,6 +77,8 @@ Restore replaces the local server's memory with the archive's. In order, it:
 
 After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts, with the final reports of their subagents (rebuilt from `<session>/subagents/agent-<id>.jsonl` by the same rules as when the subagent stopped: not with `components.write` off, not from an opted-out directory or a headless session, never one a purge deleted). The same reconcile purges again any purged document the server still holds: one a late queued retain recreated, or one another machine purged while the restore ran. Facts stored with `memory_store` after the backup was made cannot be recovered that way. What `forget --purge` deleted is never sent again (see [privacy](privacy.md#removing-what-was-stored)), even when the archive predates the purge.
 
+A session's later turns are stored as parts, each a document of its own: a restored bank may lack the parts sent after the backup while holding earlier ones. The catch-up above sends their turns again, and each PC's check of the parts it sent (at its next `jobs tick`) sends again the turns of a part the server no longer holds.
+
 `restore --plan` says how many tombstones restore checks (every one), and names the purges made after the archive was taken, which the archive may hold. Their turns are not sent again from your transcripts either.
 
 ### Other banks on the server

@@ -212,6 +212,19 @@ A part sent while the server's extraction LLM failed (a rejected key, say) is ab
 
 Some of that session's turns from this PC may be missing on the server. They are not lost: they are still in Claude Code's transcript of the session on this PC, as long as its retention keeps it (doctor's `retention` check). `backsight retain resend-failed --plan` lists the sessions of such parts, with the cost of sending each again whole; `backsight retain resend-failed --answer resend=yes` does it (see [Extraction fails or costs too much](#extraction-fails-or-costs-too-much)). When the session named is this PC's latest settled one, `backsight verify --live` compares each of its documents on the server with what this PC sent, by where each part ends (its number and last turn), not by its turns: it fails naming one that is absent or ends elsewhere once the server has nothing left queued for it (pending until then). It passes, naming it as continued on another PC, a document whose later part is another PC's, even when that PC's first part replaced this one's: there the missing turns do not show. For an older session, no command compares it. The warning ends 30 days after the last part given up.
 
+## doctor: a retain has waited on the server for hours
+
+doctor's `queue-age` warning: the oldest retain in the server's queue (pending, or being processed) is 6 hours old or more. A healthy server stores a session part in seconds to minutes, and a backfill, which `jobs tick` paces, keeps its oldest retain well under an hour: a queue that has not moved for 6 hours is stuck. While it is, what was sent is not in memory yet, the repair of a session part another PC replaced or the server lost waits for it, and so does the purge of a part that lands after its session was purged. Six hours leaves most of the day before backsight gives up repairing a part (24 hours after it was sent).
+
+On the server's host, `backsight server status` shows whether the server runs and answers; `backsight server llm check` names a provider that keeps failing (an expired key, a model removed, a quota spent), which leaves operations queued while the server retries them. Fix that, then `backsight server start` restarts a stalled server. The warning clears once the queue moves. doctor shows it as information when it cannot read the queue.
+
+## verify --live: a part is missing between parts the server holds
+
+`backsight verify --live` fails with "the server has no conversation:<session>#part<n>, between parts it holds": a session part this PC sent is not on the server while a later part is, and nothing is queued there, so its retain failed on the server or was lost. Its turns are still in the session's transcript on this PC.
+
+- When the fix says "nothing to do: the next jobs tick sends them again", this PC's check of the session's sends is still pending (up to a day after the send): the next `jobs tick` sends the missing turns again as the session's next part.
+- Otherwise, `backsight retain resend-failed --plan` lists the session when the server's failed retain names that part; `--answer resend=yes` sends the session again whole, at the extraction cost of the whole session.
+
 ## connect refuses the token
 
 `backsight connect` checks the token and the server before it changes anything: after each of these refusals, nothing changed on this PC.
