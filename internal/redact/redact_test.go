@@ -395,3 +395,245 @@ func TestValuesReplacesKnownSecretsAndTheirURLForms(t *testing.T) {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
+
+// Decision 0088: the prefixed formats of gitleaks' default rules and of
+// the AI providers, the bare AWS secret key and the whole Telegram token.
+var (
+	sendgrid  = "SG" + "." + rep("aB3dE5gH9k", 2) + "Zx" + "." + rep("q8Zr4Lm2Vn7T", 3) + "Kp9wX2y"
+	tailscale = "tskey" + "-auth-" + "kXGGu7Ra7v11CNTRL-" + rep("Zx9kLmQ2wP", 3) + "ab"
+	awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	telegram  = "1234567" + "89:AA" + "HdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ"
+	hfToken   = "hf" + "_" + rep("QwErTyUiOpAsDfGhJk", 2)
+	groq      = "gs" + "k_" + rep("a1B2c3D4e5F6g7H8i9J0", 3)
+	pypi      = "pypi" + "-AgEIcHlwaS5vcmc" + rep("Zx9-kLmQ2_wP", 6)
+	vaultTok  = "hv" + "s." + rep("CAESIJ9x2kLmQ2wPzX", 5)
+	mailgun   = "key" + "-" + rep("3f9a1c7e", 4)
+)
+
+func TestPrefixedFormatsAndWholeTokens(t *testing.T) {
+	cases := []struct {
+		name, in, kind string
+		gone           []string
+	}{
+		{"sendgrid", "SENDGRID " + sendgrid + " in CI", "sendgrid_key", []string{sendgrid[:10], sendgrid[26:]}},
+		{"tailscale auth key", "tailscale up --authkey " + tailscale, "tailscale_key", []string{"kXGGu7Ra7v11CNTRL", "Zx9kLmQ2wP"}},
+		{"tailscale api key", "key tskey" + "-api-" + "k123456CNTRL-" + rep("aB3dE5gH9k", 3), "tailscale_key", []string{"k123456CNTRL", "aB3dE5gH9k"}},
+		{"aws secret bare", "aws configure set aws_secret " + awsSecret + " done", "aws_secret_key", []string{awsSecret[:12], awsSecret[20:]}},
+		{"aws secret in a csv", "AKIA-less row," + awsSecret + "\n", "aws_secret_key", []string{"bPxRfiCY"}},
+		{"aws secret quoted", `secret '` + awsSecret + `'`, "aws_secret_key", []string{"bPxRfiCY"}},
+		{"aws secret at the end of a sentence", "the secret is " + awsSecret + ".", "aws_secret_key", []string{"bPxRfiCY"}},
+		{"telegram", "bot token " + telegram + " ok", "telegram_token", []string{"123456789", "HdqTcvCH1v"}},
+		{"telegram in a url", "https://api.telegram.org/bot" + telegram + "/sendMessage", "telegram_token", []string{"123456789", "HdqTcvCH1v"}},
+		{"huggingface", "HF " + hfToken, "huggingface_token", []string{"QwErTyUiOp"}},
+		{"groq", "export X=1 " + groq, "groq_key", []string{"a1B2c3D4e5"}},
+		{"pypi", "twine upload -p " + pypi, "pypi_token", []string{"AgEIcHlwaS5vcmc", "kLmQ2"}},
+		{"vault service", "VAULT " + vaultTok, "vault_token", []string{"CAESIJ9x2k"}},
+		{"vault batch", "hv" + "b." + rep("AAAAAQKq9zLm3XwP7rT0", 8), "vault_token", []string{"AAAAAQKq9z"}},
+		{"mailgun", "mg " + mailgun + " sent", "mailgun_key", []string{"3f9a1c7e"}},
+		{"slack app token", "xa" + "pp-1-A0123BCDEF-1234567890123-" + rep("0a1b2c3d4e", 6), "slack_token", []string{"0a1b2c3d4e"}},
+		{"slack refresh token", "xo" + "xe-1-" + rep("ABCDEF0123", 15), "slack_token", []string{"ABCDEF0123"}},
+		{"stripe prod", "sk" + "_prod_" + rep("4eC39HqLyj", 2), "stripe_key", []string{"4eC39HqLyj"}},
+		{"stripe webhook", "wh" + "sec_" + rep("4eC39HqLyjWDarjt", 2), "stripe_key", []string{"4eC39HqLyjWDarjt"}},
+		{"aws temporary id", "A3T" + "X" + "Q3EGRA7HZ6FK4M2X", "aws_access_key", []string{"Q3EGRA7HZ6FK4M2X"}},
+		{"gitlab feed token", "gl" + "ft-" + rep("xY7kQ2mZ9p", 2), "gitlab_token", []string{"xY7kQ2mZ9p"}},
+		{"gitlab runner registration", "GR13" + "48941" + rep("xY7kQ2mZ9p", 2), "gitlab_token", []string{"xY7kQ2mZ9p"}},
+		{"xai", "xa" + "i-" + rep("a1B2c3D4e5", 8), "xai_key", []string{"a1B2c3D4e5"}},
+		{"replicate", "r8" + "_" + rep("a1B2c3D4e5", 4), "replicate_token", []string{"a1B2c3D4e5"}},
+		{"doppler", "dp" + ".pt." + rep("a1B2c3D4e5", 4) + "abc", "doppler_token", []string{"a1B2c3D4e5"}},
+		{"linear", "lin" + "_api_" + rep("a1B2c3D4e5", 4), "linear_key", []string{"a1B2c3D4e5"}},
+		{"notion", "nt" + "n_" + "12345678901" + rep("a1B2c3D4e5", 3) + "abcde", "notion_token", []string{"a1B2c3D4e5"}},
+		{"perplexity", "pp" + "lx-" + rep("a1B2c3D4e5F6", 4), "perplexity_key", []string{"a1B2c3D4e5"}},
+		{"databricks", "da" + "pi" + hex32, "databricks_token", []string{hex32}},
+		{"pulumi", "pu" + "l-" + hex64[:40], "pulumi_token", []string{hex64[:40]}},
+		{"postman", "PM" + "AK-" + hex64[:24] + "-" + hex64[:34], "postman_key", []string{hex64[:24]}},
+		{"rubygems", "ruby" + "gems_" + hex64[:48], "rubygems_key", []string{hex64[:48]}},
+		{"sentry user", "sntr" + "yu_" + hex64, "sentry_token", []string{hex64}},
+		{"planetscale", "pscale" + "_tkn_" + rep("a1B2c3D4e5", 4), "planetscale_token", []string{"a1B2c3D4e5"}},
+		{"prefect", "pn" + "u_" + rep("a1B2c3D4e5F6", 3), "prefect_key", []string{"a1B2c3D4e5"}},
+		{"grafana cloud", "gl" + "c_" + rep("a1B2c3D4e5F6", 4), "grafana_token", []string{"a1B2c3D4e5"}},
+		{"grafana service account", "gl" + "sa_" + rep("a1B2c3D4", 4) + "_" + hex32[:8], "grafana_token", []string{"a1B2c3D4"}},
+		{"heroku", "HR" + "KU-AA" + rep("a1B2c3D4e5", 6), "heroku_key", []string{"a1B2c3D4e5"}},
+		{"brevo", "xkey" + "sib-" + hex64 + "-" + rep("a1B2c3D4", 2), "brevo_key", []string{hex64}},
+		{"square", "sq0" + "atp-" + rep("a1B2c3D4e5F", 2), "square_token", []string{"a1B2c3D4e5F"}},
+		{"artifactory", "AK" + "Cp" + rep("a1B2c3D4e5", 7)[:69], "artifactory_key", []string{"a1B2c3D4e5"}},
+		{"fly.io", "fo" + "1_" + rep("a1B2c3D4e5", 5)[:43], "flyio_token", []string{"a1B2c3D4e5"}},
+		{"openshift", "sha256" + "~" + rep("a1B2c3D4e5", 5)[:43], "openshift_token", []string{"a1B2c3D4e5"}},
+		{"1password service account", "op" + "s_eyJ" + rep("a1B2c3D4e5", 26), "onepassword_token", []string{"a1B2c3D4e5"}},
+		{"1password secret key", "A3" + "-ABCDEF-ABCDEFGHIJK-ABCDE-ABCDE-ABCDE", "onepassword_token", []string{"ABCDEFGHIJK"}},
+		{"newrelic user key", "NR" + "AK-" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0", "newrelic_key", []string{"ABCDEFGHIJKLMNOP"}},
+		{"alibaba", "LT" + "AI" + rep("a1B2c3D4e5", 2), "alibaba_key", []string{"a1B2c3D4e5"}},
+		{"atlassian", "ATAT" + "T3" + rep("xFfGF0a1B2c3D4e5", 12), "atlassian_token", []string{"xFfGF0a1B2"}},
+		{"azure ad client secret", "secret ab" + "c8Q~" + rep("a1B2c3D4e5", 4)[:34] + " end", "azure_client_secret", []string{"a1B2c3D4e5"}},
+		{"bedrock", "AB" + "SK" + rep("QmVkcm9ja0FQSUtleS", 7), "bedrock_key", []string{"QmVkcm9ja0FQSUtleS"}},
+		{"supabase", "sb" + "p_" + hex64[:40], "supabase_key", []string{hex64[:40]}},
+		{"supabase secret", "sb" + "_secret_" + rep("a1B2c3D4e5", 3), "supabase_key", []string{"a1B2c3D4e5"}},
+		{"sourcegraph", "sg" + "p_" + hex64[:16] + "_" + hex64[:40], "sourcegraph_token", []string{hex64[:40]}},
+		{"cloudflare origin ca", "v1" + ".0-" + hex64[:24] + "-" + rep(hex64, 3)[:146], "cloudflare_key", []string{hex64[:24]}},
+		{"typeform", "tf" + "p_" + rep("a1B2c3D4e5", 6)[:59], "typeform_token", []string{"a1B2c3D4e5"}},
+		{"easypost", "EZ" + "AK" + rep("a1B2c3D4e5", 6)[:54], "easypost_key", []string{"a1B2c3D4e5"}},
+		{"shippo", "shippo" + "_live_" + hex64[:40], "shippo_token", []string{hex64[:40]}},
+		{"clojars", "CLOJARS" + "_" + rep("a1b2c3d4e5", 6), "clojars_token", []string{"a1b2c3d4e5"}},
+		{"facebook page token", "EA" + "AC" + rep("a1B2c3D4e5", 11), "facebook_token", []string{"a1B2c3D4e5"}},
+		// Passphrases made of words: still high-entropy tokens.
+		{"word passphrase", "MyPasswordIsSecretHorse1CorrectBattery2Staple3", "high_entropy", []string{"Horse1Correct"}},
+		{"word passphrase 2", "Tom2Jerry3Cat4Dog5Fish6Bird7Bear8Lion9Wolf0Fox", "high_entropy", []string{"Cat4Dog5"}},
+		{"nuget password", `<add key="ClearTextPassword" value="hunter2hunter2" />`, "nuget_password", []string{"hunter2hunter2"}},
+		{"teams webhook", "https://acme.webhook.office.com/webhookb2/" + "88cf850f-c82e-4b79-b1d7-ecc3af0e50a9@88cf850f-c82e-4b79-b1d7-ecc3af0e50a9/IncomingWebhook/" + hex32 + "/88cf850f-c82e-4b79-b1d7-ecc3af0e50a9", "teams_webhook", []string{hex32}},
+	}
+	for _, c := range cases {
+		out, kinds := Text(c.in)
+		for _, g := range c.gone {
+			if strings.Contains(out, g) {
+				t.Errorf("%s: %q survived: %q", c.name, g, out)
+			}
+		}
+		if !strings.Contains(out, "[redacted:"+c.kind+"]") || !contains(kinds, c.kind) {
+			t.Errorf("%s: want kind %s, got %q %v", c.name, c.kind, out, kinds)
+		}
+	}
+}
+
+// The new rules leave what only looks like them alone: a bare 40-character
+// value is an AWS secret only with '/' or '+', random, and between
+// separators; identifiers made of words are no high-entropy token.
+func TestPrefixedLookAlikesSurvive(t *testing.T) {
+	for _, s := range []string{
+		"commit " + hex64[:40] + " fixed it",
+		"commit " + strings.ToUpper(hex64[:40]) + " fixed it",
+		"see internal/cli/hook_prompt.go and internal/redact/redact.go",
+		"github.com/Barben360/backsight/internal/hindsight/client",
+		"open https://github.com/Barben360/backsight/blob/main/internal/cli/x.go",
+		"the path src/components/Header/HeaderMenuItem2/index is long",
+		"cd /home/annuser/Workspace/github.com/Barben360/backsight",
+		"/usr/lib/x86_64-linux-gnu/libQt5WebEngineCore.so.5",
+		"func TestServerInstallComposeFailureRecovery2(t *testing.T)",
+		"type HTTPServerConfigurationForTheBillingService2 struct{}",
+		"hf_hub_download and hf_transfer are installed",
+		"use key-value pairs and key-rotation",
+		"cache-key-" + hex32 + " restored",
+		"restore-keys: npm-key-" + hex32,
+		"pubkey-" + hex32 + " is the public one",
+		"the hvs. prefix marks a Vault service token",
+		"SG.1 and SG.2 are sections",
+		"tskey-auth- is the prefix of Tailscale auth keys",
+		"gsk_ is Groq's prefix, pypi- PyPI's",
+		"port 123456789:AAA is not a token",
+		"log 12345:AssertionErrorInTheBillingServiceModule",
+		"timestamps 1731400000:42 and 12:30",
+		"-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBGXk8bQBCADn\n-----END PGP PUBLIC KEY BLOCK-----",
+	} {
+		out, kinds := Text(s)
+		if out != s || len(kinds) != 0 {
+			t.Errorf("look-alike changed: %q -> %q %v", s, out, kinds)
+		}
+	}
+}
+
+// A private key header without its END line swallows only the key
+// material after it (base64 lines, armour headers), not the rest of the
+// text; a key pasted without its END line is still masked whole.
+func TestUnterminatedPrivateKeyHeader(t *testing.T) {
+	hdr := "-----BEGIN " + "RSA PRIVATE KEY-----"
+	body := "MIIEowIBAAKCAQEAx7Lm3XwP7rT0vN8yB2cD4eF6gH1jK5lM9nQ0sU7wY0aZ3bE6\niO/K1SZFPTOtr/KBHBeksoGMGwKq9zLm3XwP7rT0vN8yB2cD4eF6gH1jK5lM9nQ+\nsU7wY0aZ3bE6iO=="
+	keep := []string{
+		"grep -rn '" + hdr + "' ~/.ssh\nthen we fixed the config and pushed",
+		"files starting with " + hdr + " are private keys; never commit them, the CI refuses them",
+		`if strings.HasPrefix(s, "` + hdr + `\n") { return errKey } // then the rest of the code`,
+		hdr + "\nNote: this is only a header, the key was removed",
+		// Round 2 review: lines that hold a long run of base64 characters
+		// but are no key material.
+		`if strings.Contains(s, "` + hdr + `") {` + "\n\treturn ErrPrivateKeyDetectedInInput\n}\nfmt.Println(\"done\")",
+		"The file starts with " + hdr + "\nSomeVeryLongCamelCaseIdentifierName is the next line\nbye now",
+		"echo '" + hdr + "'\nOutput:\nabcdefghijklmnop\nWritten.",
+		hdr + "\n/usr/local/share/ca-certificates/extra/root-ca.crt\nthen restart",
+	}
+	for _, s := range keep {
+		out, _ := Text(s)
+		if out != s {
+			t.Errorf("text after a bare header was eaten:\n%q\n-> %q", s, out)
+		}
+	}
+	// Round 3 review: a line with a long base64 run inside other text is
+	// no key line; its own rules may mask the run, but what follows stays.
+	for _, line := range []string{
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+		"sha512-Zx9kLmQ2wPaB3dE5gH9kq8Zr4Lm2Vn7TKpQ1sW3eR5tY7uI9oP0aS2dF4gH6jK8lZ1xC3vB5nM7qW9eR2tY4uI==",
+		`const x = "aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZyBpbiBjb2Rl==";`,
+	} {
+		s := hdr + "\n" + line + "\nthen restart"
+		if out, _ := Text(s); !strings.HasPrefix(out, hdr+"\n") || !strings.HasSuffix(out, "\nthen restart") {
+			t.Errorf("a non-key line after a bare header started key material:\n%q\n-> %q", s, out)
+		}
+	}
+	l := strings.Split(body, "\n")
+	prefixed := func(p string) string { return p + strings.Join(l, "\n"+p) }
+	for _, c := range []struct{ name, in, after string }{
+		{"lines", "my key:\n" + hdr + "\n" + body + "\nthen I deleted it", "\nthen I deleted it"},
+		{"lines to the end", hdr + "\n" + body, ""},
+		{"word lines after: still the key's", hdr + "\n" + body + "\nThanks\nbye", ""},
+		{"armour headers", hdr + "\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,3F17F5316E2BAC89\n\n" + body + "\nend of paste", "\nend of paste"},
+		{"escaped in json", `{"private_key": "` + hdr + `\n` + strings.ReplaceAll(body, "\n", `\n`) + `", "x": 1}`, `", "x": 1}`},
+		{"double-escaped in json", `{"k": "` + hdr + `\\n` + strings.ReplaceAll(body, "\n", `\\n`) + `\\n", "x": 1}`, `\\n", "x": 1}`},
+		{"flattened", "KEY=" + hdr + " " + strings.ReplaceAll(body, "\n", " ") + "\nthe next line here", "\nthe next line here"},
+		{"glued word after", hdr + "\n" + body[:64] + "\nabcdefghijklmnopq(x) said\nand then some prose", "\nand then some prose"},
+		{"crlf", hdr + "\r\n" + strings.ReplaceAll(body, "\n", "\r\n") + "\r\nbye for now", "\r\nbye for now"},
+		{"quoted", "> " + hdr + "\n" + prefixed("> ") + "\n\nthat was the key", "\n\nthat was the key"},
+		{"commented", "// " + hdr + "\n" + prefixed("// ") + "\nfunc main() { run(the, key, now) }", "\nfunc main() { run(the, key, now) }"},
+		{"hash comments", "# " + hdr + "\n" + prefixed("#   ") + "\n# end of the key", "\n# end of the key"},
+		{"backslash continuations", `ENV K="` + hdr + `\n\` + "\n" + strings.Join(l, `\n\`+"\n") + `"` + "\nRUN make build and test", `"` + "\nRUN make build and test"},
+		{"cat -A", hdr + "$\n" + strings.Join(l, "$\n") + "$\nthe end of the file", "\nthe end of the file"},
+		// Review probes: a quote prefix on every line, and a short first
+		// chunk on the header's line with the material on the next.
+		{"quoted, word line after", "> " + hdr + "\n> MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n> abcdEFGH/ijklMNOP+qrstUVWX0123456789x7Lm3XwP\nthanks", ""},
+		{"short first chunk", hdr + " MIIEvQ IBADANBgkqhkiG9w0BAQEFAASCBKcw\nabcdEFGH/ijklMNOP+qrstUVWX0123456789x7Lm3XwP\nand that was all", "\nand that was all"},
+		// Round 2 review: a key printed as spaced groups.
+		{"spaced groups", hdr + "\nMIIE owIB AAKC AQEA x7Lm 3XwP 7rT0 vN8y B2cD 4eF6\n" + l[1] + "\n", "\n"},
+		{"spaced groups, more lines", hdr + "\n" + strings.Join(strings.Fields(strings.NewReplacer("MIIE", "MIIE ", "owIB", "owIB ").Replace(l[0])), " ") + "\nKq9z Lm3X wP7r T0vN 8yB2 cD4e F6gH 1jK5\nthat is all I have", "\nthat is all I have"},
+		{"blank line inside", hdr + "\n" + l[0] + "\n\n" + l[1] + "\n" + l[2] + "\nok then we are done", "\nok then we are done"},
+	} {
+		out, kinds := Text(c.in)
+		for _, frag := range []string{"MIIEow", "MIIEvQ", "K1SZFPTOtr", "KBHBeks", "sU7wY0aZ3bE6iO", "x7Lm3XwP", "abcdEFGH"} {
+			if strings.Contains(out, frag) {
+				t.Errorf("%s: key material %q survived: %q", c.name, frag, out)
+			}
+		}
+		if !contains(kinds, "private_key") {
+			t.Errorf("%s: kinds %v", c.name, kinds)
+		}
+		if !strings.HasSuffix(out, "[redacted:private_key]"+c.after) {
+			t.Errorf("%s: the text after the key changed: %q", c.name, out)
+		}
+	}
+	// Many headers or a long line after one: each header reads only up to
+	// the next one, so the work stays linear (no wall clock here: the
+	// outcome only).
+	many := strings.Repeat(hdr+"\n", 2000) + body
+	if out, _ := Text(many); strings.Contains(out, "K1SZFPTOtr") || strings.Count(out, hdr) != 1999 {
+		t.Errorf("many headers: %d headers left, key %v", strings.Count(out, hdr), strings.Contains(out, "K1SZFPTOtr"))
+	}
+	// A header quoted before a real key: the real key alone is masked.
+	out, _ := Text("grep '" + hdr + "' found:\n" + privKey + "\nok")
+	if !strings.HasPrefix(out, "grep '"+hdr+"' found:\n[redacted:private_key]\nok") {
+		t.Errorf("%q", out)
+	}
+}
+
+// Two credentials one separator apart are both masked: no rule consumes
+// the character that bounds its match.
+func TestAdjacentMatchesAreAllFound(t *testing.T) {
+	aws2 := "Zq8/xLm+3XwP7rT0vN8yB2cD/4eF6gH1jK5lM9nQ"
+	tg2 := "987654" + "321:AA" + "FfGgHhJjKk1LlMmNnOoPpQqRrSsTtUuVvWw"
+	az1, az2 := "ab"+"c8Q~"+rep("a1B2c3D4e5", 4)[:34], "xy"+"z9Q~"+rep("Zx9kLmQ2wP", 4)[:34]
+	for _, c := range []struct{ name, in, kind string }{
+		{"aws space", awsSecret + " " + aws2, "aws_secret_key"},
+		{"aws comma", awsSecret + "," + aws2, "aws_secret_key"},
+		{"telegram space", telegram + " " + tg2, "telegram_token"},
+		{"telegram comma", telegram + "," + tg2, "telegram_token"},
+		{"azure space", az1 + " " + az2, "azure_client_secret"},
+	} {
+		out, _ := Text(c.in)
+		if want := "[redacted:" + c.kind + "]"; strings.Count(out, want) != 2 {
+			t.Errorf("%s: %q", c.name, out)
+		}
+	}
+}
