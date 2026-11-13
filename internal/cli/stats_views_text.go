@@ -217,7 +217,9 @@ func metricsText(b *strings.Builder, st termstyle.Style, r metrics.Result, dev b
 				continue
 			}
 			lines = append(lines, metricLine(st, d, m, r.Scope.ServerOK, staysThisPC(r.Scope, d)))
-			if m.Status == metrics.StatusNoData {
+			// The yield's weeks say when each can be judged, even while
+			// none can.
+			if m.Status == metrics.StatusNoData && (d.ID != "memory.yield" || len(m.Series) == 0) {
 				continue
 			}
 			for _, x := range metricDetails(d, m, r.Window.Loc) {
@@ -926,6 +928,10 @@ func blockDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string 
 			without, _ := extraAs[int64](m, "days_without")
 			add("%s in the window, %s without a run", countOf(*m.Num, "run", "runs"), countOf(without, "day", "days"))
 		}
+	case "stale.never_used":
+		if n, ok := extraAs[int64](m, "min_shows"); ok && n > 0 {
+			add("memories shown %s or more (feedback.stale_shows) and never used, over all time, not the window", countOf(n, "time", "times"))
+		}
 	case "bank.active_share":
 		if n, _ := extraAs[int64](m, "unresolved"); n > 0 {
 			add("%s shown, not placed yet, count as older", countOf(n, "memory", "memories"))
@@ -996,6 +1002,11 @@ func yieldWeekLine(p metrics.Point) string {
 	head := "week of " + p.Week + ": "
 	switch {
 	case p.Complete == nil || !*p.Complete:
+		// over or not, a week is judged once 28 days passed after its last day
+		if mon, err := time.Parse("2006-01-02", p.Week); err == nil {
+			last := mon.AddDate(0, 0, 6)
+			return head + "not complete until " + last.AddDate(0, 0, 28).Format("2006-01-02") + " (its last day, " + last.Format("2006-01-02") + ", plus 28 days)"
+		}
 		return head + "not complete yet"
 	case p.Den == nil || p.Num == nil:
 		return head + "the new memories of that week were not recorded"

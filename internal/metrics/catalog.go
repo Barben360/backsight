@@ -78,7 +78,7 @@ var Catalog = withDrills([]Def{
 		ID: "search.rate", Label: "Prompts where Claude searched memory", Unit: "ratio", Direction: "up", MinN: 20,
 		Relative: true, CI: "wilson", Scope: "machine", Source: "telemetry", Family: "reach", Series: "daily", Command: "backsight stats quality",
 		Question:   "Does Claude look in memory on its own?",
-		Definition: "Typed prompts of at least 40 characters whose turn used memory_search, memory_read or memory_store (main agent), out of all typed prompts of at least 40 characters.",
+		Definition: "Typed prompts of at least 40 characters whose turn used memory_search or memory_read (main agent), out of all typed prompts of at least 40 characters. A memory_store alone is not a search.",
 		Action:     "Claude ignores the memory tools. Check the instructions it is given.",
 	},
 	{
@@ -158,8 +158,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "stale.never_used", Label: "Often shown, never used", Unit: "count", Direction: "none", MinN: 0,
 		Aggregation: "recent_weighted", CI: "none", Scope: "machine", Source: "ledger", Family: "quality", Series: "none", Command: "backsight memory stale",
+		Extra:      []string{"min_shows"},
 		Question:   "Which memories are shown again and again for nothing?",
-		Definition: "The memories shown often without ever being used, counted from the feedback ledger with recent feedback weighted more.",
+		Definition: "The memories shown at least feedback.stale_shows times (10 by default) since this PC keeps memory feedback, shows imported from earlier history aside, and never credited. Counted over all time from the feedback ledger, not over the window: a memory the window shows most can be under the threshold.",
 		Action:     "Review them, then forget those that no longer help with backsight forget <id>.",
 	},
 	{
@@ -378,7 +379,7 @@ var Catalog = withDrills([]Def{
 		CI: "wilson", Scope: "machine", Source: "collection", Family: "cost", Series: "weekly", Command: "backsight stats cost",
 		Extra:      []string{"tokens", "tokens_per_used", "unresolved", "gone", "pending", "resolved_used", "withheld"},
 		Question:   "Do new memories turn out useful?",
-		Definition: "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
+		Definition: "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. A week is judged once 28 days passed after its last day; the weeks before the first one that made a memory are left out. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
 		Action:     "Few new memories prove useful. Compare what is stored with what Claude finds.",
 	},
 	{

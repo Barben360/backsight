@@ -216,8 +216,10 @@ func sameMap(got any, want map[string]int64) bool {
 }
 
 // TestSearchRate: typed prompts of at least 40 characters whose turn has
-// a main-agent memory tool; subagents, other tools, other sessions' turns,
-// short prompts and machine messages do not count.
+// a main-agent memory_search or memory_read; a store is not a search (the
+// rule of stats' Searches line and of the injections followed by a
+// search); subagents, other tools, other sessions' turns, short prompts
+// and machine messages do not count.
 func TestSearchRate(t *testing.T) {
 	x := newFx(t, fxNow)
 	sess := x.prompts("alpha", "long", fxNow, 25, func(_ int, p *telemetry.Prompt) { p.Plen = 40 })
@@ -228,7 +230,7 @@ func TestSearchRate(t *testing.T) {
 	x.toolUse(at, sess[10], "alpha", 1, "memory_read", false)
 	x.toolUse(at, sess[11], "alpha", 1, "memory_search", true)  // a subagent's
 	x.toolUse(at, sess[12], "alpha", 1, "memory_search", true)  // a subagent's
-	x.toolUse(at, sess[13], "alpha", 1, "memory_store", false)  // store counts
+	x.toolUse(at, sess[13], "alpha", 1, "memory_store", false)  // a store is no search
 	x.toolUse(at, sess[14], "alpha", 1, "Read", false)          // not a memory tool
 	x.toolUse(at, sess[15], "alpha", 2, "memory_search", false) // another turn
 	x.toolUse(at, "elsewhere", "alpha", 1, "memory_search", false)
@@ -246,12 +248,12 @@ func TestSearchRate(t *testing.T) {
 	x.toolUse(fxNow.Add(-time.Hour), old[0], "alpha", 1, "memory_search", false)
 
 	m := reachOf(x, x.query(7))["search.rate"]
-	// 10 main-agent searches + 1 memory_read + 1 memory_store = 12 prompts, plus the late one.
-	if m.Num == nil || *m.Num != 13 || m.Den == nil || *m.Den != 26 {
-		t.Fatalf("search rate = %v/%v, want 13/26 (value %v)", m.Num, m.Den, m.Value)
+	// 10 main-agent searches + 1 memory_read = 11 prompts, plus the late one.
+	if m.Num == nil || *m.Num != 12 || m.Den == nil || *m.Den != 26 {
+		t.Fatalf("search rate = %v/%v, want 12/26 (value %v)", m.Num, m.Den, m.Value)
 	}
-	if m.Value == nil || !close4(*m.Value, 0.5) {
-		t.Errorf("value = %v, want 0.5", m.Value)
+	if m.Value == nil || !close4(*m.Value, 12.0/26) {
+		t.Errorf("value = %v, want 12/26", m.Value)
 	}
 }
 

@@ -146,7 +146,7 @@
           "id": "search.rate",
           "label": "Prompts where Claude searched memory",
           "question": "Does Claude look in memory on its own?",
-          "definition": "Typed prompts of at least 40 characters whose turn used memory_search, memory_read or memory_store (main agent), out of all typed prompts of at least 40 characters.",
+          "definition": "Typed prompts of at least 40 characters whose turn used memory_search or memory_read (main agent), out of all typed prompts of at least 40 characters. A memory_store alone is not a search.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "up",
@@ -447,7 +447,7 @@
           "id": "stale.never_used",
           "label": "Often shown, never used",
           "question": "Which memories are shown again and again for nothing?",
-          "definition": "The memories shown often without ever being used, counted from the feedback ledger with recent feedback weighted more.",
+          "definition": "The memories shown at least feedback.stale_shows times (10 by default) since this PC keeps memory feedback, shows imported from earlier history aside, and never credited. Counted over all time from the feedback ledger, not over the window: a memory the window shows most can be under the threshold.",
           "unit": "count",
           "aggregation": "recent_weighted",
           "direction": "none",
@@ -465,6 +465,9 @@
           "dev": false,
           "family": "quality",
           "series": "none",
+          "extra": [
+            "min_shows"
+          ],
           "drill": "backsight memory stale",
           "n": 0,
           "mdc": null
@@ -1283,7 +1286,7 @@
           "id": "memory.yield",
           "label": "Memories that proved useful",
           "question": "Do new memories turn out useful?",
-          "definition": "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
+          "definition": "Per week, the share of the memories created that week which Claude used within 28 days of their day, with the tokens the server spent per useful memory. A week is judged once 28 days passed after its last day; the weeks before the first one that made a memory are left out. Memories come from the server, uses from this PC, so with several PCs the share reads low.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "up",
