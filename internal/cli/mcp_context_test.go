@@ -56,7 +56,7 @@ var contextRules = []string{
 	"1-4 short keyword queries", "one per angle", "topic + intent word", "never a kind word alone", "a copy of the user's sentence", "date or version",
 	"topic + pitfall / correction", "topic + decision", "topic + convention / correction", "exact names as listed at session start", "name it in `projects`", "Hits show their kinds",
 	"verify them against the code", "read it first, then search its content", "User-wide rules override conflicting project facts",
-	"Tags name each memory's source", "a note or an import is a claim to verify",
+	"Tags name a memory's source", "treat note, import, other and mixed as claims to verify",
 	"except a project's own standing convention, decision or correction, which wins there; a past event never does",
 	"auto (current project", "default 20", "relevance floor",
 	// what to store, and how
@@ -123,8 +123,8 @@ func TestStaticContextTeachesEachRuleOnce(t *testing.T) {
 // it under 5 000.
 func TestStaticContextBudget(t *testing.T) {
 	for _, feedback := range []bool{true, false} {
-		if n := utf8.RuneCountInString(staticContext(t, feedback)); n > 5100 { // 0089 P2: + the source words
-			t.Errorf("feedback %v: static context %d chars (max 5 100)", feedback, n)
+		if n := utf8.RuneCountInString(staticContext(t, feedback)); n > 5150 { // 0089 P2: + the source words (5 110 in v22)
+			t.Errorf("feedback %v: static context %d chars (max 5 150)", feedback, n)
 		}
 	}
 }
