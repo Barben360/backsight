@@ -121,36 +121,80 @@ func head(s string, n int) string {
 // Redacting a whole long paste would cost a hook too much.
 const redactMargin = 4096
 
+// redactMaxWindow caps the window redactHead and redactTail redact: the
+// rules run at about half a megabyte a second, and a hook calls them
+// twice per prompt.
+const redactMaxWindow = 1 << 16
+
+// redactText is redact.Text; tests watch what it is given.
+var redactText = redact.Text
+
 // redactHead is s's first n runes, redacted before the cut so that a key
 // straddling it never stays as its prefix (decision 0088). The window
-// grows when redaction shrank it to near n runes (long keys replaced),
-// so that the cut never lands within redactMargin/2 of its end.
+// grows when redaction shrank it to near n runes (long keys replaced), so
+// that the cut never lands within redactMargin/2 of its end, up to
+// redactMaxWindow. Still short there, it fails closed: the window's last
+// redactMargin runes, where a key cut at the cap would sit, are dropped.
 func redactHead(s string, n int) string {
-	for w := n + redactMargin; ; w *= 2 {
+	maxW := max(redactMaxWindow, n+redactMargin)
+	for w := n + redactMargin; ; w = min(2*w, maxW) {
 		cut := head(s, w)
-		red, _ := redact.Text(cut)
-		if len(cut) == len(s) || utf8.RuneCountInString(red) >= n+redactMargin/2 {
+		red, _ := redactText(cut)
+		rn := utf8.RuneCountInString(red)
+		switch {
+		case len(cut) == len(s) || rn >= n+redactMargin/2:
 			return head(red, n)
+		case w >= maxW:
+			return head(red, min(n, max(0, rn-redactMargin)))
 		}
 	}
 }
 
-// redactTail is s's last n runes, redacted before the cut, as redactHead.
+// redactTail is s's last n runes, redacted before the cut, as redactHead,
+// the window's first runes dropped when it fails closed. A window that
+// starts inside a private key block starts at its header instead, when
+// that is within redactMaxWindow; else it starts after the block's END
+// line, or is empty: a key's body without its header is not recognised
+// as one.
 func redactTail(s string, n int) string {
-	tail := func(s string, n int) string {
-		if r := []rune(s); len(r) > n {
-			return string(r[len(r)-n:])
+	maxW := max(redactMaxWindow, n+redactMargin)
+	for w := n + redactMargin; ; w = min(2*w, maxW) {
+		from := tailStart(s, w)
+		if b := redact.OpenKeyBefore(s, from); b >= 0 {
+			if utf8.RuneCountInString(s[b:from]) <= redactMaxWindow {
+				from = b
+			} else {
+				cut := s[from:]
+				if e := redact.KeyEnd(cut); e >= 0 {
+					red, _ := redactText(cut[e:])
+					return runeTail(red, n)
+				}
+				return ""
+			}
 		}
-		return s
-	}
-	for w := n + redactMargin; ; w *= 2 {
-		cut := tail(s, w)
-		red, _ := redact.Text(cut)
-		if len(cut) == len(s) || utf8.RuneCountInString(red) >= n+redactMargin/2 {
-			return tail(red, n)
+		red, _ := redactText(s[from:])
+		rn := utf8.RuneCountInString(red)
+		switch {
+		case from == 0 || rn >= n+redactMargin/2:
+			return runeTail(red, n)
+		case w >= maxW:
+			return runeTail(red, min(n, max(0, rn-redactMargin)))
 		}
 	}
 }
+
+// tailStart is where s's last n runes start.
+func tailStart(s string, n int) int {
+	i := len(s)
+	for ; n > 0 && i > 0; n-- {
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		i -= size
+	}
+	return i
+}
+
+// runeTail is s's last n runes.
+func runeTail(s string, n int) string { return s[tailStart(s, n):] }
 
 func words(s string) []string {
 	s = head(s, maxWordChars)

@@ -91,7 +91,8 @@ var vendorRules = []rule{
 	{kind: "perplexity_key", re: regexp.MustCompile(`\bpplx-[A-Za-z0-9]{40,}`), lit: []string{"pplx-"}},
 	{kind: "pypi_token", re: regexp.MustCompile(`\bpypi-AgE[A-Za-z0-9_-]{50,}`), lit: []string{"pypi-AgE"}},
 	{kind: "vault_token", re: regexp.MustCompile(`\bhv[sbr]\.[A-Za-z0-9_-]{24,}`), lit: []string{"hvs.", "hvb.", "hvr."}},
-	{kind: "mailgun_key", re: regexp.MustCompile(`\bkey-[0-9a-f]{32}\b`), lit: []string{"key-"}},
+	// Not after a word or '-' (cache-key-<md5>, npm-key-<hash>).
+	{kind: "mailgun_key", find: bounded(regexp.MustCompile(`key-[0-9a-f]{32}`), inClass("_-"), nil), lit: []string{"key-"}},
 	{kind: "doppler_token", re: regexp.MustCompile(`\bdp\.(?:pt|st|ct|sa|scim|audit)\.[A-Za-z0-9]{40,}`), lit: []string{"dp."}},
 	{kind: "dynatrace_token", re: regexp.MustCompile(`\bdt0c01\.[A-Za-z0-9]{24}\.[A-Za-z0-9]{64}`), lit: []string{"dt0c01."}},
 	{kind: "linear_key", re: regexp.MustCompile(`\blin_(?:api|oauth)_[A-Za-z0-9]{40}`), lit: []string{"lin_"}},
@@ -114,7 +115,7 @@ var vendorRules = []rule{
 	{kind: "newrelic_key", re: regexp.MustCompile(`\b(?:NRAK-[A-Z0-9]{27}|NRII-[A-Za-z0-9-]{32})\b`), lit: []string{"NRAK-", "NRII-"}},
 	{kind: "alibaba_key", re: regexp.MustCompile(`\bLTAI[A-Za-z0-9]{20}\b`), lit: []string{"LTAI"}},
 	{kind: "atlassian_token", re: regexp.MustCompile(`\bATATT3[A-Za-z0-9_=-]{100,}`), lit: []string{"ATATT3"}},
-	{kind: "azure_client_secret", re: regexp.MustCompile(`(?:^|[^A-Za-z0-9_~.-])([A-Za-z0-9_~.]{3}\dQ~[A-Za-z0-9_~.-]{31,34})(?:[^A-Za-z0-9_~.-]|$)`), group: 1, lit: []string{"Q~"}},
+	{kind: "azure_client_secret", find: bounded(regexp.MustCompile(`[A-Za-z0-9_~.]{3}\dQ~[A-Za-z0-9_~.-]{31,34}`), inClass("_~.-"), nil), lit: []string{"Q~"}},
 	{kind: "bedrock_key", re: regexp.MustCompile(`\bABSK[A-Za-z0-9+/]{100,}={0,2}`), lit: []string{"ABSK"}},
 	{kind: "supabase_key", re: regexp.MustCompile(`\b(?:sbp_[a-f0-9]{40}\b|sb_secret_[A-Za-z0-9_-]{20,})`), lit: []string{"sbp_", "sb_secret_"}},
 	{kind: "sourcegraph_token", re: regexp.MustCompile(`\bsgp_(?:(?:[a-fA-F0-9]{16}|local)_)?[a-fA-F0-9]{40}\b`), lit: []string{"sgp_"}},
@@ -131,11 +132,9 @@ var rules = slices.Concat([]rule{
 	// no \b: glued to a word or after an escaped newline (\n) it must still
 	// be masked whole, before a broader rule takes a part of it.
 	{kind: "backsight_token", re: regexp.MustCompile(`bst1\.[A-Za-z0-9_-]{40,}`)},
-	// PEM and PGP armour: the whole block to its END line, never across
-	// another armour line ("---"); without its END line (cut short), the
-	// key material after the header (decision 0088).
-	{kind: "private_key", re: regexp.MustCompile(`(?s)` + pemBegin + `(?:[^-]|-[^-]|--[^-])*?` + pemEnd)},
-	{kind: "private_key", find: pemCut},
+	// PEM and PGP armour: the whole block to its END line; without it (cut
+	// short), the key material after the header, fail-closed (pemBlocks).
+	{kind: "private_key", find: pemBlocks},
 	// An age identity: backsight's backup key (bech32, upper-case), whole
 	// or cut short.
 	{kind: "age_identity", re: regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Z]{16,}`)},
@@ -155,7 +154,7 @@ var rules = slices.Concat([]rule{
 	{kind: "twilio_key", re: regexp.MustCompile(`\bSK[0-9a-f]{32}\b`)},
 	// A Telegram bot token, its bot id included (also after "bot" in an
 	// API URL).
-	{kind: "telegram_token", re: regexp.MustCompile(`(?:^|[^0-9])([0-9]{5,16}:A[A-Za-z0-9_-]{32,36})(?:[^A-Za-z0-9_-]|$)`), group: 1, keep: func(h hit) bool { _, v, _ := strings.Cut(h.value, ":"); return wordy(v) }},
+	{kind: "telegram_token", find: bounded(regexp.MustCompile(`[0-9]{5,16}:A[A-Za-z0-9_-]{32,36}`), isDigit, func(s string, i int) bool { return i == len(s) || !inClass("_-")(s[i]) }), keep: func(h hit) bool { _, v, _ := strings.Cut(h.value, ":"); return wordy(v) }},
 	{kind: "teams_webhook", re: regexp.MustCompile(`\bhttps://[a-z0-9-]+\.webhook\.office\.com/webhookb2/([A-Za-z0-9@/_-]{40,})`), group: 1},
 	{kind: "nuget_password", re: regexp.MustCompile(`(?i)<add\s+key="(?:ClearText)?Password"\s+value="([^"]{6,})"`), group: 1},
 	// Webhook URLs: the path is the credential.
@@ -211,118 +210,235 @@ var rules = slices.Concat([]rule{
 		// '/' or '+' (40 without them are a high-entropy token below),
 		// between separators: not inside a path, a URL, a file name or an
 		// identifier (decision 0088).
-		{kind: "aws_secret_key", re: regexp.MustCompile(`(?:^|[^A-Za-z0-9/+=_.-])([A-Za-z0-9/+]{40})(?:[^A-Za-z0-9/+=_.-]|\.(?:\s|$)|$)`), group: 1, keep: keepAWSSecret},
+		{kind: "aws_secret_key", find: bounded(regexp.MustCompile(`[A-Za-z0-9/+]{40}`), inClass("/+=_.-"), awsEnd), keep: keepAWSSecret},
 		// A long mixed-case alphanumeric token anywhere (hex, UUIDs, digests and
-		// identifiers made of words are kept).
-		{kind: "high_entropy", re: regexp.MustCompile(`\b[A-Za-z0-9_-]{32,}\b`), keep: func(h hit) bool { return !highEntropy(h.value) || wordy(h.value) }},
+		// identifiers that rarely change character class are kept).
+		{kind: "high_entropy", re: regexp.MustCompile(`\b[A-Za-z0-9_-]{32,}\b`), keep: func(h hit) bool { return !highEntropy(h.value) }},
 	})
 
 var (
 	pemBeginRE = regexp.MustCompile(pemBegin)
+	pemEndRE   = regexp.MustCompile(pemEnd)
 	armourRE   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*:[ \t]`)
 )
 
-// pemCut is the spans of the private keys cut before their END line: the
-// header and the key material after it (pemMaterialEnd). A header with
-// none after it (quoted in a command, named in prose) is no secret and
-// stays, with the text after it.
-func pemCut(s string) [][]int {
+// pemBlocks is the spans of the private keys (decision 0088). A header
+// reads up to the next header only, so the work stays linear however many
+// there are: to its END line when one comes before the next header, the
+// whole block; else to the end of the key material after it
+// (pemMaterialEnd), and nothing when there is none (a header quoted in a
+// command or named in prose stays, with the text after it).
+func pemBlocks(s string) [][]int {
+	begins, ends := pemBeginRE.FindAllStringIndex(s, -1), pemEndRE.FindAllStringIndex(s, -1)
 	var out [][]int
-	for _, loc := range pemBeginRE.FindAllStringIndex(s, -1) {
-		if end := pemMaterialEnd(s, loc[1]); end > loc[1] {
-			out = append(out, []int{loc[0], end})
+	e := 0
+	for k, b := range begins {
+		limit := len(s)
+		if k+1 < len(begins) {
+			limit = begins[k+1][0]
+		}
+		for e < len(ends) && ends[e][0] < b[1] {
+			e++
+		}
+		if e < len(ends) && ends[e][0] < limit {
+			out = append(out, []int{b[0], ends[e][1]})
+			continue
+		}
+		if end := pemMaterialEnd(s[:limit], b[1]); end > b[1] {
+			out = append(out, []int{b[0], end})
 		}
 	}
 	return out
 }
 
-// pemMaterialEnd is where the key material starting at i ends (i when
-// there is none). Lines break at a newline, real or JSON-escaped (\n,
-// \r\n); before the material come armour headers (Proc-Type:, DEK-Info:,
-// Version:) and blank lines. The material is base64, in lines or in
-// chunks on one line (a key flattened): the first chunk 16 characters or
-// more, the next ones too, or padded, or last on their line and not a
-// word (a key's short last line, not "end" or "Thanks"). It ends at the first
-// other word, at a blank line, or at a quote or comma right after base64
-// (the end of a JSON or code string).
+// OpenKeyBefore is where the last private key header before i starts
+// when no END line follows it before i (i falls inside its block), else
+// -1: a text cut at i would leave that key's body without its header.
+func OpenKeyBefore(s string, i int) int {
+	locs := pemBeginRE.FindAllStringIndex(s[:min(len(s), i+len("-----BEGIN ")+64)], -1)
+	for k := len(locs) - 1; k >= 0; k-- {
+		if b := locs[k][0]; b < i {
+			if pemEndRE.MatchString(s[b:i]) {
+				return -1
+			}
+			return b
+		}
+	}
+	return -1
+}
+
+// KeyEnd is where s's first private key END line ends, or -1.
+func KeyEnd(s string) int {
+	if loc := pemEndRE.FindStringIndex(s); loc != nil {
+		return loc[1]
+	}
+	return -1
+}
+
+// pemMaterialEnd is where a key cut before its END line ends, read from i
+// (the end of its header): fail-closed, every line up to the first line of
+// prose (three words or more, each under 16 characters) or the end of s,
+// once a line held key material (a base64 run of 16 characters or more);
+// i when none did. Lines break at a newline, real or escaped (\n, \\n,
+// \r\n); a quote, comment or diff prefix (>, #, //, *, |) and a trailing
+// backslash or $ (cat -A) are no part of a line's words. Before the
+// material, armour headers (Proc-Type:, Version:, Comment: …) are read
+// as part of the block. A string closed right after base64 ("…==", in
+// JSON or code) ends the key there. Blank lines are bridged.
 func pemMaterialEnd(s string, i int) int {
-	end, none := i, true
-	for line := 0; ; line++ {
+	start, end, material := i, i, false
+	for {
 		j, next := pemLineEnd(s, i)
-		text := s[i:j]
-		switch blank := strings.Trim(text, " \t\r") == ""; {
-		case none && line > 0 && (blank || armourRE.MatchString(strings.TrimLeft(text, " \t"))):
-			// an armour header or a blank line before the material
-		case blank && line > 0:
-			return end
-		default:
-			toks := pemTokens(text)
-			for k, t := range toks {
-				tok := s[i+t[0] : i+t[1]]
-				b := 0
-				for b < len(tok) && (isAlnum(tok[b]) || tok[b] == '+' || tok[b] == '/') {
-					b++
+		if off, core := pemCore(s[i:j]); core != "" {
+			b, p := base64Run(core)
+			switch {
+			case b > 0 && p < len(core) && strings.IndexByte("\"'`,", core[p]) >= 0 && (material || b >= 16):
+				return i + off + p
+			case !material && armourRE.MatchString(core):
+				end = j
+			case pemProse(core):
+				if !material {
+					return start
 				}
-				p := b
-				for p < len(tok) && tok[p] == '=' {
-					p++
-				}
-				if b == 0 || b < 16 && (none || p == b && (k < len(toks)-1 || wordy(tok))) {
-					return end
-				}
-				if p < len(tok) && !strings.ContainsRune("\"'`,", rune(tok[p])) {
-					return end // base64 glued to a word: not key material
-				}
-				end, none = i+t[0]+p, false
-				if p < len(tok) {
-					return end
-				}
+				return end
+			default:
+				material = material || longRun(core, 16)
+				end = j
 			}
 		}
 		if next < 0 {
+			if !material {
+				return start
+			}
 			return end
 		}
 		i = next
 	}
 }
 
+// pemCore is text without its blanks, its prefix tokens (quote, comment
+// or diff marks, opening quotes) and a trailing backslash or $, and where
+// that starts in text.
+func pemCore(text string) (int, string) {
+	off := 0
+	for off < len(text) && strings.IndexByte(" \t>#/*|\"'`", text[off]) >= 0 {
+		off++
+	}
+	core := strings.TrimRight(text[off:], " \t\r\\$")
+	return off, core
+}
+
+// pemProse: three words or more, each under 16 characters (key material
+// is one run per line, or chunks of 64 when flattened).
+func pemProse(core string) bool {
+	f := strings.Fields(core)
+	if len(f) < 3 {
+		return false
+	}
+	for _, w := range f {
+		if len(w) >= 16 {
+			return false
+		}
+	}
+	return true
+}
+
+// base64Run is the length of the base64 run starting core, and where its
+// padding ends.
+func base64Run(core string) (int, int) {
+	b := 0
+	for b < len(core) && isBase64(core[b]) {
+		b++
+	}
+	p := b
+	for p < len(core) && core[p] == '=' {
+		p++
+	}
+	return b, p
+}
+
+// longRun: core holds a base64 run of n characters or more.
+func longRun(core string, n int) bool {
+	run := 0
+	for k := 0; k < len(core); k++ {
+		if !isBase64(core[k]) {
+			run = 0
+			continue
+		}
+		if run++; run >= n {
+			return true
+		}
+	}
+	return false
+}
+
 // pemLineEnd is the end of the line starting at i, before its break, and
-// where the next one starts (-1 at the end of s).
+// where the next one starts (-1 at the end of s). A break is a newline,
+// or n or r-then-n after one backslash or more (JSON-escaped once or
+// twice).
 func pemLineEnd(s string, i int) (int, int) {
 	for k := i; k < len(s); k++ {
-		switch {
-		case s[k] == '\n':
+		if s[k] == '\n' {
+			if k > i && s[k-1] == '\r' {
+				return k - 1, k + 1
+			}
 			return k, k + 1
-		case s[k] == '\\' && strings.HasPrefix(s[k:], `\n`):
-			return k, k + 2
-		case s[k] == '\\' && strings.HasPrefix(s[k:], `\r\n`):
-			return k, k + 4
 		}
+		if s[k] != '\\' {
+			continue
+		}
+		m := k
+		for m < len(s) && s[m] == '\\' {
+			m++
+		}
+		switch {
+		case m < len(s) && s[m] == 'n':
+			return k, m + 1
+		case m < len(s) && s[m] == 'r':
+			n := m + 1
+			for n < len(s) && s[n] == '\\' {
+				n++
+			}
+			if n > m+1 && n < len(s) && s[n] == 'n' {
+				return k, n + 1
+			}
+		}
+		k = m - 1
 	}
 	return len(s), -1
 }
 
-// pemTokens is the spans of the words of text, split at blanks.
-func pemTokens(text string) [][2]int {
-	var out [][2]int
-	start := -1
-	for k := 0; k <= len(text); k++ {
-		if k == len(text) || text[k] == ' ' || text[k] == '\t' || text[k] == '\r' {
-			if start >= 0 {
-				out = append(out, [2]int{start, k})
-				start = -1
-			}
-			continue
-		}
-		if start < 0 {
-			start = k
-		}
-	}
-	return out
-}
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func isBase64(c byte) bool { return isAlnum(c) || c == '+' || c == '/' }
 
 func isAlnum(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// bounded is re's matches with no byte of class just before them nor
+// just after (after, when set, decides the byte after instead). Checking
+// a neighbour consumes nothing, so two matches one separator apart are
+// both found.
+func bounded(re *regexp.Regexp, class func(byte) bool, after func(s string, i int) bool) func(string) [][]int {
+	if after == nil {
+		after = func(s string, i int) bool { return i == len(s) || !class(s[i]) }
+	}
+	return func(s string) [][]int {
+		var out [][]int
+		for _, m := range re.FindAllStringIndex(s, -1) {
+			if (m[0] == 0 || !class(s[m[0]-1])) && after(s, m[1]) {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+}
+
+// inClass is a byte test for the characters of chars plus ASCII letters
+// and digits.
+func inClass(chars string) func(byte) bool {
+	return func(c byte) bool { return isAlnum(c) || strings.IndexByte(chars, c) >= 0 }
 }
 
 // interleave is a[0], b[0], a[1], b[1]...
@@ -611,12 +727,27 @@ func keepAWSSecret(h hit) bool {
 	return upper < 2 || lower < 2 || digit < 1 || float64(changes)/float64(len(v)) < 0.3
 }
 
+// awsEnd: no base64, '=', '_', '-' or '.' right after a bare AWS secret
+// key, but a '.' ending a sentence (before a blank or the end).
+func awsEnd(s string, i int) bool {
+	if i == len(s) {
+		return true
+	}
+	if s[i] == '.' {
+		return i+1 == len(s) || s[i+1] == ' ' || s[i+1] == '\t' || s[i+1] == '\n' || s[i+1] == '\r'
+	}
+	return !inClass("/+=_.-")(s[i])
+}
+
 // wordy: every '/'-separated part of v is made of words, as identifiers
 // and paths are (CamelCaseIdentifier2Version3, newClientWithRetry2,
 // src/Header/MenuItem2): lower-case and capitalised words holding a
 // vowel, and runs of one or two digits. A random token almost never is:
 // each capital is followed by a lower-case letter, each run of lower-case
-// letters holds a vowel, and no three digits follow each other.
+// letters holds a vowel, and no three digits follow each other. Only the
+// new bounded rules use it (aws_secret_key, telegram_token): high_entropy
+// does not, as a passphrase made of words would then leak (decision 0088
+// D5).
 func wordy(v string) bool {
 	for _, part := range strings.Split(v, "/") {
 		if !wordRunRE.MatchString(part) {

@@ -1257,7 +1257,7 @@ func TestStopRedactsTheReplyBeforeCuttingIt(t *testing.T) {
 	fire(t, "stop", map[string]any{"session_id": "s1", "cwd": home, "last_assistant_message": "use " + key + " " + strings.Repeat("y", 979)})
 	st, _ := sessions(home).Load("s1")
 	if !strings.HasSuffix(st.LastAssistant, "yyy") || strings.Contains(st.LastAssistant, "e5F6a1B2") {
-		t.Errorf("the key's tail was kept: %q", st.LastAssistant[:40])
+		t.Errorf("the key's tail was kept: %q", st.LastAssistant[:min(40, len(st.LastAssistant))])
 	}
 }
 
@@ -1274,5 +1274,60 @@ func TestRedactHeadGrowsAWindowRedactionShrank(t *testing.T) {
 	}
 	if got := redactTail("a "+key, 10); strings.Contains(got, "e5F6") {
 		t.Errorf("tail %q", got)
+	}
+	// The tail's window, 1000+4096 runes, starts 20 characters before the
+	// key's end; the long tokens after it shrink to placeholders, so the
+	// window grows and sees the key whole.
+	tok := strings.Repeat("aB3dE5gH9kZx", 17)[:200]
+	rest := strings.Repeat(" "+tok, 40) + " " + strings.Repeat("y", 35)
+	got = redactTail("lead "+key+rest, 4000)
+	if strings.Contains(got, "e5F6a1B2") || strings.Contains(got, "aB3dE5gH9kZx") || !strings.HasSuffix(got, "yyy") {
+		t.Errorf("tail %q", got[:min(80, len(got))])
+	}
+}
+
+// The tail's window starting inside a private key block starts at its
+// header: the key is masked whole, not left to the high-entropy rule.
+func TestRedactTailStartsAtTheKeyHeader(t *testing.T) {
+	line := "iO/K1SZFPTOtr/KBHBeksoGMGwKq9zLm3XwP7rT0vN8yB2cD4eF6gH1jK5lM9nQ+\n"
+	pem := "-----BEGIN " + "RSA PRIVATE KEY-----\n" + strings.Repeat(line, 110) + "-----END " + "RSA PRIVATE KEY-----"
+	got := redactTail("here it is:\n"+pem+"\nend of the reply", 1000)
+	if strings.Contains(got, "K1SZFPTOtr") || !strings.HasSuffix(got, "[redacted:private_key]\nend of the reply") {
+		t.Errorf("%q", got[:min(80, len(got))])
+	}
+	// Beyond the cap, the window starts after the block's END line.
+	far := "-----BEGIN " + "RSA PRIVATE KEY-----\n" + strings.Repeat(line, 1100) + "-----END " + "RSA PRIVATE KEY-----"
+	if got := redactTail(far+"\nend of the reply", 1000); got != "\nend of the reply" {
+		t.Errorf("%q", got[:min(80, len(got))])
+	}
+}
+
+// A single huge token: the window stops growing at redactMaxWindow and
+// the result fails closed (counted by what is redacted, no clock).
+func TestRedactWindowIsCapped(t *testing.T) {
+	var most int
+	orig := redactText
+	redactText = func(s string) (string, []string) {
+		most = max(most, len([]rune(s)))
+		return orig(s)
+	}
+	t.Cleanup(func() { redactText = orig })
+	tok := strings.Repeat("aB3dE5gH9kZx-_", 80000) // 1.1 MB, URL-safe base64
+	for name, got := range map[string]string{"head": redactHead(tok+" end", 4000), "tail": redactTail("start "+tok, 1000)} {
+		if strings.Contains(got, "aB3dE5") || strings.Contains(got, "gH9kZx") {
+			t.Errorf("%s: token left: %q", name, got[:min(80, len(got))])
+		}
+	}
+	if most > redactMaxWindow {
+		t.Errorf("redacted %d runes at once, cap %d", most, redactMaxWindow)
+	}
+	// Long tokens (placeholders once redacted) up to the cap, then a key
+	// 6 characters inside it: at the cap the window's end is dropped, so
+	// the key's cut prefix never stays.
+	long := strings.Repeat("aB3dE5gH9kZx", 200)
+	key := "gh" + "p_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	s := strings.Repeat(long[:2000]+" ", 32) + long[:redactMaxWindow-6-32*2001-1] + " " + key + " end"
+	if got := redactHead(s, 4000); strings.Contains(got, "ghp_") {
+		t.Errorf("the key's prefix at the cap stayed: %q", got[max(0, len(got)-40):])
 	}
 }

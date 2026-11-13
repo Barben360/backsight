@@ -474,6 +474,9 @@ func TestPrefixedFormatsAndWholeTokens(t *testing.T) {
 		{"shippo", "shippo" + "_live_" + hex64[:40], "shippo_token", []string{hex64[:40]}},
 		{"clojars", "CLOJARS" + "_" + rep("a1b2c3d4e5", 6), "clojars_token", []string{"a1b2c3d4e5"}},
 		{"facebook page token", "EA" + "AC" + rep("a1B2c3D4e5", 11), "facebook_token", []string{"a1B2c3D4e5"}},
+		// Passphrases made of words: still high-entropy tokens.
+		{"word passphrase", "MyPasswordIsSecretHorse1CorrectBattery2Staple3", "high_entropy", []string{"Horse1Correct"}},
+		{"word passphrase 2", "Tom2Jerry3Cat4Dog5Fish6Bird7Bear8Lion9Wolf0Fox", "high_entropy", []string{"Cat4Dog5"}},
 		{"nuget password", `<add key="ClearTextPassword" value="hunter2hunter2" />`, "nuget_password", []string{"hunter2hunter2"}},
 		{"teams webhook", "https://acme.webhook.office.com/webhookb2/" + "88cf850f-c82e-4b79-b1d7-ecc3af0e50a9@88cf850f-c82e-4b79-b1d7-ecc3af0e50a9/IncomingWebhook/" + hex32 + "/88cf850f-c82e-4b79-b1d7-ecc3af0e50a9", "teams_webhook", []string{hex32}},
 	}
@@ -503,12 +506,12 @@ func TestPrefixedLookAlikesSurvive(t *testing.T) {
 		"the path src/components/Header/HeaderMenuItem2/index is long",
 		"cd /home/annuser/Workspace/github.com/Barben360/backsight",
 		"/usr/lib/x86_64-linux-gnu/libQt5WebEngineCore.so.5",
-		"const CamelCaseIdentifier2Version3FooBar9Baz = 1",
 		"func TestServerInstallComposeFailureRecovery2(t *testing.T)",
 		"type HTTPServerConfigurationForTheBillingService2 struct{}",
-		"call newClientWithRetryPolicyAndBackoff2Jitter3 now",
 		"hf_hub_download and hf_transfer are installed",
 		"use key-value pairs and key-rotation",
+		"cache-key-" + hex32 + " restored",
+		"restore-keys: npm-key-" + hex32,
 		"pubkey-" + hex32 + " is the public one",
 		"the hvs. prefix marks a Vault service token",
 		"SG.1 and SG.2 are sections",
@@ -544,28 +547,72 @@ func TestUnterminatedPrivateKeyHeader(t *testing.T) {
 			t.Errorf("text after a bare header was eaten:\n%q\n-> %q", s, out)
 		}
 	}
+	l := strings.Split(body, "\n")
+	prefixed := func(p string) string { return p + strings.Join(l, "\n"+p) }
 	for _, c := range []struct{ name, in, after string }{
 		{"lines", "my key:\n" + hdr + "\n" + body + "\nthen I deleted it", "\nthen I deleted it"},
 		{"lines to the end", hdr + "\n" + body, ""},
-		{"a word line after", hdr + "\n" + body[:64] + "\nThanks\nbye", "\nThanks\nbye"},
-		{"short last line", hdr + "\n" + body[:64] + "\nx7Lm3XwP\nbye", "\nbye"},
+		{"word lines after: still the key's", hdr + "\n" + body + "\nThanks\nbye", ""},
 		{"armour headers", hdr + "\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,3F17F5316E2BAC89\n\n" + body + "\nend of paste", "\nend of paste"},
 		{"escaped in json", `{"private_key": "` + hdr + `\n` + strings.ReplaceAll(body, "\n", `\n`) + `", "x": 1}`, `", "x": 1}`},
-		{"flattened", "KEY=" + hdr + " " + strings.ReplaceAll(body, "\n", " ") + "\nnext line", "\nnext line"},
-		{"glued word after", hdr + "\n" + body[:64] + "\nabcdefghijklmnopq(x) said", "\nabcdefghijklmnopq(x) said"},
-		{"crlf", hdr + "\r\n" + strings.ReplaceAll(body, "\n", "\r\n") + "\r\nbye now", "\r\nbye now"},
+		{"double-escaped in json", `{"k": "` + hdr + `\\n` + strings.ReplaceAll(body, "\n", `\\n`) + `\\n", "x": 1}`, `\\n", "x": 1}`},
+		{"flattened", "KEY=" + hdr + " " + strings.ReplaceAll(body, "\n", " ") + "\nthe next line here", "\nthe next line here"},
+		{"glued word after", hdr + "\n" + body[:64] + "\nabcdefghijklmnopq(x) said\nand then some prose", "\nand then some prose"},
+		{"crlf", hdr + "\r\n" + strings.ReplaceAll(body, "\n", "\r\n") + "\r\nbye for now", "\r\nbye for now"},
+		{"quoted", "> " + hdr + "\n" + prefixed("> ") + "\n\nthat was the key", "\n\nthat was the key"},
+		{"commented", "// " + hdr + "\n" + prefixed("// ") + "\nfunc main() { run(the, key, now) }", "\nfunc main() { run(the, key, now) }"},
+		{"hash comments", "# " + hdr + "\n" + prefixed("#   ") + "\n# end of the key", "\n# end of the key"},
+		{"backslash continuations", `ENV K="` + hdr + `\n\` + "\n" + strings.Join(l, `\n\`+"\n") + `"` + "\nRUN make build and test", `"` + "\nRUN make build and test"},
+		{"cat -A", hdr + "$\n" + strings.Join(l, "$\n") + "$\nthe end of the file", "\nthe end of the file"},
+		// Review probes: a quote prefix on every line, and a short first
+		// chunk on the header's line with the material on the next.
+		{"quoted, word line after", "> " + hdr + "\n> MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n> abcdEFGH/ijklMNOP+qrstUVWX0123456789x7Lm3XwP\nthanks", ""},
+		{"short first chunk", hdr + " MIIEvQ IBADANBgkqhkiG9w0BAQEFAASCBKcw\nabcdEFGH/ijklMNOP+qrstUVWX0123456789x7Lm3XwP\nand that was all", "\nand that was all"},
+		{"blank line inside", hdr + "\n" + l[0] + "\n\n" + l[1] + "\n" + l[2] + "\nok then we are done", "\nok then we are done"},
 	} {
 		out, kinds := Text(c.in)
-		if strings.Contains(out, "MIIEow") || strings.Contains(out, "iO/K1SZFPTOtr") || strings.Contains(out, "sU7wY0aZ3bE6iO") || !contains(kinds, "private_key") {
-			t.Errorf("%s: key material survived: %q %v", c.name, out, kinds)
+		for _, frag := range []string{"MIIEow", "MIIEvQ", "K1SZFPTOtr", "KBHBeks", "sU7wY0aZ3bE6iO", "x7Lm3XwP", "abcdEFGH"} {
+			if strings.Contains(out, frag) {
+				t.Errorf("%s: key material %q survived: %q", c.name, frag, out)
+			}
+		}
+		if !contains(kinds, "private_key") {
+			t.Errorf("%s: kinds %v", c.name, kinds)
 		}
 		if !strings.HasSuffix(out, "[redacted:private_key]"+c.after) {
 			t.Errorf("%s: the text after the key changed: %q", c.name, out)
 		}
 	}
+	// Many headers or a long line after one: each header reads only up to
+	// the next one, so the work stays linear (no wall clock here: the
+	// outcome only).
+	many := strings.Repeat(hdr+"\n", 2000) + body
+	if out, _ := Text(many); strings.Contains(out, "K1SZFPTOtr") || strings.Count(out, hdr) != 1999 {
+		t.Errorf("many headers: %d headers left, key %v", strings.Count(out, hdr), strings.Contains(out, "K1SZFPTOtr"))
+	}
 	// A header quoted before a real key: the real key alone is masked.
 	out, _ := Text("grep '" + hdr + "' found:\n" + privKey + "\nok")
 	if !strings.HasPrefix(out, "grep '"+hdr+"' found:\n[redacted:private_key]\nok") {
 		t.Errorf("%q", out)
+	}
+}
+
+// Two credentials one separator apart are both masked: no rule consumes
+// the character that bounds its match.
+func TestAdjacentMatchesAreAllFound(t *testing.T) {
+	aws2 := "Zq8/xLm+3XwP7rT0vN8yB2cD/4eF6gH1jK5lM9nQ"
+	tg2 := "987654" + "321:AA" + "FfGgHhJjKk1LlMmNnOoPpQqRrSsTtUuVvWw"
+	az1, az2 := "ab"+"c8Q~"+rep("a1B2c3D4e5", 4)[:34], "xy"+"z9Q~"+rep("Zx9kLmQ2wP", 4)[:34]
+	for _, c := range []struct{ name, in, kind string }{
+		{"aws space", awsSecret + " " + aws2, "aws_secret_key"},
+		{"aws comma", awsSecret + "," + aws2, "aws_secret_key"},
+		{"telegram space", telegram + " " + tg2, "telegram_token"},
+		{"telegram comma", telegram + "," + tg2, "telegram_token"},
+		{"azure space", az1 + " " + az2, "azure_client_secret"},
+	} {
+		out, _ := Text(c.in)
+		if want := "[redacted:" + c.kind + "]"; strings.Count(out, want) != 2 {
+			t.Errorf("%s: %q", c.name, out)
+		}
 	}
 }
