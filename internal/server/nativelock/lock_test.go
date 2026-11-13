@@ -119,8 +119,8 @@ func TestNativeLockIsTheGeneratedOne(t *testing.T) {
 // nothing may move the Linux one. A deliberate lock bump changes both
 // literals in the same commit.
 func TestLinuxLockUnchanged(t *testing.T) {
-	const wantSHA = "02630d26b3e46e5f10d6d333f225e2f7785ed16bff30ab52d03ff572757f2913"
-	const wantHash12 = "02630d26b3e4"
+	const wantSHA = "9cd0906a08602b266360e05204b66c051b977ed7d06d87dd5b77cc4dcf984221"
+	const wantHash12 = "9cd0906a0860"
 	sum := sha256.Sum256(Requirements)
 	if got := hex.EncodeToString(sum[:]); got != wantSHA {
 		t.Errorf("requirements-linux-amd64.txt sha256 %s, want %s", got, wantSHA)
@@ -202,7 +202,7 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 		// the image ships it (Hindsight 1.2.0: authlib, dnspython, fastmcp,
 		// OpenTelemetry) or an override does (pyasn1): a pin bump that
 		// lowers one fails here.
-		for name, v := range map[string]string{"authlib": "1.9.1", "dnspython": "2.9.0", "fastmcp": "3.4.11", "opentelemetry-api": "1.45.1", "pyasn1": "0.6.5"} {
+		for name, v := range map[string]string{"authlib": "1.9.1", "dnspython": "2.9.0", "fastmcp": "3.4.11", "opentelemetry-api": "1.45.1", "pyasn1": "0.6.5", "soupsieve": "4.1"} {
 			if got := For(goos).Versions()[name]; got != v {
 				t.Errorf("the %s lock holds %s %q, want %s", goos, name, got, v)
 			}
@@ -219,6 +219,9 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 	}
 	if declared["filelock"] != "4.2.1" {
 		t.Errorf("overrides.txt pins filelock at %q, want 4.2.1", declared["filelock"])
+	}
+	if declared["soupsieve"] != "4.1" {
+		t.Errorf("overrides.txt pins soupsieve at %q, want 4.1", declared["soupsieve"])
 	}
 
 	// The checker and the parser bite.
