@@ -237,6 +237,21 @@ func TestNativeLockScriptChecksThePin(t *testing.T) {
 			t.Errorf("want a refusal naming not-overridden, got %v:\n%s", err, out)
 		}
 	})
+	t.Run("a forced line without its reason is refused and nothing is written", func(t *testing.T) {
+		for _, forced := range []string{"zope-interface", "zope-interface:", "zope-interface: a cap\nnew-dep"} {
+			lock := filepath.Join(t.TempDir(), "lock.txt")
+			calls, out, _, _, err := runNativeLockForced(t, overrides, forced, imageListing(tag), overBody, lock)
+			if err == nil || !strings.Contains(out, "is not \"name: reason\"") {
+				t.Errorf("FORCED %q = %v, want a refusal:\n%s", forced, err, out)
+			}
+			if strings.Contains(calls, "uv ") {
+				t.Errorf("FORCED %q: uv ran:\n%s", forced, calls)
+			}
+			if _, serr := os.Stat(lock); serr == nil {
+				t.Errorf("FORCED %q: a lock was written", forced)
+			}
+		}
+	})
 
 	// --check compares the header across machines: its order is bytes',
 	// not the locale's (en_US puts zope-interface before zope-interface-x,

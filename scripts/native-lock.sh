@@ -66,7 +66,7 @@ WINDOWS_EXCEPTIONS=""
 WINDOWS_OVERRIDES="onnxruntime: markitdown 0.1.5b1 caps it at 1.20.1 on win32 only; Linux runs the locked version with it"
 # Overrides forced past a dependent's declared cap (uv --override, "name:
 # reason", one per line). Each must also be in overrides.txt.
-FORCED=${NATIVE_LOCK_FORCED-"filelock: litellm 1.104.0 declares filelock<4.0, but only its proxy CLI imports it, with FileLock(path, timeout=, mode=), unchanged in 4.x; litellm 1.109.1 declares filelock<5"}
+FORCED=${NATIVE_LOCK_FORCED-"filelock: litellm 1.104.0 declares filelock<4.0, but its proxy CLI is its only import, with FileLock(path, timeout=, mode=); huggingface-hub (FileLock, SoftFileLock, WeakFileLock, Timeout) declares filelock>=3.10 with no cap; both APIs are unchanged in 4.x; litellm 1.109.1 declares filelock<5"}
 check=0 shared=0 target=linux
 while [ $# -gt 0 ]; do
   case $1 in
@@ -104,6 +104,13 @@ die() {
   echo "native-lock: $*" >&2
   exit 1
 }
+
+# Each FORCED line is "name: reason": a line without one would be skipped.
+while IFS= read -r l; do
+  [ -z "$l" ] || printf '%s\n' "$l" | grep -Eq '^[A-Za-z0-9._-]+: [^ ]' || die "FORCED line \"$l\" is not \"name: reason\""
+done <<EOF_FORCED
+$FORCED
+EOF_FORCED
 
 image=$(sed -n 's/^const pinnedHindsight = "\(.*\)"$/\1/p' "$root/internal/server/render.go")
 [ -n "$image" ] || die "no pinnedHindsight in internal/server/render.go"
