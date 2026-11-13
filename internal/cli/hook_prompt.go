@@ -326,7 +326,8 @@ func (h *hookEnv) userPrompt() []byte {
 	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
-		sel, flags, items, res, empty := h.promptRecall(st, prompt, reason)
+		budget := h.budget(recallBudget)
+		sel, flags, items, res, empty := h.promptRecall(st, prompt, reason, budget)
 		text, chosen := sel.Block, sel.Chosen
 		ev.Empty = empty
 		ev.CutCount, ev.CutSize, ev.Shortened = sel.CutCount, sel.CutSize, sel.Shortened
@@ -336,7 +337,7 @@ func (h *hookEnv) userPrompt() []byte {
 			ev.Scopes[name] = telemetry.ScopeResult{OK: m.OK, MS: m.MS, Raw: m.Raw}
 			failed = failed && !m.OK
 		}
-		h.breakerRecord(failed, res.TimedOut)
+		h.breakerRecord(failed, res.TimedOut && budget >= probeBudget)
 		ev.Above = len(res.Hits)
 		if len(res.Hits) > 0 {
 			ev.Top = res.Hits[0].Reranker
@@ -465,8 +466,8 @@ func (h *hookEnv) sticky() session.Sticky {
 // empty says why nothing was chosen (the prompt event's empty field):
 // error (the search failed, whatever the bank holds), no_candidates,
 // below_floor, all_seen or capped; "" when something was.
-func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (sel selection, flags []string, items []session.Injection, res recall.Result, empty string) {
-	_, res = h.searchPrompt(prompt, h.budget(recallBudget))
+func (h *hookEnv) promptRecall(st session.State, prompt, rule string, budget time.Duration) (sel selection, flags []string, items []session.Injection, res recall.Result, empty string) {
+	_, res = h.searchPrompt(prompt, budget)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
 	// Within what the session budget has left, like the failure recall.

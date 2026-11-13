@@ -155,10 +155,10 @@ func (h *hookEnv) sessionStart() []byte {
 		case err != nil:
 			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
 			if errors.Is(err, errBriefingTimedOut) {
-				// A server that does not answer a short list read within
-				// the briefing's budget would cost the first prompt the
-				// whole recall budget: recall pauses at once.
-				h.breakerRecord(true, true)
+				// One failure toward the breaker: the briefing's 5 s, the
+				// page read's share included, is under a slow healthy
+				// server's, so it never pauses recall by itself.
+				h.breakerRecord(true, false)
 			}
 		case !h.cfg.Components.Write:
 			banner = instructions.StatusRecordingOff(name)
@@ -249,7 +249,7 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 		missing = absent
 	}
 	text, items, source, err = h.recentBriefing(ctx)
-	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if err != nil && h.ctx.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		err = fmt.Errorf("%w: %w", errBriefingTimedOut, err)
 	}
 	// A page is created only for a project with memories: an empty or new

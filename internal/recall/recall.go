@@ -125,9 +125,10 @@ type Result struct {
 	// answers held (a hit two queries found counts for both; a blank
 	// query, never sent, 0).
 	QueryHits []int `json:"query_hits"`
-	// TimedOut: a call failed because the search ran out of its budget (a
-	// server that accepted the connection and did not answer in time), not
-	// because it was refused.
+	// TimedOut: a call failed because the search ran out of its own budget
+	// (a server that accepted the connection and did not answer in time),
+	// not because it was refused or the caller's context ended; another
+	// scope may have answered.
 	TimedOut bool `json:"timed_out,omitempty"`
 }
 
@@ -170,9 +171,10 @@ func (e *Engine) scopes(q Query) []scope {
 // merges the hits. A scope that answered without any observation is asked
 // again for raw facts, still within the budget.
 func (e *Engine) Search(ctx context.Context, q Query) Result {
+	parent := ctx
 	if e.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, e.Timeout)
+		ctx, cancel = budgetContext(ctx, e.Timeout)
 		defer cancel()
 	}
 	scopes := e.scopes(q)
@@ -223,7 +225,8 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 		res.Scopes[a.scope] = m
 	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	// The search's own deadline, not one its caller's context brought.
+	if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		for _, a := range answers {
 			res.TimedOut = res.TimedOut || a.err != nil
 		}
@@ -337,6 +340,9 @@ func meta(answers []answer, name string) ScopeMeta {
 	}
 	return m
 }
+
+// budgetContext gives a search its budget (tests end it on cue).
+var budgetContext = context.WithTimeout
 
 // afterCall, when set (tests), runs once each server call of a search has
 // returned, with its scope's name: a test ends the search's context only

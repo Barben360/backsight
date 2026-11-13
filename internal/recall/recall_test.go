@@ -286,6 +286,55 @@ func TestSearchStaysWithinItsBudget(t *testing.T) {
 			t.Error("a search its caller cancelled is marked timed out")
 		}
 	})
+
+	// The budget ends once the global scope answered: the project scope
+	// failed on the search's own deadline, the global hit is kept, and the
+	// search is marked timed out (a server half hung).
+	t.Run("one scope out of the budget", func(t *testing.T) {
+		end := make(chan struct{})
+		old := budgetContext
+		t.Cleanup(func() { budgetContext, afterCall = old, nil })
+		budgetContext = func(parent context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+			return deadlineAt{parent, end}, func() {}
+		}
+		afterCall = func(scope string) {
+			if scope == "global" {
+				close(end)
+			}
+		}
+		e := &Engine{Client: hanging(t, true), Bank: "b", Transverse: []string{".claude"}, Timeout: outOfReach}
+		res := e.Search(context.Background(), q)
+		if res.Scopes["project"].OK || !res.Scopes["global"].OK || len(res.Hits) != 1 || !res.TimedOut {
+			t.Errorf("%+v, want the global hit, the project scope failed and the search timed out", res)
+		}
+	})
+
+	// A deadline the caller's context brought is not the search's own.
+	t.Run("the caller's deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		e := &Engine{Client: hanging(t, false), Bank: "b", Transverse: []string{".claude"}, Timeout: outOfReach}
+		if res := e.Search(ctx, q); res.TimedOut || res.Scopes["project"].OK {
+			t.Errorf("%+v, want failed scopes and no timeout of the search's own", res)
+		}
+	})
+}
+
+// deadlineAt is a context whose deadline passes when end closes.
+type deadlineAt struct {
+	context.Context
+	end chan struct{}
+}
+
+func (d deadlineAt) Done() <-chan struct{} { return d.end }
+
+func (d deadlineAt) Err() error {
+	select {
+	case <-d.end:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
 }
 
 func TestRerankerFloorBlankTextAndTies(t *testing.T) {

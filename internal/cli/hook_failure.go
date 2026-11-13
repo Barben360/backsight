@@ -28,14 +28,17 @@ const (
 	failureHits     = 2
 	// failureChars: the failure recall's text, the prompt's former budget
 	// (issue 328 raised the prompt's, not this one).
-	failureChars  = 800
-	failureBudget = 6 * time.Second // one recall, inside the hook's 8 s deadline
+	failureChars = 800
 	// failureMinError: shorter error text (past "Exit code N") is not a
 	// failure worth a lookup; it also keeps `backsight verify` off the server.
 	failureMinError = 15
 	failureSigsKept = 200
 	failureCmdChars = 100
 )
+
+// failureBudget: one recall, inside the hook's 8 s deadline (a variable for
+// the tests).
+var failureBudget = 6 * time.Second
 
 var (
 	exitCodeRE = regexp.MustCompile(`^\s*Exit code \d+\s*`)
@@ -144,7 +147,9 @@ func (h *hookEnv) toolFailure() []byte {
 	for _, m := range res.Scopes {
 		failed = failed && !m.OK
 	}
-	h.breakerRecord(failed, res.TimedOut)
+	// Its budget is under a healthy slow server's recalls: a timeout here
+	// is one failure, not a reason to pause the prompt recall.
+	h.breakerRecord(failed, false)
 
 	// At most failureHits unseen hits at the floor, within what the session
 	// budget has left.

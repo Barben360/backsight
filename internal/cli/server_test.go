@@ -344,6 +344,7 @@ var (
 	mentalCalls        []string          // POST/PATCH/DELETE on mental models, with the body
 	mentalGetDelay     time.Duration     // a slow page read
 	recallDelay        time.Duration     // a recall that hangs (a saturated reranker)
+	recallDelayTag     string            // only the recalls asking for this tag hang ("": all)
 	recentDelay        time.Duration     // a memories/list read that hangs
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	mentalPatchStatus  atomic.Int32      // non-zero: answer a page update with this status
@@ -431,7 +432,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentDown.Store(false)
 	recentHasEventTime.Store(false)
 	mentalModels, mentalCalls, mentalGetDelay, mentalLists = map[string]string{}, nil, 0, nil
-	recallDelay, recentDelay = 0, 0
+	recallDelay, recentDelay, recallDelayTag = 0, 0, ""
 	mentalCreateStatus.Store(0)
 	mentalPatchStatus.Store(0)
 	docDeleteFails.Store(false)
@@ -616,7 +617,7 @@ func fakeHindsight(t *testing.T) (port int) {
 				w.WriteHeader(int(st))
 				return
 			}
-			if recallDelay > 0 && !fakeWait(r, recallDelay) {
+			if recallDelay > 0 && (recallDelayTag == "" || slices.Contains(body.Tags, recallDelayTag)) && !fakeWait(r, recallDelay) {
 				return
 			}
 			extra := ""
