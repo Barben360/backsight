@@ -710,3 +710,56 @@ func TestSearchProvenance(t *testing.T) {
 		t.Errorf("raw fact: %+v", res.Hits)
 	}
 }
+
+// The source facts are capped per response: an observation some of whose
+// facts the response left out may rest on any source, so its word is
+// mixed, a claim to verify (0089 review S2); one none of whose facts came
+// back keeps no word.
+func TestSearchProvenanceWithFactsPastTheCap(t *testing.T) {
+	obs := `{"results":[
+		{"id":"o1","text":"Mostly chat.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2","f9"],"scores":{"reranker":0.8}},
+		{"id":"o2","text":"All cut.","type":"observation","tags":["project:billing"],"source_fact_ids":["g1","g2"],"scores":{"reranker":0.7}},
+		{"id":"o3","text":"All there.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2"],"scores":{"reranker":0.6}}],
+		"source_facts":{"f1":{"tags":["source:chat"]},"f2":{"tags":["source:chat"]}},"source_facts_truncated":true}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	got := map[string]string{}
+	for _, h := range res.Hits {
+		got[h.ID] = h.Source
+	}
+	if got["o1"] != "mixed" || got["o2"] != "" || got["o3"] != "session" {
+		t.Errorf("sources %v", got)
+	}
+}
+
+// Provenance alone (the hook recalls) asks a smaller source-facts budget
+// than a search showing kinds: only the tags are read, and the server
+// spends the budget in rank order (0089 review S6).
+func TestProvenanceAsksTheHookBudget(t *testing.T) {
+	var bodies []string
+	kindsEngine(t, `{"results":[]}`, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	for _, b := range bodies {
+		if strings.Contains(b, "observation") && !strings.Contains(b, `"source_facts":{"max_tokens":2048}`) {
+			t.Errorf("provenance call: %s", b)
+		}
+	}
+	bodies = nil
+	kindsEngine(t, `{"results":[]}`, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Kinds: true, Provenance: true})
+	for _, b := range bodies {
+		if strings.Contains(b, "observation") && !strings.Contains(b, `"source_facts":{"max_tokens":8192}`) {
+			t.Errorf("kinds call: %s", b)
+		}
+	}
+}
+
+// A fact missing from a response the server says it did not truncate did
+// not resolve (gone): it leaves the word as the other facts give it.
+func TestSearchProvenanceIgnoresGoneFactsWhenNotTruncated(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"Chat.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","gone"],"scores":{"reranker":0.8}}],
+		"source_facts":{"f1":{"tags":["source:chat"]}},"source_facts_truncated":false}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	if len(res.Hits) != 1 || res.Hits[0].Source != "session" {
+		t.Errorf("%+v", res.Hits)
+	}
+}

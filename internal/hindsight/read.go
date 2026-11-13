@@ -23,6 +23,9 @@ type RecallRequest struct {
 	// response grows with the facts' text, so only searches shown to a
 	// reader ask for it.
 	SourceFacts bool `json:"-"`
+	// SourceFactsTokens is the source facts' budget for the whole response
+	// when SourceFacts is set; 0 is SourceFactsTokens.
+	SourceFactsTokens int `json:"-"`
 }
 
 // MarshalJSON adds include: entities null leaves out the entity payload
@@ -31,7 +34,11 @@ func (r RecallRequest) MarshalJSON() ([]byte, error) {
 	type plain RecallRequest
 	include := map[string]any{"entities": nil}
 	if r.SourceFacts {
-		include["source_facts"] = map[string]any{"max_tokens": SourceFactsTokens}
+		n := r.SourceFactsTokens
+		if n <= 0 {
+			n = SourceFactsTokens
+		}
+		include["source_facts"] = map[string]any{"max_tokens": n}
 	}
 	return json.Marshal(struct {
 		plain
@@ -43,6 +50,12 @@ func (r RecallRequest) MarshalJSON() ([]byte, error) {
 // server's default is 4096). A fact past the cap comes without tags, so its
 // observation shows no kinds.
 const SourceFactsTokens = 8192
+
+// SourceFactsTagsTokens is the budget of a recall that reads only the
+// facts' tags (the hooks' provenance, decision 0089): the server spends it
+// in rank order, so the few memories a hook shows keep their facts, at a
+// quarter of the response.
+const SourceFactsTagsTokens = 2048
 
 // RecallHit is one recalled memory.
 type RecallHit struct {
@@ -60,6 +73,9 @@ type RecallHit struct {
 	// SourceTags: the tags of the source facts the response carried
 	// (RecallRequest.SourceFacts), each once, in order of appearance.
 	SourceTags []string `json:"-"`
+	// SourceFactsMissing: how many of SourceFactIDs a truncated response
+	// left out (the source facts' budget): their tags are unknown.
+	SourceFactsMissing int `json:"-"`
 }
 
 // Recall returns the memories matching req, best first.
@@ -69,11 +85,19 @@ func (c *Client) Recall(ctx context.Context, bank string, req RecallRequest) ([]
 		SourceFacts map[string]struct {
 			Tags []string `json:"tags"`
 		} `json:"source_facts"`
+		// SourceFactsTruncated: the budget left facts out; absent (an older
+		// server) counts as true.
+		SourceFactsTruncated *bool `json:"source_facts_truncated"`
 	}
 	err := c.do(ctx, http.MethodPost, bankPath(bank, "/memories/recall"), nil, req, &out)
 	for i, h := range out.Results {
 		seen := map[string]bool{}
 		for _, id := range h.SourceFactIDs {
+			// a fact missing from an untruncated response did not resolve
+			// (gone); one missing from a truncated one is unknown
+			if _, ok := out.SourceFacts[id]; !ok && (out.SourceFactsTruncated == nil || *out.SourceFactsTruncated) {
+				out.Results[i].SourceFactsMissing++
+			}
 			for _, t := range out.SourceFacts[id].Tags {
 				if !seen[t] {
 					seen[t] = true

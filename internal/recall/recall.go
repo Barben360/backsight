@@ -178,7 +178,14 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		defer cancel()
 	}
 	scopes := e.scopes(q)
-	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds || q.Provenance, q.MaxTokens)
+	sourceTokens := 0
+	switch {
+	case q.Kinds: // a reader sees the kinds of every hit
+		sourceTokens = hindsight.SourceFactsTokens
+	case q.Provenance: // only the tags of the few hits a hook shows
+		sourceTokens = hindsight.SourceFactsTagsTokens
+	}
+	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, sourceTokens, q.MaxTokens)
 	res := Result{Scopes: map[string]ScopeMeta{}}
 	var empty []scope
 	for _, s := range scopes {
@@ -187,7 +194,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 	}
 	if len(empty) > 0 && ctx.Err() == nil {
-		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, false, q.MaxTokens)
+		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, 0, q.MaxTokens)
 		for _, a := range raw {
 			if len(a.hits) > 0 {
 				res.Raw = true
@@ -217,6 +224,9 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
 			}
 			h.Source = SourceOf(r.Tags, r.SourceTags)
+			if h.Source != "" && r.SourceFactsMissing > 0 {
+				h.Source = "mixed" // the facts past the cap may rest on any source (decision 0089)
+			}
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
@@ -341,7 +351,8 @@ func meta(answers []answer, name string) ScopeMeta {
 // after the calls it means to keep came back.
 var afterCall func(scope string)
 
-func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sources bool, maxTokens int) []answer {
+// sourceTokens: the source facts' budget, 0 none asked.
+func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sourceTokens int, maxTokens int) []answer {
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokens
 	}
@@ -365,7 +376,7 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens, SourceFacts: sources}
+			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens, SourceFacts: sourceTokens > 0, SourceFactsTokens: sourceTokens}
 			if len(j.scope.tags) > 0 {
 				req.Tags, req.TagsMatch = j.scope.tags, "any_strict"
 			}
