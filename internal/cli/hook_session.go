@@ -297,15 +297,27 @@ func (h *hookEnv) recentBriefing(ctx context.Context) (text string, items []sess
 		if w := m.When(); !w.IsZero() {
 			ago = recall.Age(at.Sub(w))
 		}
-		tag := memoryTag(h.project, m.ID) + " " // within the item's characters
+		src := listedSource(m)
+		tag := memoryTag(h.project, src, m.ID) + " " // within the item's characters
 		line := "- " + tag + clip(m.Text, briefingItemChars-len([]rune(tag))) + age(ago) + "\n"
 		if len([]rune(b.String()))+len([]rune(line)) > briefingChars {
 			break
 		}
 		b.WriteString(line)
-		items = append(items, session.Injection{ID: m.ID, Text: m.Text, Project: h.project, Scope: "project", Prompt: 0, Rule: "briefing", At: at})
+		items = append(items, session.Injection{ID: m.ID, Text: m.Text, Project: h.project, Source: src, Scope: "project", Prompt: 0, Rule: "briefing", At: at})
 	}
 	return strings.TrimRight(b.String(), "\n"), items, source, nil
+}
+
+// listedSource is the source word of a memory a listing returned, without
+// its facts: a raw fact's own tags are exact, an observation's are not (it
+// carries its scope, and only the source tags of the facts merged into it
+// since), so an observation's source is unknown: mixed (decision 0089).
+func listedSource(m hindsight.Memory) string {
+	if m.FactType == "observation" {
+		return "mixed"
+	}
+	return recall.SourceOf(m.Tags)
 }
 
 // briefingModelID is the project's mental-model id (retain.BriefingModelID).
@@ -349,7 +361,7 @@ func (h *hookEnv) modelBriefingPage(ctx context.Context) (text, refreshed, id st
 	var b strings.Builder
 	tag := ""
 	if id != "" {
-		tag = memoryTag(h.project, id) + " " // beside the page's budget
+		tag = memoryTag(h.project, "", id) + " " // beside the page's budget
 	}
 	b.WriteString(tag + instructions.BriefingModelHeader(safeProject(h.project), age) + "\n")
 	// Server-written text: every line quoted, headings flattened, and a
@@ -433,7 +445,7 @@ func (h *hookEnv) compactStart() []byte {
 		if recent := st.Injected[max(0, len(st.Injected)-compactReplay):]; len(recent) > 0 {
 			b.WriteString("\n\nMemories shown earlier in this session " + instructions.HintsLine + ":\n")
 			for _, in := range recent {
-				fmt.Fprintf(&b, "- [%s] %s\n", safeProject(in.Project), clip(in.Text, briefingItemChars))
+				fmt.Fprintf(&b, "- %s %s\n", memoryTag(in.Project, in.Source, in.ID), clip(in.Text, briefingItemChars))
 				keep = append(keep, in.ID)
 			}
 		}
@@ -529,7 +541,7 @@ func (h *hookEnv) subagentStart() []byte {
 			if in.Rule != "briefing" || len(shown) == subagentItems {
 				continue
 			}
-			tag := memoryTag(in.Project, in.ID) + " " // within the item's characters
+			tag := memoryTag(in.Project, in.Source, in.ID) + " " // within the item's characters
 			line := "\n- " + tag + clip(in.Text, subagentItemChars-len([]rune(tag)))
 			if len([]rune(text))+len([]rune(line)) > subagentChars {
 				break

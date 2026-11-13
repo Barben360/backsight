@@ -677,7 +677,46 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	// retired too with feedback.cross_project_retire (config.toml only),
 	// else it is the user's to retire.
 	linked := linkedProjects(d.dirs, cfg, resolver, live.Cwd, live.Project)
+	// The server decides whose memory it is, never a line's text: a
+	// search, a store or a Sources answer is journaled under the name it
+	// shows (tagProject), which another project's name can share (decision
+	// 0089). Each memory is read once, here, and classify reuses the read;
+	// one the server cannot read keeps its journaled project.
+	// Read only from the server this PC joined: another one answering at
+	// the address, or a connect since, leaves the journaled projects, and
+	// the checks below refuse the call anyway.
+	read := d.memoryReader(ctx, key, ids)
+	gated := otherServerRefusal(d.dirs, cfg) != nil || sendsGate(d.dirs, d.generation)() != nil
+	if gated {
+		read = func(string) (hindsight.MemoryDetail, error) { return hindsight.MemoryDetail{}, errors.New("not read") }
+	}
+	journaled := owner
+	owner = func(id string) string {
+		if m, err := read(id); err == nil {
+			if p := recall.ProjectOf(m.Tags); p != "" {
+				return p
+			}
+		}
+		return journaled(id)
+	}
 	near := func(p string) bool { return p == live.Project || isPool(cfg, p) || slices.Contains(linked, p) }
+	// A memory the server could not read has only its journaled name,
+	// which another project's name may share: only one that is exactly a
+	// near project's goes on, whatever cross_project_retire says (the
+	// unread memory is then hidden on this PC).
+	if !gated {
+		var unconfirmed []string
+		for _, id := range ids {
+			if _, err := read(id); err != nil && !near(journaled(id)) {
+				unconfirmed = append(unconfirmed, instructions.NotRetiredLine(safeProject(journaled(id)), id,
+					"the memory server could not be read to confirm whose memory it is", true))
+			}
+		}
+		if len(unconfirmed) > 0 {
+			return "", errors.New("nothing stored: the memory server could not be read to confirm whose memory it is; the user can retire it with `backsight forget <id>`; " +
+				printLines(unconfirmed) + "\n" + strings.Join(unconfirmed, "\n"))
+		}
+	}
 	var projects, problems []string // projects: the memories', the pool as one
 	for _, id := range ids {
 		p := owner(id)
@@ -689,7 +728,10 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		}
 	}
 	if len(problems) > 0 && !cfg.Feedback.CrossProjectRetire {
-		return "", errors.New("nothing stored: the user can retire these memories from a terminal; " + printLines(problems) + "\n" + strings.Join(problems, "\n"))
+		// Never how to lift the guard: the agent may be acting on injected
+		// text; the docs tell the user (decision 0089).
+		return "", errors.New("nothing stored: retiring another project's memory is off on this machine; the user can retire it with `backsight forget <id>`; " +
+			printLines(problems) + "\n" + strings.Join(problems, "\n"))
 	}
 	// The note goes to the memories' project when they share one (the
 	// pool when every one is transverse), so that the right fact reaches
@@ -747,7 +789,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	if done >= limit && !slices.ContainsFunc(ids, func(id string) bool { return slices.Contains(used, (retirePlan{}).slot(id, listed)) }) {
 		return "", capRefusal(limit, done, ids, owner)
 	}
-	plan := d.classify(ctx, key, ids, owner)
+	plan := d.classify(read, ids, owner)
 	if len(plan.listed) > 0 {
 		d.tw.Emit(telemetry.Retire{Action: "sources", IDs: len(plan.listed)})
 		return sourcesText(plan), nil
@@ -901,7 +943,7 @@ func storeReply(res storeResult, err error, hits []recall.Hit, bar float64, limi
 	}
 	b.WriteString(header + "\n")
 	for _, h := range shown {
-		fmt.Fprintf(&b, "[%s]\n- %s (%s ago, %s)\n", singleLine(h.Project), clip(singleLine(h.Text), storeSimilarChars), h.Age, h.ID)
+		fmt.Fprintf(&b, "[%s]\n- %s (%s ago, %s)\n", tagProject(h.Project), clip(singleLine(h.Text), storeSimilarChars), h.Age, h.ID)
 	}
 	if credit {
 		b.WriteString(hint + "\n")

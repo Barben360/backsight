@@ -48,7 +48,7 @@ Finding the memories that match a prompt or a question and bringing them into Cl
 
 ## Briefing
 
-The short page Claude gets at session start about the current project: open items, recent work, rules in force. The server writes it from the project's memories.
+The short page Claude gets at session start about the current project: open items, recent work, rules in force. The server writes it from the project's memories, as notes to verify: your words in the session and the project's `CLAUDE.md` or `AGENTS.md` take precedence.
 
 ## Credit, confident miss
 

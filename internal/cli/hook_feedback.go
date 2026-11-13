@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
@@ -38,9 +39,43 @@ func shortID(id string) string {
 	return id
 }
 
-// memoryTag is a shown memory's "[<project> · <id8>]".
-func memoryTag(project, id string) string {
-	return "[" + safeProject(project) + " · " + safeProject(shortID(id)) + "]"
+// memoryTag is a shown memory's "[<project> · <source> · <id8>]", or
+// "[<project> · <id8>]" when its source is unknown (decision 0089 P2).
+func memoryTag(project, source, id string) string {
+	return "[" + projectTag(project, source) + " · " + safeProject(shortID(id)) + "]"
+}
+
+// projectTag is "<project> · <source>", or the project alone without a
+// source: the inside of a memory's tag before its id.
+func projectTag(project, source string) string {
+	if source == "" {
+		return tagProject(project)
+	}
+	return tagProject(project) + " · " + tagProject(source)
+}
+
+// tagProjectChars bounds a project's name in a memory line.
+const tagProjectChars = 60
+
+// tagProject is a project's name as memory lines show it: letters, digits,
+// spaces and -_.+/@()&',~!=%: kept, any other character shown as _, so
+// that a name (a directory's, or one an agent gave memory_store) cannot
+// forge the line's structure (decision 0089 P2).
+func tagProject(p string) string {
+	p = strings.Map(func(r rune) rune {
+		switch {
+		case r == ' ', unicode.IsLetter(r), unicode.IsDigit(r), unicode.IsMark(r), strings.ContainsRune("-_.+/@()&',~!=%:", r):
+			return r
+		}
+		return '_'
+	}, p)
+	// cut without an ellipsis, so that a shown name shown again stays the
+	// same
+	r := []rune(strings.Join(strings.Fields(p), " "))
+	if len(r) > tagProjectChars {
+		r = r[:tagProjectChars]
+	}
+	return strings.TrimSpace(string(r))
 }
 
 // texts are the instruction texts for feedback.enabled: memory_credit is
@@ -445,7 +480,9 @@ func (h *hookEnv) journalCredit(text string) {
 
 // sourceLineRE: a fact line of a Sources answer, whole: its project and
 // short id in the tag, its full id last.
-var sourceLineRE = regexp.MustCompile(`^- \[(.+?) · ([^\s\]]+)\] .* \(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)\r?$`)
+// A source word may stand between them (decision 0089 P2); an older MCP
+// server still running after an update writes none.
+var sourceLineRE = regexp.MustCompile(`^- \[(.+?) · (?:(?:session|note|subagent|import|other|mixed) · )?([^\s\]]+)\] .* \(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)\r?$`)
 
 // sourceObsRE: the line naming the observation the fact lines below it
 // are drawn from, whole.

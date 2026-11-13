@@ -78,9 +78,12 @@ type Query struct {
 	// defence: recall.global_min_score).
 	GlobalMinReranker float64
 	// Kinds asks the server, in the same calls, for the source facts of each
-	// observation to fill Hit.Kinds: for searches a reader sees, not for the
-	// prompt hook (larger responses).
+	// observation to fill Hit.Kinds (memory_search, backsight search).
 	Kinds bool
+	// Provenance asks for the same source facts to fill only Hit.Source:
+	// the recalls whose hits are injected with their source (decision
+	// 0089 P2). A raw fact's Source comes from its own tags either way.
+	Provenance bool
 }
 
 // Hit is one merged result.
@@ -105,6 +108,9 @@ type Hit struct {
 	// a subagent's report.
 	Kinds    []string `json:"kinds,omitempty"`
 	Subagent bool     `json:"subagent,omitempty"`
+	// Source: where the memory came from, one word (SourceOf), "" when
+	// its tags do not say (decision 0089 P2).
+	Source string `json:"source,omitempty"`
 }
 
 // ScopeMeta is how one scope's calls went (telemetry, A.4).
@@ -185,7 +191,14 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		defer cancel()
 	}
 	scopes := e.scopes(q)
-	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds, q.MaxTokens)
+	sourceTokens := 0
+	switch {
+	case q.Kinds: // a reader sees the kinds of every hit
+		sourceTokens = hindsight.SourceFactsTokens
+	case q.Provenance: // only the tags of the few hits a hook shows
+		sourceTokens = hindsight.SourceFactsTagsTokens
+	}
+	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, sourceTokens, q.MaxTokens)
 	res := Result{Scopes: map[string]ScopeMeta{}}
 	var empty []scope
 	for _, s := range scopes {
@@ -194,7 +207,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 	}
 	if len(empty) > 0 && ctx.Err() == nil {
-		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, false, q.MaxTokens)
+		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, 0, q.MaxTokens)
 		for _, a := range raw {
 			if len(a.hits) > 0 {
 				res.Raw = true
@@ -223,6 +236,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 			if q.Kinds {
 				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
 			}
+			h.Source = hitSource(r, sourceTokens > 0)
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
@@ -353,7 +367,8 @@ func meta(answers []answer, name string) ScopeMeta {
 // after the calls it means to keep came back.
 var afterCall func(scope string)
 
-func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sources bool, maxTokens int) []answer {
+// sourceTokens: the source facts' budget, 0 none asked.
+func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sourceTokens int, maxTokens int) []answer {
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokens
 	}
@@ -377,7 +392,7 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens, SourceFacts: sources}
+			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens, SourceFacts: sourceTokens > 0, SourceFactsTokens: sourceTokens}
 			if len(j.scope.tags) > 0 {
 				req.Tags, req.TagsMatch = j.scope.tags, "any_strict"
 			}
@@ -444,6 +459,54 @@ func KindsOf(tagSets ...[]string) (kinds []string, subagent bool) {
 	}
 	sort.Strings(kinds)
 	return kinds, subagent
+}
+
+// hitSource is a hit's source word (decision 0089). A raw fact's own tags
+// are exact. An observation's own tags hold its scope and the source tags
+// of some of its facts at most (the server merges them on update only), so
+// only its facts decide: none asked, no word; none listed, or some a
+// truncated answer left out, mixed (they may be notes).
+func hitSource(r hindsight.RecallHit, asked bool) string {
+	if r.Type != "observation" {
+		return SourceOf(r.Tags)
+	}
+	switch {
+	case !asked:
+		return ""
+	case len(r.SourceFactIDs) == 0 || r.SourceFactsMissing > 0:
+		return "mixed"
+	}
+	return SourceOf(r.SourceTags)
+}
+
+// sourceWords are the words of the source: tags the binary writes
+// (decision 0089 P2): a conversation's facts are a session's.
+var sourceWords = map[string]string{"chat": "session", "note": "note", "subagent": "subagent", "import": "import"}
+
+// SourceOf is the one word for where a memory came from, from the source:
+// tags found in the tags given (a raw fact passes its own, an observation
+// its source facts' too): session, note, subagent, import, other for a
+// source the binary does not write, mixed for two different ones, "" when
+// no tag says.
+func SourceOf(tagSets ...[]string) string {
+	word := ""
+	for _, tags := range tagSets {
+		for _, t := range tags {
+			s, ok := strings.CutPrefix(t, "source:")
+			if !ok {
+				continue
+			}
+			w := sourceWords[s]
+			if w == "" {
+				w = "other"
+			}
+			if word != "" && word != w {
+				return "mixed"
+			}
+			word = w
+		}
+	}
+	return word
 }
 
 // ProjectOf is the project tag of a memory, "" when it has none.

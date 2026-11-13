@@ -96,6 +96,7 @@ func TestUninstallNamesCodexToRestart(t *testing.T) {
 // tells a Codex agent to restart Codex, not Claude Code.
 func TestCodexMemoryServerNamesCodexToRestart(t *testing.T) {
 	home := codexHome(t, map[string]string{codexRoot: "billing"})
+	appendConfig(t, home, "[feedback]\ncross_project_retire = true") // the memory is of project proj: past the project check
 	showIn(t, home, codexRoot, creditA)
 	rawFact(creditA)
 	cs := codexMCP(t, home)

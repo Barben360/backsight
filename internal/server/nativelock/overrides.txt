@@ -10,7 +10,9 @@
 #
 # The pinned image (Hindsight 1.2.0) ships pyasn1 0.6.4, which has
 # published security advisories. The Docker runtime still runs the image's
-# version. filelock stays the image's 3.20.3: its fix (4.2.1) is above
-# litellm's filelock<4.0 (litellm 1.104.0 in the image, and still in
-# 1.106.6, the latest release on 2026-11-03).
+# version. filelock 4.2.1 is forced past litellm 1.104.0's filelock<4.0
+# (FORCED in scripts/native-lock.sh): litellm imports it in its proxy CLI
+# only, and huggingface-hub (model downloads) uses it too, both through an
+# API 4.x keeps; litellm 1.109.1 itself accepts filelock<5.
+filelock==4.2.1: security fixes the image's 3.20.3 lacks (GHSA-69hj-f68j-2879, GHSA-8mx5-7m5m-r77g)
 pyasn1==0.6.5: security fixes the image's 0.6.4 lacks

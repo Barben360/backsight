@@ -122,11 +122,11 @@ func (h *hookEnv) gate() []byte {
 		eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: gateRecallBudget, Now: now,
 			Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 		res := eng.Search(h.ctx, recall.Query{Queries: []string{h.recallQuery(q)}, Current: h.project, MinReranker: h.cfg.Recall.MinScore,
-			GlobalMinReranker: h.cfg.Recall.GlobalMinScore, Limit: gateHits})
+			GlobalMinReranker: h.cfg.Recall.GlobalMinScore, Limit: gateHits, Provenance: true})
 		if len(res.Hits) > 0 {
 			reason += "\nPossibly relevant memories " + instructions.HintsLine + ":"
 			for _, hit := range res.Hits {
-				reason += fmt.Sprintf("\n- %s %s%s", memoryTag(hit.Project, hit.ID), clip(hit.Text, briefingItemChars), age(hit.Age))
+				reason += fmt.Sprintf("\n- %s %s%s", memoryTag(hit.Project, hit.Source, hit.ID), clip(hit.Text, briefingItemChars), age(hit.Age))
 			}
 			h.journalShows("gate", itemsFromHits(res.Hits))
 			h.updateSession(func(s *session.State) error { s.KeepShownTexts(hitTexts(res.Hits)); return nil })

@@ -119,8 +119,8 @@ func TestNativeLockIsTheGeneratedOne(t *testing.T) {
 // nothing may move the Linux one. A deliberate lock bump changes both
 // literals in the same commit.
 func TestLinuxLockUnchanged(t *testing.T) {
-	const wantSHA = "5d3c1051784d4e4daaab293bcc72028da89c60cb55c75615774e2f457ef11bb3"
-	const wantHash12 = "5d3c1051784d"
+	const wantSHA = "02630d26b3e46e5f10d6d333f225e2f7785ed16bff30ab52d03ff572757f2913"
+	const wantHash12 = "02630d26b3e4"
 	sum := sha256.Sum256(Requirements)
 	if got := hex.EncodeToString(sum[:]); got != wantSHA {
 		t.Errorf("requirements-linux-amd64.txt sha256 %s, want %s", got, wantSHA)
@@ -210,18 +210,15 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 		if bad := checkOverrides(For(goos), declared); len(bad) > 0 {
 			t.Errorf("the %s lock strays from overrides.txt (run scripts/native-lock.sh):\n  %s", goos, strings.Join(bad, "\n  "))
 		}
-		// filelock stays the image's: its fix (4.2.1) is above litellm
-		// 1.104.0's filelock<4.0. A resolver that moves it, or an override
-		// of it, is a change to review, not drift.
-		if v := For(goos).Versions()["filelock"]; v != "3.20.3" {
-			t.Errorf("the %s lock holds filelock %q, want the image's 3.20.3", goos, v)
-		}
-		if v, ok := For(goos).Overrides()["filelock"]; ok {
-			t.Errorf("the %s lock overrides filelock (%s)", goos, v)
+		// filelock's security fix (4.2.1) is forced past litellm 1.104.0's
+		// filelock<4.0 (FORCED in scripts/native-lock.sh): a pin bump that
+		// lowers it back to 3.x fails here.
+		if v := For(goos).Versions()["filelock"]; v != "4.2.1" {
+			t.Errorf("the %s lock holds filelock %q, want the forced 4.2.1", goos, v)
 		}
 	}
-	if _, ok := declared["filelock"]; ok {
-		t.Error("overrides.txt names filelock: litellm 1.104.0 caps it below 4.0, and 4.2.1 is its first fixed version")
+	if declared["filelock"] != "4.2.1" {
+		t.Errorf("overrides.txt pins filelock at %q, want 4.2.1", declared["filelock"])
 	}
 
 	// The checker and the parser bite.

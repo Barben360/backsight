@@ -311,7 +311,7 @@ func TestCodexQuestionGate(t *testing.T) {
 	out := cxHook(t, harness.EventPreToolUse, cxPayload(t, home, "PreToolUse.request_user_input", nil))
 	var g gateOut
 	if json.Unmarshal(out, &g) != nil || g.Specific.Decision != "deny" || !strings.HasPrefix(g.Specific.Reason, instructions.GateReason) ||
-		!strings.Contains(g.Specific.Reason, "[billing · 0b4c2a52] Billing keeps PostgreSQL 16.") || !strings.Contains(string(out), `"hookEventName":"PreToolUse"`) {
+		!strings.Contains(g.Specific.Reason, "[billing · mixed · 0b4c2a52] Billing keeps PostgreSQL 16.") || !strings.Contains(string(out), `"hookEventName":"PreToolUse"`) {
 		t.Fatalf("gate answered %s", out)
 	}
 	if q := recallQueries[len(recallQueries)-1]; q != "Which one?" {
