@@ -358,6 +358,24 @@ func base64Run(core string) (int, int) {
 	return b, p
 }
 
+// onlyBase64Tokens: core is nothing but blank-separated base64 tokens,
+// each with its padding, the last one possibly closed by a quote, a comma
+// or a semicolon. A key line is one such token (or chunks of 64 when
+// flattened); a JWT (dots), an integrity string (sha512-) or base64 in
+// code (const x = "…";) is not.
+func onlyBase64Tokens(core string) bool {
+	f := strings.Fields(core)
+	for k, g := range f {
+		if k == len(f)-1 {
+			g = strings.TrimRight(g, "\"'`,;")
+		}
+		if b, p := base64Run(g); b == 0 || p != len(g) {
+			return false
+		}
+	}
+	return len(f) > 0
+}
+
 // keyMaterial: core looks like a line of a key, not like code, a path or
 // an identifier: a base64 run, not made of words, of 40 characters or
 // more mixing upper case, lower case and digits (key lines are 64 or 76)
@@ -365,6 +383,9 @@ func base64Run(core string) (int, int) {
 // more of 4 to 8 base64 characters, together mixing all three (a key
 // printed in spaced groups).
 func keyMaterial(core string) bool {
+	if !onlyBase64Tokens(core) {
+		return false // a JWT, an integrity string, base64 in code: not a key line
+	}
 	for _, run := range base64Runs(core) {
 		if !wordy(run) && (len(run) >= 40 && mixed(run) || len(run) >= 16 && randomish(run)) {
 			return true

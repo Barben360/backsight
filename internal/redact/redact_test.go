@@ -553,6 +553,18 @@ func TestUnterminatedPrivateKeyHeader(t *testing.T) {
 			t.Errorf("text after a bare header was eaten:\n%q\n-> %q", s, out)
 		}
 	}
+	// Round 3 review: a line with a long base64 run inside other text is
+	// no key line; its own rules may mask the run, but what follows stays.
+	for _, line := range []string{
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+		"sha512-Zx9kLmQ2wPaB3dE5gH9kq8Zr4Lm2Vn7TKpQ1sW3eR5tY7uI9oP0aS2dF4gH6jK8lZ1xC3vB5nM7qW9eR2tY4uI==",
+		`const x = "aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZyBpbiBjb2Rl==";`,
+	} {
+		s := hdr + "\n" + line + "\nthen restart"
+		if out, _ := Text(s); !strings.HasPrefix(out, hdr+"\n") || !strings.HasSuffix(out, "\nthen restart") {
+			t.Errorf("a non-key line after a bare header started key material:\n%q\n-> %q", s, out)
+		}
+	}
 	l := strings.Split(body, "\n")
 	prefixed := func(p string) string { return p + strings.Join(l, "\n"+p) }
 	for _, c := range []struct{ name, in, after string }{
