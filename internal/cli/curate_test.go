@@ -131,6 +131,137 @@ func TestPurgeOrderForAFactAndAnObservation(t *testing.T) {
 	}
 }
 
+// A session's later segments are documents of their own (decision 0090):
+// a purge of a fact from one of them deletes the session's document
+// whole, its first segment and every part, each with its tombstone, and
+// nothing of another session.
+func TestPurgeDeletesEveryPartOfASessionsDocument(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	var items []string
+	for i, d := range []string{"conversation:s9", "conversation:s9#part2", "conversation:s9#part3", "conversation:s8#part2", "conversation:s9#2"} {
+		items = append(items, `{"document_id":"`+d+`","content":"turns","tags":["project:billing"],"metadata":{"session_id":"s9","project":"billing","segment":"`+strconv.Itoa(max(i, 1))+`","last_uuid":"u`+strconv.Itoa(i)+`"}}`)
+	}
+	resp, err := http.Post("http://127.0.0.1:"+strconv.Itoa(port)+"/v1/default/banks/claude-memory/memories", "application/json",
+		strings.NewReader(`{"items":[`+strings.Join(items, ",")+`],"async":true}`))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("seeding the documents: %v %v", resp, err)
+	}
+	_ = resp.Body.Close()
+	memories["f9"] = fact("f9", "conversation:s9#part2")
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	got := strings.Join(curation, "\n")
+	for _, d := range []string{"conversation%3As9 ", "conversation%3As9%23part2 ", "conversation%3As9%23part3 "} {
+		if !strings.Contains(got, "DELETE /v1/default/banks/claude-memory/documents/"+d) {
+			t.Errorf("%s not deleted:\n%s", d, got)
+		}
+	}
+	if strings.Contains(got, "s8") || strings.Contains(got, "conversation%3As9%232") {
+		t.Errorf("another session's document, or the successor, deleted:\n%s", got)
+	}
+	st, _ := state.Load(pathsOf(home).StateFile())
+	var tombs []string
+	for _, ts := range st.Tombstones {
+		tombs = append(tombs, ts.Document+"@"+ts.LastUUID)
+	}
+	// With the two parts that may still land after the chain's last.
+	if strings.Join(tombs, " ") != "conversation:s9#part4@u2 conversation:s9#part5@u2 conversation:s9@u0 conversation:s9#part2@u1 conversation:s9#part3@u2" {
+		t.Errorf("tombstones %v", tombs)
+	}
+}
+
+// seedSession9 stores conversation:s9 and its part 2 on the fake server,
+// the fact f9 coming from the first.
+func seedSession9(t *testing.T, port int, docs ...string) {
+	t.Helper()
+	var items []string
+	for i, d := range docs {
+		items = append(items, `{"document_id":"`+d+`","content":"turns","tags":["project:billing"],"metadata":{"session_id":"s9","project":"billing","segment":"`+strconv.Itoa(i+1)+`","last_uuid":"u`+strconv.Itoa(i)+`"}}`)
+	}
+	resp, err := http.Post("http://127.0.0.1:"+strconv.Itoa(port)+"/v1/default/banks/claude-memory/memories", "application/json",
+		strings.NewReader(`{"items":[`+strings.Join(items, ",")+`],"async":true}`))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("seeding the documents: %v %v", resp, err)
+	}
+	_ = resp.Body.Close()
+}
+
+// A purge is never held by the server's queue (a leaked secret must
+// always go): a part whose retain is still queued would land after it,
+// under an id no tombstone named. The purge deletes what exists, and
+// tombstones the parts that may land (the queued one, the two after the
+// chain's last), each covering what the chain's last part did; it tells
+// the user the late part goes when it lands, and jobs tick purges it then.
+func TestAPurgeGoesNowAndItsQueuedPartGoesWhenItLands(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	seedSession9(t, port, "conversation:s9", "conversation:s9#part2")
+	memories["f9"] = fact("f9", "conversation:s9")
+	fakeQueuedOps = []string{fakeOp("op5", "pending", "conversation:s9#part5", 0)}
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes", "--json")
+	if code != output.OK || !strings.Contains(out, "purged automatically when it lands") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	got := strings.Join(curation, "\n")
+	for _, d := range []string{"conversation%3As9 ", "conversation%3As9%23part2 "} {
+		if !strings.Contains(got, "DELETE /v1/default/banks/claude-memory/documents/"+d) {
+			t.Errorf("%s not deleted:\n%s", d, got)
+		}
+	}
+	st, _ := state.Load(pathsOf(home).StateFile())
+	var tombs []string
+	for _, ts := range st.Tombstones {
+		tombs = append(tombs, ts.Document+"@"+ts.LastUUID)
+	}
+	if want := "conversation:s9#part3@u1 conversation:s9#part4@u1 conversation:s9#part5@u1 conversation:s9@u0 conversation:s9#part2@u1"; strings.Join(tombs, " ") != want {
+		t.Errorf("tombstones %v, want %s", tombs, want)
+	}
+	// The queued part lands: the next tick's look purges it.
+	fakeQueuedOps = nil
+	seedSession9(t, port, "conversation:s9#part3")
+	curation = nil
+	if code, out, errOut := run(t, "jobs", "tick", "--json"); code != output.OK {
+		t.Fatalf("tick: exit %d\n%s%s", code, out, errOut)
+	}
+	if got := strings.Join(curation, "\n"); !strings.Contains(got, "DELETE /v1/default/banks/claude-memory/documents/conversation%3As9%23part3") {
+		t.Errorf("the late part was not purged by the tick:\n%s", got)
+	}
+}
+
+// A queue that cannot be read holds no purge either: it goes, tombstones
+// the two parts after the chain's last, and says a late part, if any,
+// goes when it lands.
+func TestAPurgeGoesWhenTheQueueCannotBeRead(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	seedSession9(t, port, "conversation:s9", "conversation:s9#part2")
+	memories["f9"] = fact("f9", "conversation:s9")
+	fakeQueueStatus = http.StatusServiceUnavailable
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes", "--json")
+	if code != output.OK || !strings.Contains(out, "queue could not be read") || !strings.Contains(out, "purged automatically when it lands") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if got := strings.Join(curation, "\n"); !strings.Contains(got, "DELETE /v1/default/banks/claude-memory/documents/conversation%3As9%23part2 ") {
+		t.Errorf("not purged:\n%s", got)
+	}
+	st, _ := state.Load(pathsOf(home).StateFile())
+	n := 0
+	for _, ts := range st.Tombstones {
+		if ts.Document == "conversation:s9#part3" || ts.Document == "conversation:s9#part4" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("tombstones %+v", st.Tombstones)
+	}
+}
+
 // Like the real API, an observation's source list carries no document: the
 // purge reads each source fact for it.
 func TestPurgeAnObservationDeletesItsSourcesDocuments(t *testing.T) {

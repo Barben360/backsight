@@ -64,8 +64,8 @@ func TestAppendOfEnoughTextGoesAtOnce(t *testing.T) {
 	longOpen(e, 31_000, 230)
 	e.clock = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	if got := e.hs.retains[1]; got.UpdateMode != "append" || strings.Contains(got.Content, "still talking") {
-		t.Errorf("not the long-open part as an append: %+v", got)
+	if got := e.hs.retains[1]; !isPart(got, "conversation:s1", 2) || strings.Contains(got.Content, "still talking") {
+		t.Errorf("not the long-open part as the session's part 2: %+v", got)
 	}
 }
 

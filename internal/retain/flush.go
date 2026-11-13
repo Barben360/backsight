@@ -363,7 +363,8 @@ func (f *Flusher) cursorStale(cur Cursor, sid, path string, size int64, tombs []
 }
 
 // movedElsewhere reads, before an append, each document send would write
-// to, and reports whether one is no longer where cur left it: another PC
+// to (the end of its chain of parts, decision 0090), and reports whether
+// one is no longer where cur left it: another PC
 // continued the session (a later segment, or the same number ending at
 // another record), started a document this cursor never wrote to, or the
 // segment is invalid. The resync then numbers this PC's segment after the
@@ -381,7 +382,13 @@ func (f *Flusher) movedElsewhere(ctx context.Context, cur Cursor, sid string, se
 			continue
 		}
 		seen[k.project] = true
-		d, err := f.readDocument(ctx, LiveDocumentID(sid, cur.Home, k.project, tombs))
+		// From the part this cursor last sent: the chain before it is this
+		// PC's own (decision 0090).
+		doc, from := LiveDocumentID(sid, cur.Home, k.project, tombs), 0
+		if cur.docOf(sid, k.project) == doc {
+			from = cur.Segments[k.project]
+		}
+		d, err := f.readChain(ctx, doc, from)
 		if err != nil {
 			return false, err
 		}
@@ -688,8 +695,9 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 		segNo = 1 // the segments counted were of a purged document
 	}
 	seg := f.segment(cur, sid, doc, run, segNo, project)
+	sent := seg.Item.DocumentID // doc, or its part (decision 0090)
 	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
-		res.FailedDocument = doc
+		res.FailedDocument = sent
 		if refusesDocument(err) {
 			return f.quarantine(res, &cur, errSummary(err)), cur, status, detail, true
 		}
@@ -718,8 +726,8 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	f.noteSent(&cur, project, doc, segNo, prev, run[0].UUID, last.UUID, now)
 	cur.Records += len(run)
 	res.Records += len(run)
-	if !slices.Contains(res.Documents, doc) {
-		res.Documents = append(res.Documents, doc)
+	if !slices.Contains(res.Documents, sent) {
+		res.Documents = append(res.Documents, sent)
 	}
 	res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, project
 	return res, cur, Sent, detail, false

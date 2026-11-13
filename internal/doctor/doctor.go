@@ -226,12 +226,14 @@ func Run(ctx context.Context, env Env) Report {
 			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs, cfgErr == nil && cfg.Server.Mode != "local"))
 			add(checkEpoch(ctx, cl, tg.Bank, env.Dirs))
 			add(checkPurged(ctx, cl, tg.Bank, env))
+			add(checkQueueAge(ctx, cl, tg.Bank, nowFn()))
 		}
 	} else {
 		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
 		if tg != nil && tg.Source == "config" {
 			add(Check{ID: "restore-epoch", Status: Info, Summary: "skipped: " + skipReason(srv)})
 			add(Check{ID: "purged-documents", Status: Info, Summary: "skipped: " + skipReason(srv)})
+			add(Check{ID: "queue-age", Status: Info, Summary: "skipped: " + skipReason(srv)})
 		}
 	}
 	if !serverOnly { // they ask the bank, for nothing there

@@ -149,11 +149,11 @@ On a client of another PC's server (`server.mode = "remote"`), the server's host
 
 ## `[retain]`: when a session's new turns are sent
 
-An append to a session already on the server makes it re-read the end of that session and extract its memories again, so small appends recreate the same memories over and over. The background job therefore waits until enough new text has piled up, or enough time has passed. A session's first send, and the send when it ends (or `backsight retain flush`), never wait. See [how-it-works.md](how-it-works.md#when-a-session-is-sent).
+The new turns of a session already on the server go out as the session's next part, a document of its own, and each part costs the server one more extraction and one more pass over the memories it touches. The background job therefore waits until enough new text has piled up, or enough time has passed, so a long session makes a few large parts rather than many small ones. A session's first send, and the send when it ends (or `backsight retain flush`), never wait. See [how-it-works.md](how-it-works.md#when-a-session-is-sent).
 
 | Key | Default | Effect |
 |---|---|---|
-| `retain.append_min_chars` | `30000` | An append goes out once at least this many characters of new turns are waiting. The default is the size of the pieces the server cuts a session into (its `retain_chunk_size`), so each append brings at least one whole new piece instead of reworking the last one. `0` turns the wait off: every append goes out as soon as its turns are settled. At least 0. |
+| `retain.append_min_chars` | `30000` | A session's next part goes out once at least this many characters of new turns are waiting. The default is the size of the pieces the server cuts a session into (its `retain_chunk_size`), so each part holds at least one whole piece. `0` turns the wait off: every part goes out as soon as its turns are settled. At least 0. |
 | `retain.append_max_wait` | `"6h"` | …or once the session's last send is this old (and its turns are settled or 2 h old), whatever the amount. A duration such as `"6h"` or `"90m"`; `"0s"` turns the wait off. |
 
 ## `[backup]`

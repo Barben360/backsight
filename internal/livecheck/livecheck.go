@@ -6,7 +6,6 @@ package livecheck
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -261,10 +260,13 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	homeSegment := 0
 	for i, sd := range docs {
 		r.Document, r.Segment = sd.Document, sd.Segment
-		doc, err := in.Server.GetDocument(ctx, in.Bank, sd.Document)
-		var apiErr *hindsight.APIError
+		// The server's position: the end of the document's chain of parts,
+		// read from the part of this machine's last segment.
+		doc, _, found, err := retain.ChainEnd(ctx, func(ctx context.Context, id string) (hindsight.Document, error) {
+			return in.Server.GetDocument(ctx, in.Bank, id)
+		}, sd.Document, sd.Segment)
 		switch {
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		case err == nil && !found:
 			if mayWork() {
 				return waiting(fmt.Sprintf("session %s was sent but %s is not stored yet%s", s.sid, sd.Document, queuedNote()))
 			}
@@ -289,6 +291,21 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		case doc.Metadata["last_uuid"] != sd.LastUUID:
 			return fail("session "+s.sid+": the server's document "+sd.Document+" does not match what this machine sent",
 				fmt.Sprintf("segment %d ends at record %s on the server, %s here", seg, doc.Metadata["last_uuid"], sd.LastUUID), "backsight doctor (restore-epoch, writes)")
+		}
+		// A part missing before this machine's last (decision 0090): the
+		// chain steps over it, so it is read for here.
+		holes, err := retain.ChainHoles(ctx, func(ctx context.Context, id string) (hindsight.Document, error) {
+			return in.Server.GetDocument(ctx, in.Bank, id)
+		}, sd.Document, sd.Segment)
+		switch {
+		case err != nil:
+			return unreadable(err)
+		case len(holes) > 0 && mayWork():
+			return waiting(fmt.Sprintf("session %s: %s is not stored yet%s", s.sid, holes[0], queuedNote()))
+		case len(holes) > 0:
+			return fail("session "+s.sid+": the server has no "+strings.Join(holes, ", ")+", between parts it holds",
+				"nothing is queued on the server, so its retain failed or a restore lost it: the turns it held are not on the server",
+				holeFix(s.cur, sd.Document, in.Now))
 		}
 		if i == 0 {
 			homeSegment = seg
@@ -374,15 +391,20 @@ func continuedNote(r Result) string {
 	return "; continued on another PC: " + strings.Join(r.ContinuedElsewhere, ", ")
 }
 
-// sessionFacts lists the facts extracted from every document of a session.
+// sessionFacts lists the facts extracted from every document of a session:
+// each one's first segment and its later parts up to this machine's last
+// (an appended document from an older build holds them in the first; its
+// parts list nothing).
 func sessionFacts(ctx context.Context, in Input, s session) ([]hindsight.Memory, error) {
 	var out []hindsight.Memory
 	for _, sd := range s.cur.SentDocuments(s.sid) {
-		f, err := factsOf(ctx, in, sd.Document)
-		if err != nil {
-			return nil, err
+		for seg := 1; seg <= max(sd.Segment, 1); seg++ {
+			f, err := factsOf(ctx, in, retain.PartID(sd.Document, seg))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, f...)
 		}
-		out = append(out, f...)
 	}
 	return out, nil
 }
@@ -441,4 +463,19 @@ func seconds(d time.Duration) int {
 		d = time.Minute
 	}
 	return int((d + time.Minute - 1).Truncate(time.Minute) / time.Second)
+}
+
+// holeFix is what sends again the turns of a part missing from doc's
+// chain: the session's pending check of its sends, while one is pending
+// for doc (jobs tick looks at it); otherwise retain resend-failed, which
+// lists the session when the server's failed retain names the part, and
+// sends it again whole.
+func holeFix(cur retain.Cursor, doc string, now time.Time) string {
+	for _, pr := range cur.Replaces {
+		if pr.Document == doc && now.Sub(pr.SentAt) < retain.PendingLimit {
+			return "nothing to do: the next jobs tick sends them again (this machine's check of the session's sends is pending until " +
+				pr.SentAt.Add(retain.PendingLimit).UTC().Format("2006-01-02 15:04") + " UTC)"
+		}
+	}
+	return "backsight retain resend-failed --plan: it lists the session when the server's failed retain names that part, and --answer resend=yes sends the session again whole"
 }

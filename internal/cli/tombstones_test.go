@@ -54,11 +54,18 @@ func TestPurgeRecordsATombstone(t *testing.T) {
 	}
 	want := state.Tombstone{Bank: "claude-memory", Document: "conversation:s9", Session: "s9", Project: "billing", LastUUID: "u7",
 		PurgedAt: time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)}
+	// With it, the two parts that may still land after the purge (decision
+	// 0090), after the document's segment 2, covering what it did.
+	wants := []state.Tombstone{want, want, want}
+	wants[1].Document, wants[2].Document = "conversation:s9#part3", "conversation:s9#part4"
+	byDoc := func(ts []state.Tombstone) []state.Tombstone {
+		return slices.SortedFunc(slices.Values(ts), func(a, b state.Tombstone) int { return strings.Compare(a.Document, b.Document) })
+	}
 	st, _ := state.Load(pathsOf(home).StateFile())
-	if len(st.Tombstones) != 1 || st.Tombstones[0] != want {
+	if got := byDoc(st.Tombstones); !slices.Equal(got, byDoc(wants)) {
 		t.Errorf("state: %+v", st.Tombstones)
 	}
-	if got, err := retain.ReadTombstones(context.Background(), clientOn(port), "claude-memory"); err != nil || len(got) != 1 || got[0] != want {
+	if got, err := retain.ReadTombstones(context.Background(), clientOn(port), "claude-memory"); err != nil || !slices.Equal(byDoc(got), byDoc(wants)) {
 		t.Errorf("control bank: %+v %v", got, err)
 	}
 }
@@ -100,8 +107,20 @@ func TestPurgeTombstoneComesFirstAndSurvivesAForeignControlBank(t *testing.T) {
 	if code, _, _ := run(t, "forget", "f9", "--purge", "--yes"); code == output.OK {
 		t.Fatal("the failed delete passed")
 	}
-	if st, _ := state.Load(pathsOf(home).StateFile()); len(st.Tombstones) != 1 || st.Tombstones[0].LastUUID != "u7" {
-		t.Errorf("no tombstone after a failed delete: %+v", st.Tombstones)
+	// The document's tombstone, and those of the two parts that may land
+	// after it (decision 0090), each covering what it did.
+	sessionTombs := func() []string {
+		st, _ := state.Load(pathsOf(home).StateFile())
+		var out []string
+		for _, ts := range st.Tombstones {
+			out = append(out, ts.Document+"@"+ts.LastUUID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	want := []string{"conversation:s9#part2@u7", "conversation:s9#part3@u7", "conversation:s9@u7"}
+	if got := sessionTombs(); !slices.Equal(got, want) {
+		t.Errorf("no tombstone after a failed delete: %v", got)
 	}
 	docDeleteFails.Store(false)
 	if err := clientOn(port).CreateBank(context.Background(), "claude-memory-control", "someone else's", ""); err != nil {
@@ -111,8 +130,8 @@ func TestPurgeTombstoneComesFirstAndSurvivesAForeignControlBank(t *testing.T) {
 	if code != output.OK || !strings.Contains(out, "not yet in bank claude-memory-control") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if st, _ := state.Load(pathsOf(home).StateFile()); len(st.Tombstones) != 1 {
-		t.Errorf("tombstones: %+v", st.Tombstones)
+	if got := sessionTombs(); !slices.Equal(got, want) {
+		t.Errorf("tombstones: %v", got)
 	}
 	if got, _ := retain.ReadTombstones(context.Background(), clientOn(port), "claude-memory"); len(got) != 0 {
 		t.Errorf("written into a foreign control bank: %+v", got)

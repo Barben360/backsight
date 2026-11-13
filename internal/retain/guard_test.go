@@ -340,10 +340,12 @@ func TestGuardFullLookPicksTheCheaperWay(t *testing.T) {
 		tombstones, total  int
 		gets, listingPages int
 	}{
+		// Read one by one, each session's document costs three reads: its
+		// own, then the two parts after it (a part landed after the purge).
 		{"many tombstones, small bank", 500, 0, 0, 1},
-		{"at the boundary", 65, 65 * 200, 65, 0},
-		{"past the boundary", 65, 64 * 200, 0, 1},
-		{"few tombstones, big bank", 100, 50000, 100, 0},
+		{"at the boundary", 22, 66 * 200, 66, 0},
+		{"past the boundary", 22, 65 * 200, 0, 1},
+		{"few tombstones, big bank", 100, 60000, 300, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, g := guardEnv(t)
@@ -837,7 +839,7 @@ func TestTurnsAnOlderBinarySentToAPurgedIDGoAgainToTheLiveDocument(t *testing.T)
 	again := slices.Clone(e.hs.retains[sent:])
 	e.hs.mu.Unlock()
 	for _, it := range again {
-		if it.DocumentID != "conversation:s1#2" {
+		if chainOf(it.DocumentID) != "conversation:s1#2" {
 			t.Errorf("sent to %s", it.DocumentID)
 		}
 	}
@@ -851,32 +853,38 @@ func TestTurnsAnOlderBinarySentToAPurgedIDGoAgainToTheLiveDocument(t *testing.T)
 }
 
 // A turn this binary sent before the purge, whose async retain was still
-// queued (the document's metadata did not name it yet), is past the
-// tombstone's last record; the queued retain then recreates the document
-// with it, and the look purges that again. It is never sent again to the
-// live document: the user purged the session as it stood. A turn written
-// after the purge still goes.
+// queued, is past the tombstones' last record. Its queued retain then
+// creates the session's part 2 after the purge (decision 0090: a
+// document of its own), which the purge never saw; the tick's look finds
+// it among the new documents, as a part of a purged document, and purges
+// it. It is never sent again to the live document: the user purged the
+// session as it stood. A turn written after the purge still goes.
 func TestATurnQueuedAtThePurgeIsNeverSentAgain(t *testing.T) {
 	e := newEnv(t)
 	e.record("s1", "u0", "user", 0, "a plain first turn")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
 	e.record("s1", "u1", "user", 10, "the deploy token is hunter2-leaked")
 	e.hs.mu.Lock()
-	e.hs.stale = true // the retain of u1 is queued: the metadata still names u0
+	e.hs.hide = map[string]bool{"conversation:s1#part2": true} // the retain of u1 is queued
 	e.hs.mu.Unlock()
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	e.hs.mu.Lock()
-	e.hs.stale = false
-	e.hs.mu.Unlock()
 	e.clock = clockAt(12, 5)
-	e.purge("conversation:s1") // last record u0: u1 is not in the metadata yet
-	// The queued retain runs: the document is back, holding u1.
 	e.hs.mu.Lock()
-	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u1", "segment": "2", "project": "billing"}
-	e.hs.content["conversation:s1"] = "user: the deploy token is hunter2-leaked"
+	queued := e.hs.docs["conversation:s1#part2"]
+	delete(e.hs.docs, "conversation:s1#part2") // not on the server yet: the purge cannot see it
 	e.hs.mu.Unlock()
-	if got, err := e.f.GuardPurges(context.Background(), GuardOptions{Full: true}); err != nil || !slices.Equal(got.Purged.Documents, []string{"conversation:s1"}) {
+	e.purge("conversation:s1")
+	// The queued retain runs: part 2 is there, holding u1.
+	e.hs.mu.Lock()
+	e.hs.hide = nil
+	e.hs.docs["conversation:s1#part2"] = queued
+	e.hs.mu.Unlock()
+	got, err := e.f.GuardPurges(context.Background(), GuardOptions{})
+	if err != nil || !slices.Equal(got.Purged.Documents, []string{"conversation:s1#part2"}) {
 		t.Fatalf("%+v %v", got, err)
+	}
+	if _, ok := e.hs.docs["conversation:s1#part2"]; ok {
+		t.Error("the part created after the purge is still on the server")
 	}
 	sent := len(e.hs.retains)
 	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
@@ -889,6 +897,30 @@ func TestATurnQueuedAtThePurgeIsNeverSentAgain(t *testing.T) {
 	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
 	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1#2" || e.sentText(sent, "hunter2") {
 		t.Errorf("%+v", it)
+	}
+}
+
+// The same with an older build's append, queued at the purge: the
+// recreated document itself is purged again, by the full look too.
+func TestAnAppendQueuedAtThePurgeIsNeverSentAgain(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u0", "user", 0, "a plain first turn")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.record("s1", "u1", "user", 10, "the deploy token is hunter2-leaked")
+	e.clock = clockAt(12, 5)
+	e.purge("conversation:s1") // last record u0: the append of u1 is still queued
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u1", "segment": "2", "project": "billing"}
+	e.hs.content["conversation:s1"] = "user: the deploy token is hunter2-leaked"
+	e.hs.mu.Unlock()
+	_ = e.f.Index.Add("u1", sessionKey("claude-memory", "s1", "u1")) // the older build sent it
+	if got, err := e.f.GuardPurges(context.Background(), GuardOptions{Full: true}); err != nil || !slices.Equal(got.Purged.Documents, []string{"conversation:s1"}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	sent := len(e.hs.retains)
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	if e.sentText(sent, "hunter2") {
+		t.Fatal("the purged turn was sent again")
 	}
 }
 
@@ -920,5 +952,23 @@ func TestGuardRepeatCapSlides(t *testing.T) {
 	}
 	if got := look(24*time.Hour + 40*time.Minute); !got.Purged.Empty() || len(got.Waiting) != 1 || !got.Waiting[0].NeedsUser {
 		t.Errorf("three within the last day again: %+v", got)
+	}
+}
+
+// Decision 0090 review: a part whose retain was still queued when the
+// session's document was purged lands after it, under an id no tombstone
+// names. The full look read one by one probes the parts after each
+// tombstoned chain's last (chainGap + 1 of them) and finds it.
+func TestTheFullLookByIDFindsAPartLandedAfterThePurge(t *testing.T) {
+	e, g := guardEnv(t)
+	addTombstone(t, e, state.Tombstone{Bank: "claude-memory", Document: "conversation:s1#part2", Session: "s1", PurgedAt: clockAt(12, 10)})
+	g.recreate("conversation:s1#part3", serverAt(12, 25), "f3")
+	g.reset()
+	got, err := e.f.GuardPurges(context.Background(), GuardOptions{Full: true})
+	if err != nil || !slices.Equal(got.Purged.Documents, []string{"conversation:s1#part3"}) || g.exists("conversation:s1#part3") {
+		t.Fatalf("%+v %v, calls %v", got, err, g.calls)
+	}
+	if !g.exists("conversation:s1#2") || !g.exists("conversation:s3") {
+		t.Error("the successor, or a document no purge names, was deleted")
 	}
 }

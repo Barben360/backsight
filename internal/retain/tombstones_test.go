@@ -351,7 +351,7 @@ func TestAPurgedDocumentIsNeverWrittenAgain(t *testing.T) {
 	}
 	e.record("s1", "u3", "user", 20, "one more turn")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1#2" || it.UpdateMode != "append" {
+	if it := e.hs.retains[len(e.hs.retains)-1]; !isPart(it, "conversation:s1#2", 2) {
 		t.Errorf("the next turn: %+v", it)
 	}
 	// A lost cursor resumes from the live document: nothing is sent twice.

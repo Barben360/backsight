@@ -115,16 +115,61 @@ func notFound(err error) bool {
 // looked for: read one by one, or compared with the bank's whole listing
 // when that takes fewer requests. Otherwise only the documents created
 // since then are compared, in one listing, and lk.Recheck is read one by
-// one. Only exact ids match: a successor (<id>#2) is a document of its
-// own, found only when a tombstone names it. A bank the server does not
-// have holds nothing.
+// one. A successor (<id>#2) is a document of its own, found only when a
+// tombstone names it. A session's document and its parts (PartID) are
+// one in a listing: a tombstone of any of them makes each one listed
+// count (decision 0090: a purge tombstones them all, so a part created
+// after it, its retain still queued, or by a PC that had not learned of
+// the purge yet, is found among the new documents). Read one by one, the
+// tombstoned ids are, then the chainGap + 1 parts after each chain's last
+// tombstoned one (counted in the choice of the cheaper way). A bank the
+// server does not have holds nothing.
 func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs []state.Tombstone, lk Lookup) (Scan, error) {
 	want := tombstonedDocs(bank, tombs)
 	sc := Scan{Checked: len(want)}
 	if len(want) == 0 {
 		return sc, nil
 	}
-	found := map[string]bool{}
+	// chains: a tombstone for each session's document a tombstone names,
+	// itself or through one of its parts (its own when it has one).
+	chains := map[string]state.Tombstone{}
+	lastPart := map[string]int{} // each chain's last tombstoned segment
+	for id, t := range want {
+		if !strings.HasPrefix(id, "conversation:") {
+			continue
+		}
+		doc, part := ChainOf(id)
+		if _, ok := chains[doc]; !ok || part == 0 {
+			t.Document = doc
+			chains[doc] = t
+		}
+		lastPart[doc] = max(lastPart[doc], part, 1)
+	}
+	// probes: read one by one, the parts after each chain's last
+	// tombstoned one (chainGap + 1 of them, as a chain is read): one whose
+	// retain was still queued at the purge lands there, under an id no
+	// tombstone names.
+	var probes []string
+	for doc, last := range lastPart {
+		for n := last + 1; n <= last+chainGap+1; n++ {
+			if _, ok := want[PartID(doc, n)]; !ok {
+				probes = append(probes, PartID(doc, n))
+			}
+		}
+	}
+	sort.Strings(probes)
+	// wanted is the tombstone that makes id count as recreated.
+	wanted := func(id string) (state.Tombstone, bool) {
+		if t, ok := want[id]; ok {
+			return t, true
+		}
+		if t, ok := chains[chainOf(id)]; ok {
+			t.Document = id
+			return t, true
+		}
+		return state.Tombstone{}, false
+	}
+	found := map[string]state.Tombstone{}
 	get := func(id string) error {
 		sc.Requests++
 		_, err := cl.GetDocument(ctx, bank, id)
@@ -134,14 +179,14 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 		case err != nil:
 			return fmt.Errorf("bank %s, document %s: %w", bank, id, err)
 		}
-		found[id] = true
+		found[id], _ = wanted(id)
 		return nil
 	}
 	match := func(items []hindsight.DocumentItem) {
 		sc.Requests += len(items)/documentsPerPage + 1
 		for _, it := range items {
-			if _, ok := want[it.ID]; ok {
-				found[it.ID] = true
+			if t, ok := wanted(it.ID); ok {
+				found[it.ID] = t
 			}
 			if it.CreatedAt.After(sc.Newest) && (lk.NotAfter.IsZero() || !it.CreatedAt.After(lk.NotAfter)) {
 				sc.Newest = it.CreatedAt
@@ -155,7 +200,8 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 	sort.Strings(ids)
 	if lk.Since.IsZero() {
 		sc.Full = true
-		direct := len(want) <= directLookups
+		reads := len(want) + len(probes)
+		direct := reads <= directLookups
 		if !direct {
 			n := lk.Documents
 			if n < 0 {
@@ -168,10 +214,10 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 					return sc, fmt.Errorf("bank %s, counting its documents: %w", bank, err)
 				}
 			}
-			direct = len(want) <= (n+documentsPerPage-1)/documentsPerPage
+			direct = reads <= (n+documentsPerPage-1)/documentsPerPage
 		}
 		if direct {
-			for _, id := range ids {
+			for _, id := range append(ids, probes...) {
 				if err := get(id); err != nil {
 					return sc, err
 				}
@@ -196,17 +242,21 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 		}
 		match(items)
 		for _, id := range lk.Recheck {
-			if _, ok := want[id]; ok && !found[id] {
+			_, ok := wanted(id)
+			if _, seen := found[id]; ok && !seen {
 				if err := get(id); err != nil {
 					return sc, err
 				}
 			}
 		}
 	}
+	ids = ids[:0]
+	for id := range found {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	for _, id := range ids {
-		if found[id] {
-			sc.Found = append(sc.Found, want[id])
-		}
+		sc.Found = append(sc.Found, found[id])
 	}
 	return sc, nil
 }

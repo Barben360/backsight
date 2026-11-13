@@ -209,3 +209,38 @@ func compactStrings(s []string) []string {
 	}
 	return out
 }
+
+// WholeChains adds to ids every document of listed that is part of the
+// same session's document as one of them (PartID): a purge deletes a
+// session's document whole, its first segment and every later part,
+// whichever one the purged fact came from (decision 0090). ids keep their
+// order, the parts added follow, sorted.
+func WholeChains(ids []string, listed []hindsight.DocumentItem) []string {
+	chains := map[string]bool{}
+	have := map[string]bool{}
+	for _, id := range ids {
+		have[id] = true
+		if strings.HasPrefix(id, "conversation:") {
+			chains[chainOf(id)] = true
+		}
+	}
+	var more []string
+	for _, it := range listed {
+		if !have[it.ID] && strings.HasPrefix(it.ID, "conversation:") && chains[chainOf(it.ID)] {
+			have[it.ID] = true
+			more = append(more, it.ID)
+		}
+	}
+	sort.Strings(more)
+	return append(slicesClone(ids), more...)
+}
+
+// HasConversation says whether one of ids is a session's document.
+func HasConversation(ids []string) bool {
+	for _, id := range ids {
+		if strings.HasPrefix(id, "conversation:") {
+			return true
+		}
+	}
+	return false
+}

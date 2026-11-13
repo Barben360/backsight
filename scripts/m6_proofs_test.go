@@ -97,9 +97,17 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-code=$(cat "$t/code")
+code=$(cat "$t/code") body=$t/body
+# routes: "<url suffix> <code> <body file>" lines, the first match wins
+# over code and body.
+if [ -f "$t/routes" ]; then
+  url=$(sed -n '$s/.* //p' "$t/curl.calls")
+  while read -r suffix c b; do
+    case $url in *"$suffix") code=$c body=$t/$b; break ;; esac
+  done < "$t/routes"
+fi
 if [ "$code" = refused ]; then printf 000; exit 7; fi
-[ -z "$out" ] || cat "$t/body" > "$out"
+[ -z "$out" ] || cat "$body" > "$out"
 printf %s "$code"
 `)
 }
@@ -1236,6 +1244,84 @@ func TestM6SchedulerIsTheMachinesOwnAnswer(t *testing.T) {
 		} else if code != 0 || strings.TrimSpace(stdout) != "S["+tc.want+"]" {
 			t.Errorf("%q: exit %d, stdout %q, stderr:\n%s", tc.setup, code, stdout, stderr)
 		}
+	}
+}
+
+// Decision 0090: a session's later segments are documents of their own,
+// conversation:<sid>#part<n>, read from the segment after the document's
+// (an appended one holds several), one missing stepped over, two ending
+// the chain. The counts read every part's original_text, the position is
+// the last part, and the facts are summed over the parts.
+func TestM6ChainReadsTheSessionsParts(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
+	dir := t.TempDir()
+	m6ServerFakes(t, dir)
+	writeLines(t, filepath.Join(dir, "code"), "404")
+	writeLines(t, filepath.Join(dir, "body"), `{}`)
+	docs := map[string]map[string]any{
+		"d": {"id": "conversation:sp1", "original_text": "user: one [rec sp1-r1]\n\nuser: two [rec sp1-r2]",
+			"document_metadata": map[string]string{"segment": "2", "last_uuid": "sp1-r2"}},
+		"p3": {"id": "conversation:sp1#part3", "original_text": "user: three [rec sp1-r3]\nassistant: [rec sp1-r2]",
+			"document_metadata": map[string]string{"segment": "3", "last_uuid": "sp1-r3"}},
+		"p5": {"id": "conversation:sp1#part5", "original_text": "user: five [rec sp1-r5]",
+			"document_metadata": map[string]string{"segment": "5", "last_uuid": "sp1-r5"}},
+		// Past two missing parts (6, 7): not the session's any more.
+		"p8": {"id": "conversation:sp1#part8", "original_text": "user: eight [rec sp1-r8]",
+			"document_metadata": map[string]string{"segment": "8", "last_uuid": "sp1-r8"}},
+	}
+	for name, d := range docs {
+		b, _ := json.Marshal(d)
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLines(t, filepath.Join(dir, "facts"), `{"total":2,"items":[{"fact_type":"world","document_id":"x"},{"fact_type":"world","document_id":"x"}]}`)
+	writeLines(t, filepath.Join(dir, "routes"),
+		"/documents/conversation%3Asp1 200 d",
+		"/documents/conversation%3Asp1%23part3 200 p3",
+		"/documents/conversation%3Asp1%23part5 200 p5",
+		"/documents/conversation%3Asp1%23part8 200 p8")
+	stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_chain conversation:sp1`)
+	if want := "conversation:sp1\nconversation:sp1#part3\nconversation:sp1#part5\n"; code != 0 || stdout != want {
+		t.Errorf("m6_chain: exit %d, %q, want %q; stderr:\n%s", code, stdout, want, stderr)
+	}
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_uuid_counts sp1`)
+	if want := "sp1-r1 1\nsp1-r2 2\nsp1-r3 1\nsp1-r5 1\n"; code != 0 || stdout != want {
+		t.Errorf("m6_uuid_counts: exit %d, %q, want %q; stderr:\n%s", code, stdout, want, stderr)
+	}
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_meta sp1`)
+	if want := `{"segment":"5","records":null,"last_uuid":"sp1-r5","machine_id":null}`; code != 0 || strings.TrimSpace(stdout) != want {
+		t.Errorf("m6_meta: exit %d, %q, want %s; stderr:\n%s", code, stdout, want, stderr)
+	}
+	// The facts of the document and of each part: the memory lists are
+	// filtered by document, so each one answers its own id's.
+	for _, id := range []string{"conversation%3Asp1", "conversation%3Asp1%23part3", "conversation%3Asp1%23part5"} {
+		b, _ := json.Marshal(map[string]any{"total": 2, "items": []map[string]string{
+			{"fact_type": "world", "document_id": strings.NewReplacer("%3A", ":", "%23", "#").Replace(id)},
+			{"fact_type": "world", "document_id": strings.NewReplacer("%3A", ":", "%23", "#").Replace(id)}}})
+		name := "facts-" + strings.NewReplacer("%3A", "", "%23", "").Replace(id)
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		routes, _ := os.ReadFile(filepath.Join(dir, "routes"))
+		writeLines(t, filepath.Join(dir, "routes"), "document_id="+id+"&limit=500 200 "+name, strings.TrimSpace(string(routes)))
+	}
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_facts conversation:sp1`)
+	if code != 0 || strings.TrimSpace(stdout) != "6" {
+		t.Errorf("m6_facts: exit %d, %q, want 6 (2 per document); stderr:\n%s", code, stdout, stderr)
+	}
+	// With the document gone (a purge), its own facts are still read, and
+	// the parts from 2 on: 2 missing is stepped over, 3 and 5 counted.
+	routes, _ := os.ReadFile(filepath.Join(dir, "routes"))
+	writeLines(t, filepath.Join(dir, "routes"), "/documents/conversation%3Asp1 404 body", strings.TrimSpace(string(routes)))
+	if err := os.Remove(filepath.Join(dir, "curl.calls")); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_facts conversation:sp1`)
+	calls, _ := os.ReadFile(filepath.Join(dir, "curl.calls"))
+	if code != 0 || strings.TrimSpace(stdout) != "6" || !strings.Contains(string(calls), "document_id=conversation%3Asp1&limit=500") ||
+		!strings.Contains(string(calls), "/documents/conversation%3Asp1%23part2") {
+		t.Errorf("m6_facts, document gone: exit %d, %q, want 6 (its own, parts 3 and 5); calls:\n%s\nstderr:\n%s", code, stdout, calls, stderr)
 	}
 }
 

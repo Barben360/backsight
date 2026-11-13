@@ -209,6 +209,11 @@ func fakeLocked(f func()) {
 var (
 	fakeOperations []string
 	fakeSeriesDown bool
+	// fakeQueuedOps are the pending operations the fake lists (each a
+	// JSON object, as fakeOp writes one), beside the queued count;
+	// fakeQueueStatus non-zero: listing the queue answers it.
+	fakeQueuedOps   []string
+	fakeQueueStatus int
 )
 
 // The created-day listing of the memory-docs step: fakeCreated is the bank
@@ -464,7 +469,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	refusedCalls.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	fakeHook = nil
-	fakeOperations, fakeSeriesDown = nil, false
+	fakeOperations, fakeSeriesDown, fakeQueuedOps, fakeQueueStatus = nil, false, nil, 0
 	fakeCreated, fakeListCap, fakeListFilter, fakeListStatus, fakeListPage, fakeListLog = nil, 0, "", 0, nil, nil
 	documentNoUnits, fakeCalls = map[string]bool{}, map[string]int{}
 	fakeInFlight.Store(0)
@@ -984,20 +989,25 @@ func fakeHindsight(t *testing.T) (port int) {
 				items = items[min(off, len(items)):min(off+lim, len(items))]
 			}
 			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(total) + `,"operations":[` + strings.Join(items, ",") + `]}`))
+		case strings.HasSuffix(r.URL.Path, "/operations") && fakeQueueStatus != 0 && (r.URL.Query().Get("status") == "pending" || r.URL.Query().Get("status") == "processing"):
+			w.WriteHeader(fakeQueueStatus)
 		case strings.HasSuffix(r.URL.Path, "/operations"):
 			// Pending and processing are reported separately, like Hindsight;
 			// only pending drains as it is polled.
 			var n int64
+			var listed []string
 			switch r.URL.Query().Get("status") {
 			case "pending":
 				n = queued.Load()
 				if n > 0 {
 					queued.Add(-1)
 				}
+				listed = fakeQueuedOps
+				n += int64(len(listed))
 			case "processing":
 				n = processing.Load()
 			}
-			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[]}`))
+			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[` + strings.Join(listed, ",") + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats"):
 			_, _ = w.Write([]byte(`{"total_nodes":0,"nodes_by_fact_type":{},"pending_operations":0,"pending_consolidation":0,"failed_consolidation":0}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract") && extractFails.Load():

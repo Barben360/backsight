@@ -148,6 +148,8 @@ The bank's extraction settings are the host's. A client never sends its own, and
 
 To update, run `backsight update apply` on the host first: it moves the server to its new pin and gives the bank the new settings. Then update each PC. The PC's `version-skew` check compares Hindsight versions, not backsight releases: it reports a difference until the PC's backsight pins the Hindsight version the server runs. See [update.md](update.md).
 
+Update every PC together, soon after the host. A session's later turns go to the server as parts, each a document of its own, and an older backsight on another PC reads only the first document of a session: a session continued there may be stored twice, never lost. No check tells you that another PC runs an older backsight, as `version-skew` compares only Hindsight versions.
+
 ## A lost laptop
 
 The laptop holds the API key. On the host, give the server a new one:
@@ -169,7 +171,7 @@ The old key and every token handed out before are refused from then on. The host
 
 You copy a transcript to another PC and resume the session on both: a [split session](glossary.md#split-session). Each PC sends the turns the server does not hold from it, as the session's next part, so nothing is lost unless a part is given up (below). The part both PCs share may be stored twice. doctor's `split-session` check names such sessions, as information.
 
-One case is caught later: both PCs sent the session's first part before the server stored either, and the later one replaced the other. The PC whose part was replaced reads the session back at a later `jobs tick` and sends its missing turns again. If it still cannot compare after 24 hours, it gives up, and doctor's `replace-unconfirmed` check warns: see [doctor: a session part was never confirmed](troubleshooting.md#doctor-a-session-part-was-never-confirmed).
+One case is caught later: both PCs sent the same part of the session before the server stored either (each part is a document of its own, and the later send replaces the earlier), or the server lost a part it had accepted. The PC whose part was replaced or lost reads that part back at a later `jobs tick` and sends its missing turns again, as the session's next part. If it still cannot compare after 24 hours, it gives up, and doctor's `replace-unconfirmed` check warns: see [doctor: a session part was never confirmed](troubleshooting.md#doctor-a-session-part-was-never-confirmed).
 
 After a restore of the host, the PC that did not send the session's last part may send the whole session again, as its transcript holds it, the part both PCs share included: stored twice rather than lost.
 

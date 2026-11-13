@@ -263,11 +263,54 @@ m6_doc() {
   rm -f "$out"
 }
 
+# m6_chain <docid>: the ids of a session's document and of its later
+# parts on B's server (<docid>#part<n>, each a document of its own),
+# one a line in segment order: the document's own first (an older
+# build's appended document holds several segments), then each part from
+# the segment after it (from 2 when the document is absent), one missing
+# stepped over, two ending the chain.
+m6_chain() {
+  local doc seg next part missed=0
+  doc=$(m6_doc "$1") || exit 1
+  seg=1
+  if [ -n "$doc" ]; then
+    printf '%s\n' "$1"
+    seg=$(jq -r '.document_metadata.segment // ""' <<<"$doc")
+    [[ $seg =~ ^[0-9]+$ ]] || return 0
+  fi
+  next=$((seg + 1))
+  while [ "$missed" -le 1 ]; do
+    part=$(m6_doc "$1#part$next") || exit 1
+    if [ -n "$part" ]; then
+      printf '%s\n' "$1#part$next"
+      missed=0
+    else
+      missed=$((missed + 1))
+    fi
+    next=$((next + 1))
+  done
+}
+
 # m6_facts <docid>: how many facts (memory units but observations) the
-# server holds from that document, read with B's key. Any answer but 200,
-# a page that does not hold them all, or an item of another document,
-# fails: it never reads as fewer, nor as more.
+# server holds from that document, read first and whether it is stored
+# or not (a purge's facts must be gone with it), and from its later parts
+# (m6_chain), read with B's key.
 m6_facts() {
+  local id ids n total
+  total=$(m6_facts_of "$1") || exit 1
+  ids=$(m6_chain "$1") || exit 1
+  for id in $ids; do
+    [ "$id" != "$1" ] || continue
+    n=$(m6_facts_of "$id") || exit 1
+    total=$((total + n))
+  done
+  printf '%s\n' "$total"
+}
+
+# m6_facts_of <docid>: the same for that one document. Any answer but
+# 200, a page that does not hold them all, or an item of another
+# document, fails: it never reads as fewer, nor as more.
+m6_facts_of() {
   local out code server
   server=$(m6_server) || exit 1
   out=$(mktemp "$M6_WORK/facts.XXXXXX")
@@ -293,16 +336,22 @@ m6_facts() {
 }
 
 # m6_uuid_counts <sid>: "<uuid> <n>" for every [rec <uuid>] in the
-# original_text of conversation:<sid> (every segment appended to it), one
-# a line, sorted. Fails when the document is absent or has no
-# original_text: an empty count must never read as "none sent twice".
+# original_text of conversation:<sid> and of its later parts (m6_chain),
+# one a line, sorted. Fails when the document is absent or one of them
+# has no original_text: an empty count must never read as "none sent
+# twice".
 m6_uuid_counts() {
-  local doc
+  local doc id ids text=""
   doc=$(m6_doc "conversation:$1") || exit 1
   [ -n "$doc" ] || fail "conversation:$1 is not on the server"
-  jq -e '.original_text | type == "string" and length > 0' > /dev/null <<<"$doc" ||
-    fail "conversation:$1 has no original_text"
-  jq -r .original_text <<<"$doc" | grep -o '\[rec [^]]*\]' | sed 's/^\[rec \(.*\)\]$/\1/' | sort | uniq -c | awk '{ print $2, $1 }'
+  ids=$(m6_chain "conversation:$1") || exit 1
+  for id in $ids; do
+    doc=$(m6_doc "$id") || exit 1
+    jq -e '.original_text | type == "string" and length > 0' > /dev/null <<<"$doc" ||
+      fail "$id has no original_text"
+    text+=$(jq -r .original_text <<<"$doc")$'\n'
+  done
+  printf '%s' "$text" | grep -o '\[rec [^]]*\]' | sed 's/^\[rec \(.*\)\]$/\1/' | sort | uniq -c | awk '{ print $2, $1 }'
 }
 
 # m6_queue_wait: waits until B's server has no pending or processing
@@ -468,13 +517,15 @@ m6_hash() {
 }
 
 # m6_wait_doc <sid>: waits (5 min) until conversation:<sid> is on B's
-# server with its metadata; prints the document.
+# server with its metadata; prints the last stored document of its chain
+# (m6_chain): the session's position.
 m6_wait_doc() {
-  local doc _
+  local doc ids _
   for _ in $(seq 1 100); do
     doc=$(m6_doc "conversation:$1") || exit 1
     if [ -n "$doc" ] && jq -e '(.document_metadata.last_uuid // "") != ""' > /dev/null <<<"$doc"; then
-      printf '%s\n' "$doc"
+      ids=$(m6_chain "conversation:$1") || exit 1
+      m6_doc "$(tail -n 1 <<<"$ids")" || exit 1
       return 0
     fi
     sleep 3
@@ -1535,7 +1586,7 @@ m6_check_purge_across_clients() {
   st=$(jq -r '[.data.results[]? | select(.session == "pg1") | .status][0] // "nothing"' <<<"$out")
   [ "$st" = nothing ] && jq -e '.ok == true' > /dev/null <<<"$out" || fail "B's flush of its copy of pg1: $st ($(jq -c '.error // .data.counts' <<<"$out" | m6_scrub)), want nothing sent"
   # Positive control: B holds pg1 as sent, up to the server's last record:
-  # a later send of B's would append to conversation:pg1.
+  # a later send of B's would continue conversation:pg1.
   cur=$(m6_cursor b pg1) || exit 1
   [ "$(jq -r '.last_uuid // ""' <<<"${cur:-null}")" = pg1-r3 ] || fail "B's cursor of pg1 is '$(jq -c . <<<"${cur:-null}")', want last_uuid pg1-r3: the check would prove nothing"
   out=$(m6_on a forget --json --project "$p" --purge --answer "confirm_project=$p" < /dev/null 2> "$M6_WORK/forget.err") || rc=$?

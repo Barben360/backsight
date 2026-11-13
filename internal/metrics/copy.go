@@ -101,6 +101,7 @@ var doctorNames = map[string]string{
 	"noise-headless": "background sessions", "noise-subagent": "helper agents",
 	"noise-transverse": "shared notes", "notes": "notes", "own-owners": "file owners", "pending-restore": "pending restore", "price": "model prices",
 	"purged-documents": "removed sessions",
+	"queue-age":        "server queue stuck",
 	"reattribution":    "project re-tagging", "recall": "recall", "reference": "older server copy", "reference-server": "older server copy check",
 	"remotes": "other PCs", "replace-unconfirmed": "unconfirmed replacement", "restore": "restore", "restore-epoch": "restore state",
 	"retention": "transcript keeping", "runtime-switch": "runtime switch", "scheduler": "scheduler", "searches": "searches",

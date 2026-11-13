@@ -118,9 +118,11 @@ func projectsOf(home string, recs []transcript.Record, attrs map[int64]attr) []s
 // serverDoc is what the server holds of one of a session's documents.
 type serverDoc struct {
 	project, id string
-	found       bool
-	lastUUID    string
-	segment     string
+	// part: the document read at the chain's end (id or one of its parts).
+	part     string
+	found    bool
+	lastUUID string
+	segment  string
 	// legacy: the record up to which this document holds every project's
 	// records (a build from before per-project documents wrote it).
 	legacy string
@@ -150,24 +152,134 @@ func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects 
 	return out, nil
 }
 
-// readDocument reads one document; a missing one is not found, not an
-// error.
+// readDocument reads the server's position of a session's document id:
+// the last stored of id and its parts (ChainEnd); a missing one is not
+// found, not an error.
 func (f *Flusher) readDocument(ctx context.Context, id string) (serverDoc, error) {
+	return f.readChain(ctx, id, 0)
+}
+
+// readChain is readDocument starting at the part of segment from (when
+// above 1), the one this PC's cursor last sent: two or three reads
+// instead of one per part.
+func (f *Flusher) readChain(ctx context.Context, id string, from int) (serverDoc, error) {
 	d := serverDoc{id: id}
-	doc, err := f.Client.GetDocument(ctx, f.Bank, id)
-	var apiErr *hindsight.APIError
-	switch {
-	case err == nil:
-		m := doc.Metadata
-		d.found, d.lastUUID, d.segment, d.legacy, d.named = true, m["last_uuid"], m["segment"], m["legacy_last_uuid"], m["project"]
-		if _, layout := m["project"]; !layout {
-			d.legacy = d.lastUUID // written before per-project documents
-		}
-	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-	default:
+	doc, at, found, err := ChainEnd(ctx, func(ctx context.Context, id string) (hindsight.Document, error) {
+		return f.Client.GetDocument(ctx, f.Bank, id)
+	}, id, from)
+	if err != nil || !found {
 		return d, err
 	}
+	m := doc.Metadata
+	d.found, d.part, d.lastUUID, d.segment, d.legacy, d.named = true, at, m["last_uuid"], m["segment"], m["legacy_last_uuid"], m["project"]
+	if _, layout := m["project"]; !layout {
+		d.legacy = d.lastUUID // written before per-project documents
+	}
 	return d, nil
+}
+
+// DocumentReader reads one document of the bank (hindsight.Client's
+// GetDocument): an *hindsight.APIError of kind NotFound when absent.
+type DocumentReader func(ctx context.Context, id string) (hindsight.Document, error)
+
+// chainGap: how many parts in a row may be missing inside a chain. Parts
+// are documents of their own, which the server may store out of order:
+// one missing is stepped over, two end the chain.
+const chainGap = 1
+
+// ChainEnd reads the last stored document of a session's document doc
+// and its parts (PartID, decision 0090), with its id: doc, then the parts
+// from the segment after doc's own (an appended document from an older
+// build holds its first segments), a missing part stepped over (chainGap).
+// from above 1 starts at that part instead, when it is stored, else at
+// doc. found is false when doc is not stored (nor from's part): its
+// segments are not readable yet, or never were. A document whose segment
+// is not a number ends the chain there (the caller refuses it).
+func ChainEnd(ctx context.Context, get DocumentReader, doc string, from int) (end hindsight.Document, id string, found bool, err error) {
+	read := func(id string) (hindsight.Document, bool, error) {
+		d, err := get(ctx, id)
+		var apiErr *hindsight.APIError
+		switch {
+		case err == nil:
+			return d, true, nil
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+			return d, false, nil
+		}
+		return d, false, err
+	}
+	seg := 0
+	if from > 1 {
+		d, ok, err := read(PartID(doc, from))
+		if err != nil {
+			return end, doc, false, err
+		}
+		if ok {
+			end, id, found = d, PartID(doc, from), true
+		}
+	}
+	if !found {
+		d, ok, err := read(doc)
+		if err != nil || !ok {
+			return end, doc, false, err
+		}
+		end, id = d, doc
+	}
+	if seg, err = strconv.Atoi(end.Metadata["segment"]); err != nil || seg < 1 {
+		return end, id, true, nil
+	}
+	for next, missed := seg+1, 0; missed <= chainGap; next++ {
+		d, ok, err := read(PartID(doc, next))
+		switch {
+		case err != nil:
+			return end, id, true, err
+		case !ok:
+			missed++
+			continue
+		}
+		missed = 0
+		end, id = d, PartID(doc, next)
+		if s, err := strconv.Atoi(d.Metadata["segment"]); err != nil || s < 1 {
+			return end, id, true, nil
+		}
+	}
+	return end, id, true, nil
+}
+
+// chainHoleReads bounds ChainHoles' reads (one per part).
+const chainHoleReads = 100
+
+// ChainHoles lists the parts of doc's chain before segment upTo that the
+// server does not hold: from the segment after doc's own (an appended
+// document from an older build holds its first segments) to upTo - 1.
+// ChainEnd steps over such a hole (parts may be stored out of order); a
+// hole that stays, nothing queued, is a part whose retain failed or was
+// lost. Nothing when doc is not stored or its segment is not a number.
+// One read per part, at most chainHoleReads in all (the parts nearest
+// upTo): verify --live's bound on a session of very many parts.
+func ChainHoles(ctx context.Context, get DocumentReader, doc string, upTo int) ([]string, error) {
+	d, err := get(ctx, doc)
+	var apiErr *hindsight.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	seg, err := strconv.Atoi(d.Metadata["segment"])
+	if err != nil || seg < 1 {
+		return nil, nil
+	}
+	var holes []string
+	for s := max(seg+1, upTo-chainHoleReads); s < upTo; s++ {
+		_, err := get(ctx, PartID(doc, s))
+		switch {
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+			holes = append(holes, PartID(doc, s))
+		case err != nil:
+			return nil, err
+		}
+	}
+	return holes, nil
 }
 
 // position is what the server holds of a session, per document.

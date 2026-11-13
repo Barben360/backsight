@@ -61,13 +61,30 @@ rc_doc() {
   rm -f "$out"
 }
 
-# rc_meta <sid>: what the server holds of sid, "segment records last_uuid";
-# empty while the document is absent, "incomplete" when a field is missing
-# (never three nulls that would match each other).
+# rc_meta <sid>: what the server holds of sid, "segment records last_uuid",
+# read at the end of its chain: segment 2 onwards is a document of its own,
+# conversation:<sid>#part<n>, read from the segment after the document's,
+# one missing part stepped over, two ending it. Empty while the document is
+# absent, "incomplete" when a field is missing (never three nulls that would
+# match each other).
 rc_meta() {
-  local doc
+  local doc seg next part missed=0
   doc=$(rc_doc "$1") || exit 1
   [ -n "$doc" ] || return 0
+  seg=$(jq -r '.document_metadata.segment // ""' <<<"$doc")
+  if [[ $seg =~ ^[0-9]+$ ]]; then
+    next=$((seg + 1))
+    while [ "$missed" -le 1 ]; do
+      part=$(rc_doc "$1%23part$next") || exit 1
+      if [ -n "$part" ]; then
+        doc=$part
+        missed=0
+      else
+        missed=$((missed + 1))
+      fi
+      next=$((next + 1))
+    done
+  fi
   jq -r '.document_metadata // {} | if (.segment // "") != "" and (.records // "") != "" and (.last_uuid // "") != ""
     then "\(.segment) \(.records) \(.last_uuid)" else "incomplete" end' <<<"$doc"
 }
@@ -152,7 +169,7 @@ rc_check() { # rc_check <doctor.json> <check id>: prints its status
 # archive holds and whose second it lacks. Restores the archive, then
 # asserts: the epoch went up, doctor's restore-epoch warns until a jobs
 # tick, which reconciles and re-sends <lost sid> once and nothing of <kept
-# sid>; the next live flush re-appends only <live sid>'s second segment;
+# sid>; the next live flush re-sends only <live sid>'s second segment;
 # the server holds each session as before the restore (same segment,
 # records and last record: nothing doubled, nothing short). Sets
 # rc_epoch_before and rc_epoch_after.
@@ -209,7 +226,7 @@ rc_restore_resends() {
   m=$(rc_wait "$lost")
   [ "$m" = "$before" ] || fail "session $lost on the server: $m, before the restore: $before"
   # The live session waits for its 30 minutes in the tick; the next live
-  # flush re-appends what the restore lost, and only that.
+  # flush re-sends what the restore lost, and only that.
   if [ -n "$live" ]; then
     m=$(rc_flush_live "$live" "${live_last##*-r}")
     [ "$m" = "$live_before" ] || fail "live session $live on the server: $m, before the restore: $live_before"
