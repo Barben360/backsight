@@ -292,9 +292,8 @@ func TestSearchStaysWithinItsBudget(t *testing.T) {
 	// search is marked timed out (a server half hung).
 	t.Run("one scope out of the budget", func(t *testing.T) {
 		end := make(chan struct{})
-		old := budgetContext
-		t.Cleanup(func() { budgetContext, afterCall = old, nil })
-		budgetContext = func(parent context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+		t.Cleanup(func() { afterCall = nil })
+		budget := func(parent context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
 			return deadlineAt{parent, end}, func() {}
 		}
 		afterCall = func(scope string) {
@@ -302,7 +301,7 @@ func TestSearchStaysWithinItsBudget(t *testing.T) {
 				close(end)
 			}
 		}
-		e := &Engine{Client: hanging(t, true), Bank: "b", Transverse: []string{".claude"}, Timeout: outOfReach}
+		e := &Engine{Client: hanging(t, true), Bank: "b", Transverse: []string{".claude"}, Timeout: outOfReach, Budget: budget}
 		res := e.Search(context.Background(), q)
 		if res.Scopes["project"].OK || !res.Scopes["global"].OK || len(res.Hits) != 1 || !res.TimedOut {
 			t.Errorf("%+v, want the global hit, the project scope failed and the search timed out", res)

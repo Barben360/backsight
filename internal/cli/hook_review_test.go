@@ -171,6 +171,43 @@ func shortBudgets(t *testing.T, full, probe time.Duration) {
 	t.Cleanup(func() { recallBudget, probeBudget = oldFull, oldProbe })
 }
 
+// budgetEndsOnArrival: a hook's search whose budget is under a minute (the
+// prompt's 17 s, the probe's, the tool failure's 6 s) has it end once a
+// recall reached the fake server, whatever the clock (a real 1 ms budget
+// can end before any request leaves, on Windows' coarse clock); a budget
+// of a minute or more stays a real deadline.
+func budgetEndsOnArrival(t *testing.T) {
+	t.Helper()
+	searchBudget = func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+		if d >= time.Minute {
+			return context.WithTimeout(parent, d)
+		}
+		end := make(chan struct{})
+		var once sync.Once
+		f := func() { once.Do(func() { close(end) }) }
+		recallArrived.Store(&f)
+		return deadlineOn{parent, end}, func() {}
+	}
+	t.Cleanup(func() { searchBudget = nil; recallArrived.Store(nil) })
+}
+
+// deadlineOn is a context whose deadline passes when end closes.
+type deadlineOn struct {
+	context.Context
+	end chan struct{}
+}
+
+func (d deadlineOn) Done() <-chan struct{} { return d.end }
+
+func (d deadlineOn) Err() error {
+	select {
+	case <-d.end:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 // writeBreaker sets home's breaker.
 func writeBreaker(t *testing.T, home string, b state.Breaker) {
 	t.Helper()
@@ -190,19 +227,19 @@ func pauseOver() state.Breaker { return state.Breaker{OpenUntil: now().Add(-time
 // breaker opened: one recall that ran out of its budget is enough now.
 func TestARecallThatTimedOutOpensTheBreakerAtOnce(t *testing.T) {
 	home := hookHome(t)
-	shortBudgets(t, time.Millisecond, time.Millisecond)
+	budgetEndsOnArrival(t)  // the 17 s budget ends once the server got the call
 	recallDelay = time.Hour // answers only once the hook gave up
 	prompt(t, home, "s1", longPrompt)
 	if b := state.LoadBreaker(pathsOf(home)); !b.OpenUntil.After(now()) {
 		t.Fatalf("one timed-out recall left the breaker closed: %+v", b)
 	}
-	recallDelay, recallAnswer = 0, hits(0.9)
-	before := len(recallQueries)
-	if c := prompt(t, home, "s2", longPrompt).Specific.Context; strings.Contains(c, "memory m1") || len(recallQueries) != before {
-		t.Errorf("the next prompt recalled with the breaker open (%d calls):\n%s", len(recallQueries)-before, c)
+	// The hanging answer may still run: the fake's state under its lock.
+	fakeLocked(func() { recallDelay, recallAnswer = 0, hits(0.9) })
+	if c := prompt(t, home, "s2", longPrompt).Specific.Context; strings.Contains(c, "memory m1") {
+		t.Errorf("the next prompt recalled with the breaker open:\n%s", c)
 	}
-	if !strings.Contains(telemetryText(t, home), `"reason":"breaker"`) {
-		t.Error("the next prompt's skip is not recorded as the breaker's")
+	if ev := lastPrompt(t, home); ev["decision"] != "skip" || ev["reason"] != "breaker" {
+		t.Errorf("the next prompt: %v, want skipped by the breaker", ev)
 	}
 }
 
@@ -249,16 +286,18 @@ func TestFastFailuresStillNeedSeveralInARow(t *testing.T) {
 
 // After the pause, the first recall probes the server: on a server still
 // hanging, it gives up at the probe's budget, not the full one, and the
-// breaker opens again at once. The full budget here is an hour: a probe
-// that waited for it would wait for the client's own 30 s cap.
+// breaker opens again at once. The full budget here is an hour, a real
+// deadline: a probe given it would wait for the client's own 30 s cap.
 func TestTheProbeAfterThePauseIsBounded(t *testing.T) {
 	home := hookHome(t)
-	shortBudgets(t, time.Hour, time.Millisecond)
+	shortBudgets(t, time.Hour, time.Second)
+	budgetEndsOnArrival(t) // the probe's budget ends once the server got the call
 	writeBreaker(t, home, pauseOver())
 	recallDelay = time.Hour
-	before := len(recallQueries)
 	prompt(t, home, "s1", longPrompt)
-	if len(recallQueries) == before {
+	var asked int
+	fakeLocked(func() { asked = len(recallQueries) }) // the hanging answer may still run
+	if asked == 0 {
 		t.Fatal("no probe after the pause")
 	}
 	if b := state.LoadBreaker(pathsOf(home)); !b.OpenUntil.After(now()) {
@@ -268,7 +307,7 @@ func TestTheProbeAfterThePauseIsBounded(t *testing.T) {
 	// fits in, under the race detector too).
 	writeBreaker(t, home, pauseOver())
 	probeBudget = time.Hour
-	recallDelay, recallAnswer = 0, hits(0.9)
+	fakeLocked(func() { recallDelay, recallAnswer = 0, hits(0.9) })
 	if c := prompt(t, home, "s2", longPrompt).Specific.Context; !strings.Contains(c, "memory m1") {
 		t.Errorf("no recall from a probe that answered:\n%s", c)
 	}
@@ -281,7 +320,8 @@ func TestTheProbeAfterThePauseIsBounded(t *testing.T) {
 // is a probe still: the breaker stays half open, not closed.
 func TestAFastFailureWhileProbingKeepsProbing(t *testing.T) {
 	home := hookHome(t)
-	shortBudgets(t, time.Hour, time.Hour) // the refusal comes back within the probe's budget
+	shortBudgets(t, time.Hour, time.Hour) // real deadlines: the refusal comes back within them
+	budgetEndsOnArrival(t)
 	ended := pauseOver()
 	writeBreaker(t, home, ended)
 	recallStatus.Store(500)
@@ -292,7 +332,7 @@ func TestAFastFailureWhileProbingKeepsProbing(t *testing.T) {
 	}
 	// Still probing: a hanging server is given up on at the probe's budget
 	// (the full one is an hour), and the breaker opens.
-	probeBudget = time.Millisecond
+	probeBudget = time.Second // now ends once the server got the call
 	recallStatus.Store(0)
 	recallDelay = time.Hour
 	prompt(t, home, "s2", longPrompt)
@@ -307,12 +347,12 @@ func TestAFastFailureWhileProbingKeepsProbing(t *testing.T) {
 func TestAToolFailureRecallThatTimedOutDoesNotOpenTheBreaker(t *testing.T) {
 	home := hookHome(t)
 	failureOn(t, home)
-	old := failureBudget
-	failureBudget = time.Millisecond
-	t.Cleanup(func() { failureBudget = old })
+	budgetEndsOnArrival(t) // its 6 s ends once the server got the call
 	recallDelay = time.Hour
 	failure(t, home, "s1", "Bash", npmError, nil)
-	if len(recallQueries) == 0 {
+	var asked int
+	fakeLocked(func() { asked = len(recallQueries) }) // the hanging answer may still run
+	if asked == 0 {
 		t.Fatal("the failure recall did not ask the server")
 	}
 	if b := state.LoadBreaker(pathsOf(home)); !b.OpenUntil.IsZero() || b.Failures != 1 {

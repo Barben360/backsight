@@ -40,8 +40,11 @@ type Engine struct {
 	Bank       string
 	Transverse []string      // aliases; the first is canonical
 	Timeout    time.Duration // the whole search: every call and the raw fallback
-	Now        func() time.Time
-	Boost      float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
+	// Budget gives the search its Timeout; nil is context.WithTimeout
+	// (tests end the budget on cue).
+	Budget func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	Now    func() time.Time
+	Boost  float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
 	// Adjust is what this machine learned of the memories a search found,
 	// asked once per search with every merged hit's id: a boost added to
 	// a memory's score, or Hidden to drop it; an id it leaves out has
@@ -174,7 +177,11 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 	parent := ctx
 	if e.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = budgetContext(ctx, e.Timeout)
+		with := e.Budget
+		if with == nil {
+			with = context.WithTimeout
+		}
+		ctx, cancel = with(ctx, e.Timeout)
 		defer cancel()
 	}
 	scopes := e.scopes(q)
@@ -340,9 +347,6 @@ func meta(answers []answer, name string) ScopeMeta {
 	}
 	return m
 }
-
-// budgetContext gives a search its budget (tests end it on cue).
-var budgetContext = context.WithTimeout
 
 // afterCall, when set (tests), runs once each server call of a search has
 // returned, with its scope's name: a test ends the search's context only

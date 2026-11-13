@@ -28,17 +28,14 @@ const (
 	failureHits     = 2
 	// failureChars: the failure recall's text, the prompt's former budget
 	// (issue 328 raised the prompt's, not this one).
-	failureChars = 800
+	failureChars  = 800
+	failureBudget = 6 * time.Second // one recall, inside the hook's 8 s deadline
 	// failureMinError: shorter error text (past "Exit code N") is not a
 	// failure worth a lookup; it also keeps `backsight verify` off the server.
 	failureMinError = 15
 	failureSigsKept = 200
 	failureCmdChars = 100
 )
-
-// failureBudget: one recall, inside the hook's 8 s deadline (a variable for
-// the tests).
-var failureBudget = 6 * time.Second
 
 var (
 	exitCodeRE = regexp.MustCompile(`^\s*Exit code \d+\s*`)
@@ -139,7 +136,7 @@ func (h *hookEnv) toolFailure() []byte {
 	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
-	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: h.budget(failureBudget), Now: now, Boost: rc.ProjectBoost,
+	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: h.budget(failureBudget), Budget: searchBudget, Now: now, Boost: rc.ProjectBoost,
 		Adjust: ledgerAdjust(h.dirs, h.cfg, now(), h.tw)}
 	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Related: related,
 		MinReranker: failureMinScore, GlobalMinReranker: max(failureMinScore, rc.GlobalMinScore), Limit: 20})

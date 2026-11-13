@@ -187,6 +187,21 @@ func (f *fakeCompose) subcommands() []string {
 // each accepted item.
 var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter, retainStatus, recallStatus atomic.Int64
 
+// recallArrived, when set, runs as each recall reaches the fake server.
+var recallArrived atomic.Pointer[func()]
+
+// fakeMu guards the fake server's state; a test whose hook returned while
+// a hanging answer still runs (its budget ended on cue) reads and changes
+// that state under it (fakeLocked).
+var fakeMu sync.Mutex
+
+// fakeLocked runs f under the fake server's lock.
+func fakeLocked(f func()) {
+	fakeMu.Lock()
+	defer fakeMu.Unlock()
+	f()
+}
+
 // fakeOperations are the operations the fake lists as failed or completed
 // (each one a JSON object with operation_type, status, created_at,
 // updated_at, retry_count, error_message); nil lists none. fakeSeriesDown
@@ -433,6 +448,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentHasEventTime.Store(false)
 	mentalModels, mentalCalls, mentalGetDelay, mentalLists = map[string]string{}, nil, 0, nil
 	recallDelay, recentDelay, recallDelayTag = 0, 0, ""
+	recallArrived.Store(nil)
 	mentalCreateStatus.Store(0)
 	mentalPatchStatus.Store(0)
 	docDeleteFails.Store(false)
@@ -455,7 +471,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	fakeMaxInFlight.Store(0)
 	fakeOverlap.Store(false)
 	fakeOverlapMet.Store(false)
-	var mu sync.Mutex
+	mu := &fakeMu
 	banks := map[string]string{} // bank → name
 	bankDocs := map[string]map[string]bool{}
 	overrides := map[string]map[string]json.RawMessage{} // bank → its config overrides
@@ -609,6 +625,9 @@ func fakeHindsight(t *testing.T) (port int) {
 			recallTags = append(recallTags, strings.Join(body.Tags, ","))
 			recallQueries = append(recallQueries, body.Query)
 			recallMaxTokens = append(recallMaxTokens, body.MaxTokens)
+			if f := recallArrived.Load(); f != nil {
+				(*f)()
+			}
 			if recallFailTag != "" && slices.Contains(body.Tags, recallFailTag) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
