@@ -31,7 +31,9 @@ func showForeign(t *testing.T, home string) {
 	showItems(t, home, "S", "search", "proj", feedback.Item{ID: creditA, Rank: 1, Project: "proj"},
 		feedback.Item{ID: foreignA, Rank: 2, Project: "other"}, feedback.Item{ID: foreignB, Rank: 3, Project: "other"},
 		feedback.Item{ID: thirdA, Rank: 4, Project: "third"})
-	rawFact(creditA, foreignA, foreignB, thirdA)
+	rawFact(creditA)
+	rawFactIn("other", foreignA, foreignB)
+	rawFactIn("third", thirdA)
 }
 
 // foreignRefusal is the line a verdict on foreignA answers while
@@ -265,20 +267,42 @@ func lineWith(s, sub string) string {
 	return ""
 }
 
-// A project whose name the memory lines show through the charset (foo#1
-// shown foo_1): its memory, journaled under the shown name by a search, is
-// still the session's own, so it is retired, and the correction goes to
-// the real project, not to foo_1 (0089 review S7).
+// The memory's project comes from the server, never from a line's text:
+// a session in foo#1 shown its own memory as foo_1 (a search header)
+// retires it, and the correction goes to foo#1 (0089 review S7).
 func TestOwnProjectWithAShownNameIsStillOwn(t *testing.T) {
 	cs, home := creditSession(t)
 	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "foo#1", At: time.Now()})
 	showItems(t, home, "S", "search", "foo#1", feedback.Item{ID: creditA, Rank: 1, Project: "foo_1"})
-	rawFact(creditA)
+	memories[creditA] = `{"id":"` + creditA + `","text":"Billing runs PostgreSQL 14.","type":"world","tags":["project:foo#1"]}`
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa"))
 	if isErr || !retiredRE.MatchString(out) || strings.Contains(out, "off on this machine") {
 		t.Fatalf("%v %s", isErr, out)
 	}
 	if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:foo#1,") {
 		t.Errorf("the correction went to %q, want project foo#1", last)
+	}
+}
+
+// The other way round, the guard holds: a session in foo_1 shown another
+// project's memory (foo#1, foo[1, foo|1) under the same shown name cannot
+// retire it, nothing is stored; the server's project decides (0089
+// review round 2).
+func TestForeignProjectWithTheSameShownNameIsRefused(t *testing.T) {
+	for _, foreign := range []string{"foo#1", "foo[1", "foo|1"} {
+		t.Run(foreign, func(t *testing.T) {
+			cs, home := creditSession(t)
+			_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "foo_1", At: time.Now()})
+			showItems(t, home, "S", "search", "foo_1", feedback.Item{ID: foreignA, Rank: 1, Project: "foo_1"})
+			memories[foreignA] = `{"id":"` + foreignA + `","text":"Another project's fact.","type":"world","tags":["project:` + foreign + `"]}`
+			before := retained.Load()
+			out, isErr := call(t, cs, "memory_credit", verdict("wrong", "cccccccc"))
+			if !isErr || !strings.Contains(out, "off on this machine") {
+				t.Errorf("%v %s", isErr, out)
+			}
+			if !nothingStored(t, home, before) || len(patches()) != 0 {
+				t.Errorf("a refused verdict stored or retired: %d sent, patches %q", retained.Load()-before, patches())
+			}
+		})
 	}
 }

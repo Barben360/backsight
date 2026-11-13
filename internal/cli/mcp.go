@@ -677,19 +677,26 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	// retired too with feedback.cross_project_retire (config.toml only),
 	// else it is the user's to retire.
 	linked := linkedProjects(d.dirs, cfg, resolver, live.Cwd, live.Project)
-	// A memory a search, a store or a Sources answer showed is journaled
-	// under its shown name (tagProject): the session's own, a linked
-	// project or the pool shown under another name is still that project
-	// (decision 0089).
-	shownOwner := owner
+	// The server decides whose memory it is, never a line's text: a
+	// search, a store or a Sources answer is journaled under the name it
+	// shows (tagProject), which another project's name can share (decision
+	// 0089). Each memory is read once, here, and classify reuses the read;
+	// one the server cannot read keeps its journaled project.
+	// Read only from the server this PC joined: another one answering at
+	// the address, or a connect since, leaves the journaled projects, and
+	// the checks below refuse the call anyway.
+	read := d.memoryReader(ctx, key, ids)
+	if otherServerRefusal(d.dirs, cfg) != nil || sendsGate(d.dirs, d.generation)() != nil {
+		read = func(string) (hindsight.MemoryDetail, error) { return hindsight.MemoryDetail{}, errors.New("not read") }
+	}
+	journaled := owner
 	owner = func(id string) string {
-		p := shownOwner(id)
-		for _, real := range append([]string{live.Project}, linked...) {
-			if p != real && sameProject(p, real) {
-				return real
+		if m, err := read(id); err == nil {
+			if p := recall.ProjectOf(m.Tags); p != "" {
+				return p
 			}
 		}
-		return p
+		return journaled(id)
 	}
 	near := func(p string) bool { return p == live.Project || isPool(cfg, p) || slices.Contains(linked, p) }
 	var projects, problems []string // projects: the memories', the pool as one
@@ -764,7 +771,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	if done >= limit && !slices.ContainsFunc(ids, func(id string) bool { return slices.Contains(used, (retirePlan{}).slot(id, listed)) }) {
 		return "", capRefusal(limit, done, ids, owner)
 	}
-	plan := d.classify(ctx, key, ids, owner)
+	plan := d.classify(read, ids, owner)
 	if len(plan.listed) > 0 {
 		d.tw.Emit(telemetry.Retire{Action: "sources", IDs: len(plan.listed)})
 		return sourcesText(plan), nil

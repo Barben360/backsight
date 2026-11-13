@@ -98,14 +98,10 @@ func onServer(key *mcpKey, f func(*hindsight.Client) error) error {
 // retired: a world or experience fact is retired; an observation with
 // sources is skipped when one of them is named too, else its sources are
 // listed; a read that fails, another type, or no sources: hidden.
-func (d mcpDeps) classify(ctx context.Context, key *mcpKey, ids []string, owner func(string) string) retirePlan {
+func (d mcpDeps) classify(read func(id string) (hindsight.MemoryDetail, error), ids []string, owner func(string) string) retirePlan {
 	plan := retirePlan{sources: map[string][]sourceFact{}, of: map[string]string{}}
 	for _, id := range ids {
-		var m hindsight.MemoryDetail
-		err := onServer(key, func(cl *hindsight.Client) (err error) {
-			m, err = cl.GetMemory(ctx, d.cfg.Server.Bank, id)
-			return err
-		})
+		m, err := read(id)
 		switch {
 		case err != nil:
 			plan.hide = append(plan.hide, id)
@@ -143,6 +139,29 @@ func (d mcpDeps) classify(ctx context.Context, key *mcpKey, ids []string, owner 
 		}
 	}
 	return plan
+}
+
+// memoryReader reads each of ids from the server once, on its first ask,
+// and answers again from that read: correct() takes each memory's project
+// from it, classify its type and sources.
+func (d mcpDeps) memoryReader(ctx context.Context, key *mcpKey, ids []string) func(id string) (hindsight.MemoryDetail, error) {
+	type answer struct {
+		m   hindsight.MemoryDetail
+		err error
+	}
+	cache := make(map[string]answer, len(ids))
+	return func(id string) (hindsight.MemoryDetail, error) {
+		if a, ok := cache[id]; ok {
+			return a.m, a.err
+		}
+		var a answer
+		a.err = onServer(key, func(cl *hindsight.Client) (err error) {
+			a.m, err = cl.GetMemory(ctx, d.cfg.Server.Bank, id)
+			return err
+		})
+		cache[id] = a
+		return a.m, a.err
+	}
 }
 
 // sourcesText is the answer to a first verdict on observations: the facts
