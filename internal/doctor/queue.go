@@ -18,14 +18,22 @@ import (
 // given up, while a slow model on a long backfill does not raise it.
 const queueAgeLimit = 6 * time.Hour
 
+// queueMoving: a retain completed this recently says the queue moves. A
+// long import or manual backfill drains in order, 20 s or more a
+// document, so its oldest retain can pass queueAgeLimit on a healthy
+// server: that is information, not a stuck queue.
+const queueMoving = time.Hour
+
 // queuePages: the pages of the queue read per status (100 operations
 // each).
 const queuePages = 5
 
 // checkQueueAge warns when the bank's oldest pending or processing retain
-// is queueAgeLimit old or more (decision 0090): while it waits, the
-// repair of a session's parts and the purge of a part landing after its
-// session's purge both wait for it.
+// is queueAgeLimit old or more and no retain completed within queueMoving
+// (decision 0090): while the queue does not move, the repair of a
+// session's parts and the purge of a part landing after its session's
+// purge both wait for it. Retains completing meanwhile: information, the
+// queue is draining.
 func checkQueueAge(ctx context.Context, cl *hindsight.Client, bank string, now time.Time) Check {
 	c := Check{ID: "queue-age"}
 	var oldest time.Time
@@ -51,6 +59,13 @@ func checkQueueAge(ctx context.Context, cl *hindsight.Client, bank string, now t
 	at := ""
 	if !complete {
 		at = "at least "
+	}
+	last, ok, err := cl.LatestOperation(ctx, bank, "completed", "retain")
+	if err == nil && ok && now.Sub(last.FinishedAt()) < queueMoving {
+		c.Status = Info
+		c.Summary = fmt.Sprintf("the server's queue waited %s%d h, still draining (a retain completed %d min ago)", at, int(age.Hours()), int(now.Sub(last.FinishedAt()).Minutes()))
+		c.Detail = "a long import or backfill is stored in order: what was sent last waits its turn"
+		return c
 	}
 	c.Status = Warn
 	c.Summary = fmt.Sprintf("a retain has waited on the server for %s%d h", at, int(age.Hours()))
