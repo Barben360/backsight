@@ -245,6 +245,38 @@ func ChainEnd(ctx context.Context, get DocumentReader, doc string, from int) (en
 	return end, id, true, nil
 }
 
+// ChainHoles lists the parts of doc's chain before segment upTo that the
+// server does not hold: from the segment after doc's own (an appended
+// document from an older build holds its first segments) to upTo - 1.
+// ChainEnd steps over such a hole (parts may be stored out of order); a
+// hole that stays, nothing queued, is a part whose retain failed or was
+// lost. Nothing when doc is not stored or its segment is not a number.
+func ChainHoles(ctx context.Context, get DocumentReader, doc string, upTo int) ([]string, error) {
+	d, err := get(ctx, doc)
+	var apiErr *hindsight.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	seg, err := strconv.Atoi(d.Metadata["segment"])
+	if err != nil || seg < 1 {
+		return nil, nil
+	}
+	var holes []string
+	for s := seg + 1; s < upTo; s++ {
+		_, err := get(ctx, PartID(doc, s))
+		switch {
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+			holes = append(holes, PartID(doc, s))
+		case err != nil:
+			return nil, err
+		}
+	}
+	return holes, nil
+}
+
 // position is what the server holds of a session, per document.
 type position struct {
 	at       map[string]int    // project → index in recs of its document's last_uuid

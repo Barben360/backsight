@@ -182,8 +182,11 @@ func BaseDocumentID(id string) string {
 }
 
 // olderBuild makes BuildSegmentOf send a later segment as builds before
-// decision 0090 did, appended to the document: the tests of what such a
-// build leaves on a server (migration) set it.
+// decision 0090 did, appended to the document, and noteSent watch it as
+// they did: the tests of what such a build leaves on a server (migration)
+// set it. A package global for tests alone, never set in production: the
+// tests that set it must not run in parallel (none of this package's
+// tests calls t.Parallel).
 var olderBuild = false
 
 // BuildSegment turns records of one session and one project into a retain

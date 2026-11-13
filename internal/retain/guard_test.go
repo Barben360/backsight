@@ -340,10 +340,12 @@ func TestGuardFullLookPicksTheCheaperWay(t *testing.T) {
 		tombstones, total  int
 		gets, listingPages int
 	}{
+		// Read one by one, each session's document costs three reads: its
+		// own, then the two parts after it (a part landed after the purge).
 		{"many tombstones, small bank", 500, 0, 0, 1},
-		{"at the boundary", 65, 65 * 200, 65, 0},
-		{"past the boundary", 65, 64 * 200, 0, 1},
-		{"few tombstones, big bank", 100, 50000, 100, 0},
+		{"at the boundary", 22, 66 * 200, 66, 0},
+		{"past the boundary", 22, 65 * 200, 0, 1},
+		{"few tombstones, big bank", 100, 60000, 300, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, g := guardEnv(t)
@@ -950,5 +952,23 @@ func TestGuardRepeatCapSlides(t *testing.T) {
 	}
 	if got := look(24*time.Hour + 40*time.Minute); !got.Purged.Empty() || len(got.Waiting) != 1 || !got.Waiting[0].NeedsUser {
 		t.Errorf("three within the last day again: %+v", got)
+	}
+}
+
+// Decision 0090 review: a part whose retain was still queued when the
+// session's document was purged lands after it, under an id no tombstone
+// names. The full look read one by one probes the parts after each
+// tombstoned chain's last (chainGap + 1 of them) and finds it.
+func TestTheFullLookByIDFindsAPartLandedAfterThePurge(t *testing.T) {
+	e, g := guardEnv(t)
+	addTombstone(t, e, state.Tombstone{Bank: "claude-memory", Document: "conversation:s1#part2", Session: "s1", PurgedAt: clockAt(12, 10)})
+	g.recreate("conversation:s1#part3", serverAt(12, 25), "f3")
+	g.reset()
+	got, err := e.f.GuardPurges(context.Background(), GuardOptions{Full: true})
+	if err != nil || !slices.Equal(got.Purged.Documents, []string{"conversation:s1#part3"}) || g.exists("conversation:s1#part3") {
+		t.Fatalf("%+v %v, calls %v", got, err, g.calls)
+	}
+	if !g.exists("conversation:s1#2") || !g.exists("conversation:s3") {
+		t.Error("the successor, or a document no purge names, was deleted")
 	}
 }

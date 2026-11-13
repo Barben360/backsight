@@ -173,6 +173,43 @@ func TestPurgeDeletesEveryPartOfASessionsDocument(t *testing.T) {
 	}
 }
 
+// A part whose retain is still queued would land after the purge, under
+// an id no tombstone names: the purge of a session's document refuses
+// while the server's queue names one of its parts, deleting nothing, and
+// says to run it again once the queue is clear.
+func TestPurgeWaitsForAQueuedPartOfTheSession(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	var items []string
+	for i, d := range []string{"conversation:s9", "conversation:s9#part2"} {
+		items = append(items, `{"document_id":"`+d+`","content":"turns","tags":["project:billing"],"metadata":{"session_id":"s9","project":"billing","segment":"`+strconv.Itoa(i+1)+`","last_uuid":"u`+strconv.Itoa(i)+`"}}`)
+	}
+	resp, err := http.Post("http://127.0.0.1:"+strconv.Itoa(port)+"/v1/default/banks/claude-memory/memories", "application/json",
+		strings.NewReader(`{"items":[`+strings.Join(items, ",")+`],"async":true}`))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("seeding the documents: %v %v", resp, err)
+	}
+	_ = resp.Body.Close()
+	memories["f9"] = fact("f9", "conversation:s9")
+	fakeQueuedOps = []string{fakeOp("op3", "pending", "conversation:s9#part3", 0)}
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes", "--json")
+	if code == output.OK || !strings.Contains(out+errOut, "conversation:s9#part3") || !strings.Contains(out+errOut, "queued") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if got := strings.Join(curation, "\n"); strings.Contains(got, "DELETE ") {
+		t.Errorf("deleted while a part is queued:\n%s", got)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); len(st.Tombstones) != 0 {
+		t.Errorf("tombstones written: %+v", st.Tombstones)
+	}
+	// Once the queue is clear, the same command purges every part.
+	fakeQueuedOps = nil
+	if code, out, errOut := run(t, "forget", "f9", "--purge", "--yes", "--json"); code != output.OK {
+		t.Fatalf("queue clear: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
 // Like the real API, an observation's source list carries no document: the
 // purge reads each source fact for it.
 func TestPurgeAnObservationDeletesItsSourcesDocuments(t *testing.T) {

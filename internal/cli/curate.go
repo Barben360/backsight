@@ -355,6 +355,53 @@ func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, fact
 	return out, undeletable, err
 }
 
+// queuePagesBeforePurge: how many pages of the server's queue a purge of
+// a session's document reads, per status.
+const queuePagesBeforePurge = 5
+
+// queuedPartRefusal refuses a purge of a session's document while the
+// server's queue holds a retain that may write one of its parts (decision
+// 0090: a part is a document of its own; one whose retain is still queued
+// would land after the purge, under an id no tombstone names), or cannot
+// tell: the queue unread, longer than read, or holding a retain of no
+// single document. Nothing is deleted; the same command, run once the
+// queue is clear, purges it all.
+func queuedPartRefusal(ctx context.Context, cl *hindsight.Client, bank string, docs []purgeDoc) error {
+	chains := map[string]bool{}
+	for _, d := range docs {
+		if retain.HasConversation([]string{d.ID}) {
+			doc, _ := retain.ChainOf(d.ID)
+			chains[doc] = true
+		}
+	}
+	if len(chains) == 0 {
+		return nil
+	}
+	again := ": nothing was deleted; run the same command again once the server's queue is clear (a few minutes)"
+	for _, status := range []string{"pending", "processing"} {
+		ops, complete, err := cl.QueuedOperationsOf(ctx, bank, status, queuePagesBeforePurge)
+		switch {
+		case err != nil:
+			return &output.Error{Code: output.Blocked, Message: "the server's queue cannot be read, so a part of a session's document may still be on its way (" + err.Error() + ")" + again}
+		case !complete:
+			return &output.Error{Code: output.Blocked, Message: "the server's queue is longer than backsight reads, so a part of a session's document may still be on its way" + again}
+		}
+		for _, op := range ops {
+			if !strings.Contains(op.Type, "retain") {
+				continue
+			}
+			doc, _ := retain.ChainOf(op.DocumentID)
+			switch {
+			case op.DocumentID == "":
+				return &output.Error{Code: output.Blocked, Message: "the server's queue holds a retain of several documents, which may write a part of a session's document" + again}
+			case chains[doc]:
+				return &output.Error{Code: output.Blocked, Message: "a retain of " + op.DocumentID + " is still queued on the server: it would land after the purge" + again}
+			}
+		}
+	}
+	return nil
+}
+
 // purgeDocumentsByID reads each document for its memory count and
 // tombstone, sorted by id; with skipMissing, a document the server does
 // not hold is left out instead of failing.
@@ -426,6 +473,9 @@ func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, gate fun
 	}
 	defer func() { _ = l.Release() }()
 	if err := gate(); err != nil {
+		return nil, "", err
+	}
+	if err := queuedPartRefusal(ctx, cl, bank, docs); err != nil {
 		return nil, "", err
 	}
 	// Before any delete: a purge stopped half way still holds what it

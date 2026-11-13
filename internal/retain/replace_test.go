@@ -602,10 +602,9 @@ func TestReplaceChecksAreBoundedPerRun(t *testing.T) {
 	for _, sid := range []string{"s1", "s2"} {
 		f.FlushFile(context.Background(), filepath.Join(e.dir, sid+".jsonl"), Options{})
 	}
-	// One look: the document, then its next parts until chainGap+1 are
-	// missing (decision 0090); the other session waits.
-	if n := e.hs.gets - reads; n != chainEndReads {
-		t.Errorf("one run read %d documents (%v), want %d", n, e.hs.reads[reads:], chainEndReads)
+	// One look: the one document its send wrote; the other session waits.
+	if n := e.hs.gets - reads; n != 1 {
+		t.Errorf("one run read %d documents (%v), want 1", n, e.hs.reads[reads:])
 	}
 	if first := chainOf(e.hs.reads[reads]); !slices.Contains([]string{"conversation:s1", "conversation:s2"}, first) ||
 		slices.ContainsFunc(e.hs.reads[reads:], func(id string) bool { return chainOf(id) != first }) {

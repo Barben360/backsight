@@ -703,7 +703,7 @@ func TestLiveCheckReadsTheSessionsParts(t *testing.T) {
 	if r.Document != "conversation:s" || r.Segment != 3 || r.ServerSegment != 3 || r.Facts != 3 || r.Observations != 1 || len(r.ContinuedElsewhere) != 0 {
 		t.Errorf("%+v", r)
 	}
-	if slices.Contains(w.srv.calls, "GET document b conversation:s") {
+	if i := slices.IndexFunc(w.srv.calls, func(c string) bool { return strings.HasPrefix(c, "GET document ") }); i < 0 || w.srv.calls[i] != "GET document b conversation:s#part3" {
 		t.Errorf("read the chain from its first document, not from this PC's last part: %q", w.srv.calls)
 	}
 	// This PC's part 3 is not where the server ends any more.
@@ -717,4 +717,25 @@ func TestLiveCheckReadsTheSessionsParts(t *testing.T) {
 	if r.ServerSegment != 4 || r.Facts != 3 {
 		t.Errorf("%+v", r)
 	}
+}
+
+// A part missing between stored ones (its retain failed in the worker, or
+// a restore lost it) while nothing is queued: the chain steps over it, so
+// the check reads the parts before this PC's last and fails naming it.
+func TestLiveCheckFailsOnAPartMissingBetweenStoredOnes(t *testing.T) {
+	w := newWorld(t)
+	p := w.transcript("s", now.Add(-2*time.Hour))
+	fi, _ := os.Stat(p)
+	c := retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "s-a3", Segment: 3, Document: "conversation:s", Bank: "b", SentAt: now.Add(-90 * time.Minute)}
+	if err := retain.SaveCursor(w.cursors, "s", c); err != nil {
+		t.Fatal(err)
+	}
+	w.srv.docs["conversation:s"] = hindsight.Document{ID: "conversation:s", Metadata: map[string]string{"segment": "1", "last_uuid": "s-a1"}}
+	w.srv.docs["conversation:s#part3"] = hindsight.Document{ID: "conversation:s#part3", Metadata: map[string]string{"segment": "3", "last_uuid": "s-a3"}}
+	w.srv.memories = append(w.srv.memories, hindsight.Memory{ID: "f1", FactType: "world", DocumentID: "conversation:s", ConsolidatedAt: "2026-10-25T11:00:00+00:00"})
+	w.observation("o1", now.Add(-80*time.Minute), "f1")
+	want(t, w.checkAs("this-pc"), Fail, "conversation:s#part2")
+	// An older build's appended document holds segments 1-2: no hole.
+	w.srv.docs["conversation:s"].Metadata["segment"] = "2"
+	want(t, w.checkAs("this-pc"), Pass, "")
 }

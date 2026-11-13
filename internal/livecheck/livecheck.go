@@ -292,6 +292,21 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 			return fail("session "+s.sid+": the server's document "+sd.Document+" does not match what this machine sent",
 				fmt.Sprintf("segment %d ends at record %s on the server, %s here", seg, doc.Metadata["last_uuid"], sd.LastUUID), "backsight doctor (restore-epoch, writes)")
 		}
+		// A part missing before this machine's last (decision 0090): the
+		// chain steps over it, so it is read for here.
+		holes, err := retain.ChainHoles(ctx, func(ctx context.Context, id string) (hindsight.Document, error) {
+			return in.Server.GetDocument(ctx, in.Bank, id)
+		}, sd.Document, sd.Segment)
+		switch {
+		case err != nil:
+			return unreadable(err)
+		case len(holes) > 0 && mayWork():
+			return waiting(fmt.Sprintf("session %s: %s is not stored yet%s", s.sid, holes[0], queuedNote()))
+		case len(holes) > 0:
+			return fail("session "+s.sid+": the server has no "+strings.Join(holes, ", ")+", between parts it holds",
+				"nothing is queued on the server, so its retain failed or a restore lost it: the turns it held are not on the server",
+				"backsight jobs tick: within a day of the send, the session's check of its sends sends them again")
+		}
 		if i == 0 {
 			homeSegment = seg
 		}
