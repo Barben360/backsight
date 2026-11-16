@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -432,6 +433,45 @@ func TestGPUOverrideGatedByConfig(t *testing.T) {
 			c := check(t, f.run(), "gpu")
 			if !strings.Contains(c.Summary, tc.inSummary) {
 				t.Errorf("summary %q, want %q", c.Summary, tc.inSummary)
+			}
+		})
+	}
+}
+
+// A TEI reranker started without a tokenizer worker limit starts one per CPU
+// core, each holding its own tokenizer in host RAM (issue 345): the gpu
+// check warns and names the two lines to add. A limit as a flag or an
+// environment variable, or a llama.cpp reranker, warns nothing; a limit
+// only in a comment does not count.
+func TestGPUTEIWithoutTokenizationWorkers(t *testing.T) {
+	const tei = "services:\n  reranker:\n    image: ghcr.io/huggingface/text-embeddings-inference:86-1.9.4\n    command:\n      - --model-id\n      - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1\n%s  hindsight:\n    environment:\n      HINDSIGHT_API_RERANKER_PROVIDER: tei\n"
+	const llama = "services:\n  reranker:\n    image: ghcr.io/ggml-org/llama.cpp:server-vulkan-b11723\n  hindsight:\n    environment:\n      HINDSIGHT_API_RERANKER_PROVIDER: cohere\n"
+	cases := []struct {
+		name, override string
+		status         Status
+	}{
+		{"no limit", fmt.Sprintf(tei, ""), Warn},
+		{"limit only in a comment", fmt.Sprintf(tei, "      # - --tokenization-workers\n      #TOKENIZATION_WORKERS: 2\n"), Warn},
+		{"flag", fmt.Sprintf(tei, "      - --tokenization-workers\n      - \"2\"\n"), Info},
+		{"flag with equals", fmt.Sprintf(tei, "      - --tokenization-workers=2\n"), Info},
+		{"environment", fmt.Sprintf(tei, "    environment:\n      TOKENIZATION_WORKERS: \"2\"\n"), Info},
+		{"llama.cpp", llama, Info},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.env.GPUs = func() []string { return []string{"NVIDIA (/dev/nvidiactl)"} }
+			put(t, filepath.Join(f.env.Dirs.Data, "server", "compose.override.yaml"), tc.override, 0o600)
+			c := check(t, f.run(), "gpu")
+			expect(t, c, tc.status, "your own reranker (provider ")
+			if tc.status == Info {
+				if c.Fix != "" {
+					t.Errorf("nothing to fix: %+v", c)
+				}
+				return
+			}
+			if !strings.Contains(c.Detail, "one tokenizer per CPU core") || !strings.Contains(c.Fix, "--tokenization-workers") || !strings.Contains(c.Fix, "docker compose up -d reranker") || !strings.Contains(c.Fix, "backsight guide gpu-reranker") {
+				t.Errorf("warning: %+v", c)
 			}
 		})
 	}
