@@ -414,7 +414,7 @@ stale_shows = 10                    # memory stale: shown at least this often an
 boost_weight = 0.1                  # k of the recall boost (§4; ≥ 0; 0: no boost, hidden memories still skipped); bounds +k·β/(α+β), −k·α/(α+β)
 prior_credits = 3.0                 # α, the credits every memory starts with (> 0)
 prior_misses = 9.0                  # β, the misses every memory starts with (> 0); neutral when credits/(credits+misses) = α/(α+β)
-cross_project_retire = false        # true: memory_credit wrong/outdated may retire a memory of any project shown in the session (0089 P1: off by default; config.toml only)
+cross_project_retire = true         # memory_credit wrong/outdated may retire a memory of any project shown in the session; false: only the session's, its linked projects' and the pool's (0092: on by default, after 0089 P1; config.toml only)
 share_ledger = true                 # share the ledger with the user's other machines through the control bank (§9.1, block 4); false: neither send nor read (the last document stays, ignored by others after 30 days)
 ```
 ### A.2 `secrets.toml` (0600)

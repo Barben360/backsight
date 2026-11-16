@@ -41,8 +41,12 @@ func showForeign(t *testing.T, home string) {
 const foreignRefusal = "> 🧠⚠️ **Not retired (other · cccccccc)** — a memory of project other, outside this session's project and the projects it links · retire it: `backsight forget " + foreignA + "`"
 
 // crossOn is the config that lets a session retire another project's
-// memory (off by default since decision 0089 P1).
-const crossOn = "\n[feedback]\ncross_project_retire = true\n"
+// memory, the default since decision 0092; crossOff keeps retirement to
+// the session's projects.
+const (
+	crossOn  = "\n[feedback]\ncross_project_retire = true\n"
+	crossOff = "\n[feedback]\ncross_project_retire = false\n"
+)
 
 // With feedback.cross_project_retire = true a session retires a wrong
 // memory of any project it was shown: the correction goes to that
@@ -70,12 +74,29 @@ func TestCrossProjectRetireStoresTheCorrectionInTheMemorysProject(t *testing.T) 
 	}
 }
 
-// By default (no key) another project's memory is refused: nothing
-// stored, nothing invalidated, and the answer says plainly that it is off
-// and what the user runs; it never tells a possibly injected agent how to
-// lift the guard (that is in the docs only).
-func TestCrossProjectRetireIsOffByDefault(t *testing.T) {
+// By default (no key) a session retires another project's memory it was
+// shown, its correction stored in that project (decision 0092).
+func TestCrossProjectRetireIsOnByDefault(t *testing.T) {
 	cs, home := creditSession(t)
+	showForeign(t, home)
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "cccccccc"))
+	if isErr || !retiredRE.MatchString(out) {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:other,") {
+		t.Errorf("the correction went to %q, want project other", last)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], "/memories/"+foreignA+" ") {
+		t.Errorf("patches %q", p)
+	}
+}
+
+// With cross_project_retire = false another project's memory is refused:
+// nothing stored, nothing invalidated, and the answer says plainly that it
+// is off and what the user runs; it never tells a possibly injected agent
+// how to lift the guard (that is in the docs only).
+func TestCrossProjectRetireOffRefuses(t *testing.T) {
+	cs, home := creditSessionWith(t, crossOff)
 	showForeign(t, home)
 	before := retained.Load()
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "cccccccc"))
@@ -123,7 +144,7 @@ func TestCrossProjectRetireOffKeepsTheRefusal(t *testing.T) {
 // read (its related project is retirable) but a feedback key in it is
 // not, in a table or at the top.
 func TestRepositoryCannotTurnOnCrossProjectRetire(t *testing.T) {
-	cs, home := creditSession(t)
+	cs, home := creditSessionWith(t, crossOff)
 	showForeign(t, home)
 	_ = os.MkdirAll(filepath.Join(home, "proj"), 0o700)
 	toml := "related = [\"third\"]\ncross_project_retire = true\n\n[feedback]\ncross_project_retire = true\n"
@@ -284,14 +305,14 @@ func TestOwnProjectWithAShownNameIsStillOwn(t *testing.T) {
 	}
 }
 
-// The other way round, the guard holds: a session in foo_1 shown another
-// project's memory (foo#1, foo[1, foo|1) under the same shown name cannot
-// retire it, nothing is stored; the server's project decides (0089
-// review round 2).
+// The other way round, the guard holds when cross_project_retire is off:
+// a session in foo_1 shown another project's memory (foo#1, foo[1, foo|1)
+// under the same shown name cannot retire it, nothing is stored; the
+// server's project decides (0089 review round 2).
 func TestForeignProjectWithTheSameShownNameIsRefused(t *testing.T) {
 	for _, foreign := range []string{"foo#1", "foo[1", "foo|1"} {
 		t.Run(foreign, func(t *testing.T) {
-			cs, home := creditSession(t)
+			cs, home := creditSessionWith(t, crossOff)
 			_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "foo_1", At: time.Now()})
 			showItems(t, home, "S", "search", "foo_1", feedback.Item{ID: foreignA, Rank: 1, Project: "foo_1"})
 			memories[foreignA] = `{"id":"` + foreignA + `","text":"Another project's fact.","type":"world","tags":["project:` + foreign + `"]}`

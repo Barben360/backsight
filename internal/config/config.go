@@ -369,11 +369,11 @@ type Feedback struct {
 	ShareLedger bool `toml:"share_ledger" json:"share_ledger"`
 	// CrossProjectRetire: Claude may retire a wrong or outdated memory of
 	// any project shown in the session, its correction stored in that
-	// memory's project; false: only the session's project, the transverse
-	// pool and the projects it links (the default since decision 0089 P1:
-	// a session that read hostile text cannot retire other projects'
-	// memories). Read from config.toml only: a repository's .backsight.toml
-	// never sets it.
+	// memory's project (the default again since decision 0092, after 0089
+	// P1 turned it off); false: only the session's project, the transverse
+	// pool and the projects it links, so a session that read hostile text
+	// cannot retire other projects' memories. Read from config.toml only:
+	// a repository's .backsight.toml never sets it.
 	CrossProjectRetire bool `toml:"cross_project_retire" json:"cross_project_retire"`
 }
 
@@ -407,7 +407,7 @@ func Default(d paths.Dirs, home string) Config {
 		Retain:     Retain{AppendMinChars: 30_000, AppendMaxWait: "6h"},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
 		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 10, StaleShows: 10,
-			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true},
+			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true, CrossProjectRetire: true},
 		Terminal: Terminal{Logo: "braille"},
 	}
 }
