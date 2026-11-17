@@ -273,7 +273,7 @@ func Run(ctx context.Context, env Env) Report {
 		gs.remote, gs.native = cfg.Server.Mode == "remote", cfg.Server.Runtime == "native"
 	}
 	if !gs.remote && !gs.native {
-		gs.provider = ownReranker(composeDir)
+		gs.provider, gs.teiUnbounded = ownReranker(composeDir)
 	}
 	add(checkGPU(gs))
 	writeOff := cfgErr == nil && !cfg.Components.Write
@@ -1273,11 +1273,13 @@ func checkClient(env Env, loc claudecode.Location, cfg *config.Config) Check {
 
 // gpuSetup is what the gpu check reports on: the devices seen, where the
 // server runs, and the reranker provider the user's compose.override.yaml
-// sets ("" for none).
+// sets ("" for none), and whether that reranker is TEI with no limit on its
+// tokenizer workers.
 type gpuSetup struct {
 	gpus           []string
 	remote, native bool
 	provider       string
+	teiUnbounded   bool
 }
 
 const gpuGuide = "backsight guide gpu-reranker"
@@ -1290,6 +1292,11 @@ func checkGPU(s gpuSetup) Check {
 		c.Summary = "your own reranker (provider " + s.provider + ", in compose.override.yaml), not managed by backsight"
 		if seen != "" {
 			c.Summary += "; " + seen
+		}
+		if s.teiUnbounded {
+			c.Status = Warn
+			c.Detail = "Text Embeddings Inference starts one tokenizer per CPU core when --tokenization-workers is not set, about 200 MB of RAM each: several GB on a machine with many cores, for no faster recall"
+			c.Fix = `add - --tokenization-workers and - "2" to the reranker's command in compose.override.yaml, then docker compose up -d reranker in the server's directory: ` + gpuGuide
 		}
 	case len(s.gpus) == 0:
 		c.Summary = "no GPU detected; the reranker runs on the CPU"
@@ -1309,24 +1316,34 @@ func checkGPU(s gpuSetup) Check {
 // setting, in Compose's map (KEY: value) or list (- KEY=value) form.
 var rerankerProviderRE = regexp.MustCompile(`(?m)^[ \t]*(?:-[ \t]*)?["']?HINDSIGHT_API_RERANKER_PROVIDER["']?[ \t]*[:=][ \t]*["']?([A-Za-z0-9_-]+)`)
 
+// teiImageRE matches an uncommented Text Embeddings Inference image line;
+// teiWorkersRE a tokenizer worker limit, as TEI's flag or its environment
+// variable.
+var (
+	teiImageRE   = regexp.MustCompile(`(?m)^[ \t]*image[ \t]*:[ \t]*["']?[^\s#"']*text-embeddings-inference`)
+	teiWorkersRE = regexp.MustCompile(`(?m)^[^#\n]*(?:--tokenization-workers|TOKENIZATION_WORKERS)\b`)
+)
+
 // ownReranker returns the reranker provider the server's
 // compose.override.yaml sets, "" when it sets none, sets one of the CPU
-// providers backsight renders itself (local, onnx), or cannot be read. The
-// file is the user's: doctor only reads it (decisions 0035, 0082).
-func ownReranker(composeDir string) string {
+// providers backsight renders itself (local, onnx), or cannot be read; and
+// whether the file runs a Text Embeddings Inference image with no tokenizer
+// worker limit (issue 345). The file is the user's: doctor only reads it
+// (decisions 0035, 0082).
+func ownReranker(composeDir string) (provider string, teiUnbounded bool) {
 	b, err := os.ReadFile(filepath.Join(composeDir, "compose.override.yaml"))
 	if err != nil {
-		return ""
+		return "", false
 	}
 	m := rerankerProviderRE.FindSubmatch(b)
 	if m == nil {
-		return ""
+		return "", false
 	}
 	switch p := string(m[1]); strings.ToLower(p) {
 	case "local", "onnx":
-		return ""
+		return "", false
 	default:
-		return p
+		return p, teiImageRE.Match(b) && !teiWorkersRE.Match(b)
 	}
 }
 

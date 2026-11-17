@@ -58,6 +58,9 @@ services:
       - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
       - --max-client-batch-size
       - "64"
+      # Without a limit, TEI starts one tokenizer per CPU core in RAM.
+      - --tokenization-workers
+      - "2"
     volumes:
       - tei_cache:/data
     healthcheck:
@@ -89,6 +92,7 @@ volumes:
 - The healthcheck and `depends_on` matter: without them, the server starts before the reranker has loaded its model, fails its first call to it and exits.
 - TEI downloads the model from Hugging Face at its first start, into the `tei_cache` volume.
 - TEI cuts by itself a prompt and memory longer than the model's 512 tokens, so long searches work unchanged.
+- **Keep `--tokenization-workers`.** The model runs on the GPU, but TEI splits text into tokens on the CPU, and by default starts one worker per CPU core, each with its own copy of the tokenizer (about 200 MB). On a 20-core laptop that was 5.3 GB of RAM, against 1.6 GB with 2 workers, for the same search times (0.15 to 0.17 s): recall sends a few rerank calls per prompt and needs no more. doctor's `gpu` check warns when a TEI reranker has no limit.
 
 Then: `backsight server start`, and [check it works](#check-it-works).
 
@@ -204,7 +208,7 @@ A reranker on the host must listen on an address the server's container reaches 
 
 ## Check it works
 
-1. `docker compose ps`, in the server's directory, shows `reranker` healthy and `hindsight` running.
+1. `docker compose ps`, in the server's directory, shows `reranker` healthy and `hindsight` running. On NVIDIA, `docker compose logs reranker | grep tokenization` shows `Starting 2 tokenization workers`, and `docker stats --no-stream` keeps the `reranker` container's memory under 2 GB.
 2. The server's log names the provider: `docker compose logs hindsight | grep Reranker` shows `provider=tei` or `provider=cohere`. `backsight doctor`'s `gpu` check says the same: `your own reranker (provider tei, in compose.override.yaml)`, or `cohere`.
 3. `backsight search "something you know is in memory"` answers with the same memories as before, faster. Run it a few times: the first call after a start warms the GPU.
 4. The GPU shows the work: `nvidia-smi` lists the service's process; on AMD and Intel, the service's memory appears in the GPU tools of your desktop, or with `radeontop` / `intel_gpu_top`.
@@ -220,6 +224,8 @@ An earlier Hindsight setup of yours may already run a GPU reranker: a Python ser
 - **Or replace it** with one of the services above, then stop the old one.
 
 Either way, it must serve the same model, `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`: another model ranks differently, and an English-only one misses prompts in other languages.
+
+**An override copied before backsight 1.7.0** starts TEI without `--tokenization-workers`, so it holds several GB of RAM on a machine with many cores. Add the two lines `- --tokenization-workers` and `- "2"` at the end of the `reranker` service's `command`, then `docker compose up -d reranker` in the server's directory. doctor's `gpu` check warns until then. The llama.cpp recipe is not affected: it holds one tokenizer whatever the core count (about 260 MB on a 24-core machine).
 
 ## Going back to the CPU
 
