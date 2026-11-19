@@ -245,7 +245,7 @@ Every view uses the existing envelope `{schema_version: 1, command, ok, data | e
   "metrics": {
     "used.turn_rate": {"value": 0.36, "num": 12, "den": 33, "unit": "ratio", "aggregation": "raw",
                        "status": "ok", "borderline": false, "tags": [], "ci": [0.22, 0.53], "mdc": 0.24,
-                       "previous": 0.30, "delta": 0.06, "drill": "backsight stats sessions --has used",
+                       "previous": 0.30, "delta": 0.06, "usual": 0.33, "drill": "backsight stats sessions --has used",
                        "series": [{"day": "2026-10-24", "value": 0.4, "num": 4, "den": 10}],
                        "extra": {"worst_case": 0.31, "pending": 2}}
   },
