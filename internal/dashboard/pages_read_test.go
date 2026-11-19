@@ -31,7 +31,7 @@ func TestReadViewsKeepsTheDeclaredOrder(t *testing.T) {
 		}
 		return metrics.Result{View: view}, stateReady, nil
 	}
-	outs := readViewsWith(context.Background(), twoViews, views.Params{}, "", read)
+	outs := readViewsWith(context.Background(), twoViews, views.Params{}, "", read, nil)
 	if len(outs) != 2 {
 		t.Fatalf("%d answers, want 2", len(outs))
 	}
@@ -91,7 +91,17 @@ func TestAViewThatPanicsFailsTheRequestNotTheProcess(t *testing.T) {
 		}
 		return metrics.Result{View: view}, stateReady, nil
 	}
-	outs := readViewsWith(context.Background(), twoViews, views.Params{}, "", read)
+	var logged []string
+	logPanic := func(view string, r any, stack []byte) {
+		logged = append(logged, view)
+		if len(stack) == 0 {
+			t.Error("a panic logged without its stack")
+		}
+	}
+	outs := readViewsWith(context.Background(), twoViews, views.Params{}, "", read, logPanic)
+	if len(logged) != 1 || logged[0] != "days" {
+		t.Errorf("logged %q, want the days view once", logged)
+	}
 	if len(outs) != 2 || outs[0].err != nil || outs[0].res.View != "overview" {
 		t.Fatalf("the other view's answer was lost: %+v", outs)
 	}
@@ -104,6 +114,49 @@ func TestAViewThatPanicsFailsTheRequestNotTheProcess(t *testing.T) {
 	}
 	if strings.Contains(bad.err.Error(), "secret") {
 		t.Errorf("the panic's value reached the error: %q", bad.err)
+	}
+}
+
+// A day page on all PCs reads the day with this PC's own answer beside the merged one (Query.WithOwn), from the
+// same read: its Found tile says "This PC's N prompts" with this PC's count of that day, not the merged one, and
+// not the "This PC's events" a page without its own answer falls back to. The day is the busiest of this PC's
+// days the other PCs also sent, so the two counts differ.
+func TestDayPageOnAllPCsShowsThisPCsOwnCount(t *testing.T) {
+	old := dataSpec
+	t.Cleanup(func() { dataSpec = old })
+	dataSpec.OtherPCs = 3
+	h := dataHarness(t)
+	ck := cookieHdr(h.login())
+	ctx := context.Background()
+	const metric = "recall.hit_rate"
+	day, ownN, allN := "", int64(0), int64(0)
+	for _, d := range apiPath(t, h, "/api/v1/days").Tables.Days {
+		all, _, err := h.s.data.result(ctx, "days", views.Params{Machines: "all", Limit: 50}, d.Day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		own := all.ThisPC()
+		if own == nil {
+			t.Fatalf("%s: the merged day carries no answer of this PC's", d.Day)
+		}
+		a, o := all.Metrics[metric].Den, own.Metrics[metric].Den
+		if a != nil && o != nil && *o > ownN && *a != *o {
+			day, ownN, allN = d.Day, *o, *a
+		}
+	}
+	if day == "" {
+		t.Fatal("fixture: no day whose merged and own counts differ")
+	}
+	resp := h.do("GET", "/days/"+day+"?machines=all", ck...)
+	text := visibleText(body(t, resp))
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /days/%s?machines=all: %d", day, resp.StatusCode)
+	}
+	if want := "This PC’s " + strconv.FormatInt(ownN, 10) + " prompts →"; !strings.Contains(text, want) {
+		t.Errorf("/days/%s?machines=all: no %q (merged count %d) in %.400s", day, want, allN, text)
+	}
+	if strings.Contains(text, "This PC’s "+strconv.FormatInt(allN, 10)+" prompts →") {
+		t.Errorf("/days/%s?machines=all shows the merged count %d as this PC's", day, allN)
 	}
 }
 

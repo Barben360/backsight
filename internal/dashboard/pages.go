@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -631,7 +632,7 @@ type viewOut struct {
 // numbers). The answers come back in the views' order, the caller judging
 // them in it.
 func (s *Server) readViews(ctx context.Context, spec pageSpec, p views.Params, id string) []viewOut {
-	return readViewsWith(ctx, spec, p, id, s.data.result)
+	return readViewsWith(ctx, spec, p, id, s.data.result, s.data.logPanic)
 }
 
 // viewReader reads one view: data.result, or a stand-in in a test.
@@ -641,14 +642,19 @@ type viewReader func(ctx context.Context, view string, p views.Params, id string
 // the process. The panic's value stays out of it (it may name a path).
 var errViewFailed = errors.New("a view of the page could not be read")
 
-func readViewsWith(ctx context.Context, spec pageSpec, p views.Params, id string, read viewReader) []viewOut {
+// readViewsWith reads the views of spec with read; a view whose read panics is
+// told to logPanic (nil: to no one) and fails its slot.
+func readViewsWith(ctx context.Context, spec pageSpec, p views.Params, id string, read viewReader, logPanic func(view string, r any, stack []byte)) []viewOut {
 	outs := make([]viewOut, len(spec.Views))
 	var wg sync.WaitGroup
 	for i, v := range spec.Views {
 		q := viewParams(spec, v, p)
 		wg.Go(func() {
 			defer func() {
-				if recover() != nil {
+				if r := recover(); r != nil {
+					if logPanic != nil {
+						logPanic(v, r, debug.Stack())
+					}
 					outs[i] = viewOut{st: stateReady, err: errViewFailed}
 				}
 			}()

@@ -2,10 +2,26 @@ package views
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/metrics"
 )
+
+// A language of recall.by_lang reads by its name, on a page as in stats --dev: the known codes by their English
+// name, the group of undetected prompts in words, any other code as it is.
+func TestLanguageName(t *testing.T) {
+	for code, want := range map[string]string{"en": "English", "fr": "French", "zh": "Chinese", "unknown": "language not detected", "xx": "xx"} {
+		if got := LanguageName(code); got != want {
+			t.Errorf("LanguageName(%q) = %q, want %q", code, got, want)
+		}
+	}
+	m := metrics.Metric{Extra: map[string]any{"by_lang": map[string]any{"fr": map[string]any{"num": int64(3), "den": int64(4)}}}}
+	d, _ := metrics.DefOf("recall.by_lang")
+	if lines := ExtraLines(d, m); len(lines) != 1 || !strings.HasPrefix(lines[0], "French: ") {
+		t.Errorf("the extra lines of recall.by_lang %q, want one for French", lines)
+	}
+}
 
 // Every key the time-to-recall funnel carries, and every state of a
 // never-extracted session, has a plain word of its own (Word falls back to

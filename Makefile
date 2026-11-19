@@ -1,5 +1,7 @@
 PKG      := github.com/Barben360/backsight
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# VERSION: as a release names it, the tag without its v (git describe gives v0.1.27-m7, the release 0.1.27-m7):
+# one version, one spelling, so the Releases page counts it once.
+VERSION  ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 LDFLAGS  := -s -w -X $(PKG)/internal/buildinfo.Version=$(VERSION) -X $(PKG)/internal/buildinfo.Commit=$(COMMIT)
 # TEST_KEY (a minisign public key line) makes a test build, with the

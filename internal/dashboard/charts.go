@@ -919,8 +919,10 @@ func dayRuns(ps []metrics.Point, keep func(p metrics.Point) bool) []string {
 // no record at all), newest first, and a note on the days with no record.
 // recordFrom is the first day the record holds, "" when it holds none; bank
 // says which chart it sits under (the bank's explains the hole, the cost
-// chart points at it). Empty when every day is the server's.
-func recordBlock(ps []metrics.Point, recordFrom string, bank bool) template.HTML {
+// chart points at it); more is the command whose JSON lists every day with
+// its source, named when the table is cut. Empty when every day is the
+// server's.
+func recordBlock(ps []metrics.Point, recordFrom string, bank bool, more string) template.HTML {
 	var rows []metrics.Point
 	for i := len(ps) - 1; i >= 0; i-- {
 		if ps[i].Source == fromRecord || ps[i].Source == fromNone {
@@ -943,7 +945,11 @@ func recordBlock(ps []metrics.Point, recordFrom string, bank bool) template.HTML
 	}
 	b.WriteString(`</tbody></table></div>`)
 	if len(rows) > len(shown) {
-		b.WriteString(`<p class="tbl-more">Showing the latest ` + strconv.Itoa(len(shown)) + ` of ` + strconv.Itoa(len(rows)) + ` days.</p>`)
+		b.WriteString(`<p class="tbl-more">Showing the latest ` + strconv.Itoa(len(shown)) + ` of ` + strconv.Itoa(len(rows)) + ` days.`)
+		if more != "" { // each day's source is in the series' points
+			b.WriteString(` Every day: <code>` + template.HTMLEscapeString(more) + `</code>`)
+		}
+		b.WriteString(`</p>`)
 	}
 	b.WriteString(`</details>`)
 	if !bank {

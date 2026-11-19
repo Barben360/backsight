@@ -125,8 +125,16 @@ func (d PageData) yieldOf(r *metrics.Result) YieldCard {
 		}
 		c.Charts = []PathChart{{HTML: chart.Cohort{Label: label, Weeks: weeks, More: d.more()}.HTML()}}
 	}
+	today := "" // the window's last day: a week that ends on it or later is still running
+	if !r.Window.Until.IsZero() {
+		loc := d.Loc
+		if loc == nil {
+			loc = time.UTC
+		}
+		today = r.Window.Until.Add(-time.Nanosecond).In(loc).Format(dayKey)
+	}
 	for i := len(v.M.Series) - 1; i >= 0; i-- {
-		c.Rows = append(c.Rows, d.yieldRow(v, v.M.Series[i]))
+		c.Rows = append(c.Rows, d.yieldRow(v, v.M.Series[i], today))
 	}
 	return c
 }
@@ -163,13 +171,22 @@ func completeUntil(monday string) (last, until string) {
 	return end.Format("Jan 2"), end.AddDate(0, 0, 28).Format("Jan 2")
 }
 
-func (d PageData) yieldRow(v MetricView, p metrics.Point) YieldRow {
+// yieldRow is a week's row of the yield table; today is the window's last
+// day ("" when unknown), so that a week still running reads its new
+// memories as "so far".
+func (d PageData) yieldRow(v MetricView, p metrics.Point, today string) YieldRow {
 	l := d.L
 	row := YieldRow{Week: dayLabel(p.Week), New: dash, Used: dash, Share: dash, Tokens: dash}
 	switch {
 	case p.Complete == nil || !*p.Complete:
 		last, until := completeUntil(p.Week)
 		row.Note = "not complete until " + until + " (its last day, " + last + ", plus 28 days)"
+		if p.Den != nil { // its new memories so far
+			row.New = l.Int(*p.Den)
+			if t, err := time.Parse(dayKey, p.Week); err == nil && today != "" && t.AddDate(0, 0, 6).Format(dayKey) >= today {
+				row.New += " so far"
+			}
+		}
 	case p.Den == nil:
 		row.Note = views.NoDataWords[metrics.ReasonNoRecord]
 	default:
@@ -361,22 +378,6 @@ type LangRow struct {
 // LangLine is a language the test finds behind (or ahead): a sentence.
 type LangLine struct{ Text string }
 
-// languageNames are the languages prompts are read as; any other is shown
-// by its code.
-var languageNames = map[string]string{
-	"en": "English", "fr": "French", "de": "German", "es": "Spanish", "it": "Italian", "pt": "Portuguese",
-	"nl": "Dutch", "sv": "Swedish", "da": "Danish", "no": "Norwegian", "fi": "Finnish", "pl": "Polish",
-	"cs": "Czech", "ru": "Russian", "uk": "Ukrainian", "tr": "Turkish", "ar": "Arabic", "he": "Hebrew",
-	"hi": "Hindi", "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "vi": "Vietnamese", "id": "Indonesian",
-}
-
-func languageName(code string) string {
-	if n, ok := languageNames[code]; ok {
-		return n
-	}
-	return views.Word(views.LanguageWords, code)
-}
-
 // The language test as recall.by_lang's extra holds it (metrics' langTest).
 type (
 	langBy struct {
@@ -471,7 +472,7 @@ func (d PageData) langOf(r *metrics.Result) LangCard {
 	by, _ := extraAs[map[string]langBy](v.M, "by_lang")
 	minN := int64(v.Def.MinN)
 	row := func(code string, num, den int64) LangRow {
-		lr := LangRow{Name: languageName(code), Prompts: l.Int(den)}
+		lr := LangRow{Name: views.LanguageName(code), Prompts: l.Int(den)}
 		if den < minN {
 			lr.Got, lr.Few = l.Int(num)+" of "+l.Int(den), true
 			return lr
@@ -510,5 +511,5 @@ func langLine(g langGap, ref string) (LangLine, bool) {
 		dir, n, a, b = "more", -n, -b, -a
 	}
 	return LangLine{Text: fmt.Sprintf("%s prompts get memory %d pts %s often than %s (%d to %d pts): a gap over %d pts whose interval excludes 0.",
-		languageName(g.Lang), n, dir, languageName(ref), a, b, metrics.LangGapPoints)}, true
+		views.LanguageName(g.Lang), n, dir, views.LanguageName(ref), a, b, metrics.LangGapPoints)}, true
 }

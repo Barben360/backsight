@@ -403,3 +403,8 @@ func Word(m map[string]string, k string) string {
 	}
 	return k
 }
+
+// LanguageName names a language of recall.by_lang (LanguageWords): "French"
+// for "fr", "language not detected" for the undetected prompts, any other
+// code as it is.
+func LanguageName(code string) string { return Word(LanguageWords, code) }

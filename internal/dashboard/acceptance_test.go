@@ -461,12 +461,18 @@ func TestAcceptancePageSet(t *testing.T) {
 		t.Errorf("the hot memory's page with limit=500 draws %d marks, want 500 shows", n)
 	}
 	// A year of days is drawn: a bar for each day of the outcomes chart (the hover sentences stop at
-	// chart.HoverMax positions, the bars do not).
+	// chart.HoverMax positions, the bars do not), as a rect or as a rectangle of its fill's path.
 	q365 := parseHTML(t, pageOf(t, "quality", "365", false).Body)
 	if card := q365.first("section.card[aria-labelledby=w-outcomes]"); card == nil {
 		t.Error("no outcomes card on the quality page over 365 days")
-	} else if n := len(card.find("figure.chart rect.seg")); n < 365 {
-		t.Errorf("the outcomes chart over 365 days draws %d bars", n)
+	} else {
+		n := len(card.find("figure.chart rect.seg"))
+		for _, p := range card.find("figure.chart path.seg") {
+			n += strings.Count(p.attr("d"), "z")
+		}
+		if n < 365 {
+			t.Errorf("the outcomes chart over 365 days draws %d bars", n)
+		}
 	}
 }
 

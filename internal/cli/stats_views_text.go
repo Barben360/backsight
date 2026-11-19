@@ -495,7 +495,7 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 		sessionPageText(b, *s, loc)
 	}
 	memoriesText(b, t, loc)
-	daysText(b, t, loc)
+	daysText(b, t, loc, r.Scope.Machines == "all")
 	releasesText(b, t, loc)
 	if t.Defs != nil {
 		defsText(b, t.Defs)
@@ -737,7 +737,9 @@ func memoriesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 	}
 }
 
-func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
+// daysText writes the days view's tables. With all PCs only the calendar adds the PCs up: the Days table stays
+// this PC's, and its title says so beside the all-PCs footer.
+func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location, allPCs bool) {
 	if t.Calendar != nil {
 		recorded := 0
 		for _, c := range t.Calendar {
@@ -753,7 +755,11 @@ func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 			rows = append(rows, []string{d.Day, n64(d.Prompts), n64(d.Recalls), n64(d.PromptsWithMemory), n64(d.UsedTurns), n64(d.Wrong),
 				thousands(float64(d.ContextChars)), n64(d.Sessions), n64(d.SentOK), n64(d.SentFailed)})
 		}
-		section(b, "Days", []string{"Day", "Prompts", "Recalls", "With memory", "Used turns", "Wrong", "Context chars", "Sessions", "Sent", "Send failed"}, rows)
+		title := "Days"
+		if allPCs {
+			title = "Days (this PC)"
+		}
+		section(b, title, []string{"Day", "Prompts", "Recalls", "With memory", "Used turns", "Wrong", "Context chars", "Sessions", "Sent", "Send failed"}, rows)
 	}
 	if d := t.Day; d != nil {
 		section(b, "Sessions of "+d.Day, sessionHead, sessionRows(d.Sessions, loc))
@@ -972,10 +978,10 @@ func blockDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string 
 			break
 		}
 		for _, g := range t.Gaps {
-			add("%s: %s %% of prompts got memory, %s pts behind %s (%s to %s)", g.Lang, percentOf(g.Value), signedPoints(g.Gap), t.Reference, signedPoints(g.Interval[0]), signedPoints(g.Interval[1]))
+			add("%s: %s %% of prompts got memory, %s pts behind %s (%s to %s)", views.LanguageName(g.Lang), percentOf(g.Value), signedPoints(g.Gap), views.LanguageName(t.Reference), signedPoints(g.Interval[0]), signedPoints(g.Interval[1]))
 		}
 		for _, l := range t.LeftOut {
-			add("%s: %d of %d, too few to compare", l.Lang, l.Num, l.Den)
+			add("%s: %d of %d, too few to compare", views.LanguageName(l.Lang), l.Num, l.Den)
 		}
 	case "bank.growth", "extraction.tokens":
 		if from, _ := extraAs[string](m, "record_from"); from != "" {

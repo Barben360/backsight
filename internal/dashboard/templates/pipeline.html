@@ -7,7 +7,7 @@
 {{template "pcard" .Flow}}
 {{with .Backlog}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Waiting</th><th class="r">Count</th><th>What to run</th></tr></thead>
+<thead><tr><th scope="col">Waiting</th><th scope="col" class="r">Count</th><th scope="col">What to run</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{.What}}</td><td class="r">{{.Count}}</td><td>{{with .Cmd}}{{template "cmd" .}}{{else}}{{with .Muted}}<span class="muted">{{.}}</span>{{end}}{{end}}</td></tr>
 {{end}}</tbody></table></div>
@@ -19,7 +19,7 @@
 {{with .Queue}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Counts}}<div class="row small sub counts">{{range .Counts}}<span><b class="num">{{.Big}}</b> {{.Label}}</span>{{end}}</div>
 {{end}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Failed server task</th><th>Age</th><th class="r">Retries</th></tr></thead>
+<thead><tr><th scope="col">Failed server task</th><th scope="col">Age</th><th scope="col" class="r">Retries</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{.Task}}</td><td>{{.Age}}</td><td class="r">{{.Retries}}</td></tr>
 {{end}}</tbody></table></div>
@@ -39,7 +39,7 @@
 {{with .Whole}}<p class="small sub">Whole way, from the end of a session to a memory of it being recalled: typical <b>{{.Typical}}</b>, slowest 1 in 20 <b>{{.Slowest}}</b>. Not the sum of the steps: each step is timed on its own sessions.</p>
 {{end}}{{with .Never}}<details class="never" open><summary><b>{{.Title}}</b></summary>
 <div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Session</th><th>Project</th><th>Sent</th><th>On the server</th></tr></thead>
+<thead><tr><th scope="col">Session</th><th scope="col">Project</th><th scope="col">Sent</th><th scope="col">On the server</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td>{{template "projlink" .Project}}</td><td>{{template "reltime" .Sent}}</td><td>{{if .State.Class}}<span class="st {{.State.Class}}">{{.State.Word}}</span>{{else}}{{.State.Word}}{{end}}{{.State.Rest}}</td></tr>
 {{end}}</tbody></table></div>
@@ -49,7 +49,7 @@
 <div class="grid-2">
 {{with .Hooks}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>How it stopped</th><th class="r">Last 24 h</th><th class="r">{{.WindowHead}}</th></tr></thead>
+<thead><tr><th scope="col">How it stopped</th><th scope="col" class="r">Last 24 h</th><th scope="col" class="r">{{.WindowHead}}</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{failkind .Kind}}</td><td class="r">{{.Day}}</td><td class="r">{{.Window}}</td></tr>
 {{end}}</tbody></table></div>

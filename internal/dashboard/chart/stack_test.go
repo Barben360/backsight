@@ -614,10 +614,29 @@ func TestLongStackDrawsThinBarsAsPaths(t *testing.T) {
 	if len(long) >= len(short) {
 		t.Errorf("a long window is %d bytes, the short one %d: the merge saves nothing", len(long), len(short))
 	}
-	// A hatched part keeps its rects (the hatch lines follow each one).
+	// A hatched part keeps its rects where its bars are wide enough to carry hatch lines (the lines follow each
+	// one); in a long window they are too narrow for any, so the hatched part is one path too, with the same
+	// rectangles (the pending days of Quality's outcomes over 395 days were 790 rects, 65 kB of the page).
 	c := outcomes([]string{"a"}, []float64{1}, []float64{1})
 	c.Hatch = "f-ignored"
-	if strings.Contains(string(c.Bars()), "<path class=\"seg") {
-		t.Error("a hatched part is a path")
+	if out := string(c.Bars()); strings.Contains(out, "<path class=\"seg") || !strings.Contains(out, `class="hatch-ln"`) {
+		t.Error("a hatched part wide enough to hatch is a path, or has no hatch lines")
+	}
+	x, big, small := make([]string, HoverMax+1), make([]float64, HoverMax+1), make([]float64, HoverMax+1)
+	for i := range x {
+		x[i], big[i], small[i] = fmt.Sprintf("d%d", i), 120, 60
+	}
+	hatched := outcomes(x, big, small)
+	hatched.Hatch = "f-ignored"
+	out := string(hatched.Bars())
+	if strings.Contains(out, `<rect class="seg`) || strings.Contains(out, `class="hatch-ln"`) {
+		t.Error("a long window's hatched bars are still rects, or carry hatch lines")
+	}
+	paths := segPath.FindAllStringSubmatch(out, -1)
+	if len(paths) != 2 || paths[1][1] != "seg-fine f-ignored" {
+		t.Fatalf("paths %d, want one for each of the 2 fills, the hatched one seg-fine f-ignored", len(paths))
+	}
+	if got := len(pathRect.FindAllString(paths[1][2], -1)); got != HoverMax+1 {
+		t.Errorf("the hatched path holds %d rectangles, want %d", got, HoverMax+1)
 	}
 }
