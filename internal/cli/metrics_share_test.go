@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -403,6 +405,93 @@ func TestPublishWaitsForAFullCatchUp(t *testing.T) {
 	}
 }
 
+// failIndexOpen makes the publish's first index open fail with err; later
+// opens are real.
+func failIndexOpen(t *testing.T, err error) {
+	t.Helper()
+	opens := 0
+	old := publishIndexOpen
+	publishIndexOpen = func(ctx context.Context, o index.Options) (*index.Index, error) {
+		if opens++; opens == 1 {
+			return nil, err
+		}
+		return old(ctx, o)
+	}
+	t.Cleanup(func() { publishIndexOpen = old })
+}
+
+// An index that does not open for a passing reason (an update being
+// applied, backsight updated meanwhile, another process holding it, the
+// budget spent) is waited for as one not caught up: tried at the next
+// tick, no failed_at. One that cannot open (corrupt, a full disk, a read
+// error, any other) is a compute failure, tried again an hour later. Either way the
+// tick's index line says why.
+func TestPublishIndexThatDoesNotOpen(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		wait bool
+		line string
+	}{
+		{index.ErrUpdateInProgress, true, "skipped: an update is being applied"},
+		{fmt.Errorf("open: %w", index.ErrSchemaChanged), true, "skipped: backsight was updated meanwhile"},
+		{index.ErrInUse, true, "failed: busy"},
+		{fmt.Errorf("open: %w", context.DeadlineExceeded), true, "failed: timeout"},
+		{index.ErrUnreadable, false, "failed: corrupt"},
+		{index.ErrDiskFull, false, "failed: full"},
+		{errors.New("open: some other error"), false, "failed: other"},
+	} {
+		t.Run(c.line, func(t *testing.T) {
+			m := newShareMachine(t)
+			writes := watchMetricsWrites(t)
+			calls := stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+			failIndexOpen(t, c.err)
+
+			s := m.publish(pubT0)
+			rec := m.record()
+			if s.Up || s.IndexLine != c.line || len(writes()) != 0 || *calls != 0 {
+				t.Fatalf("index not opened: %+v, %d writes, %d computes", s, len(writes()), *calls)
+			}
+			if c.wait {
+				if !s.Waiting || s.Failure != "budget" || !rec.FailedAt.IsZero() || !rec.FailedSince.Equal(pubT0) || rec.Failure != "budget" {
+					t.Fatalf("want a wait: %+v, record %+v", s, rec)
+				}
+				// The next tick, 15 minutes later: tried again, sent.
+				if s := m.publish(pubT0.Add(15 * time.Minute)); !s.Up || len(writes()) != 1 {
+					t.Fatalf("the next tick: %+v, %d writes", s, len(writes()))
+				}
+				return
+			}
+			if s.Waiting || s.Failure != "compute" || !rec.FailedAt.Equal(pubT0) || rec.Failure != "compute" {
+				t.Fatalf("want a compute failure: %+v, record %+v", s, rec)
+			}
+			if s := m.publish(pubT0.Add(15 * time.Minute)); s.Up || s.Failure != "" || len(writes()) != 0 {
+				t.Fatalf("15 min later: %+v, %d writes: a failure waits its hour", s, len(writes()))
+			}
+			if s := m.publish(pubT0.Add(61 * time.Minute)); !s.Up || len(writes()) != 1 {
+				t.Fatalf("61 min later: %+v, %d writes", s, len(writes()))
+			}
+		})
+	}
+}
+
+// The tick takes the publish's index line and does not open the index
+// again (its own step would have caught up and said so).
+func TestTickDoesNotReopenAnIndexThePublishCouldNotOpen(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	failIndexOpen(t, index.ErrUpdateInProgress)
+	withClock(t, pubT0)
+	before := index.OpensOf(pathsOf(home).State)
+	_, res := tickJSON(t)
+	if res.MetricsIndex != "skipped: an update is being applied" || !res.MetricsWaiting {
+		t.Errorf("metrics_index %q, waiting %v", res.MetricsIndex, res.MetricsWaiting)
+	}
+	if n := index.OpensOf(pathsOf(home).State) - before; n != 0 {
+		t.Errorf("the index was opened %d time(s) after the publish could not", n)
+	}
+}
+
 func TestPublishFailureIsRetriedAfterAnHour(t *testing.T) {
 	m := newShareMachine(t)
 	writes := watchMetricsWrites(t)
@@ -616,6 +705,29 @@ func TestTickPublishesAndReports(t *testing.T) {
 
 // A tick whose publish is due and whose index holds more than one budget of
 // lines does one catch-up, the publish's: the tick's line is its freshness.
+// A tick skipped for components.write = false still shares: its line says
+// what the sharing step did, as a done tick's does.
+func TestSkippedTickReportsTheDailyFigures(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	setComponents(t, home, "write = false")
+	writes := watchMetricsWrites(t)
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	withClock(t, pubT0)
+	code, out, _ := run(t, "jobs", "tick")
+	if code != output.OK || len(writes()) != 1 {
+		t.Fatalf("exit %d, %d writes\n%s", code, len(writes()), out)
+	}
+	if !strings.HasPrefix(out, "skipped: components.write is off") || !strings.Contains(out, "daily figures sent (1 days") ||
+		!strings.Contains(out, "metrics index") {
+		t.Errorf("tick line: %q", out)
+	}
+	// Nothing to say: the skipped line is as before.
+	if got := tickText(tickResult{Status: "skipped", Reason: "another tick is running"}); got != "skipped: another tick is running\n" {
+		t.Errorf("bare skipped line: %q", got)
+	}
+}
+
 func TestTickCatchesUpOnceWhenThePublishIsDue(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))

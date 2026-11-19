@@ -34,8 +34,9 @@ const metricsRetryAfter = time.Hour
 // tests: the cap itself cannot be exceeded by one day of figures).
 var metricsWriteMax = machines.WriteMax
 
-// dailyFigures and publishCatchUp are the seams of the tests.
+// dailyFigures, publishIndexOpen and publishCatchUp are the seams of the tests.
 var dailyFigures = metrics.Daily
+var publishIndexOpen = index.Open
 var publishCatchUp = func(ctx context.Context, ix *index.Index, b time.Duration) (index.Freshness, error) {
 	return ix.CatchUp(ctx, b)
 }
@@ -51,7 +52,8 @@ const (
 
 // metricsShare is what the tick's publish did. Up: the document was
 // written (Days days, Bytes bytes, Dropped what the cap left out);
-// Waiting: the index was not caught up (Failure is then budget);
+// Waiting: the index did not open for a passing reason or was not caught
+// up (Failure is then budget);
 // Empty: no complete day to share yet; Failure: the class of a failed
 // attempt.
 type metricsShare struct {
@@ -149,8 +151,16 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 
 	o := indexOptions(d, home, nil)
 	o.Now = tickIndexClock
-	ix, err := index.Open(ctx, o)
+	ix, err := publishIndexOpen(ctx, o)
 	if err != nil {
+		// Its line is the tick's, which then does not open it again. A
+		// passing reason is waited for as an index not caught up (the next
+		// tick tries again); one that stays (corrupt, a full disk, a read
+		// error) is a failure, tried again an hour later.
+		line = indexStepError(err)
+		if openPassing(ctx, err) {
+			return fail(failBudget, true)
+		}
 		return fail(failCompute, false)
 	}
 	defer func() { _ = ix.Close() }()
@@ -217,6 +227,15 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	}
 	s := metricsShare{Up: true, Days: len(doc.Days), Bytes: len(meta), Dropped: dropped, IndexLine: line}
 	return s, machines.SavePublished(dir, machines.Published{At: now, Server: target, Until: doc.Until, FirstSeen: first, Bytes: len(meta)})
+}
+
+// openPassing reports whether an index.Open error passes by itself: an
+// update being applied, backsight updated meanwhile, another process
+// holding the file, or the budget spent.
+func openPassing(ctx context.Context, err error) bool {
+	return errors.Is(err, index.ErrUpdateInProgress) || errors.Is(err, index.ErrSchemaChanged) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil ||
+		index.Class(err) == "busy"
 }
 
 // withoutVersions is days with every version breakdown removed (a copy).

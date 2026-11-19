@@ -377,7 +377,8 @@ func tickText(r tickResult) string {
 		metrics = ", metrics index " + r.MetricsIndex
 	}
 	if r.Status == "skipped" {
-		return "skipped: " + r.Reason + metrics + "\n"
+		// A tick skipped for components.write = false still shares.
+		return "skipped: " + r.Reason + r.sharingText() + metrics + "\n"
 	}
 	msg := fmt.Sprintf("%s: sessions %v, notes sent %d, queued %d (%d ms)", r.Status, r.Sessions, r.Notes.Sent, r.Notes.Kept, r.MS)
 	if r.Extraction != "" {
@@ -410,6 +411,13 @@ func tickText(r tickResult) string {
 	if r.History != "" {
 		msg += ", " + r.History
 	}
+	return msg + r.sharingText() + metrics + "\n"
+}
+
+// sharingText is the tick line's parts for the sharing step (the shared
+// counts, this PC's daily figures, the other PCs'), each after ", ".
+func (r tickResult) sharingText() string {
+	msg := ""
 	if r.SharedUp {
 		msg += ", this machine's counts sent to the server"
 	}
@@ -428,7 +436,7 @@ func tickText(r tickResult) string {
 	if t := r.fetchText(); t != "" {
 		msg += ", " + t
 	}
-	return msg + metrics + "\n"
+	return msg
 }
 
 // tickRead is the ledger as the tick's steps after the settle read it
