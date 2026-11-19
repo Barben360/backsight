@@ -1000,14 +1000,17 @@ func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config,
 
 // uninstallMetricsDocument deletes this machine's daily figures document
 // from the server this PC joined, under uninstallSharedCounts's rules:
-// skipped when this machine never published one (no record of a send),
-// another server answers at the joined address, or connect moved this PC
-// since uninstall read its config; kept with one line when the server
-// fails or does not answer within uninstallShareBudget.
+// skipped when this machine never tried to publish one (no publish
+// record), another server answers at the joined address, or connect moved
+// this PC since uninstall read its config; kept with one line when the
+// server fails or does not answer within uninstallShareBudget. A record of
+// failures only is no proof that nothing was sent: a send whose record
+// could not be saved leaves it as it was, so the delete is asked for (a
+// document that is not there deletes as done).
 func uninstallMetricsDocument(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, generation int, plan bool) undoAction {
 	a := undoAction{Name: "daily figures"}
 	machine := retain.ReadMachineID(d.State)
-	if rec, ok := machines.LoadPublished(d.MetricsDir()); machine == "" || !ok || rec.At.IsZero() {
+	if _, ok := machines.LoadPublished(d.MetricsDir()); machine == "" || !ok {
 		a.Status, a.Detail = "skipped", "this machine never shared its daily figures"
 		return a
 	}
