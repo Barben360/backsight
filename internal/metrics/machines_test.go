@@ -2134,6 +2134,115 @@ func TestReleasesReadEachVersionsDaysOnce(t *testing.T) {
 	}
 }
 
+// West of UTC the noon of UTC day 10-20 is still on the local 10-20: 01:00
+// in Pago Pago (UTC-11), and exactly local midnight at UTC-12, which opens
+// the local 10-20 (a bucket is [start, end)), never the 10-19 before it.
+func TestCalendarPlacesOthersByLocalNoonWestOfUTC(t *testing.T) {
+	for _, zone := range []string{"Pacific/Pago_Pago", "Etc/GMT+12", "America/Los_Angeles"} {
+		t.Run(zone, func(t *testing.T) {
+			loc, err := time.LoadLocation(zone)
+			if err != nil {
+				t.Skip(err)
+			}
+			x := newFx(t, fxNow)
+			x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+			x.pcRows(pcRow{machine: pcOther1, day: "2026-10-20", f: machines.Figures{Prompts: 5, Hit: machines.Pair{2, 5}}})
+			w, err := NewWindow(x.now, 7, time.Time{}, time.Time{}, loc, zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := calendarOf(x.runAs("days", Query{Window: w, Machines: "all"}))
+			if d := all["2026-10-20"]; d.Prompts != 5 || d.PromptsWithMemory != 2 || !d.Recorded {
+				t.Errorf("10-20 = %+v, want the 5 prompts, 2 with memory", d)
+			}
+			for _, other := range []string{"2026-10-19", "2026-10-21"} {
+				if d := all[other]; d.Prompts != 0 || d.Recorded {
+					t.Errorf("%s = %+v, want nothing", other, d)
+				}
+			}
+		})
+	}
+}
+
+// Under a project filter every merged metric carries others_not_filtered,
+// and on a window drawn by the hour every merged one with a series carries
+// series_this_pc (context per session keeps this PC's series without it);
+// without the filter, on a daily window, neither.
+func TestMergedTagsOnEveryMergedMetric(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "a", fxNow, 6, func(i int, p *telemetry.Prompt) { p.Injected, p.MS, p.Chars = i%2, 800, 1000 })
+	x.declaredTurn(fxNow.Add(-3*time.Hour), "a-1", "declared", "used", "mem-1")
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	f := machines.Figures{Prompts: 9, Hit: machines.Pair{6, 9}, Used: machines.Pair{2, 4}, Coverage: machines.Pair{4, 5},
+		Wrong: machines.Pair{1, 3}, Context: machines.Pair{900, 3}, Latency: machines.Latency{0, 9}}
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-29", f: f, flow: machines.Pair{2, 2}})
+	merged := []struct{ view, id string }{
+		{"quality", "recall.hit_rate"}, {"quality", "used.turn_rate"}, {"quality", "declare.coverage"}, {"quality", "verdict.wrong_rate"},
+		{"pipeline", "pipeline.flow"}, {"cost", "context.per_session"}, {"cost", "recall.latency"},
+	}
+	for _, c := range []struct {
+		name            string
+		days            int
+		project         string
+		filtered, hours bool
+	}{{"a day, a project", 1, "alpha", true, true}, {"a week", 7, "", false, false}} {
+		q := x.query(c.days)
+		q.Machines, q.Project = "all", c.project
+		for _, m := range merged {
+			got := x.runAs(m.view, q).Metrics[m.id]
+			if got.Num == nil && got.Den == nil {
+				t.Fatalf("%s, %s: not merged (%+v)", c.name, m.id, got)
+			}
+			if has := slices.Contains(got.Tags, tagOthersNotFiltered); has != c.filtered {
+				t.Errorf("%s, %s: others_not_filtered %v, want %v (tags %v)", c.name, m.id, has, c.filtered, got.Tags)
+			}
+			wantHours := c.hours && m.id != "context.per_session"
+			if has := slices.Contains(got.Tags, tagSeriesThisPC); has != wantHours {
+				t.Errorf("%s, %s: series_this_pc %v, want %v (tags %v)", c.name, m.id, has, wantHours, got.Tags)
+			}
+		}
+	}
+}
+
+// By PC under a version and a project filter: this PC's row counts its
+// prompts of that project and version; the other PC's counts its day's
+// figures of that version, whole (it sends no project).
+func TestByPCRowsFollowTheVersionBesideTheProject(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.1"
+	x.prompts("alpha", "a1", fxNow, 2, nil)
+	x.binary = "0.1.2"
+	x.prompts("alpha", "a2", fxNow, 3, nil)
+	x.prompts("beta", "b2", fxNow, 4, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 30, Hit: machines.Pair{0, 30}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", version: "0.1.2", f: machines.Figures{Prompts: 10, Hit: machines.Pair{0, 10}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", version: "0.1.1", f: machines.Figures{Prompts: 20, Hit: machines.Pair{0, 20}}},
+	)
+	for _, c := range []struct {
+		project, version string
+		this, other      int64
+	}{{"alpha", "0.1.2", 3, 10}, {"alpha", "0.1.1", 2, 20}, {"beta", "0.1.1", 0, 20}, {"", "0.1.2", 7, 10}, {"alpha", "", 5, 30}} {
+		q := x.allQuery()
+		q.Project = c.project
+		err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
+			e.view, e.q.version = "cost", c.version
+			rows, err := byPC(e, q.Window, map[string]Metric{})
+			if err != nil {
+				return err
+			}
+			if len(rows) != 2 || rows[0].Prompts != c.this || rows[0].Active != (c.this > 0) || rows[1].Prompts != c.other {
+				t.Errorf("project %q, version %q: rows %+v, want this PC %d (active when above 0), the other %d", c.project, c.version, rows, c.this, c.other)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // The reads of pc_days by window go through its index on (version, noon),
 // not a scan of every PC's days: the plan of each names pc_days_version_noon.
 func TestOtherPCsDaysReadThroughTheVersionNoonIndex(t *testing.T) {
