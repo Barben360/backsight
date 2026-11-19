@@ -403,6 +403,39 @@ func TestPublishWaitsForAFullCatchUp(t *testing.T) {
 	}
 }
 
+// An index that does not open (an update being applied, a full disk, a
+// timeout) is waited for as one not caught up: tried at the next tick, the
+// tick's index line saying why, no compute failure and no hour's wait.
+func TestPublishWaitsForAnIndexThatDoesNotOpen(t *testing.T) {
+	m := newShareMachine(t)
+	writes := watchMetricsWrites(t)
+	calls := stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	opens := 0
+	old := publishIndexOpen
+	publishIndexOpen = func(ctx context.Context, o index.Options) (*index.Index, error) {
+		if opens++; opens == 1 {
+			return nil, index.ErrUpdateInProgress
+		}
+		return old(ctx, o)
+	}
+	t.Cleanup(func() { publishIndexOpen = old })
+
+	s := m.publish(pubT0)
+	if s.Up || !s.Waiting || s.Failure != "budget" || s.IndexLine != "skipped: an update is being applied" {
+		t.Fatalf("index not opened: %+v", s)
+	}
+	if rec := m.record(); !rec.FailedAt.IsZero() || !rec.FailedSince.Equal(pubT0) || rec.Failure != "budget" {
+		t.Fatalf("record %+v: no failed_at, failed_since the first wait", rec)
+	}
+	if len(writes()) != 0 || *calls != 0 {
+		t.Fatalf("%d writes, %d computes without an index", len(writes()), *calls)
+	}
+	// The next tick, 15 minutes later: tried again, sent.
+	if s := m.publish(pubT0.Add(15 * time.Minute)); !s.Up || len(writes()) != 1 {
+		t.Fatalf("the next tick: %+v, %d writes", s, len(writes()))
+	}
+}
+
 func TestPublishFailureIsRetriedAfterAnHour(t *testing.T) {
 	m := newShareMachine(t)
 	writes := watchMetricsWrites(t)

@@ -34,8 +34,9 @@ const metricsRetryAfter = time.Hour
 // tests: the cap itself cannot be exceeded by one day of figures).
 var metricsWriteMax = machines.WriteMax
 
-// dailyFigures and publishCatchUp are the seams of the tests.
+// dailyFigures, publishIndexOpen and publishCatchUp are the seams of the tests.
 var dailyFigures = metrics.Daily
+var publishIndexOpen = index.Open
 var publishCatchUp = func(ctx context.Context, ix *index.Index, b time.Duration) (index.Freshness, error) {
 	return ix.CatchUp(ctx, b)
 }
@@ -51,7 +52,7 @@ const (
 
 // metricsShare is what the tick's publish did. Up: the document was
 // written (Days days, Bytes bytes, Dropped what the cap left out);
-// Waiting: the index was not caught up (Failure is then budget);
+// Waiting: the index did not open or was not caught up (Failure is then budget);
 // Empty: no complete day to share yet; Failure: the class of a failed
 // attempt.
 type metricsShare struct {
@@ -149,9 +150,13 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 
 	o := indexOptions(d, home, nil)
 	o.Now = tickIndexClock
-	ix, err := index.Open(ctx, o)
+	ix, err := publishIndexOpen(ctx, o)
 	if err != nil {
-		return fail(failCompute, false)
+		// An index that does not open (an update being applied, a full
+		// disk, the budget spent) is waited for as one not caught up; its
+		// line is the tick's, which then does not open it again.
+		line = indexStepError(err)
+		return fail(failBudget, true)
 	}
 	defer func() { _ = ix.Close() }()
 	side := ""
