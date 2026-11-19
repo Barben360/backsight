@@ -157,7 +157,11 @@ func noonSpan(w Window) (lo, hi time.Time) {
 	return lo, hi
 }
 
+// onReadOthers runs at each read of pc_days by readOthers (tests count them).
+var onReadOthers = func(version string) {}
+
 func readOthers(e env, w Window, version string) (others, error) {
+	onReadOthers(version)
 	lo, hi := noonSpan(w)
 	var buckets []Bucket
 	var o others

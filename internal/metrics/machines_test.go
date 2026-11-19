@@ -2071,6 +2071,33 @@ func TestReleasesOthersShareTheNoonBounds(t *testing.T) {
 	}
 }
 
+// Releases on all PCs reads each version's pc_days once: a version both PCs
+// ran (this PC's row, its flagship merged) and one only the other PC ran
+// (its row added, its flagship merged), and the day totals once.
+func TestReleasesReadEachVersionsDaysOnce(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.2"
+	x.prompts("alpha", "b", fxNow.Add(-24*time.Hour), 2, injecting(2))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-28", version: "0.1.2", f: machines.Figures{Prompts: 10, Hit: machines.Pair{3, 10}}},
+		pcRow{machine: pcOther1, day: "2026-10-28", version: "0.1.3", f: machines.Figures{Prompts: 7, Hit: machines.Pair{2, 7}}},
+		pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 17, Hit: machines.Pair{5, 17}}},
+	)
+	reads := map[string]int{}
+	onReadOthers = func(version string) { reads[version]++ }
+	t.Cleanup(func() { onReadOthers = func(string) {} })
+	by := releaseByVersion(x.runAs("releases", x.allQuery()))
+	if den(by["0.1.2"].Flagship["recall.hit_rate"]) != 12 || den(by["0.1.3"].Flagship["recall.hit_rate"]) != 7 {
+		t.Fatalf("flagship hit dens %d and %d, want 12 and 7 (merged)", den(by["0.1.2"].Flagship["recall.hit_rate"]), den(by["0.1.3"].Flagship["recall.hit_rate"]))
+	}
+	for _, v := range []string{"0.1.2", "0.1.3"} {
+		if reads[v] != 1 {
+			t.Errorf("version %s: pc_days read %d times over the window, want 1 (reads %v)", v, reads[v], reads)
+		}
+	}
+}
+
 // An hourly window's merged rates and latency keep this PC's series, as a
 // copy: a write to the merged run's points never reaches this PC's run in
 // the memo.
