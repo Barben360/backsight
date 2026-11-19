@@ -126,7 +126,7 @@ When other PCs use the same memory server and share their activity (`feedback` a
 | Quality | The Found and Used cards | The outcomes, reports, empty reasons, searches and every list |
 | Cost | The time memory adds to a prompt, drawn per day as a range with a **By PC** table; in the figures above, the context per session (an average) and that time | The context card's chart (the other PCs send a total and a count, not sizes), the time of a search, and what the server's model spent (every PC's) |
 | Pipeline | The write flow (how many sends worked) | What waits on this PC and on the server, the jobs, the steps that crashed |
-| Days, one day, Releases | The calendar and the day's tiles; the numbers per version | The day-by-day table, the markers on a day, the comparison of two versions |
+| Days, one day, Releases | The calendar and the day's tiles; the numbers per version | The day-by-day table (in `backsight stats days --machines all` it is titled `Days (this PC)`), the markers on a day, the comparison of two versions |
 | Bank, System | Nothing | Both are the server's or this PC's. System gains **Which PCs share their activity here?** (below) |
 
 The tiles show **a range** where the PCs' times are only known by bucket:

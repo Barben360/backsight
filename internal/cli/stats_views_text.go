@@ -495,7 +495,7 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 		sessionPageText(b, *s, loc)
 	}
 	memoriesText(b, t, loc)
-	daysText(b, t, loc)
+	daysText(b, t, loc, r.Scope.Machines == "all")
 	releasesText(b, t, loc)
 	if t.Defs != nil {
 		defsText(b, t.Defs)
@@ -737,7 +737,9 @@ func memoriesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 	}
 }
 
-func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
+// daysText writes the days view's tables. With all PCs only the calendar adds the PCs up: the Days table stays
+// this PC's, and its title says so beside the all-PCs footer.
+func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location, allPCs bool) {
 	if t.Calendar != nil {
 		recorded := 0
 		for _, c := range t.Calendar {
@@ -753,7 +755,11 @@ func daysText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 			rows = append(rows, []string{d.Day, n64(d.Prompts), n64(d.Recalls), n64(d.PromptsWithMemory), n64(d.UsedTurns), n64(d.Wrong),
 				thousands(float64(d.ContextChars)), n64(d.Sessions), n64(d.SentOK), n64(d.SentFailed)})
 		}
-		section(b, "Days", []string{"Day", "Prompts", "Recalls", "With memory", "Used turns", "Wrong", "Context chars", "Sessions", "Sent", "Send failed"}, rows)
+		title := "Days"
+		if allPCs {
+			title = "Days (this PC)"
+		}
+		section(b, title, []string{"Day", "Prompts", "Recalls", "With memory", "Used turns", "Wrong", "Context chars", "Sessions", "Sent", "Send failed"}, rows)
 	}
 	if d := t.Day; d != nil {
 		section(b, "Sessions of "+d.Day, sessionHead, sessionRows(d.Sessions, loc))
