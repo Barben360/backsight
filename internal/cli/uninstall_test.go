@@ -687,7 +687,7 @@ func TestUninstallDeletesTheMetricsDocument(t *testing.T) {
 			t.Fatal(err)
 		}
 		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
-		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "done" {
+		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "done" || !strings.Contains(s.Detail, "no send of them was recorded") {
 			t.Fatalf("exit %d, step %+v\n%s", code, s, out)
 		}
 		if got := metricsDocs(cl); len(got) != 0 {
