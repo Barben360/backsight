@@ -76,6 +76,13 @@ func TestCacheKeyIgnoresTheClock(t *testing.T) {
 	if cacheKey("quality", "", views.Params{Dev: true}) == cacheKey("quality", "", views.Params{}) {
 		t.Error("the developer flag does not change the key")
 	}
+	// machines "" reads "this": one result, one key; "all" is another.
+	if cacheKey("overview", "", views.Params{Machines: "this"}) != cacheKey("overview", "", views.Params{}) {
+		t.Error(`machines "this" and "" are keyed apart: the same result computed twice`)
+	}
+	if cacheKey("overview", "", views.Params{Machines: "all"}) == cacheKey("overview", "", views.Params{}) {
+		t.Error(`machines "all" shares the key of this PC's result`)
+	}
 
 	// Every parameter but Text and DevSet tells two keys apart.
 	zero := cacheKey("overview", "", views.Params{})

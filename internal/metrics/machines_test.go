@@ -259,6 +259,31 @@ func TestBrowseViewsStayThisPC(t *testing.T) {
 	}
 }
 
+// Bank, system and defs have nothing to merge: asked for all PCs, their
+// scope says what they count (this PC's activity), not "all"; System's table
+// of the PCs still lists every counted one.
+func TestNonMergingViewsSayThisPC(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "p", fxNow, 3, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	for _, view := range []string{"bank", "system", "defs"} {
+		q := x.allQuery()
+		q.Project = "alpha"
+		r := x.runAs(view, q)
+		if r.Scope.Machines != "this" || r.Scope.OthersUnfiltered || r.Scope.PCs == nil || r.Scope.PCs.Count != 2 {
+			t.Errorf("%s on all PCs: scope %+v pcs %+v, want machines this, others not flagged, 2 PCs listed", view, r.Scope, r.Scope.PCs)
+		}
+		if view == "system" && (r.Tables.Machines == nil || len(r.Tables.Machines.Rows) != 2) {
+			t.Errorf("system on all PCs: machines table %+v, want both PCs", r.Tables.Machines)
+		}
+	}
+	for _, view := range mergingViews {
+		if r := x.runAs(view, x.allQuery()); r.Scope.Machines != "all" {
+			t.Errorf("%s on all PCs: machines %q, want all", view, r.Scope.Machines)
+		}
+	}
+}
+
 func (x *fx) srcAs() Source {
 	src := x.source()
 	src.Self = func() SelfPC { return SelfPC{Machine: pcThis} }
@@ -489,6 +514,17 @@ func TestMergeTwoPCsGivesExactSums(t *testing.T) {
 	}
 	sameSeries(t, "wrong", wrong, map[string][2]int64{"2026-10-30": {0, 5}, "2026-10-29": {1, 9}, "2026-10-27": {0, 6},
 		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+	// By ruling the breakdown in extra stays this PC's (the other PCs send
+	// the pair only), so it does not sum to the merged 1/20: the tag says so.
+	if sum := wrong.Extra["wrong"].(int64) + wrong.Extra["outdated"].(int64) + wrong.Extra["used"].(int64) + wrong.Extra["confirmed"].(int64); sum != 6 {
+		t.Errorf("wrong extra sums to %d, want this PC's 6", sum)
+	}
+	if !slices.Contains(wrong.Tags, tagExtraThisPC) {
+		t.Errorf("wrong tags %v, want %s", wrong.Tags, tagExtraThisPC)
+	}
+	if slices.Contains(this["verdict.wrong_rate"].Tags, tagExtraThisPC) || slices.Contains(used.Tags, tagExtraThisPC) {
+		t.Errorf("extra_this_pc on this PC's wrong (%v) or on used (%v)", this["verdict.wrong_rate"].Tags, used.Tags)
+	}
 
 	flow := x.mergedOf("pipeline", x.query(7))["pipeline.flow"]
 	isNum(t, "flow", flow, 8, 8)
@@ -2025,5 +2061,323 @@ func TestMergedRunCarriesThisPCsOwnAnswer(t *testing.T) {
 	x.cfg = func(c *config.Config) { c.Feedback.ShareLedger = false }
 	if r := x.runAs("overview", asked); r.Scope.Machines != "this" || r.ThisPC() != nil {
 		t.Errorf("sharing off: scope %q, own %v", r.Scope.Machines, r.ThisPC())
+	}
+}
+
+// A custom window longer than a day takes as many of the other PCs' days as
+// it lasts, rounded: the first round(length / 24 h) noons it holds. 30 h
+// holding two noons takes one day, 47 h holding two takes two, and 36 h,
+// a day and a half, takes two.
+func TestCustomWindowTakesTheNoonsItLasts(t *testing.T) {
+	late := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name         string
+		since, until time.Time
+		days         int64
+	}{
+		{"30 h, two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 17, 30, 0, 0, time.UTC), 1},
+		{"47 h, two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 3, 10, 30, 0, 0, time.UTC), 2},
+		{"36 h, two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 23, 30, 0, 0, time.UTC), 2},
+		{"30 h, one noon", time.Date(2026, 11, 1, 13, 0, 0, 0, time.UTC), time.Date(2026, 11, 2, 19, 0, 0, 0, time.UTC), 1},
+		{"55 h, three noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 3, 18, 30, 0, 0, time.UTC), 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFx(t, late)
+			x.pcDoc(pcOther1, "2026-09-10", late.Add(-time.Hour), "")
+			for _, d := range []string{"2026-11-01", "2026-11-02", "2026-11-03"} {
+				x.pcRows(pcRow{machine: pcOther1, day: d, f: machines.Figures{Prompts: 1, Hit: machines.Pair{1, 1}}})
+			}
+			w, err := NewWindow(late, 0, c.since, c.until, time.UTC, "UTC")
+			if err != nil {
+				t.Fatal(err)
+			}
+			isNum(t, c.name, x.mergedOf("quality", Query{Window: w})["recall.hit_rate"], c.days, c.days)
+		})
+	}
+}
+
+// In a zone whose local midnight falls at 12:00 UTC (Norfolk Island under
+// DST, UTC+12), a week of whole local days across the fall-back change lasts
+// 169 h and holds 8 noons, its first at its very start: it takes the first 7.
+func TestWeekAcrossFallBackTakesSevenDays(t *testing.T) {
+	norfolk, err := time.LoadLocation("Pacific/Norfolk")
+	if err != nil {
+		t.Skip(err)
+	}
+	late := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	x := newFx(t, late)
+	x.pcDoc(pcOther1, "2026-01-10", late.Add(-time.Hour), "")
+	for d := time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC); d.Before(time.Date(2026, 4, 9, 0, 0, 0, 0, time.UTC)); d = d.AddDate(0, 0, 1) {
+		x.pcRows(pcRow{machine: pcOther1, day: d.Format("2006-01-02"), f: machines.Figures{Prompts: 1, Hit: machines.Pair{1, 1}}})
+	}
+	w, err := NewWindow(late, 0, time.Date(2026, 4, 1, 0, 0, 0, 0, norfolk), time.Date(2026, 4, 8, 0, 0, 0, 0, norfolk), norfolk, "Pacific/Norfolk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Length() != 169*time.Hour || !w.Since.Equal(time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("window %v from %v, want 169 h from 2026-03-31 12:00Z", w.Length(), w.Since.UTC())
+	}
+	isNum(t, "a week across fall-back", x.mergedOf("quality", Query{Window: w})["recall.hit_rate"], 7, 7)
+}
+
+// Releases lists the other PCs' versions over the same noons as their
+// figures: a 25 h window holding two noons spans only the first, so a
+// version run on both days reads first = last = that noon, its n that day's.
+func TestReleasesOthersShareTheNoonBounds(t *testing.T) {
+	late := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	x := newFx(t, late)
+	x.pcDoc(pcOther1, "2026-09-10", late.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-11-01", version: "0.1.3", f: machines.Figures{Prompts: 7, Hit: machines.Pair{2, 7}}},
+		pcRow{machine: pcOther1, day: "2026-11-02", version: "0.1.3", f: machines.Figures{Prompts: 5, Hit: machines.Pair{1, 5}}},
+		pcRow{machine: pcOther1, day: "2026-11-02", version: "0.1.4", f: machines.Figures{Prompts: 3, Hit: machines.Pair{1, 3}}},
+	)
+	w, err := NewWindow(late, 0, time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 12, 30, 0, 0, time.UTC), time.UTC, "UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := releaseByVersion(x.runAs("releases", Query{Window: w, Machines: "all"}))
+	v, ok := by["0.1.3"]
+	if !ok {
+		t.Fatalf("versions %v, want 0.1.3", by)
+	}
+	noon := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if v.N != 7 || !v.First.Equal(noon) || !v.Last.Equal(noon) {
+		t.Errorf("0.1.3: n %d, first %v, last %v; want 7, both %v", v.N, v.First, v.Last, noon)
+	}
+	if _, ok := by["0.1.4"]; ok {
+		t.Errorf("0.1.4 listed: it ran only on the second noon, which the window does not take")
+	}
+}
+
+// Releases on all PCs reads each version's pc_days once: a version both PCs
+// ran (this PC's row, its flagship merged) and one only the other PC ran
+// (its row added, its flagship merged), and the day totals once.
+func TestReleasesReadEachVersionsDaysOnce(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.2"
+	x.prompts("alpha", "b", fxNow.Add(-24*time.Hour), 2, injecting(2))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-28", version: "0.1.2", f: machines.Figures{Prompts: 10, Hit: machines.Pair{3, 10}}},
+		pcRow{machine: pcOther1, day: "2026-10-28", version: "0.1.3", f: machines.Figures{Prompts: 7, Hit: machines.Pair{2, 7}}},
+		pcRow{machine: pcOther1, day: "2026-10-28", f: machines.Figures{Prompts: 17, Hit: machines.Pair{5, 17}}},
+	)
+	reads := map[string]int{}
+	onReadOthers = func(version string) { reads[version]++ }
+	t.Cleanup(func() { onReadOthers = func(string) {} })
+	by := releaseByVersion(x.runAs("releases", x.allQuery()))
+	if den(by["0.1.2"].Flagship["recall.hit_rate"]) != 12 || den(by["0.1.3"].Flagship["recall.hit_rate"]) != 7 {
+		t.Fatalf("flagship hit dens %d and %d, want 12 and 7 (merged)", den(by["0.1.2"].Flagship["recall.hit_rate"]), den(by["0.1.3"].Flagship["recall.hit_rate"]))
+	}
+	for _, v := range []string{"0.1.2", "0.1.3"} {
+		if reads[v] != 1 {
+			t.Errorf("version %s: pc_days read %d times over the window, want 1 (reads %v)", v, reads[v], reads)
+		}
+	}
+}
+
+// West of UTC the noon of UTC day 10-20 is still on the local 10-20: 01:00
+// in Pago Pago (UTC-11), and exactly local midnight at UTC-12, which opens
+// the local 10-20 (a bucket is [start, end)), never the 10-19 before it.
+func TestCalendarPlacesOthersByLocalNoonWestOfUTC(t *testing.T) {
+	for _, zone := range []string{"Pacific/Pago_Pago", "Etc/GMT+12", "America/Los_Angeles"} {
+		t.Run(zone, func(t *testing.T) {
+			loc, err := time.LoadLocation(zone)
+			if err != nil {
+				t.Skip(err)
+			}
+			x := newFx(t, fxNow)
+			x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+			x.pcRows(pcRow{machine: pcOther1, day: "2026-10-20", f: machines.Figures{Prompts: 5, Hit: machines.Pair{2, 5}}})
+			w, err := NewWindow(x.now, 7, time.Time{}, time.Time{}, loc, zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := calendarOf(x.runAs("days", Query{Window: w, Machines: "all"}))
+			if d := all["2026-10-20"]; d.Prompts != 5 || d.PromptsWithMemory != 2 || !d.Recorded {
+				t.Errorf("10-20 = %+v, want the 5 prompts, 2 with memory", d)
+			}
+			for _, other := range []string{"2026-10-19", "2026-10-21"} {
+				if d := all[other]; d.Prompts != 0 || d.Recorded {
+					t.Errorf("%s = %+v, want nothing", other, d)
+				}
+			}
+		})
+	}
+}
+
+// Under a project filter every merged metric carries others_not_filtered,
+// and on a window drawn by the hour every merged one with a series carries
+// series_this_pc (context per session keeps this PC's series without it);
+// without the filter, on a daily window, neither.
+func TestMergedTagsOnEveryMergedMetric(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "a", fxNow, 6, func(i int, p *telemetry.Prompt) { p.Injected, p.MS, p.Chars = i%2, 800, 1000 })
+	x.declaredTurn(fxNow.Add(-3*time.Hour), "a-1", "declared", "used", "mem-1")
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	f := machines.Figures{Prompts: 9, Hit: machines.Pair{6, 9}, Used: machines.Pair{2, 4}, Coverage: machines.Pair{4, 5},
+		Wrong: machines.Pair{1, 3}, Context: machines.Pair{900, 3}, Latency: machines.Latency{0, 9}}
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-29", f: f, flow: machines.Pair{2, 2}})
+	merged := []struct{ view, id string }{
+		{"quality", "recall.hit_rate"}, {"quality", "used.turn_rate"}, {"quality", "declare.coverage"}, {"quality", "verdict.wrong_rate"},
+		{"pipeline", "pipeline.flow"}, {"cost", "context.per_session"}, {"cost", "recall.latency"},
+	}
+	for _, c := range []struct {
+		name            string
+		days            int
+		project         string
+		filtered, hours bool
+	}{{"a day, a project", 1, "alpha", true, true}, {"a week", 7, "", false, false}} {
+		q := x.query(c.days)
+		q.Machines, q.Project = "all", c.project
+		for _, m := range merged {
+			got := x.runAs(m.view, q).Metrics[m.id]
+			if got.Num == nil && got.Den == nil {
+				t.Fatalf("%s, %s: not merged (%+v)", c.name, m.id, got)
+			}
+			if has := slices.Contains(got.Tags, tagOthersNotFiltered); has != c.filtered {
+				t.Errorf("%s, %s: others_not_filtered %v, want %v (tags %v)", c.name, m.id, has, c.filtered, got.Tags)
+			}
+			wantHours := c.hours && m.id != "context.per_session"
+			if has := slices.Contains(got.Tags, tagSeriesThisPC); has != wantHours {
+				t.Errorf("%s, %s: series_this_pc %v, want %v (tags %v)", c.name, m.id, has, wantHours, got.Tags)
+			}
+		}
+	}
+}
+
+// By PC under a version and a project filter: this PC's row counts its
+// prompts of that project and version; the other PC's counts its day's
+// figures of that version, whole (it sends no project).
+func TestByPCRowsFollowTheVersionBesideTheProject(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.1"
+	x.prompts("alpha", "a1", fxNow, 2, nil)
+	x.binary = "0.1.2"
+	x.prompts("alpha", "a2", fxNow, 3, nil)
+	x.prompts("beta", "b2", fxNow, 4, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 30, Hit: machines.Pair{0, 30}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", version: "0.1.2", f: machines.Figures{Prompts: 10, Hit: machines.Pair{0, 10}}},
+		pcRow{machine: pcOther1, day: "2026-10-29", version: "0.1.1", f: machines.Figures{Prompts: 20, Hit: machines.Pair{0, 20}}},
+	)
+	for _, c := range []struct {
+		project, version string
+		this, other      int64
+	}{{"alpha", "0.1.2", 3, 10}, {"alpha", "0.1.1", 2, 20}, {"beta", "0.1.1", 0, 20}, {"", "0.1.2", 7, 10}, {"alpha", "", 5, 30}} {
+		q := x.allQuery()
+		q.Project = c.project
+		err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
+			e.view, e.q.version = "cost", c.version
+			rows, err := byPC(e, q.Window, map[string]Metric{})
+			if err != nil {
+				return err
+			}
+			if len(rows) != 2 || rows[0].Prompts != c.this || rows[0].Active != (c.this > 0) || rows[1].Prompts != c.other {
+				t.Errorf("project %q, version %q: rows %+v, want this PC %d (active when above 0), the other %d", c.project, c.version, rows, c.this, c.other)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The reads of pc_days by window go through its index on (version, noon),
+// not a scan of every PC's days: the plan of each names pc_days_version_noon.
+func TestOtherPCsDaysReadThroughTheVersionNoonIndex(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcDoc(pcOther2, "2026-09-10", fxNow.Add(-time.Hour), "")
+	for d := 1; d <= 30; d++ {
+		day := fxNow.AddDate(0, 0, -d).UTC().Format("2006-01-02")
+		for _, pc := range []string{pcOther1, pcOther2} {
+			x.pcRows(pcRow{machine: pc, day: day, f: machines.Figures{Prompts: 1}},
+				pcRow{machine: pc, day: day, version: "0.1.2", f: machines.Figures{Prompts: 1}})
+		}
+	}
+	w := x.window(7)
+	lo, hi := noonSpan(w)
+	at0, at1 := fxNow.Add(-machines.DropAfter).UnixMilli(), fxNow.Add(machines.MaxSkew).UnixMilli()
+	err := withTx(context.Background(), x.srcAs(), x.allQuery(), nil, func(e env) error {
+		for _, c := range []struct {
+			name, q string
+			args    []any
+		}{
+			{"readOthers", othersQuery, []any{"", lo.UnixMilli(), hi.UnixMilli() + 1, at0, at1}},
+			{"otherVersions", otherVersionsQuery, []any{lo.UnixMilli(), hi.UnixMilli(), at0, at1}},
+		} {
+			rows, err := e.tx.QueryContext(e.ctx, "EXPLAIN QUERY PLAN "+c.q, c.args...)
+			if err != nil {
+				return err
+			}
+			var plan []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					return err
+				}
+				plan = append(plan, detail)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if !slices.ContainsFunc(plan, func(d string) bool { return strings.Contains(d, "pc_days_version_noon") }) {
+				t.Errorf("%s: plan %q does not use pc_days_version_noon", c.name, plan)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An hourly window's merged rates and latency keep this PC's series, as a
+// copy: a write to the merged run's points never reaches this PC's run in
+// the memo.
+func TestHourlyMergedSeriesIsACopy(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "h", fxNow, 10, injecting(4))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 9, Hit: machines.Pair{6, 9}, Latency: machines.Latency{0, 9}}})
+	q := x.query(1)
+	q.Machines = "all"
+	err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
+		for _, c := range []struct{ view, id string }{{"quality", "recall.hit_rate"}, {"cost", "recall.latency"}} {
+			e.view = c.view
+			fam := families.byID[c.id]
+			_, this, err := e.this().runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, _ := json.Marshal(this[c.id].Series)
+			_, merged, err := e.runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(merged[c.id].Tags, tagSeriesThisPC) || len(merged[c.id].Series) == 0 {
+				t.Fatalf("%s: tags %v, %d points: want an hourly merged run", c.id, merged[c.id].Tags, len(merged[c.id].Series))
+			}
+			for i := range merged[c.id].Series {
+				merged[c.id].Series[i].Partial = !merged[c.id].Series[i].Partial
+				merged[c.id].Series[i].Hour = "written"
+			}
+			_, again, err := e.this().runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after, _ := json.Marshal(again[c.id].Series); string(after) != string(before) {
+				t.Errorf("%s: a write to the merged series changed this PC's run:\nbefore %s\nafter  %s", c.id, before, after)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

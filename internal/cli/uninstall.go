@@ -1000,16 +1000,26 @@ func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config,
 
 // uninstallMetricsDocument deletes this machine's daily figures document
 // from the server this PC joined, under uninstallSharedCounts's rules:
-// skipped when this machine never published one (no record of a send),
-// another server answers at the joined address, or connect moved this PC
-// since uninstall read its config; kept with one line when the server
-// fails or does not answer within uninstallShareBudget.
+// skipped when this machine never tried to publish one (no publish
+// record), another server answers at the joined address, or connect moved
+// this PC since uninstall read its config; kept with one line when the
+// server fails or does not answer within uninstallShareBudget. A record of
+// failures only is no proof that nothing was sent: a send whose record
+// could not be saved leaves it as it was, so the delete is asked for (a
+// document that is not there deletes as done).
 func uninstallMetricsDocument(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, generation int, plan bool) undoAction {
 	a := undoAction{Name: "daily figures"}
 	machine := retain.ReadMachineID(d.State)
-	if rec, ok := machines.LoadPublished(d.MetricsDir()); machine == "" || !ok || rec.At.IsZero() {
+	rec, ok := machines.LoadPublished(d.MetricsDir())
+	if machine == "" || !ok {
 		a.Status, a.Detail = "skipped", "this machine never shared its daily figures"
 		return a
+	}
+	// A record of failures only: the delete is asked for, the line says
+	// the document may not have been there.
+	unsure := ""
+	if rec.At.IsZero() {
+		unsure = " (no send of them was recorded, only failures: there may have been none)"
 	}
 	if otherServer(d, cfg) != nil {
 		a.Status, a.Detail = "skipped", "another server answers at "+cfg.Server.URL+": nothing is deleted there (the other machines ignore this machine's figures after 30 days)"
@@ -1017,7 +1027,7 @@ func uninstallMetricsDocument(ctx context.Context, d paths.Dirs, cfg config.Conf
 	}
 	id := machines.DocPrefix + machine
 	if plan {
-		a.Status, a.Detail = "planned", "this machine's daily figures ("+id+") deleted from the server"
+		a.Status, a.Detail = "planned", "this machine's daily figures ("+id+") deleted from the server"+unsure
 		return a
 	}
 	if err := sendsGate(d, generation)(); err != nil {
@@ -1034,7 +1044,7 @@ func uninstallMetricsDocument(ctx context.Context, d paths.Dirs, cfg config.Conf
 		a.Status, a.Detail = "kept", "this machine's daily figures ("+id+") stay on the server, "+strings.Join(strings.Fields(errMessage(err)), " ")+": the other machines ignore them after 30 days"
 		return a
 	}
-	a.Status, a.Detail = "done", "this machine's daily figures ("+id+") deleted from the server"
+	a.Status, a.Detail = "done", "this machine's daily figures ("+id+") deleted from the server"+unsure
 	return a
 }
 

@@ -72,9 +72,35 @@ func addViewFlags(cmd *cobra.Command, f *viewFlags) {
 	p.BoolVar(&f.dev, "dev", false, "views: add the developer metrics")
 	p.IntVar(&f.limit, "limit", metrics.DefaultLimit, "views: rows per page, 1 to 500")
 	p.IntVar(&f.offset, "offset", 0, "views: rows to skip")
-	p.StringVar(&f.machines, "machines", "", "views: this (this PC's figures, default) or all (merged with the other PCs sharing this server)")
+	p.Var(&onceString{p: &f.machines, name: "machines"}, "machines", "views: this (this PC's figures, default) or all (merged with the other PCs sharing this server)")
 	p.StringVar(&f.client, "client", "", "only one coding tool's activity: "+strings.Join(views.ClientValues(), " or ")+" (default both)")
 }
+
+// onceString is a string flag that may be given once: the API refuses a
+// parameter given twice (views.FromValues), and the command line agrees
+// rather than letting the last one win.
+type onceString struct {
+	p    *string
+	name string
+	set  bool
+}
+
+func (o *onceString) Set(s string) error {
+	if o.set {
+		return fmt.Errorf("give --%s once", o.name)
+	}
+	o.set, *o.p = true, s
+	return nil
+}
+
+func (o *onceString) String() string {
+	if o.p == nil {
+		return ""
+	}
+	return *o.p
+}
+
+func (o *onceString) Type() string { return "string" }
 
 // refuseViewFlags is the usage error for a view-only flag given to the
 // legacy report or to `stats index`.

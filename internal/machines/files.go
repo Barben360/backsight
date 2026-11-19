@@ -57,12 +57,24 @@ func LoadCache(metricsDir string) (Cache, error) {
 	if err != nil {
 		return Cache{}, err
 	}
-	var c Cache
-	if err := json.Unmarshal(b, &c); err != nil {
+	// Every key SaveCache writes must be there: JSON of another shape
+	// (`{}`, null) is no cache, not an empty one.
+	var shape struct {
+		FetchedAt *time.Time   `json:"fetched_at"`
+		Docs      *[]CachedDoc `json:"docs"`
+		Ignored   *[]Ignored   `json:"ignored"`
+	}
+	if err := json.Unmarshal(b, &shape); err != nil {
 		return Cache{}, err
 	}
-	return c, nil
+	if shape.FetchedAt == nil || shape.Docs == nil || shape.Ignored == nil {
+		return Cache{}, errCacheShape
+	}
+	return Cache{FetchedAt: *shape.FetchedAt, Docs: *shape.Docs, Ignored: *shape.Ignored}, nil
 }
+
+// errCacheShape: the cache file is JSON, but not of the cache's shape.
+var errCacheShape = errors.New("machines: the cache file is not of the cache's shape")
 
 // readCapped reads r to its end, refusing more than max bytes (a file that
 // grew after its size was checked).
@@ -131,7 +143,9 @@ func AsTargetKey(s string) string {
 // PublishedFile is the path of the publish record in metricsDir.
 func PublishedFile(metricsDir string) string { return filepath.Join(metricsDir, "published.json") }
 
-// LoadPublished reads the record; a missing or corrupt file reads as none.
+// LoadPublished reads the record; a missing or corrupt file reads as none,
+// and so does one that holds neither a send nor a failure (`{}`, null, a
+// file of another shape): every record the publish step saves has one.
 func LoadPublished(metricsDir string) (Published, bool) {
 	b, err := fsutil.ReadFileShared(PublishedFile(metricsDir))
 	if err != nil {
@@ -139,6 +153,9 @@ func LoadPublished(metricsDir string) (Published, bool) {
 	}
 	var p Published
 	if err := json.Unmarshal(b, &p); err != nil {
+		return Published{}, false
+	}
+	if p.At.IsZero() && p.FailedAt.IsZero() && p.FailedSince.IsZero() {
 		return Published{}, false
 	}
 	p.Server = AsTargetKey(p.Server) // an older binary kept the target's text

@@ -168,14 +168,7 @@ func backlogAgeOf(tx *sql.Tx, now time.Time, status map[string]string) (time.Dur
 		// for a home document, not before the last ok of its siblings
 		// (settledHomes: the same rule readDocumentStatus applies; an event
 		// in the very millisecond of that ok is not settled by it).
-		rows, err := tx.Query(`
-SELECT r.document, MIN(r.ts) FROM tel_retain r
-LEFT JOIN (SELECT document, MAX(ts) AS done FROM tel_retain
-           WHERE document IS NOT NULL AND status NOT IN ('queued', 'retry') GROUP BY document) d
-       ON d.document = r.document
-LEFT JOIN (` + siblingOKSQL + `) s ON s.home = r.document
-WHERE r.document IS NOT NULL AND r.ts > COALESCE(d.done, -1) AND r.ts >= COALESCE(s.ts, -1)
-GROUP BY r.document`)
+		rows, err := tx.Query(currentWaitsSQL)
 		if err != nil {
 			return 0, err
 		}
@@ -199,6 +192,25 @@ GROUP BY r.document`)
 	}
 	return max(0, now.Sub(time.UnixMilli(oldest.Int64))), nil
 }
+
+// currentWaitsSQL is backlogAgeOf's grouped pass: per document, the first
+// event of its current wait. Its reads of tel_retain by document stay in
+// the index tel_retain_document (migration 0007). Columns: document, the
+// wait's first ts.
+const currentWaitsSQL = `
+SELECT r.document, MIN(r.ts) FROM tel_retain r
+LEFT JOIN (SELECT document, MAX(ts) AS done FROM tel_retain
+           WHERE document IS NOT NULL AND status NOT IN ('queued', 'retry') GROUP BY document) d
+       ON d.document = r.document
+LEFT JOIN (` + siblingOKSQL + `) s ON s.home = r.document
+WHERE r.document IS NOT NULL AND r.ts > COALESCE(d.done, -1) AND r.ts >= COALESCE(s.ts, -1)
+GROUP BY r.document`
+
+// documentStatusSQL reads document_status, each document's last event,
+// whose window reads tel_retain in the order of the index
+// tel_retain_document (migration 0007): no sort, no visit of the table's
+// rows. Columns: document, status, ts.
+const documentStatusSQL = `SELECT document, status, ts FROM document_status WHERE document IS NOT NULL`
 
 // documentStatus is document_status as a map, each document's last status
 // overall ("" when it carries none) as sentStatus reads it, read once per
@@ -244,7 +256,7 @@ func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT document, status, ts FROM document_status WHERE document IS NOT NULL`)
+	rows, err := tx.Query(documentStatusSQL)
 	if err != nil {
 		return nil, err
 	}

@@ -139,11 +139,18 @@ WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '' AND `+projectCla
 // flagship judges the flagship metrics on one version's rows: each family
 // run once for the window in an environment of its own (no memo shared with
 // the other versions), the metrics read as finish reads them with no
-// previous window.
+// previous window. The other PCs' days are the one memo's (othersAt keys
+// them by version), so releaseOthers does not read them again.
 func flagship(e env, w Window, version string) (map[string]Metric, error) {
 	ve := e
 	ve.q.version = version
 	ve.memo = newMemo()
+	if e.memo != nil {
+		if e.memo.others == nil {
+			e.memo.others = map[othersKey]others{}
+		}
+		ve.memo.others = e.memo.others
+	}
 	out := make(map[string]Metric, len(ReleaseFlagship))
 	for _, id := range ReleaseFlagship {
 		d, _ := DefOf(id)

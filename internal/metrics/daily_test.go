@@ -340,3 +340,83 @@ func TestDailyAssignsDaysAtTheUTCBoundary(t *testing.T) {
 		t.Errorf("00:00:00Z: %+v, want 1 prompt, hit [0 1], the 6000 ms bucket", d.Figures)
 	}
 }
+
+// withinTheDay reports every figure of a version row above its day's: a
+// reader refuses such a document, and the publish would drop the whole
+// version breakdown to send it.
+func withinTheDay(t *testing.T, days []machines.Day) {
+	t.Helper()
+	for _, d := range days {
+		for v, f := range d.Versions {
+			if f.Prompts > d.Prompts {
+				t.Errorf("%s %s: prompts %d above the day's %d", d.Day, v, f.Prompts, d.Prompts)
+			}
+			for _, p := range []struct {
+				name     string
+				ver, day machines.Pair
+			}{{"hit", f.Hit, d.Hit}, {"used", f.Used, d.Used}, {"coverage", f.Coverage, d.Coverage}, {"wrong", f.Wrong, d.Wrong}, {"context", f.Context, d.Context}} {
+				if p.ver[0] > p.day[0] || p.ver[1] > p.day[1] {
+					t.Errorf("%s %s: %s %v above the day's %v", d.Day, v, p.name, p.ver, p.day)
+				}
+			}
+			for i := range f.Latency {
+				if f.Latency[i] > d.Latency[i] {
+					t.Errorf("%s %s: latency bucket %d %d above the day's %d", d.Day, v, i, f.Latency[i], d.Latency[i])
+				}
+			}
+		}
+	}
+}
+
+// Every figure of every version row stays at or below its day's, on the
+// fixture and on random days: sessions, briefings and turns that span
+// versions, an invalid version, skips, documents.
+func TestDailyVersionFiguresStayWithinTheDay(t *testing.T) {
+	withinTheDay(t, dailyFixture(t).daily())
+
+	x := newFx(t, dailyAt)
+	rng := rand.New(rand.NewSource(20261119))
+	versions := []string{"v1.0", "v1.1", "v2.0", "v1 bad"}
+	sessions := []string{"S1", "S2", "S3", ""}
+	for i := range 120 {
+		at := utc(1+rng.Intn(2), rng.Intn(24)).Add(time.Duration(i%60) * time.Minute)
+		x.binary = versions[rng.Intn(len(versions))]
+		s := sessions[rng.Intn(len(sessions))]
+		switch rng.Intn(6) {
+		case 0, 1, 2:
+			f := map[string]any{"decision": "recall", "injected": rng.Intn(2)}
+			if f["injected"] == 0 {
+				f["empty"] = "no_candidates"
+			}
+			if rng.Intn(2) == 0 {
+				f["ms"] = rng.Intn(7000)
+			}
+			if rng.Intn(3) == 0 {
+				f["chars"] = 1 + rng.Intn(900)
+			}
+			dailyPrompt(x, at, 1000+i, s, f)
+		case 3:
+			dailyPrompt(x, at, 1000+i, s, map[string]any{"decision": "skip", "reason": "machine"})
+		case 4:
+			if s != "" {
+				x.tel(at, telemetry.Briefing{Chars: 1 + rng.Intn(600), Source: "raw"}, s, "alpha")
+			}
+		case 5:
+			outcome := []string{"declared", "undeclared", ""}[rng.Intn(3)]
+			verdict := []string{"used", "wrong", ""}[rng.Intn(3)]
+			x.declaredTurn(at, fmt.Sprintf("T%d", i), outcome, verdict, fmt.Sprintf("m%d", i))
+		}
+	}
+	days := x.daily()
+	if len(days) != 2 {
+		t.Fatalf("days = %+v, want 2", days)
+	}
+	n := 0
+	for _, d := range days {
+		n += len(d.Versions)
+	}
+	if n < 4 {
+		t.Fatalf("%d version rows, want several to compare", n)
+	}
+	withinTheDay(t, days)
+}

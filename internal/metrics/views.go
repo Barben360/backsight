@@ -285,11 +285,12 @@ func System(ctx context.Context, s Source, q Query) (Result, error) {
 // of need first), with the envelope every view carries, and makes every
 // list of the result marshal as [] rather than null.
 func runView(ctx context.Context, src Source, q Query, name string, need []string, fill func(e env, r *Result) error) (Result, error) {
-	// Sharing off answers this PC's figures, and the browse views always
-	// do: the scope says so.
+	// Sharing off answers this PC's figures, and so do the views that do
+	// not merge (bank, system and defs have nothing to add up; projects,
+	// sessions and memories are this PC's): the scope says what they count.
 	// A client filter counts this PC's activity: other PCs send no client.
 	machines := "this"
-	if q.Machines == "all" && q.Client == "" && sharingOn(src.Config) && !slices.Contains(thisOnlyViews, name) {
+	if q.Machines == "all" && q.Client == "" && sharingOn(src.Config) && MergingView(name) {
 		machines = "all"
 	}
 	q.Machines = machines

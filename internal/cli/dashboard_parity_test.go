@@ -406,7 +406,7 @@ func TestAPIEqualsTheCLIAllPCs(t *testing.T) {
 		{"days", "days", "", nil, false},
 		{"days/2026-10-07", "days", "2026-10-07", nil, false},
 		{"releases", "releases", "", nil, false},
-		{"system", "system", "", nil, false},
+		{"system", "system", "", nil, true}, // nothing to merge: the scope says this PC
 		{"memories/mem-long-1", "memories", "mem-long-1", nil, true},
 		{"overview, a project", "overview", "", []pair{{"project", "p1"}}, false},
 		{"cost, a month", "cost", "", []pair{{"days", "30"}}, false},

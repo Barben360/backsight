@@ -163,6 +163,12 @@ func TestParseRefusesHostileDocuments(t *testing.T) {
 		{"at missing", "", edit(func(m map[string]any) { delete(m, "at") }), NotValid},
 		{"machine missing", "", edit(func(m map[string]any) { delete(m, "machine") }), NotValid},
 		{"first_seen missing", "", edit(func(m map[string]any) { delete(m, "first_seen") }), NotValid},
+		{"a field name in upper case", "", replace(`"prompts":41`, `"PROMPTS":41`), NotValid},
+		{"a field again in another case", "", replace(`"prompts":41`, `"prompts":41,"Prompts":99`), NotValid},
+		{"v in upper case", "", replace(`{"v":1`, `{"V":1`), NotValid},
+		{"machine in title case", "", replace(`"machine":`, `"Machine":`), NotValid},
+		{"a field name with a long s", "", replace(`"days":`, `"day`+"ſ"+`":`), NotValid},
+		{"a field name in a version row in upper case", "", replace(`"v0.1.30-m7":{"prompts":41`, `"v0.1.30-m7":{"Prompts":41`), NotValid},
 		{"trailing value", "", func(s string) string { return s + s }, NotValid},
 		{"trailing garbage", "", func(s string) string { return s + " x" }, NotValid},
 		{"truncated", "", func(s string) string { return s[:len(s)-1] }, NotValid},
@@ -337,6 +343,40 @@ func TestUnknownVersionIsIgnoredWithItsReason(t *testing.T) {
 	want, _ := baseDoc().Marshal()
 	if again, _ := got.Marshal(); again != want {
 		t.Fatalf("unknown fields leaked:\n%s\n%s", again, want)
+	}
+}
+
+// The field names are matched in their case only; a versions key is a
+// version, whatever its case. The rule is the same at every level: a key
+// is refused only when it folds to one of the document's field names (any
+// of them, wherever it sits), so an unknown key that folds to none, at the
+// top or nested, stays ignored as before.
+func TestParseFieldNamesInTheirCase(t *testing.T) {
+	s := edit(func(m map[string]any) {
+		day(m)["versions"] = map[string]any{"Prompts": ver(m)}
+		m["Other_Field"] = map[string]any{"X": 1}
+		day(m)["Extra_Field"] = "x"
+	})(baseJSON(t))
+	d, err := Parse(DocPrefix+baseID, s, parseNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.Days[1].Versions["Prompts"]; !ok || d.Days[1].Prompts != 41 {
+		t.Fatalf("the version Prompts and the day: %+v", d.Days[1])
+	}
+	// A day's field name in another case at the top, or nested in an
+	// unknown field: refused like one in its own place.
+	for _, mut := range []func(m map[string]any){
+		func(m map[string]any) { m["Prompts"] = 1 },
+		func(m map[string]any) { m["Other_Field"] = map[string]any{"Days": 1} },
+	} {
+		if _, err := Parse(DocPrefix+baseID, edit(mut)(baseJSON(t)), parseNow); err == nil || reasonOf(t, err) != NotValid {
+			t.Errorf("a field name in another case elsewhere: %v", err)
+		}
+	}
+	// {"V":2} has no v: not valid, not a newer version.
+	if _, err := Parse(DocPrefix+baseID, `{"V":2}`, parseNow); reasonOf(t, err) != NotValid {
+		t.Errorf(`{"V":2}: %v`, err)
 	}
 }
 
