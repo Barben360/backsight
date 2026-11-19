@@ -62,7 +62,8 @@ func yieldPoints(ws []yieldWeek) []metrics.Point {
 	var out []metrics.Point
 	for _, w := range ws {
 		p := metrics.Point{Week: w.monday, Source: "server", Complete: &w.complete}
-		if w.complete {
+		switch {
+		case w.complete:
 			p.Num, p.Den = ip(w.num), ip(w.den)
 			if w.den >= 20 {
 				p.Value = fp(float64(w.num) / float64(w.den))
@@ -70,19 +71,22 @@ func yieldPoints(ws []yieldWeek) []metrics.Point {
 			if w.perUsed > 0 {
 				p.TokensPerUsed = fp(w.perUsed)
 			}
+		case w.den > 0: // not complete: its new memories so far, no used count
+			p.Den = ip(w.den)
 		}
 		out = append(out, p)
 	}
 	return out
 }
 
-// the design's thirteen weeks: Aug 4 to Oct 27 2025, as of Oct 30.
+// the design's thirteen weeks: Aug 4 to Oct 27 2025, as of Oct 30. Of the weeks not complete, Sep 29 and Oct 27
+// have their new memories counted (as drawn), Oct 20 none (a day nobody recorded).
 var yieldWeeks = []yieldWeek{
 	{"2025-08-04", true, 5, 12, 0}, {"2025-08-11", true, 0, 0, 0}, {"2025-08-18", true, 0, 0, 0},
 	{"2025-08-25", true, 0, 0, 0}, {"2025-09-01", true, 0, 0, 0},
 	{"2025-09-08", true, 13, 52, 15800}, {"2025-09-15", true, 0, 0, 0}, {"2025-09-22", true, 14, 45, 12400},
-	{"2025-09-29", false, 0, 0, 0}, {"2025-10-06", false, 0, 0, 0}, {"2025-10-13", false, 0, 0, 0},
-	{"2025-10-20", false, 0, 0, 0}, {"2025-10-27", false, 0, 0, 0},
+	{"2025-09-29", false, 0, 41, 0}, {"2025-10-06", false, 0, 0, 0}, {"2025-10-13", false, 0, 0, 0},
+	{"2025-10-20", false, 0, 0, 0}, {"2025-10-27", false, 0, 38, 0},
 }
 
 // giveYield sets memory.yield to the weeks, its headline being the latest complete one.
@@ -165,9 +169,9 @@ func TestYieldCard(t *testing.T) {
 			t.Fatalf("%d rows: %q", len(got), got)
 		}
 		for i, want := range [][]string{
-			{"Oct 27", "—", "not complete until Nov 30 (its last day, Nov 2, plus 28 days)"},
+			{"Oct 27", "38", "not complete until Nov 30 (its last day, Nov 2, plus 28 days)"},
 			{"Oct 20", "—", "not complete until Nov 23 (its last day, Oct 26, plus 28 days)"},
-			{"Sep 29", "—", "not complete until Nov 2 (its last day, Oct 5, plus 28 days)"},
+			{"Sep 29", "41", "not complete until Nov 2 (its last day, Oct 5, plus 28 days)"},
 			{"Sep 22", "45", "14", "31 %", "12.4 k"},
 			{"Sep 15", "0", "—", "—", "—"},
 			{"Sep 8", "52", "13", "25 %", "15.8 k"},

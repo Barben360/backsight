@@ -44,6 +44,7 @@ type yieldWeek struct {
 type yieldRun struct {
 	started                             bool // some day list was read
 	weeks                               []*yieldWeek
+	today                               string // the span's last date: it and the dates after it may be held by nothing yet
 	unresolved, gone, pending, resolved int64
 }
 
@@ -99,7 +100,7 @@ func weeksOf(w Window) []*yieldWeek {
 }
 
 func loadYield(e env, w Window) (*yieldRun, error) {
-	run := &yieldRun{weeks: weeksOf(w)}
+	run := &yieldRun{weeks: weeksOf(w), today: w.Until.Add(-time.Nanosecond).In(w.Loc).Format(dateLayout)}
 	if err := e.tx.QueryRowContext(e.ctx, `SELECT EXISTS (SELECT 1 FROM memory_days)`).Scan(&run.started); err != nil {
 		return nil, err
 	}
@@ -130,7 +131,10 @@ func (r *yieldRun) bounds() (first, last string, fromMs, toMs int64) {
 
 // readCreated sets each week's memories created: per day the server's
 // series, else the day line this PC recorded (server_day: the latest line
-// of the bucket); a week with a day neither holds has none.
+// of the bucket); a week with a past day neither holds has none. The
+// current week counts its days so far: the span's last date and the dates
+// after it, which neither may hold yet (the record writes a day once it is
+// over), count what is held, else nothing.
 func readCreated(e env, r *yieldRun) error {
 	perDay, held := map[string]int64{}, map[string]string{}
 	if serverReason(e, yieldSeriesKey) == "" {
@@ -159,6 +163,9 @@ func readCreated(e env, r *yieldRun) error {
 		for _, d := range wk.dates {
 			switch held[d] {
 			case "":
+				if d >= r.today {
+					continue
+				}
 				wk.source = "none"
 			case "record":
 				if wk.source == "server" {
@@ -374,6 +381,9 @@ func yield(e env, w Window, obs map[string]Observation, met map[string]Metric) e
 			if wk.tokens != nil && wk.num > 0 {
 				p.TokensPerUsed = ptr(float64(*wk.tokens) / float64(wk.num))
 			}
+		} else if wk.den != nil {
+			// not complete: its new memories, so far; no used count, no share until its 28 days are over
+			p.Den = wk.den
 		}
 		m.Series = append(m.Series, p)
 	}

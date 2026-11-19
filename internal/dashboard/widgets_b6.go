@@ -170,6 +170,9 @@ func (d PageData) yieldRow(v MetricView, p metrics.Point) YieldRow {
 	case p.Complete == nil || !*p.Complete:
 		last, until := completeUntil(p.Week)
 		row.Note = "not complete until " + until + " (its last day, " + last + ", plus 28 days)"
+		if p.Den != nil { // its new memories so far
+			row.New = l.Int(*p.Den)
+		}
 	case p.Den == nil:
 		row.Note = views.NoDataWords[metrics.ReasonNoRecord]
 	default:

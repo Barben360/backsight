@@ -291,6 +291,50 @@ func TestYieldIncompleteWeeks(t *testing.T) {
 	wantFloat(t, "metric value (the latest complete week's)", m.Value, 25.0/45)
 }
 
+// A week not complete yet still counts its new memories (den), with no used count and no share: the page's
+// "New memories" column shows them while the 28 days run. The current week counts the days so far: the dates
+// after the window's last one have no figure yet and count none, where a past date nobody recorded still leaves
+// the week without a count.
+func TestYieldIncompleteWeeksCountTheirNewMemories(t *testing.T) {
+	x := ydFx(t)
+	x.ydDays(ydWeek, 45)
+	x.ydDays("2026-09-28", 40)
+	for i, n := range []int64{6, 7, 8, 9} { // 10-26 to 10-29: 10-30, the window's last date, and after hold nothing
+		x.ydDay(ydDate("2026-10-26").AddDate(0, 0, i).Format("2006-01-02"), n, nil)
+	}
+	for i := range 6 { // the week of 10-19 lacks its Wednesday
+		if i != 2 {
+			x.ydDay(ydDate("2026-10-19").AddDate(0, 0, i).Format("2006-01-02"), 5, nil)
+		}
+	}
+	x.ydListed()
+	x.ydUsedMemories("a", 25)
+	x.ydMemory("b", "2026-09-29")
+	x.ydUsed("b", ydDate("2026-09-30"), "")
+	m := yieldOf(x, x.query(90))
+	for _, c := range []struct {
+		week string
+		den  int64
+	}{{"2026-09-28", 40}, {"2026-10-26", 30}} {
+		p := weekOf(t, m, c.week)
+		if p.Complete == nil || *p.Complete {
+			t.Fatalf("week %s complete = %v, want not", c.week, p.Complete)
+		}
+		wantInt(t, "new memories of the week of "+c.week, p.Den, c.den)
+		if p.Num != nil || p.Value != nil || p.CI != nil {
+			t.Errorf("week %s: num %v value %v ci %v, want none while it is not complete", c.week, p.Num, p.Value, p.CI)
+		}
+	}
+	if p := weekOf(t, m, "2026-10-19"); p.Den != nil || p.Source != "none" {
+		t.Errorf("a week with a past day nobody recorded: den %v source %q, want none", p.Den, p.Source)
+	}
+	// the headline stays the latest complete week's
+	p := weekOf(t, m, ydWeek)
+	wantInt(t, "den of the complete week", p.Den, 45)
+	wantFloat(t, "metric value (the latest complete week's)", m.Value, 25.0/45)
+	wantInt(t, "metric den", m.Den, 45)
+}
+
 // A week is complete when the window's end is at or after its last date +
 // 29 days at 00:00 UTC: to the minute.
 func TestYieldCompleteAtTheExactMoment(t *testing.T) {
