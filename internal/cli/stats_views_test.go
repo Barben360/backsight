@@ -226,6 +226,8 @@ func TestPersistentFlags(t *testing.T) {
 		{[]string{"stats", "7", "--machines", "all"}, "--machines applies to a view"},
 		{[]string{"stats", "index", "--machines", "all"}, "--machines applies to a view"},
 		{[]string{"stats", "overview", "--machines", "both"}, "--machines: this or all"},
+		{[]string{"stats", "overview", "--machines", "this", "--machines", "all"}, "give --machines once"},
+		{[]string{"stats", "cost", "--machines", "all", "--machines", "all"}, "give --machines once"},
 		{[]string{"stats", "index", "--days", "3"}, "--days applies to a view"},
 		{[]string{"stats", "index", "rebuild", "--plan", "--project", "x"}, "--project applies to a view"},
 		{[]string{"stats", "index", "migrate", "--since", "2026-10-01"}, "--since applies to a view"},
