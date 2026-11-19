@@ -91,6 +91,9 @@ var yieldWeeks = []yieldWeek{
 
 // giveYield sets memory.yield to the weeks, its headline being the latest complete one.
 func giveYield(r *metrics.Result, ws []yieldWeek) {
+	// as of Oct 30: the week of Oct 27 is still running
+	r.Window.Until = time.Date(2025, 10, 31, 0, 0, 0, 0, time.UTC)
+	r.Window.Since = r.Window.Until.AddDate(0, 0, -30)
 	give(r, "memory.yield", func(m *metrics.Metric) {
 		m.Series = yieldPoints(ws)
 		m.Value, m.Num, m.Den, m.CI = nil, nil, nil, nil
@@ -169,7 +172,7 @@ func TestYieldCard(t *testing.T) {
 			t.Fatalf("%d rows: %q", len(got), got)
 		}
 		for i, want := range [][]string{
-			{"Oct 27", "38", "not complete until Nov 30 (its last day, Nov 2, plus 28 days)"},
+			{"Oct 27", "38 so far", "not complete until Nov 30 (its last day, Nov 2, plus 28 days)"},
 			{"Oct 20", "—", "not complete until Nov 23 (its last day, Oct 26, plus 28 days)"},
 			{"Sep 29", "41", "not complete until Nov 2 (its last day, Oct 5, plus 28 days)"},
 			{"Sep 22", "45", "14", "31 %", "12.4 k"},

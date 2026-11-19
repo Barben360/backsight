@@ -125,8 +125,16 @@ func (d PageData) yieldOf(r *metrics.Result) YieldCard {
 		}
 		c.Charts = []PathChart{{HTML: chart.Cohort{Label: label, Weeks: weeks, More: d.more()}.HTML()}}
 	}
+	today := "" // the window's last day: a week that ends on it or later is still running
+	if !r.Window.Until.IsZero() {
+		loc := d.Loc
+		if loc == nil {
+			loc = time.UTC
+		}
+		today = r.Window.Until.Add(-time.Nanosecond).In(loc).Format(dayKey)
+	}
 	for i := len(v.M.Series) - 1; i >= 0; i-- {
-		c.Rows = append(c.Rows, d.yieldRow(v, v.M.Series[i]))
+		c.Rows = append(c.Rows, d.yieldRow(v, v.M.Series[i], today))
 	}
 	return c
 }
@@ -163,7 +171,10 @@ func completeUntil(monday string) (last, until string) {
 	return end.Format("Jan 2"), end.AddDate(0, 0, 28).Format("Jan 2")
 }
 
-func (d PageData) yieldRow(v MetricView, p metrics.Point) YieldRow {
+// yieldRow is a week's row of the yield table; today is the window's last
+// day ("" when unknown), so that a week still running reads its new
+// memories as "so far".
+func (d PageData) yieldRow(v MetricView, p metrics.Point, today string) YieldRow {
 	l := d.L
 	row := YieldRow{Week: dayLabel(p.Week), New: dash, Used: dash, Share: dash, Tokens: dash}
 	switch {
@@ -172,6 +183,9 @@ func (d PageData) yieldRow(v MetricView, p metrics.Point) YieldRow {
 		row.Note = "not complete until " + until + " (its last day, " + last + ", plus 28 days)"
 		if p.Den != nil { // its new memories so far
 			row.New = l.Int(*p.Den)
+			if t, err := time.Parse(dayKey, p.Week); err == nil && today != "" && t.AddDate(0, 0, 6).Format(dayKey) >= today {
+				row.New += " so far"
+			}
 		}
 	case p.Den == nil:
 		row.Note = views.NoDataWords[metrics.ReasonNoRecord]
