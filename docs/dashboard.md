@@ -194,7 +194,7 @@ A whole page can also be replaced by a short message:
 | "The page took too long." | Use Try again. |
 | "This link has expired." (a one-time link, used or older than 2 minutes) | Run `backsight dashboard link` for a new one. |
 
-A page that is not found, a malformed request and a page that fails keep the page's own question as their title, with a sentence that says what is wrong; for a failure, run `backsight doctor`. A page that fails because the dashboard hit a fault of its own (a bug, not your data) also leaves a line in `logs/dashboard.log` under backsight's state directory, with where it happened and never a memory's text: attach it when you report the bug. The dashboard serves the next request as usual.
+A page that is not found, a malformed request and a page that fails keep the page's own question as their title, with a sentence that says what is wrong; for a failure, run `backsight doctor`. A page that fails because the dashboard hit a fault of its own (a bug, not your data) also leaves a line in `logs/dashboard.log` under backsight's state directory (`backsight paths` prints it as `state`): `~/.local/state/backsight/logs/dashboard.log` on Linux, `%LOCALAPPDATA%\backsight\state\logs\dashboard.log` on Windows. The line says which view failed and where in the code, and never holds a memory's text. The file is readable by you alone, has secrets redacted, and rotates to `dashboard.log.1` at 10 MiB. Attach it when you report the bug. The dashboard serves the next request as usual.
 
 ## Preferences
 
