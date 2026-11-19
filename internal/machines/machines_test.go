@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const exampleJSON = `{"v":1,"machine":"3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6","at":1762394700,"os":"linux",` +
+const exampleJSON = `{"v":1,"machine":"3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6","at":1793955900,"os":"linux",` +
 	`"first_seen":"2026-09-02","binary_version":"v0.1.30-m7","until":"2026-11-05",` +
 	`"latency_edges_ms":[50,100,250,500,1000,2000,2500,5000],` +
 	`"days":[{"day":"2026-11-05","prompts":41,"hit":[12,30],"used":[5,9],"coverage":[9,11],"wrong":[0,6],` +
@@ -30,7 +30,7 @@ var exampleFigures = Figures{
 
 func exampleDoc() Doc {
 	return Doc{
-		Machine: "3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6", At: time.Unix(1762394700, 0).UTC(), OS: "linux",
+		Machine: "3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6", At: time.Unix(1793955900, 0).UTC(), OS: "linux",
 		FirstSeen: "2026-09-02", BinaryVersion: "v0.1.30-m7", Until: "2026-11-05",
 		Days: []Day{{Day: "2026-11-05", Figures: exampleFigures, Flow: Pair{3, 3},
 			Versions: map[string]Figures{"v0.1.30-m7": exampleFigures}}},
@@ -45,20 +45,17 @@ func TestDocRoundTrip(t *testing.T) {
 	if got != exampleJSON {
 		t.Fatalf("marshal differs:\n got %s\nwant %s", got, exampleJSON)
 	}
-	// D's example has an `at` (2025-11-06) earlier than its `until` (2026-11-05), which Parse
-	// refuses, so the parse-back runs on the same document published a year later.
-	later := exampleDoc()
-	later.At = time.Date(2026, 11, 6, 9, 5, 0, 0, time.UTC)
-	s, _ := later.Marshal()
-	back, err := Parse(exampleName, s, later.At.Add(time.Hour))
+	// The example is sent at 2026-11-06 09:05 UTC, the morning after its until.
+	want := exampleDoc()
+	if !want.At.Equal(time.Date(2026, 11, 6, 9, 5, 0, 0, time.UTC)) {
+		t.Fatalf("the example's at is %s", want.At)
+	}
+	back, err := Parse(exampleName, got, want.At.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(back, later) {
-		t.Fatalf("round trip differs:\n got %+v\nwant %+v", back, later)
-	}
-	if _, err := Parse(exampleName, got, later.At); err == nil {
-		t.Fatal("until after at's date must be refused")
+	if !reflect.DeepEqual(back, want) {
+		t.Fatalf("round trip differs:\n got %+v\nwant %+v", back, want)
 	}
 }
 
