@@ -40,13 +40,7 @@ func calendar(e env) ([]CalendarDay, error) {
 	// One grouped read of the prompts: the SQL places each on its local date
 	// (the zone's offset is a constant between two changes of the clocks), so
 	// a few hundred rows come back instead of every prompt.
-	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT `+dayOf("ts")+`, COUNT(*),
-       SUM(CASE WHEN reason IS NULL OR reason <> 'machine' THEN 1 ELSE 0 END),
-       SUM(CASE WHEN (reason IS NULL OR reason <> 'machine') AND decision = 'recall' AND COALESCE(injected, 0) > 0 THEN 1 ELSE 0 END),
-       COUNT(DISTINCT NULLIF(session, ''))
-FROM tel_prompt WHERE ts >= ? AND ts < ? AND `+projectClause+`
-GROUP BY 1`,
+	rows, err := e.tx.QueryContext(e.ctx, calendarPromptsSQL(dayOf("ts")),
 		start.UnixMilli(), end.UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {
 		return nil, err
@@ -82,6 +76,21 @@ GROUP BY 1`,
 		}
 	}
 	return out, nil
+}
+
+// calendarPromptsSQL is the calendar's grouped read of the prompts, day the
+// SQL expression of a prompt's local date number over ts; its arguments are
+// the span's start and end (unix ms) and the project twice. Every column it
+// reads is in the index tel_prompt_calendar (migration 0007), so the read
+// of 13 months never visits tel_prompt's rows.
+func calendarPromptsSQL(day string) string {
+	return `
+SELECT ` + day + `, COUNT(*),
+       SUM(CASE WHEN reason IS NULL OR reason <> 'machine' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN (reason IS NULL OR reason <> 'machine') AND decision = 'recall' AND COALESCE(injected, 0) > 0 THEN 1 ELSE 0 END),
+       COUNT(DISTINCT NULLIF(session, ''))
+FROM tel_prompt WHERE ts >= ? AND ts < ? AND ` + projectClause + `
+GROUP BY 1`
 }
 
 // localDayExpr returns the SQL expression, for a unix ms column, of the

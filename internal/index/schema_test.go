@@ -41,6 +41,7 @@ var released = map[string]string{
 	"0004-telemetry":  "aaf75e2f8a157bcb6bbd81f2ffad7baa37049dba73b543277596a87b347f98c1",
 	"0005-waiting":    "a36ea344d07e8cc422223b4e6bb06664e4b0c43cfdc5ba22c4ad0aed987c8f7e",
 	"0006-client":     "228345391978a865f9dc58a143b7a9c8731c142f0bc4bacd6fd45bab7052981a",
+	"0007-indexes":    "dfe70a2dbc885213383ccc4170de8fab0bb957a93c9548252e39dc6e9865b1e0",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -119,8 +120,8 @@ func TestReleasedMigrationsArePinned(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
 	defer mustClose(t, ix)
-	if ix.Schema() != 6 {
-		t.Fatalf("schema %d, want 6", ix.Schema())
+	if ix.Schema() != 7 {
+		t.Fatalf("schema %d, want 7", ix.Schema())
 	}
 	for _, tc := range schemaTables {
 		got := columnsOf(t, ix.sh.w, tc.name)
@@ -379,6 +380,9 @@ func TestSchemaIndexes(t *testing.T) {
 	for _, n := range []string{"shows", "stops", "credits", "turns"} {
 		want[n] = append(want[n], n+"_session_turn:session,turn")
 	}
+	// 0007: the days calendar's covering index, and tel_retain by document
+	want["tel_prompt"] = append(want["tel_prompt"], "tel_prompt_calendar:ts,project,reason,decision,injected,session")
+	want["tel_retain"] = append(want["tel_retain"], "tel_retain_document:document,ts,source_file,offset,status,ms")
 	for tbl, idx := range want {
 		var got []string
 		rows, err := ix.sh.w.Query(`SELECT il.name, group_concat(ii.name) FROM pragma_index_list(?) il
