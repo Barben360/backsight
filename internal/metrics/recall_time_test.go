@@ -286,6 +286,37 @@ func TestTimeToRecallWatch(t *testing.T) {
 	wantHop(t, hopsOf(t, m), "sent_to_extracted", 50*60_000, nil, 99)
 }
 
+// The value is the whole way's typical time, which needs 20 sessions recalled: with fewer, a judged step under
+// its limit reads too few, not ok beside no value, so every consumer (the tiles, the funnel card's pill, stats)
+// agrees with the figure. A slow step still reads watch with no value (TestTimeToRecallWatch): it outranks too few.
+func TestTimeToRecallTooFewWhileTooFewAreRecalled(t *testing.T) {
+	run := func(recalled int) Metric {
+		x := newFx(t, fxNow)
+		for i := 1; i <= 100; i++ { // 100 sent and turned into memories within 2 minutes: the judged step is fast
+			s := fmt.Sprintf("sess-%d", i)
+			if i <= recalled {
+				x.rcWhole(s, rcBase, time.Minute, time.Minute, time.Minute)
+				continue
+			}
+			x.rcPrompt(rcBase, s)
+			x.rcSend(rcBase.Add(time.Minute), s)
+			x.rcOp(s, "completed", rcBase.Add(time.Minute+5*time.Second), rcBase.Add(2*time.Minute), 0, units(2))
+		}
+		return ttr(x, x.query(7))
+	}
+	m := run(19)
+	if m.Status != StatusTooFew || m.Value != nil {
+		t.Errorf("19 recalled: status %q value %v, want too_few and no value", m.Status, m.Value)
+	}
+	if h := hopsOf(t, m)["sent_to_extracted"]; h.N != 100 || h.P95 == nil {
+		t.Fatalf("fixture: the judged step has %d timed, p95 %v; want 100 and a p95", h.N, h.P95)
+	}
+	m = run(20)
+	if m.Status != StatusOK || m.Value == nil {
+		t.Errorf("20 recalled: status %q value %v, want ok with a value", m.Status, m.Value)
+	}
+}
+
 func TestTimeToRecallTooFew(t *testing.T) {
 	x := newFx(t, fxNow)
 	for i := 1; i <= 19; i++ {

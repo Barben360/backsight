@@ -499,5 +499,11 @@ func timeToRecall(e env, w Window) (map[string]Observation, map[string]Metric, e
 		m.Tags = []string{tagPartial}
 	}
 	o := Observation{Den: hops[1].N, P95: hops[1].P95}
+	// The value needs its 20 sessions recalled: with fewer, a judged step under its limit would read ok beside
+	// no value, so it reads too few (judged on the recalled count). A step over its limit still reads watch:
+	// the slow step is real whatever was recalled yet.
+	if d, _ := DefOf(timeToRecallID); m.Value == nil && (o.P95 == nil || d.Absolute.Watch == nil || *o.P95 <= *d.Absolute.Watch) {
+		o.Den = hops[3].N
+	}
 	return map[string]Observation{timeToRecallID: o}, map[string]Metric{timeToRecallID: m}, nil
 }

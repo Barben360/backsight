@@ -1255,7 +1255,7 @@
           "id": "pipeline.time_to_recall",
           "label": "From session to recalled memory",
           "question": "How long until a session's memories come back?",
-          "definition": "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way; the slowest 1 in 20 of the sent-to-memories step needs 100 sessions and is watched above 1 hour.",
+          "definition": "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way, which needs 20 sessions recalled: with fewer it reads too few, unless the step it watches is slow. That step is sent to turned into memories: its slowest 1 in 20 needs 100 sessions and is watched above 1 hour.",
           "unit": "ms",
           "aggregation": "raw",
           "direction": "down",
