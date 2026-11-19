@@ -250,6 +250,10 @@ const (
 	tagStatusThisPC      = "status_this_pc"      // pipeline.flow, context.per_session: the status stays this PC's
 	tagAverage           = "average"             // context.per_session: total characters over total sessions
 	tagApproximate       = "approximate"         // recall.latency: a range from merged buckets
+	// verdict.wrong_rate: its extra's breakdown (wrong, outdated, used,
+	// confirmed) stays this PC's, by ruling (the other PCs send the pair
+	// only), so it does not sum to the merged num and den.
+	tagExtraThisPC = "extra_this_pc"
 )
 
 // mergeFunc returns, for the ids of its family that merge, a merged copy of
@@ -288,6 +292,9 @@ func mergeRates(e env, w Window, o others, obs map[string]Observation, met map[s
 		mo, mm, ok := mergePair(e, w, to, met[r.id], r.pair(o.total), func(i int) machines.Pair { return r.pair(o.byBucket[i]) })
 		if !ok {
 			continue
+		}
+		if r.id == "verdict.wrong_rate" {
+			mm.Tags = append(mm.Tags, tagExtraThisPC)
 		}
 		obs2[r.id], met2[r.id] = mo, mm
 	}

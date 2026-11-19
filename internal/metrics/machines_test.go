@@ -514,6 +514,17 @@ func TestMergeTwoPCsGivesExactSums(t *testing.T) {
 	}
 	sameSeries(t, "wrong", wrong, map[string][2]int64{"2026-10-30": {0, 5}, "2026-10-29": {1, 9}, "2026-10-27": {0, 6},
 		"2026-10-23": {0, 0}, "2026-10-24": {0, 0}, "2026-10-25": {0, 0}, "2026-10-26": {0, 0}, "2026-10-28": {0, 0}})
+	// By ruling the breakdown in extra stays this PC's (the other PCs send
+	// the pair only), so it does not sum to the merged 1/20: the tag says so.
+	if sum := wrong.Extra["wrong"].(int64) + wrong.Extra["outdated"].(int64) + wrong.Extra["used"].(int64) + wrong.Extra["confirmed"].(int64); sum != 6 {
+		t.Errorf("wrong extra sums to %d, want this PC's 6", sum)
+	}
+	if !slices.Contains(wrong.Tags, tagExtraThisPC) {
+		t.Errorf("wrong tags %v, want %s", wrong.Tags, tagExtraThisPC)
+	}
+	if slices.Contains(this["verdict.wrong_rate"].Tags, tagExtraThisPC) || slices.Contains(used.Tags, tagExtraThisPC) {
+		t.Errorf("extra_this_pc on this PC's wrong (%v) or on used (%v)", this["verdict.wrong_rate"].Tags, used.Tags)
+	}
 
 	flow := x.mergedOf("pipeline", x.query(7))["pipeline.flow"]
 	isNum(t, "flow", flow, 8, 8)
