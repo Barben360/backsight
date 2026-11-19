@@ -102,7 +102,7 @@ func bankOf(d PageData) BankPage {
 		}
 		b.Growth.Extras = extrasOf(d.L, growth)
 		from, _ := extraAs[string](growth.M, "record_from")
-		b.Growth.Charts = []PathChart{{HTML: kindsOf(l, d.more(), growth) + recordBlock(growth.M.Series, from, true)}}
+		b.Growth.Charts = []PathChart{{HTML: kindsOf(l, d.more(), growth) + recordBlock(growth.M.Series, from, true, d.more())}}
 	}
 
 	// bank.by_project's value is how many projects hold memories.

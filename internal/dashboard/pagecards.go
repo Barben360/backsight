@@ -470,7 +470,7 @@ func costOf(d PageData) CostPage {
 		c.Extraction.Extras = extrasOf(d.L, tokens, price)
 		from, _ := extraAs[string](tokens.M, "record_from")
 		c.Extraction.Charts = []PathChart{{HTML: extractionChart(l, d.more(), r.Tables.Extraction, tokens.M.Series) +
-			recordBlock(tokens.M.Series, from, false)}}
+			recordBlock(tokens.M.Series, from, false, d.more())}}
 		cur, _ := price.M.Extra["currency"].(string)
 		money := func(v float64, ok bool) string {
 			if !ok {
