@@ -616,6 +616,29 @@ func TestTickPublishesAndReports(t *testing.T) {
 
 // A tick whose publish is due and whose index holds more than one budget of
 // lines does one catch-up, the publish's: the tick's line is its freshness.
+// A tick skipped for components.write = false still shares: its line says
+// what the sharing step did, as a done tick's does.
+func TestSkippedTickReportsTheDailyFigures(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	setComponents(t, home, "write = false")
+	writes := watchMetricsWrites(t)
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	withClock(t, pubT0)
+	code, out, _ := run(t, "jobs", "tick")
+	if code != output.OK || len(writes()) != 1 {
+		t.Fatalf("exit %d, %d writes\n%s", code, len(writes()), out)
+	}
+	if !strings.HasPrefix(out, "skipped: components.write is off") || !strings.Contains(out, "daily figures sent (1 days") ||
+		!strings.Contains(out, "metrics index") {
+		t.Errorf("tick line: %q", out)
+	}
+	// Nothing to say: the skipped line is as before.
+	if got := tickText(tickResult{Status: "skipped", Reason: "another tick is running"}); got != "skipped: another tick is running\n" {
+		t.Errorf("bare skipped line: %q", got)
+	}
+}
+
 func TestTickCatchesUpOnceWhenThePublishIsDue(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
