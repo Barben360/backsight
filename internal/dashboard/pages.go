@@ -865,9 +865,13 @@ func switchOf(d PageData, view string) *Switch {
 	if pcs.Sharing && pcs.Count <= 1 && !asked || !pcs.Sharing && sc.Server == "" && !asked {
 		return nil
 	}
+	// Bank, System and the definitions merge nothing, so their scope reads
+	// this PC's; asked for all PCs, the switch stays there (Which PCs, the
+	// kept links), as the pages' table of what adds up says.
+	kept := asked && pcs.Sharing && !metrics.MergingView(view) && !metrics.ThisOnlyView(view)
 	sw := &Switch{
 		ThisHref: without(f.Path, "machines"), AllHref: addMachines(f.Path), N: pcs.Count,
-		AllSelected: sc.Machines == "all", Off: !pcs.Sharing, OffHref: machinesHref, OffTitle: sharingOffHint,
+		AllSelected: sc.Machines == "all" || kept, Off: !pcs.Sharing, OffHref: machinesHref, OffTitle: sharingOffHint,
 		Host: isLoopbackHost(sc.Server), AllNone: metrics.ThisOnlyView(view) && pcs.Sharing, NoneTitle: thisOnlyHint,
 	}
 	if !sw.AllSelected {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
@@ -248,9 +249,18 @@ func TestSharingOffEmptiesTheRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	loads := 0
+	sharingLoad = func(path string, d paths.Dirs, home string) (config.Config, error) {
+		loads++
+		return config.Load(path, d, home)
+	}
+	t.Cleanup(func() { sharingLoad = config.Load })
 	catchUp()
 	if d, n := rows(); d != 1 || n != 1 {
 		t.Fatalf("sharing on: %d documents, %d days, want 1 and 1", d, n)
+	}
+	if loads != 1 {
+		t.Errorf("config.toml loaded %d times in a catch-up that read the cache, want 1", loads)
 	}
 	for name, on := range map[string][2]bool{"share_ledger off": {true, false}, "feedback off": {false, true}} {
 		setSharing(on[0], on[1])

@@ -302,8 +302,9 @@ const (
 // listing l. Each is read with machines.Parse at now (untrusted): this PC's
 // own is left out, so is one more than machines.DropAfter old, a name listed
 // twice keeps its first, at most machines.MaxDocs are kept, the newest by at;
-// every refused one is recorded as ignored (its short id, if any, and the
-// reason). A failure keeps the cache as it was.
+// every refused one is counted in ignored and the first machines.MaxDocs are
+// recorded in the cache (their short id, if any, and the reason). A failure
+// keeps the cache as it was.
 func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlListing, d paths.Dirs, cfg config.Config, machine string, now time.Time) (fetched, ignored int, err error) {
 	if !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger || machine == "" {
 		return 0, 0, nil
@@ -325,6 +326,14 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 	}
 	var good []kept
 	fresh := machines.Cache{FetchedAt: now, Docs: []machines.CachedDoc{}, Ignored: []machines.Ignored{}}
+	// ignore records a refused document: all are counted, the first
+	// machines.MaxDocs listed.
+	ignore := func(id string, reason machines.Reason) {
+		ignored++
+		if len(fresh.Ignored) < machines.MaxDocs {
+			fresh.Ignored = append(fresh.Ignored, machines.Ignored{Machine: machines.Short(id), Reason: reason})
+		}
+	}
 	seen := map[string]bool{}
 	for _, it := range items {
 		if it.ID == machines.DocPrefix+machine || seen[it.ID] {
@@ -338,9 +347,7 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 			if pe := (*machines.ParseError)(nil); errors.As(perr, &pe) {
 				reason = pe.Reason
 			}
-			if len(fresh.Ignored) < machines.MaxDocs {
-				fresh.Ignored = append(fresh.Ignored, machines.Ignored{Machine: machines.Short(it.ID), Reason: reason})
-			}
+			ignore(it.ID, reason)
 			continue
 		}
 		if now.Sub(doc.At) > machines.DropAfter {
@@ -367,9 +374,7 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 	good = good[:min(len(good), machines.MaxDocs)]
 	good, over := withinCacheBudget(good, func(g kept) machines.CachedDoc { return machines.CachedDoc{Name: g.name, Raw: g.raw} }, cacheDocsBudget)
 	for _, g := range over {
-		if len(fresh.Ignored) < machines.MaxDocs {
-			fresh.Ignored = append(fresh.Ignored, machines.Ignored{Machine: machines.Short(g.name), Reason: machines.TooLarge})
-		}
+		ignore(g.name, machines.TooLarge)
 	}
 	slices.SortFunc(good, func(a, b kept) int { return cmp.Compare(a.name, b.name) })
 	for _, g := range good {
@@ -378,12 +383,12 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 	if err := machines.SaveCache(dir, fresh); err != nil {
 		return 0, 0, errCacheWrite
 	}
-	return len(fresh.Docs), len(fresh.Ignored), nil
+	return len(fresh.Docs), ignored, nil
 }
 
 // cacheDocsBudget is what the cached documents may take once JSON-escaped,
-// MaxCacheBytes less room for the rest of machines.json.
-const cacheDocsBudget = machines.MaxCacheBytes - 1<<20
+// MaxCacheBytes less room for the rest of machines.json (a var for the tests).
+var cacheDocsBudget = machines.MaxCacheBytes - 1<<20
 
 // withinCacheBudget keeps the leading items whose escaped JSON, summed, stays
 // within budget; the others (in order) are returned as over. A running total,
@@ -442,6 +447,9 @@ func (r tickResult) fetchText() string {
 		msg := fmt.Sprintf("daily figures of %d other PC(s) fetched", r.MetricsFetched)
 		if r.MetricsIgnored > 0 {
 			msg += fmt.Sprintf(", %d document(s) ignored", r.MetricsIgnored)
+		}
+		if r.MetricsIgnored > machines.MaxDocs { // the cache lists only the first
+			msg += fmt.Sprintf(", the first %d listed", machines.MaxDocs)
 		}
 		return msg
 	}

@@ -23,26 +23,26 @@ var indexRegistry = func() fs.FS { return index.Embedded }
 // silent).
 func indexOptions(d paths.Dirs, home string, progress io.Writer) index.Options {
 	return index.Options{Dirs: d, Home: home, Migrations: indexRegistry(), Ledger: indexLedger(d), LocalStatus: localStatusOf(d), Progress: progress,
-		Machines: machinesOf(d, home), MachinesOff: func() bool { return !sharingOn(d, home) }}
+		Machines: machinesOf(d), MachinesOff: func() bool { return !sharingOn(d, home) }}
 }
+
+// sharingLoad loads the config for sharingOn (tests count the loads).
+var sharingLoad = config.Load
 
 // sharingOn reports whether feedback.enabled and feedback.share_ledger are
 // both on in the config. No config (nothing set up) or one that does not
 // load reads as off: the other PCs' rows are cleared until it loads.
 func sharingOn(d paths.Dirs, home string) bool {
-	cfg, err := config.Load(d.ConfigFile(), d, home)
+	cfg, err := sharingLoad(d.ConfigFile(), d, home)
 	return err == nil && cfg.Feedback.Enabled && cfg.Feedback.ShareLedger
 }
 
-// machinesOf reads the other PCs' cache for the index: an empty one while
-// sharing is off (the file stays on disk), else metrics/machines.json.
-func machinesOf(d paths.Dirs, home string) func() (machines.Cache, error) {
-	return func() (machines.Cache, error) {
-		if !sharingOn(d, home) {
-			return machines.Cache{}, nil
-		}
-		return machines.LoadCache(d.MetricsDir())
-	}
+// machinesOf reads the other PCs' cache for the index, metrics/machines.json.
+// Sharing off is MachinesOff's to say: the index asks it first and never
+// calls this then (the file stays on disk), so a catch-up loads the config
+// once.
+func machinesOf(d paths.Dirs) func() (machines.Cache, error) {
+	return func() (machines.Cache, error) { return machines.LoadCache(d.MetricsDir()) }
 }
 
 // localStatusOf reads the local_status row's sources: reach.json and

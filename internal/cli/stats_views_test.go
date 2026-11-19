@@ -226,6 +226,8 @@ func TestPersistentFlags(t *testing.T) {
 		{[]string{"stats", "7", "--machines", "all"}, "--machines applies to a view"},
 		{[]string{"stats", "index", "--machines", "all"}, "--machines applies to a view"},
 		{[]string{"stats", "overview", "--machines", "both"}, "--machines: this or all"},
+		{[]string{"stats", "overview", "--machines", "this", "--machines", "all"}, "give --machines once"},
+		{[]string{"stats", "cost", "--machines", "all", "--machines", "all"}, "give --machines once"},
 		{[]string{"stats", "index", "--days", "3"}, "--days applies to a view"},
 		{[]string{"stats", "index", "rebuild", "--plan", "--project", "x"}, "--project applies to a view"},
 		{[]string{"stats", "index", "migrate", "--since", "2026-10-01"}, "--since applies to a view"},
@@ -251,6 +253,14 @@ func TestPersistentFlags(t *testing.T) {
 		code, out, errOut := run(t, c.args...)
 		if code != output.Usage || !strings.Contains(errOut, c.want) || out != "" {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q, want exit 2 with %q", c.args, code, out, errOut, c.want)
+		}
+	}
+	// --machines given once still parses, in both spellings
+	for _, args := range [][]string{{"--machines", "this"}, {"--machines=all"}} {
+		v = runView(t, append([]string{"stats", "quality"}, args...)...)
+		want := strings.TrimPrefix(args[len(args)-1], "--machines=")
+		if v.code != output.OK || at(v.env.Data, "scope", "machines") != want {
+			t.Errorf("%v: exit %d scope.machines %v, want %s", args, v.code, at(v.env.Data, "scope", "machines"), want)
 		}
 	}
 	// the error as JSON follows the envelope

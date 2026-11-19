@@ -17,7 +17,7 @@
       "until": "2026-10-01T14:00:00+02:00"
     },
     "scope": {
-      "machines": "all",
+      "machines": "this",
       "server": "127.0.0.1:PORT",
       "server_ok": true,
       "pcs": {
