@@ -423,6 +423,8 @@ New local files under `<state>/metrics/`, append-only JSONL with A.4's conventio
 
 *(2026-11-19, from the block 8 review deferred in https://github.com/Barben360/backsight/issues/128: R10's noon rule takes, in a window longer than a day, at most its first round(length / 24 h) noons, so a custom 30 h window holding two noons counts one day of the other PCs, as the 25 h day page did already, and a 36 h or 47 h window two; an N-day window holds exactly N noons and is unchanged. The Releases rows of the other PCs' versions read the same days.)*
 
+*(2026-11-19, same review: bank, system and defs merge nothing, so with `--machines all` their `scope.machines` reads `this` (it read `all`), as projects, sessions and memories do; the pages keep their switch on all PCs there, with Which PCs, as the table of what adds up says.)*
+
 ### 14. Agents
 - Block 2: `docs/agent-guide.md` and the `backsight:doctor` skill learn the views ("is memory working / worth it" → `backsight stats overview --json`, read `verdict` and `attention`; drill down with the other views; never `stats index rebuild` without the user); the `backsight:memory` skill's allowed commands gain `backsight stats` (read only).
 - Block 4: agents never start the dashboard on their own. When the user asks, they run `backsight dashboard --open` in the background; for a link they run `backsight dashboard link`. They never put a session secret on a command line.

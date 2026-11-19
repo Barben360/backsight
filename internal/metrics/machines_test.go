@@ -259,6 +259,31 @@ func TestBrowseViewsStayThisPC(t *testing.T) {
 	}
 }
 
+// Bank, system and defs have nothing to merge: asked for all PCs, their
+// scope says what they count (this PC's activity), not "all"; System's table
+// of the PCs still lists every counted one.
+func TestNonMergingViewsSayThisPC(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "p", fxNow, 3, nil)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	for _, view := range []string{"bank", "system", "defs"} {
+		q := x.allQuery()
+		q.Project = "alpha"
+		r := x.runAs(view, q)
+		if r.Scope.Machines != "this" || r.Scope.OthersUnfiltered || r.Scope.PCs == nil || r.Scope.PCs.Count != 2 {
+			t.Errorf("%s on all PCs: scope %+v pcs %+v, want machines this, others not flagged, 2 PCs listed", view, r.Scope, r.Scope.PCs)
+		}
+		if view == "system" && (r.Tables.Machines == nil || len(r.Tables.Machines.Rows) != 2) {
+			t.Errorf("system on all PCs: machines table %+v, want both PCs", r.Tables.Machines)
+		}
+	}
+	for _, view := range mergingViews {
+		if r := x.runAs(view, x.allQuery()); r.Scope.Machines != "all" {
+			t.Errorf("%s on all PCs: machines %q, want all", view, r.Scope.Machines)
+		}
+	}
+}
+
 func (x *fx) srcAs() Source {
 	src := x.source()
 	src.Self = func() SelfPC { return SelfPC{Machine: pcThis} }
