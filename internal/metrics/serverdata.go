@@ -32,7 +32,8 @@ type serverData struct {
 	LLM                 map[string][]hindsight.LLMBucket // key: operation ("" = all), over the window's period
 	LLM30               []hindsight.LLMBucket            // all operations over 30d whatever the window (llm30d:)
 	LLMSpan, LLM30Span  llmSpan                          // what the LLM reads can hold: their periods back from the read
-	Memory              hindsight.MemoryDetail           // memory:<id>
+	SeriesSpan          llmSpan                          // what the series read can hold: whole UTC days, today's to the read
+	Memory            hindsight.MemoryDetail           // memory:<id>
 	Doctor              []DoctorCheck
 	DoctorErr           error
 	Err                 map[string]error
@@ -258,6 +259,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	ySpan := yieldReadSpan(readAt, w)
 	d.LLMSpan = llmSpan{From: readAt.Add(-periodLength(llmPeriod(span))), To: readAt}
 	d.LLM30Span = llmSpan{From: readAt.Add(-periodLength("30d")), To: readAt}
+	d.SeriesSpan = llmSpan{To: readAt}
 	yieldLLM := map[string]*[]hindsight.LLMBucket{}
 	var (
 		kmu    sync.Mutex
