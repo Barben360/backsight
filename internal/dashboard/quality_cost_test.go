@@ -1274,7 +1274,7 @@ func TestCostThisPCIsUnchanged(t *testing.T) {
 			t.Errorf("the main of this PC's page changed: sha256 %s, want %s", sum, want)
 		}
 	}
-	pin(plain, "751382b1bc15ff98a8a3988dd6c460e2f4966e1694434805e07747cf80b12fb8")
+	pin(plain, "41f2587a3908d2d7a60981667504b944e8cd119e1c3f4b8cb6b9ac8e4e214b4e")
 	pin(render(false, nil), "7ab9cc687f2ecad7226e6646a6847c1fece20d173e693e59f56e77097852f4ba")
 	// The latency card of this PC's page is still two lines and the limit.
 	n := parseHTML(t, plain)
@@ -1555,6 +1555,24 @@ func TestCostPageBucketsFollowTheLocale(t *testing.T) {
 	}
 	if txt := line(format.Locale{}); !strings.Contains(txt, "all PCs: typical 500 ms–1.0 s") {
 		t.Errorf("English detail line: %q", txt)
+	}
+	// The detail lines' other figures follow it too: this PC's exact times, and the sizes with their grouping.
+	if txt := line(fr); !strings.Contains(txt, "this PC alone: typical 840 ms, slowest 1 in 20 1,6 s") {
+		t.Errorf("this PC's times not in the locale: %q", txt)
+	}
+	if txt := line(format.Locale{}); !strings.Contains(txt, "this PC alone: typical 840 ms, slowest 1 in 20 1.6 s") {
+		t.Errorf("English times: %q", txt)
+	}
+	ctx := func(l format.Locale) string {
+		n := allPCsCostNode(t, func(d *PageData) { d.L = l })
+		return cardOf(t, n, "w-context-per_session").text()
+	}
+	// (text() reads the locale's narrow no-break space as a space)
+	if txt := ctx(fr); !strings.Contains(txt, "this PC alone: typical 2 100 chars, high 3 600 chars") || strings.Contains(txt, "2,100") {
+		t.Errorf("the context's sizes not in the locale: %q", txt)
+	}
+	if txt := ctx(format.Locale{}); !strings.Contains(txt, "this PC alone: typical 2,100 chars, high 3,600 chars") {
+		t.Errorf("English sizes: %q", txt)
 	}
 }
 

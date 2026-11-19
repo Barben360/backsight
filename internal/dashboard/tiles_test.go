@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -725,5 +726,77 @@ func TestMergedTileLeavesThisPCsItemsToTheirCard(t *testing.T) {
 	one := scenarioNamed(t, "qualitywatch")
 	if got := allTile(t, one, nil, tilePage, "Found").Note; got != scFoundText {
 		t.Errorf("this PC: %q", got)
+	}
+}
+
+// The rules the tile head's fit rests on, checked without a browser (TestTileHeadsFitInChrome measures the
+// result): the head is a row whose spacer pushes the info button to the edge, and the title's group is a
+// flex box that wraps and may shrink below its content's width, so the chips go under the title instead of
+// pushing the button out of the tile.
+func TestTileHeadRulesLetTheGroupWrap(t *testing.T) {
+	css, err := assetFS.ReadFile("assets/dashboard.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		sel         string
+		decl, value string
+	}{
+		{".tile-top", "display", "flex"},
+		{".tile-top .spacer", "flex", "1"},
+		{".tile-who", "display", "flex"},
+		{".tile-who", "flex-wrap", "wrap"},
+		{".tile-who", "min-width", "0"},
+	} {
+		found := false
+		for _, r := range cssRules(string(css)) {
+			if r.At == "" && slices.Contains(r.Sel, c.sel) && r.declStarts(c.decl, c.value) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("dashboard.css: no top-level %s { %s: %s }", c.sel, c.decl, c.value)
+		}
+	}
+	// and no narrower width takes the wrap back
+	for _, r := range cssRules(string(css)) {
+		if r.At != "" && slices.Contains(r.Sel, ".tile-who") && (r.declStarts("flex-wrap", "nowrap") || r.declStarts("display", "block")) {
+			t.Errorf("dashboard.css: %s .tile-who { %s } undoes the wrap", r.At, r.Body)
+		}
+	}
+}
+
+// Every tile's head is laid out to fit its tile (TestTileHeadsFitInChrome measures it): the title and its chips
+// are one group, .tile-who, which wraps the chips under the title, and the info button follows the group in the
+// head, so it keeps the first line. On this PC as on all PCs.
+func TestTileHeadsGroupTheTitleAndChips(t *testing.T) {
+	read := 0
+	for name, doc := range map[string]*node{
+		"this PC": renderOverview(t, scenarioNamed(t, "healthy")),
+		"all PCs": renderAllPCs(t, allPCsOverview(t), scenarioNamed(t, "healthy"), nil, allPCsPage),
+	} {
+		for _, tile := range doc.find("article.tile") {
+			read++
+			top := tile.first(".tile-top")
+			if top == nil {
+				t.Fatalf("%s: a tile at line %d has no head", name, tile.line)
+			}
+			who := top.first(".tile-who")
+			if who == nil || who.Parent != top || who.first("h3.tile-name") == nil {
+				t.Errorf("%s: the head at line %d does not group its title in .tile-who", name, top.line)
+				continue
+			}
+			for _, chip := range top.find(".chip") {
+				if !within(chip, "div", "tile-who") {
+					t.Errorf("%s: chip %q at line %d sits outside the title's group", name, chip.text(), chip.line)
+				}
+			}
+			if info := top.first("details.info"); info == nil || info.Parent != top || info.line < who.line {
+				t.Errorf("%s: the head at line %d has no info button after the group", name, top.line)
+			}
+		}
+	}
+	if read < 12 {
+		t.Errorf("%d tiles read, want the Overview's six on this PC and on all PCs", read)
 	}
 }

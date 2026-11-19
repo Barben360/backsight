@@ -128,10 +128,37 @@ func TestSwitchStaysVisibleInTheScopeLineOnAPhone(t *testing.T) {
 	if matched == 0 {
 		t.Errorf("none of %q matches an element of the page: the check would be vacuous", sels)
 	}
-	css := dashboardCSS(t)
-	i := strings.Index(css, "@container page (max-width: 899px) {\n  .mscope")
-	if i < 0 || !strings.Contains(css[i:i+strings.Index(css[i:], "\n}")], ".mscope { flex-basis: 100%; }") {
+	if !switchHasOwnLine(dashboardCSS(t)) {
 		t.Error("the narrow block gives the switch no line of its own")
+	}
+}
+
+// switchHasOwnLine reports whether a narrow block of css gives the switch a line of its own.
+func switchHasOwnLine(css string) bool {
+	return slices.ContainsFunc(cssRules(css), func(r cssRule) bool {
+		return r.At == narrow && slices.Contains(r.Sel, ".mscope") && r.declStarts("flex-basis", "100%")
+	})
+}
+
+// The check reads the sheet's rules, not its layout: a sheet cut short, written on one line or with the rule
+// elsewhere in the narrow block is read, not a panic; a rule outside the narrow block, or another value, is not it.
+func TestSwitchHasOwnLineReadsRules(t *testing.T) {
+	for _, c := range []struct {
+		name, css string
+		want      bool
+	}{
+		{"as shipped", "@container page (max-width: 899px) {\n  .mscope { flex-basis: 100%; }\n}\n", true},
+		{"cut short", "@container page (max-width: 899px) {\n  .mscope { flex-basis: 100%; }", true},
+		{"one line", "@container page (max-width: 899px) { .mscope { flex-basis: 100%; } }", true},
+		{"after another rule", "@container page (max-width: 899px) {\n  .x { color: red; }\n  .mscope { flex-basis: 100%; }\n}\n", true},
+		{"outside the narrow block", ".mscope { flex-basis: 100%; }\n@container page (max-width: 899px) {\n  .x { color: red; }\n}\n", false},
+		{"another value", "@container page (max-width: 899px) {\n  .mscope { flex-basis: 50%; }\n}\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := switchHasOwnLine(c.css); got != c.want {
+				t.Errorf("%v, want %v", got, c.want)
+			}
+		})
 	}
 }
 

@@ -993,6 +993,14 @@ func TestViewTextAllPCs(t *testing.T) {
 	if out := text("overview", "--project", "p1"); strings.Contains(out, "other PCs") || !strings.Contains(out, "Activity on this PC · memory on") {
 		t.Errorf("this PC alone names the other PCs:\n%s", out)
 	}
+	// The Days table counts this PC's days even with all PCs (only the calendar adds them up): beside the
+	// all-PCs footer its title says so; with this PC alone it is the plain title.
+	if out := text("days", "--machines", "all"); !strings.Contains(out, "\nDays (this PC)\nDay ") {
+		t.Errorf("the Days table on all PCs does not say it is this PC's:\n%s", out)
+	}
+	if out := text("days"); !strings.Contains(out, "\nDays\nDay ") || strings.Contains(out, "(this PC)") {
+		t.Errorf("the Days table on this PC alone:\n%s", out)
+	}
 	// the speed of the 649 recalls: 8 days of 80 from the other PCs and
 	// this PC's 9; the slowest 1 in 20 is rank 617, in (1000, 2000], and
 	// the typical one rank 325, in (500, 1000]

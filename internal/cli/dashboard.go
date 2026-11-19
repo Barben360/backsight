@@ -7,8 +7,10 @@ import (
 	"io"
 	"io/fs"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,9 +18,11 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/dashboard"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -66,6 +70,9 @@ func runDashboard(ctx context.Context, e *env, port int, open bool) error {
 	cfg, err := dashboardConfig(ctx, d, home, port, e.stderr)
 	if err != nil {
 		return err
+	}
+	if c, ok := cfg.Log.(io.Closer); ok {
+		defer func() { _ = c.Close() }()
 	}
 	s, err := startServer(ctx, cfg)
 	if err != nil {
@@ -210,6 +217,7 @@ func dashboardConfig(_ context.Context, d paths.Dirs, home string, port int, std
 	}
 	return dashboard.Config{
 		Dirs: d, Port: port, Now: now, Version: buildinfo.Version, Stderr: stderr, Source: src,
+		Log: &dashboardLog{path: filepath.Join(d.State, "logs", "dashboard.log")},
 		OpenIndex: func(ctx context.Context) (dashboard.Index, error) {
 			ix, err := index.Open(ctx, indexOptionsAt(d, home, stderr))
 			if err != nil {
@@ -225,6 +233,53 @@ func dashboardConfig(_ context.Context, d paths.Dirs, home string, port int, std
 			return !st.Exists || st.IngestedAt.IsZero(), nil
 		},
 	}, nil
+}
+
+// dashboardLog is the dashboard's log, <state>/logs/dashboard.log beside the
+// other logs: what the dashboard recovered from (a view that panicked) for
+// whoever looks into it later. It is opened on its first line, so a run with
+// nothing to say leaves no file; private, rotated at 10 MiB to .1 and with the
+// secrets' values redacted, as the jobs' logs. A log that cannot be opened
+// drops its lines: it never stops the dashboard.
+type dashboardLog struct {
+	path string
+
+	mu     sync.Mutex
+	opened bool
+	w      io.WriteCloser // the redactor over f; nil: not opened, or it could not be
+	f      io.Closer
+}
+
+func (l *dashboardLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.opened {
+		l.opened = true
+		if fsutil.MkdirPrivate(filepath.Dir(l.path)) == nil {
+			if f, err := supervise.OpenLog(l.path); err == nil {
+				l.w, l.f = supervise.NewRedactor(f, localSecretValues()), f
+			}
+		}
+	}
+	if l.w == nil {
+		return len(p), nil
+	}
+	return l.w.Write(p)
+}
+
+// Close writes what the redactor holds and closes the file.
+func (l *dashboardLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.w == nil {
+		return nil
+	}
+	err := l.w.Close()
+	if cerr := l.f.Close(); err == nil {
+		err = cerr
+	}
+	l.w, l.f = nil, nil
+	return err
 }
 
 // openBrowser opens url in the default browser. It starts the program and

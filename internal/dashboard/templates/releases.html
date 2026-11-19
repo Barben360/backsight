@@ -29,7 +29,7 @@
 {{end}}{{.Chart}}
 <div class="tbl-wrap"><table class="tbl">
 <caption class="sr-only">{{.Caption}}</caption>
-<thead><tr><th>Project</th><th>Where memory was shown</th><th class="r">{{.A}}</th><th class="r">{{.B}}</th><th class="r">Difference (95 %)</th><th>Reading</th></tr></thead>
+<thead><tr><th scope="col">Project</th><th scope="col">Where memory was shown</th><th scope="col" class="r">{{.A}}</th><th scope="col" class="r">{{.B}}</th><th scope="col" class="r">Difference (95 %)</th><th scope="col">Reading</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{.Project}}</td><td>{{.Shown}}</td>{{template "cmprow" .}}</tr>
 {{end}}{{with .Pooled}}<tr class="total"><td colspan="2">{{.Label}}</td>{{template "cmprow" .}}</tr>
@@ -40,8 +40,8 @@
 {{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
 <thead>
-<tr><th rowspan="2">Version</th><th rowspan="2">In use</th><th class="r" rowspan="2">Prompts</th><th class="r" rowspan="2">Turns judged</th><th class="r">Found</th><th class="r">Used</th><th class="r">Said what it used</th><th class="r">Reported wrong</th><th class="r">Context</th><th class="r">Speed</th><th colspan="3" class="side">Beside it (covariates)</th></tr>
-<tr><th class="r xs">recall.hit_rate</th><th class="r xs">used.turn_rate</th><th class="r xs">declare.coverage</th><th class="r xs">verdict.wrong_rate</th><th class="r xs">context.per_session</th><th class="r xs">recall.latency</th><th class="side">Top project</th><th class="r">Prompts / day</th><th class="r">Memories</th></tr>
+<tr><th scope="col" rowspan="2">Version</th><th scope="col" rowspan="2">In use</th><th scope="col" class="r" rowspan="2">Prompts</th><th scope="col" class="r" rowspan="2">Turns judged</th><th scope="col" class="r">Found</th><th scope="col" class="r">Used</th><th scope="col" class="r">Said what it used</th><th scope="col" class="r">Reported wrong</th><th scope="col" class="r">Context</th><th scope="col" class="r">Speed</th><th scope="colgroup" colspan="3" class="side">Beside it (covariates)</th></tr>
+<tr><th scope="col" class="r xs">recall.hit_rate</th><th scope="col" class="r xs">used.turn_rate</th><th scope="col" class="r xs">declare.coverage</th><th scope="col" class="r xs">verdict.wrong_rate</th><th scope="col" class="r xs">context.per_session</th><th scope="col" class="r xs">recall.latency</th><th scope="col" class="side">Top project</th><th scope="col" class="r">Prompts / day</th><th scope="col" class="r">Memories</th></tr>
 </thead>
 <tbody>
 {{range .Rows}}<tr id="release-{{.Version}}"><td class="mono"><a href="{{.Href}}">{{.Version}}</a></td><td>{{.Span}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Judged}}</td>{{range .Flags}}<td class="r">{{if .Class}}<span class="st {{.Class}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}</td>{{end}}<td class="side" title="{{.Shares}}">{{template "projlink" .Top}} {{.TopShare}}</td><td class="r">{{.PerDay}}</td><td class="r">{{.Bank}}</td></tr>
@@ -51,7 +51,7 @@
 <div class="grid-2">
 {{with .Settings}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Setting</th><th class="r">Value</th></tr></thead>
+<thead><tr><th scope="col">Setting</th><th scope="col" class="r">Value</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td class="mono">{{.Name}}</td><td class="r">{{.Value}}</td></tr>
 {{end}}</tbody></table></div>

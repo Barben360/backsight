@@ -105,10 +105,16 @@ func (d *domHarness) run(t *testing.T, chrome, scenario string) ([]string, strin
 // runAt is run on another page (path and query).
 func (d *domHarness) runAt(t *testing.T, chrome, path, scenario string) ([]string, string) {
 	t.Helper()
+	return d.runSized(t, chrome, path, scenario, 1280)
+}
+
+// runSized is runAt in a window width pixels wide.
+func (d *domHarness) runSized(t *testing.T, chrome, path, scenario string, width int) ([]string, string) {
+	t.Helper()
 	d.mu.Lock()
 	d.log = nil
 	d.mu.Unlock()
-	args := []string{"--headless=new", "--disable-gpu", "--no-first-run", "--window-size=1280,900", "--user-data-dir=" + t.TempDir()}
+	args := []string{"--headless=new", "--disable-gpu", "--no-first-run", "--window-size=" + strconv.Itoa(width) + ",900", "--user-data-dir=" + t.TempDir()}
 	if os.Getuid() == 0 {
 		args = append(args, "--no-sandbox")
 	}
@@ -338,4 +344,26 @@ func TestScriptBehaviourInChrome(t *testing.T) {
 			t.Errorf("data-result %q, want %q", res, want)
 		}
 	})
+}
+
+// A tile's head stays inside the tile at every width of the tile grid: the title and its chips are one group
+// that wraps (the chips under the title) while the info button keeps the first line, at the right edge. On this
+// PC, Reported wrong's button ran 7 px into the padding beside its 2-line title at 1440 px, and the Overview's
+// six tiles further at narrower widths.
+func TestTileHeadsFitInChrome(t *testing.T) {
+	if os.Getenv("BACKSIGHT_CHROME_TESTS") != "1" {
+		t.Skip("BACKSIGHT_CHROME_TESTS is not 1")
+	}
+	chrome := chromePath()
+	if chrome == "" {
+		t.Fatal("BACKSIGHT_CHROME_TESTS=1 but no Chrome or Chromium on PATH")
+	}
+	d := newDOMHarness(t)
+	for _, width := range []int{950, 1024, 1280, 1440, 1920} {
+		for _, path := range []string{"/?days=7", "/quality?days=7", "/cost?days=7", "/pipeline?days=7"} {
+			if _, res := d.runSized(t, chrome, path, "tilefit", width); res != "ok" {
+				t.Errorf("%s at %d px: %s", path, width, res)
+			}
+		}
+	}
 }

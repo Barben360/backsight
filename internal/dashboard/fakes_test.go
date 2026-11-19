@@ -26,7 +26,8 @@ var dataSpec = indexgen.Spec{Months: 1, TelemetryPerYear: 6000, JournalPerYear: 
 // set, holds each ReadTx until it is closed or the call's context ends;
 // entered, when set, receives a value as each ReadTx starts. open is the
 // Config's OpenIndex: it fails with openErrs in turn, and waits for
-// openGate when set.
+// openGate when set. readErr, when set, is what each ReadTx fails with;
+// readPanic, when set, what it panics with.
 type fakeIndex struct {
 	real *index.Index
 
@@ -46,6 +47,8 @@ type fakeIndex struct {
 	opens       int
 	versionHold bool  // FileVersion waits for its context to end
 	openEnded   error // the context error an open waiting for openGate returned
+	readErr     error
+	readPanic   any
 }
 
 var _ Index = (*fakeIndex)(nil)
@@ -88,8 +91,14 @@ func (f *fakeIndex) counts() (catchUps, readTxs, closes int) {
 func (f *fakeIndex) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	f.mu.Lock()
 	f.readTxs++
-	block, entered := f.block, f.entered
+	block, entered, readErr, readPanic := f.block, f.entered, f.readErr, f.readPanic
 	f.mu.Unlock()
+	if readPanic != nil {
+		panic(readPanic)
+	}
+	if readErr != nil {
+		return readErr
+	}
 	if entered != nil {
 		select {
 		case entered <- struct{}{}:

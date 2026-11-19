@@ -371,7 +371,7 @@ var Catalog = withDrills([]Def{
 		Command:    "backsight stats pipeline",
 		Extra:      []string{"funnel", "hops"},
 		Question:   "How long until a session's memories come back?",
-		Definition: "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way; the slowest 1 in 20 of the sent-to-memories step needs 100 sessions and is watched above 1 hour.",
+		Definition: "For each session of this PC, the time from its last prompt to its first memory shown in a later session, split into three steps: sent, turned into memories, shown again. The value is the typical (median) whole way, which needs 20 sessions recalled: with fewer it reads too few, unless the step it watches is slow. That step is sent to turned into memories: its slowest 1 in 20 needs 100 sessions and is watched above 1 hour.",
 		Action:     "Memories take long to come back. Check the server with backsight doctor.",
 	},
 	{

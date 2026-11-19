@@ -38,7 +38,7 @@ Every `make` target runs Go on 4 CPUs (`GOMAXPROCS`, and `golangci-lint --concur
 | Command | Does |
 |---|---|
 | `make check` | the whole gate below, in one command |
-| `make build` | builds `bin/backsight` |
+| `make build` | builds `bin/backsight`, versioned by `git describe` without the tag's `v` (`0.1.27-m7`, as a release names it), so the two kinds of build count as one version on the Releases page |
 | `make test` | runs every test with the race detector, then without it the tests on a year of generated history, which skip under it (`make test-sweep`: the dashboard's page sweep and page reads, the metrics views) |
 | `make test-shard SHARD=<i> SHARDS=<n>` | runs slice `i` (from 0) of `n` of `make test`'s race-detector run, as CI does in parallel jobs; each test is in exactly one slice (`scripts/testshard`), the slices balanced by the tests' recorded times |
 | `make test-durations [RUN=<id>]` | records those times (`scripts/testshard/durations.txt`) from the times each `test-race` slice of a CI run uploads (main's latest successful run by default; needs `gh`), refused if a slice is missing or a test failed; a test added since counts 0.05 s, so re-record when CI's slices drift apart |

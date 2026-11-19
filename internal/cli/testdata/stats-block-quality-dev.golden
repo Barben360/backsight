@@ -6,7 +6,7 @@ Prompts that found nothing                   1 prompt                 (ok, +1 vs
   why: reason not recorded 1
   prompts skipped: other 1
 Prompts that got memory, by language         8 of 9                   (n=9, too few, 11 more needed)
-  fr: 1 of 1, too few to compare
+  French: 1 of 1, too few to compare
 Prompts where Claude searched memory         0 of 9                   (n=9, too few, 11 more needed)
 Searches that found nothing                  —                        (no data: nothing recorded yet)
 

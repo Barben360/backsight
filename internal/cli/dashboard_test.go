@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
@@ -393,6 +394,47 @@ func TestDashboardReadsTheServerReadOnly(t *testing.T) {
 	}
 	if _, ok := cfg.Source.Server.(*hindsight.ReadOnly); !ok || !cfg.Source.Configured || !strings.HasPrefix(cfg.Source.ServerHost, "127.0.0.1:") {
 		t.Errorf("server %T, configured %v, host %q", cfg.Source.Server, cfg.Source.Configured, cfg.Source.ServerHost)
+	}
+}
+
+// The dashboard logs what it recovered from in <state>/logs/dashboard.log, beside the other logs: the file is
+// made on the first line only (a run with nothing to say leaves none), private, and the secrets' values are
+// redacted as in the other logs.
+func TestDashboardLogIsMadeOnItsFirstLine(t *testing.T) {
+	viewsFixture(t)
+	d, home, _ := machine()
+	const secret = "dash-log-secret-value-42"
+	if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", secret) }); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := dashboardConfig(context.Background(), d, home, 0, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log == nil {
+		t.Fatal("the dashboard has no log")
+	}
+	path := filepath.Join(d.State, "logs", "dashboard.log")
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the log exists before its first line: %v", err)
+	}
+	if _, err := fmt.Fprintf(cfg.Log, "2026-11-19T10:00:00Z dashboard: the quality view panicked near %s\n", secret); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := cfg.Log.(io.Closer); ok {
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no log after its first line: %v", err)
+	}
+	if !strings.Contains(string(b), "dashboard: the quality view panicked near ") || strings.Contains(string(b), secret) {
+		t.Errorf("log %q: want the line with the secret redacted", b)
+	}
+	if fi, err := os.Stat(path); runtime.GOOS != "windows" && (err != nil || fi.Mode().Perm() != 0o600) {
+		t.Errorf("the log's mode: %v, %v", fi.Mode(), err)
 	}
 }
 

@@ -14,7 +14,7 @@
 {{template "devids" .Card}}{{template "lead" .Card}}{{with .Lede}}<p class="xs muted">{{.}}</p>
 {{end}}{{template "nodata" .Note}}{{range .Charts}}{{.HTML}}
 {{end}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Server task</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
+<thead><tr><th scope="col">Server task</th><th scope="col" class="r">Input</th><th scope="col" class="r">Cached</th><th scope="col" class="r">Output</th><th scope="col" class="r">Cost</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{.Task}}</td><td class="r">{{.Input}}</td><td class="r">{{.Cached}}</td><td class="r">{{.Output}}</td><td class="r">{{.Cost}}</td></tr>
 {{end}}{{with .Total}}<tr class="total"><td>{{.Task}}</td><td class="r">{{.Input}}</td><td class="r">{{.Cached}}</td><td class="r">{{.Output}}</td><td class="r">{{.Cost}}</td></tr>

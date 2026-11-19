@@ -191,7 +191,8 @@ func (c Stack) Bars() template.HTML {
 				if rw < fineBelow || rh < fineBelow {
 					// the 2 px surface stroke would eat a thin rect whole: it is drawn without one.
 					cls = "seg-fine " + cls
-					if m > HoverMax && (c.Hatch == "" || part.Class != c.Hatch) { // a long window: thin bars share a path
+					// a long window: thin bars share a path, the hatched part's too when too narrow to carry a hatch line
+					if m > HoverMax && (c.Hatch == "" || part.Class != c.Hatch || rw < minHatchWidth) {
 						fine.add("seg "+cls, rx, ry, rw, rh)
 						continue
 					}

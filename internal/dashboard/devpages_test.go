@@ -407,7 +407,7 @@ func TestReleaseTableCells(t *testing.T) {
 	if title := tr.find("td")[10].attr("title"); title != "alpha 38 %; beta 38 %; zeta 25 %" {
 		t.Errorf("shares %q", title)
 	}
-	if h := doc.find("main thead th"); len(h) == 0 || !strings.Contains(b, "<th class=\"r xs\">recall.hit_rate</th>") {
+	if h := doc.find("main thead th"); len(h) == 0 || !strings.Contains(b, "<th scope=\"col\" class=\"r xs\">recall.hit_rate</th>") {
 		t.Error("the flagship ids are not named under their headings")
 	}
 }
