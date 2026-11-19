@@ -8,14 +8,14 @@
 {{end}}{{if or (not .NoMemories) .TopUsed.Rows .NeverUsed.Rows}}<div class="grid-2">
 {{with .TopUsed}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Memory</th><th class="r">Shown</th><th>Last shown</th></tr></thead>
+<thead><tr><th scope="col">Memory</th><th scope="col" class="r">Shown</th><th scope="col">Last shown</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td class="r">{{.Shown}}</td><td>{{template "reltime" .Last}}</td></tr>
 {{end}}</tbody></table></div>
 {{end}}{{template "card-close" .Head}}{{end}}
 {{with .NeverUsed}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Memory</th><th class="r">Shown</th><th>Last shown</th><th>Look at it</th></tr></thead>
+<thead><tr><th scope="col">Memory</th><th scope="col" class="r">Shown</th><th scope="col">Last shown</th><th scope="col">Look at it</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td class="r">{{.Shown}}</td><td>{{template "reltime" .Last}}</td><td>{{with .Command}}{{template "cmd" .}}{{end}}</td></tr>
 {{end}}</tbody></table></div>

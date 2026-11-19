@@ -24,7 +24,7 @@
 {{end}}{{with .Cmd}}{{template "cmd" .}}
 {{end}}{{with .Table}}<div class="tbl-wrap">
 <table class="tbl cmp">
-<thead><tr><th>Recent-weighted counts</th><th class="r">This PC</th><th class="r">{{.Others}}</th><th class="r">All PCs</th></tr></thead>
+<thead><tr><th scope="col">Recent-weighted counts</th><th scope="col" class="r">This PC</th><th scope="col" class="r">{{.Others}}</th><th scope="col" class="r">All PCs</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{with .Swatch}}<i class="sw {{.}}"></i> {{end}}{{.Label}}</td><td class="r">{{.This}}</td><td class="r">{{.Others}}</td><td class="r"><b>{{.All}}</b></td></tr>
 {{end}}</tbody></table></div>

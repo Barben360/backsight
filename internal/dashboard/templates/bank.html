@@ -11,7 +11,7 @@
 {{template "pcard" .Growth}}
 {{with .Projects}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Bars}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Project</th><th><span class="sr-only">Share of the largest project</span></th><th class="r">Memories</th></tr></thead>
+<thead><tr><th scope="col">Project</th><th scope="col"><span class="sr-only">Share of the largest project</span></th><th scope="col" class="r">Memories</th></tr></thead>
 <tbody>
 {{range .Bars}}<tr><td>{{if .Href}}<a class="trunc" href="{{.Href}}" title="{{.Full}}">{{.Name}}</a>{{else}}<span class="trunc" title="{{.Full}}">{{.Name}}</span>{{end}}</td><td class="bar"><svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{if eq .Count "1"}}1 memory{{else}}{{.Count}} memories{{end}}"><rect class="f-seq2" x="0" y="0" width="{{printf "%.1f" .W}}" height="10"></rect></svg></td><td class="r">{{.Count}}</td></tr>
 {{end}}</tbody></table></div>
@@ -30,7 +30,7 @@
 {{template "card-head" .Head}}{{template "devids" .Card}}{{range .Tabs}}<details class="tabs" name="review"{{if .Open}} open{{end}}><summary>{{.Title}}{{with .Count}} <span class="count">{{.}}</span>{{end}}</summary>
 <p class="small sub">{{.Question}}</p>
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Memory</th><th>Project</th><th class="r">Shown</th><th>Last shown</th><th>Command</th></tr></thead>
+<thead><tr><th scope="col">Memory</th><th scope="col">Project</th><th scope="col" class="r">Shown</th><th scope="col">Last shown</th><th scope="col">Command</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "idlink" (memlink .ID)}}</td>
 <td>{{if .Project}}{{template "projlink" (projref .Project)}}{{else}}{{dash}}{{end}}</td>
@@ -47,7 +47,7 @@
 {{with .Concentration}}{{$more := .More}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<p class="small sub">{{.Sentence.Memories}} took <b>{{.Sentence.Share}}</b> of the {{.Sentence.Shows}} shows.</p>
 <div class="tbl-wrap"><table class="tbl">
-<thead><tr><th class="r">#</th><th>Memory</th><th>Project</th><th class="r">Shown</th><th class="r">Share of shows</th><th class="r">Used</th></tr></thead>
+<thead><tr><th scope="col" class="r">#</th><th scope="col">Memory</th><th scope="col">Project</th><th scope="col" class="r">Shown</th><th scope="col" class="r">Share of shows</th><th scope="col" class="r">Used</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td class="r">{{.N}}</td><td>{{template "idlink" (memlink .Memory)}}</td><td>{{template "projlink" .Project}}</td><td class="r">{{.Shown}}</td><td class="r">{{.Share}}</td><td class="r">{{if eq .Used "0"}}<span class="st st-few">{{.Used}}</span>{{else}}{{.Used}}{{end}}</td></tr>
 {{end}}<tr><td colspan="6" class="muted"><a href="{{$more}}">all, by shows →</a></td></tr>

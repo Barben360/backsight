@@ -252,6 +252,32 @@ func TestPCsPagesNameEveryTable(t *testing.T) {
 	}
 }
 
+// Every table header of every page says what it heads: a column, a group of columns (a header spanning
+// several), or a row (in the table's body). The control is that the pages read hold headers.
+func TestEveryTableHeaderHasScope(t *testing.T) {
+	read := map[string]int{}
+	for _, p := range allA11yPages(t) {
+		for _, th := range p.Doc.find("th") {
+			read[p.Name]++
+			want := "col"
+			switch {
+			case within(th, "tbody", ""):
+				want = "row"
+			case th.attr("colspan") != "" && th.attr("colspan") != "1":
+				want = "colgroup"
+			}
+			if got := th.attr("scope"); got != want {
+				t.Errorf("%s: th %q at line %d has scope %q, want %q", p.Name, strings.TrimSpace(th.text()), th.line, got, want)
+			}
+		}
+	}
+	for _, page := range []string{"/?dev=0", "/pipeline?dev=0", "/bank?dev=0", "/releases?dev=1", "/quality?dev=0"} {
+		if read[page] == 0 {
+			t.Errorf("no table header read on %s: the check sees nothing", page)
+		}
+	}
+}
+
 // walk calls f on every element under n, in document order.
 func walk(n *node, f func(*node)) {
 	for _, k := range n.Kids {

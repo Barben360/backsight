@@ -28,7 +28,7 @@
 
 {{/* widget: by coding tool. Reads .V.overview.Tables.ByClient through byclient (ByClient: Head, Rows; ByClientRow: Name, Href, Sessions, Recalls, GotMemory, Used, PerSession). Only on a window more than one tool was active in. */}}
 {{with byclient $r $.Frame.Path}}{{template "card-open" .Head}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Tool</th><th class="r">Sessions</th><th class="r">Recalls</th><th class="r">Got memory</th><th class="r">Memory used</th><th class="r">Context per session</th></tr></thead>
+<thead><tr><th scope="col">Tool</th><th scope="col" class="r">Sessions</th><th scope="col" class="r">Recalls</th><th scope="col" class="r">Got memory</th><th scope="col" class="r">Memory used</th><th scope="col" class="r">Context per session</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td><a href="{{.Href}}" data-client="{{.Name}}">{{.Name}}</a></td><td class="r">{{n .Sessions}}</td><td class="r">{{n .Recalls}}</td><td class="r">{{.GotMemory}}</td><td class="r">{{.Used}}</td><td class="r">{{.PerSession}}</td></tr>
 {{end}}</tbody></table></div>
@@ -52,7 +52,7 @@
 {{/* widget: lately. Reads .V.overview.Tables.Lately (ID, Project, Last, Shown, Used, Wrong) and GeneratedAt (the times are told against it). */}}
 {{with latelyhead $r}}{{template "card-open" .}}{{end}}
 {{if $r.Tables.Lately}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
+<thead><tr><th scope="col">Session</th><th scope="col">Project</th><th scope="col">When</th><th scope="col" class="r">Shown</th><th scope="col" class="r">Used</th><th scope="col" class="r">Wrong</th></tr></thead>
 <tbody>
 {{range $r.Tables.Lately}}<tr><td>{{template "idlink" (sesslink .ID)}}</td>
 <td>{{if .Project}}{{template "projlink" (projref .Project)}}{{else}}{{dash}}{{end}}</td>

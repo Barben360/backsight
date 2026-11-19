@@ -295,7 +295,7 @@
 
 {{/* jobs: dot is a list of JobLine (Job, Code, When, Result, Class, Took). */}}
 {{define "jobs"}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Job</th><th>Last run</th><th>Result</th><th class="r">Took</th></tr></thead>
+<thead><tr><th scope="col">Job</th><th scope="col">Last run</th><th scope="col">Result</th><th scope="col" class="r">Took</th></tr></thead>
 <tbody>
 {{range .}}<tr><td>{{.Job}} (<code>{{.Code}}</code>)</td><td>{{template "reltime" .When}}</td><td><span class="st {{.Class}}">{{.Result}}</span></td><td class="r">{{.Took}}</td></tr>
 {{end}}</tbody></table></div>
@@ -303,7 +303,7 @@
 
 {{/* doctor: dot is a list of CheckLine (Status, Class, Check, Fix). */}}
 {{define "doctor"}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Status</th><th>Check</th><th>Fix</th></tr></thead>
+<thead><tr><th scope="col">Status</th><th scope="col">Check</th><th scope="col">Fix</th></tr></thead>
 <tbody>
 {{range .}}<tr><td><span class="st {{.Class}}">{{.Status}}</span></td><td>{{.Check}}</td><td>{{with .Fix}}{{template "cmd" .}}{{else}}<span class="muted">{{dash}}</span>{{end}}</td></tr>
 {{end}}</tbody></table></div>
@@ -335,7 +335,7 @@
 
 {{/* sessions: dot is a SessionsTable (WhenHead, Rows: When, ID, Project, Prompts, Got, Shown, Used, Wrong, WrongClass, Context, Sent). */}}
 {{define "sessions"}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>{{.WhenHead}}</th><th>Session</th><th>Project</th><th class="r">Prompts</th><th class="r">Got memory</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th><th class="r">Context added</th><th>Sent</th></tr></thead>
+<thead><tr><th scope="col">{{.WhenHead}}</th><th scope="col">Session</th><th scope="col">Project</th><th scope="col" class="r">Prompts</th><th scope="col" class="r">Got memory</th><th scope="col" class="r">Shown</th><th scope="col" class="r">Used</th><th scope="col" class="r">Wrong</th><th scope="col" class="r">Context added</th><th scope="col">Sent</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "reltime" .When}}</td><td>{{template "idlink" .ID}}</td><td>{{template "projlink" .Project}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Got}}</td><td class="r">{{.Shown}}</td><td class="r">{{.Used}}</td><td class="r">{{if .WrongClass}}<span class="st {{.WrongClass}}">{{.Wrong}}</span>{{else}}{{.Wrong}}{{end}}</td><td class="r">{{.Context}}</td><td>{{if .Sent.Class}}<span class="st {{.Sent.Class}}">{{.Sent.Word}}</span>{{else}}<span class="muted">{{.Sent.Word}}</span>{{end}}</td></tr>
 {{end}}</tbody></table></div>

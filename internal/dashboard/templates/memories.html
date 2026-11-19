@@ -6,7 +6,7 @@
 {{end}}{{template "card-open" .Head}}
 <div class="row"><nav class="seg" aria-label="Order">{{range .Order}}{{template "seglink" .}}{{end}}</nav><nav class="seg" aria-label="Show">{{range .Filter}}{{template "seglink" .}}{{end}}</nav></div>
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Memory</th><th>Project</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Ignored</th><th class="r">Used when judged</th><th>Learned ranking</th><th>Last shown</th><th>Last used</th><th>State</th></tr></thead>
+<thead><tr><th scope="col">Memory</th><th scope="col">Project</th><th scope="col" class="r">Shown</th><th scope="col" class="r">Used</th><th scope="col" class="r">Ignored</th><th scope="col" class="r">Used when judged</th><th scope="col">Learned ranking</th><th scope="col">Last shown</th><th scope="col">Last used</th><th scope="col">State</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "idlink" .ID}}</td><td>{{template "projlink" .Project}}</td><td class="r">{{.Shown}}</td><td class="r">{{.Used}}</td><td class="r">{{.Ignored}}</td><td class="r">{{.Rate}}</td><td>{{.Ranking}}{{with .Boost}} <span class="muted">{{.}}</span>{{end}}</td><td>{{if .NeverShown}}<span class="muted">never</span>{{else}}{{template "reltime" .LastShown}}{{end}}</td><td>{{if .NeverUsed}}<span class="muted">never</span>{{else}}{{template "reltime" .LastUsed}}{{end}}</td><td>{{if .State.Class}}<span class="st {{.State.Class}}">{{.State.Word}}</span>{{else}}{{.State.Word}}{{end}}</td></tr>
 {{end}}</tbody></table></div>

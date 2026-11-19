@@ -9,7 +9,7 @@
 <div class="grid-2">
 {{with .Reported}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Memory</th><th>Report</th><th>Project</th><th>Session</th><th>When</th></tr></thead>
+<thead><tr><th scope="col">Memory</th><th scope="col">Report</th><th scope="col">Project</th><th scope="col">Session</th><th scope="col">When</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{template "idlink" (memlink .Memory)}}</td>
 <td>{{.Verdict}}</td>
@@ -32,7 +32,7 @@
 {{template "pcard" .Blocks}}
 {{with .Lang}}{{template "card-open" .Head}}
 {{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Prompt language</th><th class="r">Got memory</th><th class="r">Prompts</th></tr></thead>
+<thead><tr><th scope="col">Prompt language</th><th scope="col" class="r">Got memory</th><th scope="col" class="r">Prompts</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr><td>{{.Name}}</td><td class="r">{{if .Few}}<span class="st st-few">{{.Got}}</span>{{else}}{{.Got}}{{with .Interval}} <span class="muted">{{.}}</span>{{end}}{{end}}</td><td class="r">{{.Prompts}}</td></tr>
 {{end}}</tbody></table></div>

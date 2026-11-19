@@ -7,7 +7,7 @@
 {{range .Groups}}<section id="{{.ID}}" aria-labelledby="{{.ID}}-h">
 <h3 id="{{.ID}}-h">{{.Title}}</h3>
 <div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Id</th><th>On the page</th><th>Question</th><th>Definition</th><th>When it is watched</th><th>Unit</th><th>Where from</th><th class="r">Fewest needed</th><th class="r">n now (7 days)</th><th class="r">Smallest change it can show</th></tr></thead>
+<thead><tr><th scope="col">Id</th><th scope="col">On the page</th><th scope="col">Question</th><th scope="col">Definition</th><th scope="col">When it is watched</th><th scope="col">Unit</th><th scope="col">Where from</th><th scope="col" class="r">Fewest needed</th><th scope="col" class="r">n now (7 days)</th><th scope="col" class="r">Smallest change it can show</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr id="{{.ID}}"><td class="mono"><code>{{.ID}}</code></td><td>{{.Label}}</td><td class="wrapok">{{.Question}}</td><td class="wrapok">{{.Definition}}</td><td class="wrapok">{{.Limits}}</td><td>{{.Unit}}</td><td>{{.Where}}</td><td class="r">{{.MinN}}</td><td class="r">{{.N}}</td><td class="r">{{.Smallest}}</td></tr>
 {{end}}</tbody></table></div>

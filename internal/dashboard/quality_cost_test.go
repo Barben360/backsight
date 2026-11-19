@@ -1274,7 +1274,7 @@ func TestCostThisPCIsUnchanged(t *testing.T) {
 			t.Errorf("the main of this PC's page changed: sha256 %s, want %s", sum, want)
 		}
 	}
-	pin(plain, "751382b1bc15ff98a8a3988dd6c460e2f4966e1694434805e07747cf80b12fb8")
+	pin(plain, "41f2587a3908d2d7a60981667504b944e8cd119e1c3f4b8cb6b9ac8e4e214b4e")
 	pin(render(false, nil), "7ab9cc687f2ecad7226e6646a6847c1fece20d173e693e59f56e77097852f4ba")
 	// The latency card of this PC's page is still two lines and the limit.
 	n := parseHTML(t, plain)
