@@ -571,7 +571,7 @@ func TestExtraBreakdownsAreShown(t *testing.T) {
 		set(r, "used.by_path", map[string]any{"by_path": map[string]any{"prompt": pathStat(3, 5, 0.6), "search": pathStat(1, 2, 0.5)}})
 		set(r, "recall.by_lang", map[string]any{"by_lang": map[string]any{"fr": pathStat(1, 4, 0.25), "unknown": pathStat(2, 2, 1)}})
 		set(r, "used.rank", map[string]any{"hit_at_1": 0.5, "hit_at_3": 0.75, "histogram": map[string]int64{"1": 6, "2": 2, "unranked": 1}})
-	}, "why: no candidates 4", "added to the prompt: 3 of 5 (60 %)", "Claude's search: 1 of 2 (50 %)", "fr: 1 of 4 (25 %)",
+	}, "why: no candidates 4", "added to the prompt: 3 of 5 (60 %)", "Claude's search: 1 of 2 (50 %)", "French: 1 of 4 (25 %)",
 		"language not detected: 2 of 2 (100 %)", "the best-ranked memory was used in 50 % of turns", "one of the first three was used in 75 % of turns",
 		"rank 1 6, rank 2 2", "not ranked 1")
 	check("bank", func(d *PageData) {
