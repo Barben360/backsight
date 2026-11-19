@@ -255,6 +255,14 @@ func TestPersistentFlags(t *testing.T) {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q, want exit 2 with %q", c.args, code, out, errOut, c.want)
 		}
 	}
+	// --machines given once still parses, in both spellings
+	for _, args := range [][]string{{"--machines", "this"}, {"--machines=all"}} {
+		v = runView(t, append([]string{"stats", "quality"}, args...)...)
+		want := strings.TrimPrefix(args[len(args)-1], "--machines=")
+		if v.code != output.OK || at(v.env.Data, "scope", "machines") != want {
+			t.Errorf("%v: exit %d scope.machines %v, want %s", args, v.code, at(v.env.Data, "scope", "machines"), want)
+		}
+	}
 	// the error as JSON follows the envelope
 	v = runView(t, "stats", "overview", "--limit", "501")
 	if v.code != output.Usage || v.env.OK || v.env.Command != "stats overview" || v.env.Error.Code != output.Usage {
