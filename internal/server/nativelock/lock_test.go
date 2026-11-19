@@ -237,8 +237,14 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 			continue
 		}
 		otel++
-		if v != "1.45.2" && v != "0.66b2" {
-			t.Errorf("overrides.txt pins %s at %q, want 1.45.2 or 0.66b2", name, v)
+		want := "0.66b2" // the contrib packages
+		switch name {
+		case "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-proto",
+			"opentelemetry-exporter-otlp-proto-common", "opentelemetry-exporter-otlp-proto-http":
+			want = "1.45.2"
+		}
+		if v != want {
+			t.Errorf("overrides.txt pins %s at %q, want %s", name, v, want)
 		}
 	}
 	if otel != 13 {
