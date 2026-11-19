@@ -914,6 +914,97 @@ func TestFetchCountsEveryIgnoredDocument(t *testing.T) {
 	}
 }
 
+// A name listed twice keeps its first document: one cached, the first's
+// figures, and the second is neither cached nor counted as ignored.
+func TestFetchDuplicateNameKeepsTheFirst(t *testing.T) {
+	m := newShareMachine(t)
+	id := otherPC(1)
+	first := otherDoc(t, id, pubT0)
+	second := strings.Replace(otherDoc(t, id, pubT0.Add(-time.Hour)), `"os":"linux"`, `"os":"darwin"`, 1)
+	if second == otherDoc(t, id, pubT0.Add(-time.Hour)) {
+		t.Fatal("the second document's OS was not changed")
+	}
+	l := &controlListing{done: true, items: []hindsight.DocumentItem{
+		{ID: machines.DocPrefix + id, Metadata: map[string]string{machines.MetaKey: first}},
+		{ID: machines.DocPrefix + otherPC(2), Metadata: map[string]string{machines.MetaKey: otherDoc(t, otherPC(2), pubT0)}},
+		{ID: machines.DocPrefix + id, Metadata: map[string]string{machines.MetaKey: second}},
+	}}
+	f, i, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != 2 || i != 0 {
+		t.Fatalf("%d fetched, %d ignored, %v: want 2 and 0", f, i, err)
+	}
+	var raws []string
+	for _, d := range m.machinesCache().Docs {
+		if d.Name == machines.DocPrefix+id {
+			raws = append(raws, d.Raw)
+		}
+	}
+	if len(raws) != 1 || raws[0] != first {
+		t.Errorf("cached %d documents of %s (%v), want the first only", len(raws), id, raws)
+	}
+}
+
+// A failed listing is kept by the tick's one listing: the shared counts and
+// the daily figures both get the failure, from one request.
+func TestFailedListingIsSharedByBothCallers(t *testing.T) {
+	m := newShareMachine(t)
+	requests := 0
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "-control/documents") {
+			requests++
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(broken.Close)
+	cl, err := hindsight.New(broken.URL, "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &controlListing{}
+	if _, _, err := refreshShared(context.Background(), cl, l, m.d, m.cfg.Server.Bank, pubID, pubT0, feedbackParams(m.cfg)); err == nil {
+		t.Fatal("the shared counts: no error from a failing listing")
+	}
+	f, i, err := refreshMetricsDocs(context.Background(), cl, l, m.d, m.cfg, pubID, pubT0)
+	if err == nil || f != 0 || i != 0 {
+		t.Errorf("the daily figures: %d, %d, %v, want the listing's failure", f, i, err)
+	}
+	if requests != 1 {
+		t.Errorf("%d listing requests, want 1: the failure was not shared", requests)
+	}
+	if _, err := os.Stat(machines.CacheFile(m.d.MetricsDir())); err == nil {
+		t.Error("a cache was written from a failed listing")
+	}
+}
+
+// End to end, the documents past the cache's budget (the oldest first, as
+// kept newest first) are left out as too large, and the cache still loads.
+func TestFetchLeavesOutWhatIsOverTheCacheBudget(t *testing.T) {
+	m := newShareMachine(t)
+	l := &controlListing{done: true}
+	for n := range 3 { // PC n sent n hours ago
+		l.items = append(l.items, hindsight.DocumentItem{ID: machines.DocPrefix + otherPC(n),
+			Metadata: map[string]string{machines.MetaKey: otherDoc(t, otherPC(n), pubT0.Add(-time.Duration(n)*time.Hour))}})
+	}
+	one, err := json.Marshal(machines.CachedDoc{Name: machines.DocPrefix + otherPC(0), Raw: otherDoc(t, otherPC(0), pubT0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := cacheDocsBudget
+	cacheDocsBudget = 2*(len(one)+1) + 10 // two documents fit, not three
+	t.Cleanup(func() { cacheDocsBudget = old })
+	f, i, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != 2 || i != 1 {
+		t.Fatalf("%d fetched, %d ignored, %v: want 2 and 1", f, i, err)
+	}
+	c := m.machinesCache()
+	if len(c.Docs) != 2 || c.Docs[0].Name != machines.DocPrefix+otherPC(0) || c.Docs[1].Name != machines.DocPrefix+otherPC(1) {
+		t.Errorf("cached %+v, want the two newest", c.Docs)
+	}
+	if want := []machines.Ignored{{Machine: otherPC(2)[:8], Reason: machines.TooLarge}}; !slices.Equal(c.Ignored, want) {
+		t.Errorf("ignored %+v, want %+v", c.Ignored, want)
+	}
+}
+
 func TestFetchFailureKeepsTheCache(t *testing.T) {
 	m := newShareMachine(t)
 	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))

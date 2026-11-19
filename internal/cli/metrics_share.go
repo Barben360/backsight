@@ -368,8 +368,8 @@ func refreshMetricsDocs(ctx context.Context, cl *hindsight.Client, l *controlLis
 }
 
 // cacheDocsBudget is what the cached documents may take once JSON-escaped,
-// MaxCacheBytes less room for the rest of machines.json.
-const cacheDocsBudget = machines.MaxCacheBytes - 1<<20
+// MaxCacheBytes less room for the rest of machines.json (a var for the tests).
+var cacheDocsBudget = machines.MaxCacheBytes - 1<<20
 
 // withinCacheBudget keeps the leading items whose escaped JSON, summed, stays
 // within budget; the others (in order) are returned as over. A running total,
