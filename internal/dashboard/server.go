@@ -29,6 +29,10 @@ type Config struct {
 	Now     func() time.Time // nil: time.Now
 	Version string           // the footer's
 	Stderr  io.Writer        // progress and hints; nil: io.Discard
+	// Log is where the dashboard records what went wrong and was recovered, for whoever looks into it later:
+	// a view that panicked, with where. It never gets a memory's text or a panic's value of the code's own;
+	// nil: nowhere.
+	Log io.Writer
 
 	// OpenIndex opens the metrics index (index.Open with the command
 	// line's options, progress on Stderr); nil: no data layer, every data

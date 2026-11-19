@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -60,6 +62,7 @@ type data struct {
 	opening  *opening // the open attempt in flight
 	stopped  bool
 	wg       sync.WaitGroup // the detached work stop waits for
+	logMu    sync.Mutex     // one entry of the log at a time
 }
 
 // opening is an open attempt; err is set before done is closed.
@@ -316,6 +319,22 @@ func (d *data) base() metrics.Source {
 	return src
 }
 
+// logPanic records in the log that view panicked, and where (stack). The panic's value is written only when it
+// is a runtime error, whose message is the runtime's own; any other value, which the code made and which could
+// hold what the view read (a memory's text, a path), is told by its type alone.
+func (d *data) logPanic(view string, r any, stack []byte) {
+	if d.cfg.Log == nil {
+		return
+	}
+	what := fmt.Sprintf(" (a value of type %T)", r)
+	if re, ok := r.(runtime.Error); ok {
+		what = ": " + re.Error()
+	}
+	d.logMu.Lock()
+	defer d.logMu.Unlock()
+	_, _ = fmt.Fprintf(d.cfg.Log, "%s dashboard: the %s view panicked%s\n%s\n", d.cfg.Now().UTC().Format(time.RFC3339), view, what, stack)
+}
+
 // result is view's result for p and id, from the result cache: on a miss
 // the index is caught up and the view computed, once for every caller of
 // the key. A state other than ready comes without a result. Text is
@@ -333,7 +352,15 @@ func (d *data) result(ctx context.Context, view string, p views.Params, id strin
 	if st, err := d.check(ctx); st != stateReady {
 		return metrics.Result{}, st, err
 	}
-	res, err := d.results.get(ctx, cacheKey(view, id, p), func(ctx context.Context) (metrics.Result, error) {
+	res, err := d.results.get(ctx, cacheKey(view, id, p), func(ctx context.Context) (res metrics.Result, err error) {
+		// The computation runs apart from the request (the cache's own goroutine): a panic there would end the
+		// dashboard. It fails this view's answer instead, and the log keeps where it was.
+		defer func() {
+			if r := recover(); r != nil {
+				d.logPanic(view, r, debug.Stack())
+				res, err = metrics.Result{}, errViewFailed
+			}
+		}()
 		src, err := d.source(ctx)
 		if err != nil {
 			return metrics.Result{}, err
