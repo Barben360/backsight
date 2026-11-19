@@ -119,8 +119,8 @@ func TestNativeLockIsTheGeneratedOne(t *testing.T) {
 // nothing may move the Linux one. A deliberate lock bump changes both
 // literals in the same commit.
 func TestLinuxLockUnchanged(t *testing.T) {
-	const wantSHA = "9cd0906a08602b266360e05204b66c051b977ed7d06d87dd5b77cc4dcf984221"
-	const wantHash12 = "9cd0906a0860"
+	const wantSHA = "cbfc74ccba7d346b3d202582c6d51ad1c944d586a6ffb699f0599b0ae7d95b5a"
+	const wantHash12 = "cbfc74ccba7d"
 	sum := sha256.Sum256(Requirements)
 	if got := hex.EncodeToString(sum[:]); got != wantSHA {
 		t.Errorf("requirements-linux-amd64.txt sha256 %s, want %s", got, wantSHA)
@@ -199,10 +199,11 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 	}
 	for _, goos := range []string{"linux", "windows"} {
 		// Every security fix issue #130 took stays in the lock, whether
-		// the image ships it (Hindsight 1.2.0: authlib, dnspython, fastmcp,
-		// OpenTelemetry) or an override does (pyasn1): a pin bump that
-		// lowers one fails here.
-		for name, v := range map[string]string{"authlib": "1.9.1", "dnspython": "2.9.0", "fastmcp": "3.4.11", "opentelemetry-api": "1.45.1", "pyasn1": "0.6.5", "soupsieve": "4.1"} {
+		// the image ships it (Hindsight 1.2.0: authlib, fastmcp) or an
+		// override does (pyasn1, soupsieve, and dnspython and
+		// OpenTelemetry past the image's): a pin bump that lowers one
+		// fails here.
+		for name, v := range map[string]string{"authlib": "1.9.1", "dnspython": "2.9.2", "fastmcp": "3.4.11", "opentelemetry-api": "1.45.2", "pyasn1": "0.6.5", "soupsieve": "4.1"} {
 			if got := For(goos).Versions()[name]; got != v {
 				t.Errorf("the %s lock holds %s %q, want %s", goos, name, got, v)
 			}
@@ -222,6 +223,26 @@ func TestNativeLocksHoldAndRecordTheirOverrides(t *testing.T) {
 	}
 	if declared["soupsieve"] != "4.1" {
 		t.Errorf("overrides.txt pins soupsieve at %q, want 4.1", declared["soupsieve"])
+	}
+	if declared["dnspython"] != "2.9.2" {
+		t.Errorf("overrides.txt pins dnspython at %q, want 2.9.2", declared["dnspython"])
+	}
+	// OpenTelemetry's packages move as one set (opentelemetry-sdk and
+	// opentelemetry-semantic-conventions pin opentelemetry-api exactly):
+	// every one the image ships is overridden at the 1.45.2/0.66b2 patch
+	// release, none left at the image's 1.45.1/0.66b1.
+	otel := 0
+	for name, v := range declared {
+		if !strings.HasPrefix(name, "opentelemetry-") {
+			continue
+		}
+		otel++
+		if v != "1.45.2" && v != "0.66b2" {
+			t.Errorf("overrides.txt pins %s at %q, want 1.45.2 or 0.66b2", name, v)
+		}
+	}
+	if otel != 13 {
+		t.Errorf("overrides.txt pins %d opentelemetry packages, want the image's 13", otel)
 	}
 
 	// The checker and the parser bite.

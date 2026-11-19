@@ -16,6 +16,28 @@
 # API 4.x keeps; litellm 1.109.1 itself accepts filelock<5. soupsieve 4.x
 # drops 2.x's handling of template and iframe contents as separate
 # documents (CSS selectors only); beautifulsoup4 asks for soupsieve>1.2.
+# dnspython 2.9.2 is a patch release of the image's 2.9.0. OpenTelemetry
+# releases its packages as one set: opentelemetry-sdk and
+# opentelemetry-semantic-conventions pin opentelemetry-api exactly, and the
+# exporters and instrumentations pin each other, so opentelemetry-api's fix
+# (1.45.2) moves the whole set to its patch release (1.45.2/0.66b2), whose
+# only other change is a metric cardinality limit (past 2000 series, a
+# metric's new series fold into one otel.metric.overflow series; nothing
+# fails).
+dnspython==2.9.2: security fix the image's 2.9.0 lacks (GHSA-vvf4-9x63-8xvv)
 filelock==4.2.1: security fixes the image's 3.20.3 lacks (GHSA-69hj-f68j-2879, GHSA-8mx5-7m5m-r77g)
+opentelemetry-api==1.45.2: security fix the image's 1.45.1 lacks (GHSA-mf5v-w3w3-f6cg)
+opentelemetry-exporter-http-transport==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs its siblings at 1.45.1)
+opentelemetry-exporter-otlp-common==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs opentelemetry-sdk~=1.45.1)
+opentelemetry-exporter-otlp-proto-common==1.45.2: the patch release of opentelemetry-api 1.45.2's set (the image's 1.45.1 needs opentelemetry-proto==1.45.1)
+opentelemetry-exporter-otlp-proto-http==1.45.2: the patch release of opentelemetry-api 1.45.2's set (the image's 1.45.1 needs its siblings at 1.45.1/0.66b1)
+opentelemetry-exporter-prometheus==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs opentelemetry-sdk~=1.45.1)
+opentelemetry-instrumentation==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs opentelemetry-semantic-conventions==0.66b1)
+opentelemetry-instrumentation-asgi==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs its siblings at 0.66b1)
+opentelemetry-instrumentation-fastapi==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs its siblings at 0.66b1)
+opentelemetry-proto==1.45.2: the patch release of opentelemetry-api 1.45.2's set (opentelemetry-exporter-otlp-proto-http 1.45.2 needs it)
+opentelemetry-sdk==1.45.2: the patch release of opentelemetry-api 1.45.2's set (the image's 1.45.1 needs opentelemetry-api==1.45.1)
+opentelemetry-semantic-conventions==0.66b2: the patch release of opentelemetry-api 1.45.2's set (the image's 0.66b1 needs opentelemetry-api==1.45.1)
+opentelemetry-util-http==0.66b2: the patch release of opentelemetry-api 1.45.2's set (opentelemetry-instrumentation-asgi 0.66b2 needs it)
 pyasn1==0.6.5: security fixes the image's 0.6.4 lacks
 soupsieve==4.1: security fixes the image's 2.9.2 lacks (GHSA-mmhr-3c5m-f64f, GHSA-4j63-6c4x-wfg4)
