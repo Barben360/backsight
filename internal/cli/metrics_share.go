@@ -52,7 +52,8 @@ const (
 
 // metricsShare is what the tick's publish did. Up: the document was
 // written (Days days, Bytes bytes, Dropped what the cap left out);
-// Waiting: the index did not open or was not caught up (Failure is then budget);
+// Waiting: the index did not open for a passing reason or was not caught
+// up (Failure is then budget);
 // Empty: no complete day to share yet; Failure: the class of a failed
 // attempt.
 type metricsShare struct {
@@ -152,11 +153,15 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	o.Now = tickIndexClock
 	ix, err := publishIndexOpen(ctx, o)
 	if err != nil {
-		// An index that does not open (an update being applied, a full
-		// disk, the budget spent) is waited for as one not caught up; its
-		// line is the tick's, which then does not open it again.
+		// Its line is the tick's, which then does not open it again. A
+		// passing reason is waited for as an index not caught up (the next
+		// tick tries again); one that stays (corrupt, a full disk, a read
+		// error) is a failure, tried again an hour later.
 		line = indexStepError(err)
-		return fail(failBudget, true)
+		if openPassing(ctx, err) {
+			return fail(failBudget, true)
+		}
+		return fail(failCompute, false)
 	}
 	defer func() { _ = ix.Close() }()
 	side := ""
@@ -222,6 +227,15 @@ func publishMetrics(ctx context.Context, cl *hindsight.Client, d paths.Dirs, hom
 	}
 	s := metricsShare{Up: true, Days: len(doc.Days), Bytes: len(meta), Dropped: dropped, IndexLine: line}
 	return s, machines.SavePublished(dir, machines.Published{At: now, Server: target, Until: doc.Until, FirstSeen: first, Bytes: len(meta)})
+}
+
+// openPassing reports whether an index.Open error passes by itself: an
+// update being applied, backsight updated meanwhile, another process
+// holding the file, or the budget spent.
+func openPassing(ctx context.Context, err error) bool {
+	return errors.Is(err, index.ErrUpdateInProgress) || errors.Is(err, index.ErrSchemaChanged) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil ||
+		index.Class(err) == "busy"
 }
 
 // withoutVersions is days with every version breakdown removed (a copy).
