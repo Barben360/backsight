@@ -2070,3 +2070,48 @@ func TestReleasesOthersShareTheNoonBounds(t *testing.T) {
 		t.Errorf("0.1.4 listed: it ran only on the second noon, which the window does not take")
 	}
 }
+
+// An hourly window's merged rates and latency keep this PC's series, as a
+// copy: a write to the merged run's points never reaches this PC's run in
+// the memo.
+func TestHourlyMergedSeriesIsACopy(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "h", fxNow, 10, injecting(4))
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcRows(pcRow{machine: pcOther1, day: "2026-10-29", f: machines.Figures{Prompts: 9, Hit: machines.Pair{6, 9}, Latency: machines.Latency{0, 9}}})
+	q := x.query(1)
+	q.Machines = "all"
+	err := withTx(context.Background(), x.srcAs(), q, nil, func(e env) error {
+		for _, c := range []struct{ view, id string }{{"quality", "recall.hit_rate"}, {"cost", "recall.latency"}} {
+			e.view = c.view
+			fam := families.byID[c.id]
+			_, this, err := e.this().runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, _ := json.Marshal(this[c.id].Series)
+			_, merged, err := e.runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(merged[c.id].Tags, tagSeriesThisPC) || len(merged[c.id].Series) == 0 {
+				t.Fatalf("%s: tags %v, %d points: want an hourly merged run", c.id, merged[c.id].Tags, len(merged[c.id].Series))
+			}
+			for i := range merged[c.id].Series {
+				merged[c.id].Series[i].Partial = !merged[c.id].Series[i].Partial
+				merged[c.id].Series[i].Hour = "written"
+			}
+			_, again, err := e.this().runIDs(fam, q.Window, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after, _ := json.Marshal(again[c.id].Series); string(after) != string(before) {
+				t.Errorf("%s: a write to the merged series changed this PC's run:\nbefore %s\nafter  %s", c.id, before, after)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

@@ -352,6 +352,7 @@ func mergePair(e env, w Window, to Observation, tm Metric, tot machines.Pair, bu
 	}
 	if w.Length() <= hourlyMax {
 		mm.Tags = append(mm.Tags, tagSeriesThisPC)
+		mm.Series = slices.Clone(tm.Series) // this PC's, as a copy: the memo's run is never shared
 		return mo, mm, true
 	}
 	buckets := w.Buckets()
@@ -503,6 +504,7 @@ func mergeLatency(e env, w Window, o others, to Observation, tm Metric) (Observa
 	}
 	if w.Length() <= hourlyMax {
 		mm.Tags = append(mm.Tags, tagSeriesThisPC)
+		mm.Series = slices.Clone(tm.Series) // this PC's, as a copy: the memo's run is never shared
 		return mo, mm, true
 	}
 	buckets := w.Buckets()
