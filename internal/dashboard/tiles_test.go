@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -725,6 +726,43 @@ func TestMergedTileLeavesThisPCsItemsToTheirCard(t *testing.T) {
 	one := scenarioNamed(t, "qualitywatch")
 	if got := allTile(t, one, nil, tilePage, "Found").Note; got != scFoundText {
 		t.Errorf("this PC: %q", got)
+	}
+}
+
+// The rules the tile head's fit rests on, checked without a browser (TestTileHeadsFitInChrome measures the
+// result): the head is a row whose spacer pushes the info button to the edge, and the title's group is a
+// flex box that wraps and may shrink below its content's width, so the chips go under the title instead of
+// pushing the button out of the tile.
+func TestTileHeadRulesLetTheGroupWrap(t *testing.T) {
+	css, err := assetFS.ReadFile("assets/dashboard.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		sel         string
+		decl, value string
+	}{
+		{".tile-top", "display", "flex"},
+		{".tile-top .spacer", "flex", "1"},
+		{".tile-who", "display", "flex"},
+		{".tile-who", "flex-wrap", "wrap"},
+		{".tile-who", "min-width", "0"},
+	} {
+		found := false
+		for _, r := range cssRules(string(css)) {
+			if r.At == "" && slices.Contains(r.Sel, c.sel) && r.declStarts(c.decl, c.value) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("dashboard.css: no top-level %s { %s: %s }", c.sel, c.decl, c.value)
+		}
+	}
+	// and no narrower width takes the wrap back
+	for _, r := range cssRules(string(css)) {
+		if r.At != "" && slices.Contains(r.Sel, ".tile-who") && (r.declStarts("flex-wrap", "nowrap") || r.declStarts("display", "block")) {
+			t.Errorf("dashboard.css: %s .tile-who { %s } undoes the wrap", r.At, r.Body)
+		}
 	}
 }
 
