@@ -1115,35 +1115,54 @@ func TestLatencyStatusIsExactAtTheEdges(t *testing.T) {
 	})
 }
 
-// Oct 29: this PC 800 and 1 800 ms (buckets 4 and 5), the other PC one in
-// bucket 6: merged [0,0,0,0,1,1,1,0,0], n 3, rank ceil(2.85) = 3 -> bucket 6
-// (2000, 2500]; this PC's exact p95 of the day is 1 800 (rank 2 of 2).
-// Oct 27: the other PC alone, 2 in the open bucket: n 2, lo 5000, no hi.
-// Oct 28: no sample on any PC.
+// Oct 29: this PC 18 at 800 ms and 2 at 1 800 ms (buckets 4 and 5), the
+// other PC 2 in bucket 6: merged [0,0,0,0,18,2,2,0,0], n 22, rank
+// ceil(20.9) = 21 -> bucket 6 (2000, 2500]; this PC's exact p95 of the day
+// is 1 800 (rank 19 of 20). Oct 27: the other PC alone, 20 in the open
+// bucket: n 20, lo 5000, no hi. Oct 28: no sample on any PC. A day's
+// slowest 1 in 20 needs 20 samples (latencyDayMin): Oct 26, the other PC's
+// 19, has none; Oct 25, this PC's 5 at 800 ms and the other PC's 15 in
+// bucket 5, n 20, has its range (1000, 2000] but no exact value of this
+// PC's.
 func TestMergedLatencySeries(t *testing.T) {
 	x := newFx(t, fxNow)
-	x.prompts("alpha", "s", fxNow.Add(-24*time.Hour), 2, func(i int, p *telemetry.Prompt) { p.MS = 800 + 1000*i })
+	at := func(day int, ms ...int) {
+		for i, v := range ms {
+			x.tel(time.Date(2026, 10, day, 8, i, 0, 0, fxParis), telemetry.Prompt{N: i + 1, Decision: "recall", MS: v}, "s", "alpha")
+		}
+	}
+	at(29, append(slices.Repeat([]int{800}, 18), 1800, 1800)...)
+	at(25, slices.Repeat([]int{800}, 5)...)
 	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "2026-10-29")
-	x.pcRows(latRow(pcOther1, "2026-10-29", 1, [9]int64{6: 1}), latRow(pcOther1, "2026-10-27", 2, [9]int64{8: 2}))
+	x.pcRows(latRow(pcOther1, "2026-10-29", 2, [9]int64{6: 2}), latRow(pcOther1, "2026-10-27", 20, [9]int64{8: 20}),
+		latRow(pcOther1, "2026-10-26", 19, [9]int64{8: 19}), latRow(pcOther1, "2026-10-25", 15, [9]int64{5: 15}))
 	m := x.mergedOf("cost", x.query(7))["recall.latency"]
 	byDay := map[string]Point{}
 	for _, p := range m.Series {
 		byDay[p.Day] = p
 	}
 	p := byDay["2026-10-29"]
-	if num0(p.N) != 3 || p.Lo == nil || *p.Lo != 2000 || p.Hi == nil || *p.Hi != 2500 || p.ThisP95 == nil || *p.ThisP95 != 1800 {
-		t.Errorf("Oct 29 = %+v, want n 3, (2000, 2500], this_p95 1800", p)
+	if num0(p.N) != 22 || p.Lo == nil || *p.Lo != 2000 || p.Hi == nil || *p.Hi != 2500 || p.ThisP95 == nil || *p.ThisP95 != 1800 {
+		t.Errorf("Oct 29 = %+v, want n 22, (2000, 2500], this_p95 1800", p)
 	}
 	if p.P50 != nil || p.P95 != nil {
 		t.Errorf("Oct 29 keeps p50/p95: %+v", p)
 	}
 	p = byDay["2026-10-27"]
-	if num0(p.N) != 2 || p.Lo == nil || *p.Lo != 5000 || p.Hi != nil || p.ThisP95 != nil {
-		t.Errorf("Oct 27 = %+v, want n 2, lo 5000, no hi, no this_p95", p)
+	if num0(p.N) != 20 || p.Lo == nil || *p.Lo != 5000 || p.Hi != nil || p.ThisP95 != nil {
+		t.Errorf("Oct 27 = %+v, want n 20, lo 5000, no hi, no this_p95", p)
 	}
 	p = byDay["2026-10-28"]
 	if num0(p.N) != 0 || p.Lo != nil || p.Hi != nil {
 		t.Errorf("Oct 28 = %+v, want n 0 and no lo/hi", p)
+	}
+	p = byDay["2026-10-26"]
+	if num0(p.N) != 19 || p.Lo != nil || p.Hi != nil || p.ThisP95 != nil {
+		t.Errorf("Oct 26 = %+v, want n 19 and no range: too few for a slowest 1 in 20", p)
+	}
+	p = byDay["2026-10-25"]
+	if num0(p.N) != 20 || p.Lo == nil || *p.Lo != 1000 || p.Hi == nil || *p.Hi != 2000 || p.ThisP95 != nil {
+		t.Errorf("Oct 25 = %+v, want n 20, (1000, 2000], no this_p95 (this PC's 5 are too few)", p)
 	}
 	raw, _ := json.Marshal(byDay["2026-10-29"])
 	var keys map[string]any

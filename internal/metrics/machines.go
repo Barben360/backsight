@@ -514,7 +514,7 @@ func mergeLatency(e env, w Window, o others, to Observation, tm Metric) (Observa
 			dn += c
 		}
 		p.N, p.ThisP95, p.P50, p.P95, p.Lo, p.Hi = i64(dn), p.P95, nil, nil, nil, nil
-		if r, ok := machines.Rank(day, 95); ok {
+		if r, ok := machines.Rank(day, 95); ok && dn >= latencyDayMin { // a day's range needs its samples, as this PC's exact value
 			lo, hi := machines.Range(r)
 			l := float64(lo)
 			p.Lo = &l

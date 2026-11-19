@@ -64,10 +64,14 @@ func YieldServerNeeds() []string {
 
 // Sample sizes for the figures taken from a distribution: the p50 needs
 // 20, the p95 needs 100 (below, the figure is null). MinForP95 is exported
-// so that the page words the same number.
+// so that the page words the same number. A day of a latency series needs
+// latencyDayMin for its p50 and p95, as the last 24 h that judge a
+// recovery (RecentMinN): a day under it is a gap, never a slowest 1 in 20
+// read off 3 samples.
 const (
-	minForP50 = 20
-	MinForP95 = 100
+	minForP50     = 20
+	MinForP95     = 100
+	latencyDayMin = RecentMinN
 )
 
 // tagPartial marks an extraction figure whose per-operation split lacks an
@@ -316,7 +320,7 @@ func bucketsOf(ms []int64) (b [9]int64) {
 
 // latency fills a latency metric from the (ts, ms) rows of query: the
 // value is the p95 from 100 samples; the series has a point per day with
-// its own p50, p95 and n whatever n.
+// its n, and its own p50 and p95 from latencyDayMin samples.
 func latency(e env, w Window, id, query string, obs map[string]Observation, met map[string]Metric) error {
 	xs, buckets, err := costSamples(e, w, query)
 	if err != nil {
@@ -330,7 +334,7 @@ func latency(e env, w Window, id, query string, obs map[string]Observation, met 
 		p := pointOf(w, b.Key)
 		p.N = i64(int64(len(xs.byDay[i])))
 		p.buckets = bucketsOf(xs.byDay[i])
-		if len(xs.byDay[i]) > 0 {
+		if len(xs.byDay[i]) >= latencyDayMin {
 			a, c := Percentile(xs.byDay[i], 50), Percentile(xs.byDay[i], 95)
 			p.P50, p.P95 = &a, &c
 		}
