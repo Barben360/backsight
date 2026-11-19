@@ -887,6 +887,33 @@ func TestFetchKeeps64Newest(t *testing.T) {
 	}
 }
 
+// The list of ignored documents keeps 64, but the fetch counts every one it
+// set aside, and the tick's line says how many the list holds.
+func TestFetchCountsEveryIgnoredDocument(t *testing.T) {
+	m := newShareMachine(t)
+	const total = 70
+	l := &controlListing{done: true}
+	for n := range total {
+		l.items = append(l.items, hindsight.DocumentItem{ID: machines.DocPrefix + otherPC(n), Metadata: map[string]string{machines.MetaKey: "{}"}})
+	}
+	f, i, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != 0 || i != total {
+		t.Fatalf("%d fetched, %d ignored, %v: want 0 and %d", f, i, err, total)
+	}
+	if got := len(m.machinesCache().Ignored); got != machines.MaxDocs {
+		t.Errorf("%d ignored documents listed in the cache, want %d", got, machines.MaxDocs)
+	}
+	var r tickResult
+	r.applyFetch(f, i, "")
+	if want := "70 document(s) ignored, the first 64 listed"; !strings.Contains(r.fetchText(), want) {
+		t.Errorf("tick line %q, want %q", r.fetchText(), want)
+	}
+	r.applyFetch(1, 3, "")
+	if txt := r.fetchText(); !strings.HasSuffix(txt, "3 document(s) ignored") {
+		t.Errorf("tick line %q: under the cap it names no list", txt)
+	}
+}
+
 func TestFetchFailureKeepsTheCache(t *testing.T) {
 	m := newShareMachine(t)
 	m.putMetrics(otherPC(1), otherDoc(t, otherPC(1), pubT0))
