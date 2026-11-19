@@ -57,8 +57,15 @@ var (
 	HasWords  = map[string]string{"used": "Used", "wrong": "Reported wrong", "undeclared": "Not declared", "memory": "Got memory", "never_extracted": "Never turned into memories", "contradicted": "Corrected after memory"}
 	SortWords = map[string]string{"shown": "Most shown", "used": "Most used", "rate": "Used rate", "last_shown": "Last shown"}
 
-	// LanguageWords name the language groups of recall.by_lang.
-	LanguageWords = map[string]string{"unknown": "language not detected"}
+	// LanguageWords name the language groups of recall.by_lang: the languages prompts are read as, and the
+	// prompts whose language was not detected. LanguageName reads them.
+	LanguageWords = map[string]string{
+		"en": "English", "fr": "French", "de": "German", "es": "Spanish", "it": "Italian", "pt": "Portuguese",
+		"nl": "Dutch", "sv": "Swedish", "da": "Danish", "no": "Norwegian", "fi": "Finnish", "pl": "Polish",
+		"cs": "Czech", "ru": "Russian", "uk": "Ukrainian", "tr": "Turkish", "ar": "Arabic", "he": "Hebrew",
+		"hi": "Hindi", "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "vi": "Vietnamese", "id": "Indonesian",
+		"unknown": "language not detected",
+	}
 )
 
 // generic is v as plain JSON values, so a breakdown held in a type of the
@@ -151,7 +158,7 @@ func ExtraLines(d metrics.Def, m metrics.Metric) []string {
 		for _, k := range sortedKeys(g) {
 			if one, ok := g[k].(map[string]any); ok {
 				if s, ok := share(one); ok {
-					out = append(out, Word(LanguageWords, k)+": "+s)
+					out = append(out, LanguageName(k)+": "+s)
 				}
 			}
 		}

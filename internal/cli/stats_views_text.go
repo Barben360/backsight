@@ -978,10 +978,10 @@ func blockDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string 
 			break
 		}
 		for _, g := range t.Gaps {
-			add("%s: %s %% of prompts got memory, %s pts behind %s (%s to %s)", g.Lang, percentOf(g.Value), signedPoints(g.Gap), t.Reference, signedPoints(g.Interval[0]), signedPoints(g.Interval[1]))
+			add("%s: %s %% of prompts got memory, %s pts behind %s (%s to %s)", views.LanguageName(g.Lang), percentOf(g.Value), signedPoints(g.Gap), views.LanguageName(t.Reference), signedPoints(g.Interval[0]), signedPoints(g.Interval[1]))
 		}
 		for _, l := range t.LeftOut {
-			add("%s: %d of %d, too few to compare", l.Lang, l.Num, l.Den)
+			add("%s: %d of %d, too few to compare", views.LanguageName(l.Lang), l.Num, l.Den)
 		}
 	case "bank.growth", "extraction.tokens":
 		if from, _ := extraAs[string](m, "record_from"); from != "" {

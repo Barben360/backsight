@@ -364,22 +364,6 @@ type LangRow struct {
 // LangLine is a language the test finds behind (or ahead): a sentence.
 type LangLine struct{ Text string }
 
-// languageNames are the languages prompts are read as; any other is shown
-// by its code.
-var languageNames = map[string]string{
-	"en": "English", "fr": "French", "de": "German", "es": "Spanish", "it": "Italian", "pt": "Portuguese",
-	"nl": "Dutch", "sv": "Swedish", "da": "Danish", "no": "Norwegian", "fi": "Finnish", "pl": "Polish",
-	"cs": "Czech", "ru": "Russian", "uk": "Ukrainian", "tr": "Turkish", "ar": "Arabic", "he": "Hebrew",
-	"hi": "Hindi", "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "vi": "Vietnamese", "id": "Indonesian",
-}
-
-func languageName(code string) string {
-	if n, ok := languageNames[code]; ok {
-		return n
-	}
-	return views.Word(views.LanguageWords, code)
-}
-
 // The language test as recall.by_lang's extra holds it (metrics' langTest).
 type (
 	langBy struct {
@@ -474,7 +458,7 @@ func (d PageData) langOf(r *metrics.Result) LangCard {
 	by, _ := extraAs[map[string]langBy](v.M, "by_lang")
 	minN := int64(v.Def.MinN)
 	row := func(code string, num, den int64) LangRow {
-		lr := LangRow{Name: languageName(code), Prompts: l.Int(den)}
+		lr := LangRow{Name: views.LanguageName(code), Prompts: l.Int(den)}
 		if den < minN {
 			lr.Got, lr.Few = l.Int(num)+" of "+l.Int(den), true
 			return lr
@@ -513,5 +497,5 @@ func langLine(g langGap, ref string) (LangLine, bool) {
 		dir, n, a, b = "more", -n, -b, -a
 	}
 	return LangLine{Text: fmt.Sprintf("%s prompts get memory %d pts %s often than %s (%d to %d pts): a gap over %d pts whose interval excludes 0.",
-		languageName(g.Lang), n, dir, languageName(ref), a, b, metrics.LangGapPoints)}, true
+		views.LanguageName(g.Lang), n, dir, views.LanguageName(ref), a, b, metrics.LangGapPoints)}, true
 }
