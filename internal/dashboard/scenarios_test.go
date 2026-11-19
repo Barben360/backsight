@@ -197,7 +197,10 @@ func scDelta(d float64) scOpt {
 func scDeltaFrom(prev float64) scOpt {
 	return func(m *metrics.Metric) { m.Previous, m.Delta = scF(prev), scF(*m.Value-prev) }
 }
-func scSnapshot() scOpt { return scTags("snapshot") }
+
+// scUsual sets a relative metric's usual level (its baselines' median).
+func scUsual(u float64) scOpt { return func(m *metrics.Metric) { m.Usual = scF(u) } }
+func scSnapshot() scOpt       { return scTags("snapshot") }
 
 // scDaily is the tile's sparkline over the window's 8 day buckets,
 // 2026-10-23 to 2026-10-30, the first and the last partial: vals are the
@@ -424,7 +427,7 @@ func scQualityWatch() *metrics.Result {
 		"With less memory, Claude starts each prompt with less of your context. The Quality page shows why prompts got nothing: often a project with little memory yet, which importing its past sessions fixes.")
 	v := &metrics.Verdict{WindowDays: 7, Axes: scAxes(map[string]metrics.Axis{"found": scAxis(metrics.AxisAttention, 7, scReason(it))})}
 	return scResult(v, scSummary(21, 8, 18000, scF(41.05), true), []metrics.Item{it}, append([]scPart{
-		scRate("recall.hit_rate", metrics.StatusWatch, 21, 150, scCI(0.09, 0.20), scDeltaFrom(0.27), scMDC(0.08),
+		scRate("recall.hit_rate", metrics.StatusWatch, 21, 150, scCI(0.09, 0.20), scDeltaFrom(0.22), scUsual(0.27), scMDC(0.08),
 			scDaily(0.01, 26, 22, 17, 13, 12, 15, 14)),
 		scRate("used.turn_rate", metrics.StatusOK, 14, 45, scCI(0.19, 0.46), scBorderline(), scDelta(-0.09), scMDC(0.25),
 			scDaily(0.01, 40, 35, 30, 28, 33, 30, 31)),
@@ -832,7 +835,7 @@ func scenarioNoteFigures(r *metrics.Result, axis, note string) ([]string, bool) 
 		return nil, axis == "right" && ax.WindowDays == 28 && slices.Contains(m["used.turn_rate"].Tags, "judged_28d")
 	case axis == "found" && strings.Contains(note, " vs "):
 		f := m["recall.hit_rate"]
-		return []string{pct(f.Value) + " vs " + pct(f.Previous) + " usual"}, true
+		return []string{pct(f.Value) + " vs " + pct(f.Usual) + " usual"}, true // the median of the four weeks before, not last week
 	case axis == "found":
 		return []string{pct(m["recall.hit_rate"].Value)}, true
 	case axis == "right" && strings.HasSuffix(note, " turns"):

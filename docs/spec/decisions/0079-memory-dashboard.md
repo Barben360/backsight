@@ -258,6 +258,7 @@ Every view uses the existing envelope `{schema_version: 1, command, ok, data | e
 - Axis states: `ok | attention | too_early | cant_judge | learning`; severities: `info | watch | bad`.
 - `metrics` keys are catalog ids; a metric a view cannot compute is present with `status: "no_data"` and `reason`, one of `no_events|feedback_off|server_only_host|server_down|server_unsupported|not_built`.
   *(2026-11-09, as built: `memory.yield` adds `no_complete_week`, `no_record` and `record_catching_up`, and other views have their own reasons; `docs/dashboard.md` lists every `no_data` reason the code can return, guarded by a test, and the agent guide points there.)*
+- *(2026-11-19: a relative metric with a baseline median (two of its four previous weeks with `min_n`) carries it as `usual`; the Found axis line and tile say it as "usual", where they quoted `previous`, last week's value.)*
 - `series` only where a page charts it (daily buckets; hourly for windows ≤ 48 h). `drill` is the CLI command listing the events behind the number; the page link is derived from it.
 - No field holds memory, prompt, error or config text, except `stats memories <id> --text`. A canary test fails if any appears (§15).
 - Adding fields is compatible; renaming or removing one bumps `view_schema`.

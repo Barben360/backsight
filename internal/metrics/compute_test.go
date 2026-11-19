@@ -367,3 +367,33 @@ func TestPreviousAndDeltaNeedMinN(t *testing.T) {
 		})
 	}
 }
+
+// TestUsualIsTheBaselinesMedian: a relative metric's usual level is the
+// median of its four previous weeks, the level its relative rule compares
+// with, not last week's value. Now 4/40; the weeks before 20/40, 12/40,
+// 12/40 and 36/40: previous 0.5, usual (0.3 + 0.5) / 2 = 0.4. With one
+// week of enough prompts there is no usual level, as no relative rule.
+func TestUsualIsTheBaselinesMedian(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 40, injecting(4))
+	for k, n := range []int{20, 12, 12, 36} {
+		x.prompts("alpha", fmt.Sprintf("b%d", k), since7.Add(-time.Duration(7*k)*day), 40, injecting(n))
+	}
+	m := reachOf(x, x.query(7))["recall.hit_rate"]
+	if m.Previous == nil || !same(*m.Previous, 0.5) {
+		t.Errorf("previous %v, want 0.5", m.Previous)
+	}
+	if m.Usual == nil || !same(*m.Usual, 0.4) {
+		t.Errorf("usual %v, want the median 0.4", m.Usual)
+	}
+	if m.Status != StatusWatch {
+		t.Errorf("status %s, want watch (upper bound under 0.7 × 0.4)", m.Status)
+	}
+
+	x = newFx(t, fxNow)
+	x.prompts("alpha", "cur", fxNow, 40, injecting(4))
+	x.prompts("alpha", "b0", since7, 40, injecting(20))
+	if m := reachOf(x, x.query(7))["recall.hit_rate"]; m.Usual != nil {
+		t.Errorf("one baseline week: usual %v, want none", *m.Usual)
+	}
+}

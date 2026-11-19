@@ -269,8 +269,8 @@ func foundNote(r *metrics.Result, l format.Locale, ax metrics.Axis, cause bool) 
 		return "", false
 	}
 	pct := l.Percent(*m.Value)
-	if ax.State == metrics.AxisAttention && m.Previous != nil {
-		s := pct + " vs " + l.Percent(*m.Previous) + " usual"
+	if ax.State == metrics.AxisAttention && m.Usual != nil { // usual: the four weeks' median the rule compares with
+		s := pct + " vs " + l.Percent(*m.Usual) + " usual"
 		if !hasBad(ax) {
 			s += ", two weeks running"
 		}

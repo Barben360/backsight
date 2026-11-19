@@ -226,8 +226,8 @@ func foundSub(m metrics.Metric, l format.Locale, num, den int64, haveND, tooFew 
 		return ""
 	}
 	s := l.Int(num) + " of " + format.Count(l, den, "prompt", "prompts")
-	if (m.Status == metrics.StatusWatch || m.Status == metrics.StatusBad) && m.Previous != nil {
-		s = "usual " + l.Percent(*m.Previous) + " · " + s
+	if (m.Status == metrics.StatusWatch || m.Status == metrics.StatusBad) && m.Usual != nil {
+		s = "usual " + l.Percent(*m.Usual) + " · " + s
 	}
 	return s
 }

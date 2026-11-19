@@ -162,7 +162,10 @@ type Metric struct {
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`
 	Delta       *float64       `json:"delta"`
-	Drill       string         `json:"drill"`
+	// Usual: a relative metric's usual level, the median its relative rule
+	// compares with (the four previous weeks with enough data, two at least).
+	Usual *float64 `json:"usual,omitempty"`
+	Drill string   `json:"drill"`
 	Series      []Point        `json:"series,omitempty"`
 	Extra       map[string]any `json:"extra,omitempty"` // keys declared in the catalog
 
