@@ -418,11 +418,22 @@ func TestOutcomesDayOfTheLastEvent(t *testing.T) {
 	x.retained(ago(2*time.Hour), "x1", "ok", 90)
 	// Out of time order, as two processes appending can write it: x2's
 	// later line in the file carries the earlier ts. It still lands on
-	// the day of its latest event, not of its last row. (Today the ts
-	// range reads tel_retain_ts and hands the rows in ts order; a query
-	// that reads them in file order must not move x2.)
+	// the day of its latest event, not of its last row. The ts range reads
+	// tel_retain_ts, which hands the rows in ts order whatever the file's;
+	// without the index the query reads them in file order (the table's
+	// key), so the rows reach the family out of ts order and the test
+	// bites.
 	x.retained(ago(2*time.Hour), "x2", "ok", 80)
 	x.retained(ago(50*time.Hour), "x2", "queued", 0)
+	x.source() // the index, built
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(x.dirs.IndexDir(), index.FileName)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`DROP INDEX tel_retain_ts`); err != nil {
+		t.Fatal(err)
+	}
 	m := pipeOf(x, x.query(7))["retain.outcomes"]
 	days := map[string]Point{}
 	for _, p := range m.Series {
