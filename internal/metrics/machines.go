@@ -157,6 +157,23 @@ func noonSpan(w Window) (lo, hi time.Time) {
 	return lo, hi
 }
 
+// othersQuery is readOthers' read of pc_days: one version's days of the
+// counted PCs, by noon, through the index pc_days_version_noon.
+const othersQuery = `
+SELECT d.machine, d.noon, d.prompts, d.hit_n, d.hit_d, d.used_n, d.used_d, d.cov_n, d.cov_d, d.wrong_n, d.wrong_d,
+       d.ctx_chars, d.ctx_sessions, COALESCE(d.flow_n, 0), COALESCE(d.flow_d, 0),
+       d.lat0, d.lat1, d.lat2, d.lat3, d.lat4, d.lat5, d.lat6, d.lat7, d.lat8
+FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
+WHERE d.version = ? AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`
+
+// otherVersionsQuery is otherVersions' read: the versions of the counted
+// PCs' days by noon, through the same index.
+const otherVersionsQuery = `
+SELECT d.version, MIN(d.noon), MAX(d.noon)
+FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
+WHERE d.version <> '' AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?
+GROUP BY d.version ORDER BY d.version`
+
 // onReadOthers runs at each read of pc_days by readOthers (tests count them).
 var onReadOthers = func(version string) {}
 
@@ -171,12 +188,7 @@ func readOthers(e env, w Window, version string) (others, error) {
 		o.flowByBucket = make([]machines.Pair, len(buckets))
 		o.rowsByBucket = make([]int, len(buckets))
 	}
-	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT d.machine, d.noon, d.prompts, d.hit_n, d.hit_d, d.used_n, d.used_d, d.cov_n, d.cov_d, d.wrong_n, d.wrong_d,
-       d.ctx_chars, d.ctx_sessions, COALESCE(d.flow_n, 0), COALESCE(d.flow_d, 0),
-       d.lat0, d.lat1, d.lat2, d.lat3, d.lat4, d.lat5, d.lat6, d.lat7, d.lat8
-FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
-WHERE d.version = ? AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`,
+	rows, err := e.tx.QueryContext(e.ctx, othersQuery,
 		version, lo.UnixMilli(), hi.UnixMilli()+1,
 		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
 	if err != nil {
@@ -825,11 +837,7 @@ type otherVersion struct {
 // counts (noonSpan, as readOthers).
 func otherVersions(e env, w Window) ([]otherVersion, error) {
 	lo, hi := noonSpan(w)
-	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT d.version, MIN(d.noon), MAX(d.noon)
-FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
-WHERE d.version <> '' AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?
-GROUP BY d.version ORDER BY d.version`,
+	rows, err := e.tx.QueryContext(e.ctx, otherVersionsQuery,
 		lo.UnixMilli(), hi.UnixMilli(),
 		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
 	if err != nil {

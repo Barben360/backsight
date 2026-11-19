@@ -2134,6 +2134,57 @@ func TestReleasesReadEachVersionsDaysOnce(t *testing.T) {
 	}
 }
 
+// The reads of pc_days by window go through its index on (version, noon),
+// not a scan of every PC's days: the plan of each names pc_days_version_noon.
+func TestOtherPCsDaysReadThroughTheVersionNoonIndex(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.pcDoc(pcOther1, "2026-09-10", fxNow.Add(-time.Hour), "")
+	x.pcDoc(pcOther2, "2026-09-10", fxNow.Add(-time.Hour), "")
+	for d := 1; d <= 30; d++ {
+		day := fxNow.AddDate(0, 0, -d).UTC().Format("2006-01-02")
+		for _, pc := range []string{pcOther1, pcOther2} {
+			x.pcRows(pcRow{machine: pc, day: day, f: machines.Figures{Prompts: 1}},
+				pcRow{machine: pc, day: day, version: "0.1.2", f: machines.Figures{Prompts: 1}})
+		}
+	}
+	w := x.window(7)
+	lo, hi := noonSpan(w)
+	at0, at1 := fxNow.Add(-machines.DropAfter).UnixMilli(), fxNow.Add(machines.MaxSkew).UnixMilli()
+	err := withTx(context.Background(), x.srcAs(), x.allQuery(), nil, func(e env) error {
+		for _, c := range []struct {
+			name, q string
+			args    []any
+		}{
+			{"readOthers", othersQuery, []any{"", lo.UnixMilli(), hi.UnixMilli() + 1, at0, at1}},
+			{"otherVersions", otherVersionsQuery, []any{lo.UnixMilli(), hi.UnixMilli(), at0, at1}},
+		} {
+			rows, err := e.tx.QueryContext(e.ctx, "EXPLAIN QUERY PLAN "+c.q, c.args...)
+			if err != nil {
+				return err
+			}
+			var plan []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					return err
+				}
+				plan = append(plan, detail)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if !slices.ContainsFunc(plan, func(d string) bool { return strings.Contains(d, "pc_days_version_noon") }) {
+				t.Errorf("%s: plan %q does not use pc_days_version_noon", c.name, plan)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // An hourly window's merged rates and latency keep this PC's series, as a
 // copy: a write to the merged run's points never reaches this PC's run in
 // the memo.
