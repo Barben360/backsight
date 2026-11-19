@@ -96,17 +96,24 @@ func (ix *Index) refreshMachines(ctx context.Context) error {
 	if have && !flagged && old.size == size && old.mtime == mtime {
 		return nil
 	}
+	// The lock guards the fields only: the read and the writes below run
+	// without it.
 	ix.machinesBad.mu.Lock()
-	defer ix.machinesBad.mu.Unlock()
-	if flagged && ix.machinesBad.ok && ix.machinesBad.size == size && ix.machinesBad.mtime == mtime {
+	same := flagged && ix.machinesBad.ok && ix.machinesBad.size == size && ix.machinesBad.mtime == mtime
+	if !same {
+		ix.machinesBad.ok = false
+	}
+	ix.machinesBad.mu.Unlock()
+	if same {
 		return nil // the same unreadable file: already recorded
 	}
-	ix.machinesBad.ok = false
 	unreadable := func() error {
 		if err := ix.recordOnce(ctx, machinesSource, 0, errMachinesUnreadable); err != nil {
 			return err
 		}
+		ix.machinesBad.mu.Lock()
 		ix.machinesBad.size, ix.machinesBad.mtime, ix.machinesBad.ok = size, mtime, true
+		ix.machinesBad.mu.Unlock()
 		return nil
 	}
 
