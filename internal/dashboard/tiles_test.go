@@ -727,3 +727,38 @@ func TestMergedTileLeavesThisPCsItemsToTheirCard(t *testing.T) {
 		t.Errorf("this PC: %q", got)
 	}
 }
+
+// Every tile's head is laid out to fit its tile (TestTileHeadsFitInChrome measures it): the title and its chips
+// are one group, .tile-who, which wraps the chips under the title, and the info button follows the group in the
+// head, so it keeps the first line. On this PC as on all PCs.
+func TestTileHeadsGroupTheTitleAndChips(t *testing.T) {
+	read := 0
+	for name, doc := range map[string]*node{
+		"this PC": renderOverview(t, scenarioNamed(t, "healthy")),
+		"all PCs": renderAllPCs(t, allPCsOverview(t), scenarioNamed(t, "healthy"), nil, allPCsPage),
+	} {
+		for _, tile := range doc.find("article.tile") {
+			read++
+			top := tile.first(".tile-top")
+			if top == nil {
+				t.Fatalf("%s: a tile at line %d has no head", name, tile.line)
+			}
+			who := top.first(".tile-who")
+			if who == nil || who.Parent != top || who.first("h3.tile-name") == nil {
+				t.Errorf("%s: the head at line %d does not group its title in .tile-who", name, top.line)
+				continue
+			}
+			for _, chip := range top.find(".chip") {
+				if !within(chip, "div", "tile-who") {
+					t.Errorf("%s: chip %q at line %d sits outside the title's group", name, chip.text(), chip.line)
+				}
+			}
+			if info := top.first("details.info"); info == nil || info.Parent != top || info.line < who.line {
+				t.Errorf("%s: the head at line %d has no info button after the group", name, top.line)
+			}
+		}
+	}
+	if read < 12 {
+		t.Errorf("%d tiles read, want the Overview's six on this PC and on all PCs", read)
+	}
+}

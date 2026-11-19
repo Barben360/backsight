@@ -175,6 +175,23 @@
         out('open=' + q('details.summary-text').open + ';label=' + btn.textContent.trim());
       }, 300);
     },
+    // Every part of a tile's head stays inside the tile's padding: the tiles whose head runs past its right
+    // edge, with by how much ("ok" when none).
+    tilefit: function () {
+      var bad = [];
+      document.querySelectorAll('article.tile').forEach(function (tile) {
+        var r = tile.getBoundingClientRect();
+        var edge = r.right - parseFloat(getComputedStyle(tile).paddingRight) - parseFloat(getComputedStyle(tile).borderRightWidth);
+        // the head, its title and chips, and the info button (not its popover, which docks where it fits)
+        tile.querySelectorAll('.tile-top, .tile-top .tile-name, .tile-top .chip, .tile-top details.info > summary').forEach(function (e) {
+          var over = e.getBoundingClientRect().right - edge;
+          if (over > 0.5 && e.getClientRects().length) {
+            bad.push(tile.getAttribute('aria-labelledby') + ':' + desc(e) + ':' + over.toFixed(1));
+          }
+        });
+      });
+      out(bad.length ? bad.join(',') : 'ok');
+    },
     copyok: function () {
       var got = '';
       clip(function (t) { got = t; return Promise.resolve(); });
