@@ -2077,6 +2077,30 @@ func TestCustomWindowTakesTheNoonsItLasts(t *testing.T) {
 	}
 }
 
+// In a zone whose local midnight falls at 12:00 UTC (Norfolk Island under
+// DST, UTC+12), a week of whole local days across the fall-back change lasts
+// 169 h and holds 8 noons, its first at its very start: it takes the first 7.
+func TestWeekAcrossFallBackTakesSevenDays(t *testing.T) {
+	norfolk, err := time.LoadLocation("Pacific/Norfolk")
+	if err != nil {
+		t.Skip(err)
+	}
+	late := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	x := newFx(t, late)
+	x.pcDoc(pcOther1, "2026-01-10", late.Add(-time.Hour), "")
+	for d := time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC); d.Before(time.Date(2026, 4, 9, 0, 0, 0, 0, time.UTC)); d = d.AddDate(0, 0, 1) {
+		x.pcRows(pcRow{machine: pcOther1, day: d.Format("2006-01-02"), f: machines.Figures{Prompts: 1, Hit: machines.Pair{1, 1}}})
+	}
+	w, err := NewWindow(late, 0, time.Date(2026, 4, 1, 0, 0, 0, 0, norfolk), time.Date(2026, 4, 8, 0, 0, 0, 0, norfolk), norfolk, "Pacific/Norfolk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Length() != 169*time.Hour || !w.Since.Equal(time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("window %v from %v, want 169 h from 2026-03-31 12:00Z", w.Length(), w.Since.UTC())
+	}
+	isNum(t, "a week across fall-back", x.mergedOf("quality", Query{Window: w})["recall.hit_rate"], 7, 7)
+}
+
 // Releases lists the other PCs' versions over the same noons as their
 // figures: a 25 h window holding two noons spans only the first, so a
 // version run on both days reads first = last = that noon, its n that day's.

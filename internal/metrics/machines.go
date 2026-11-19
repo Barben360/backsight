@@ -121,8 +121,8 @@ type othersKey struct {
 }
 
 // othersAt reads pc_days once per (window, version) in the transaction. A
-// day D counts in w when D 12:00 UTC is in noonSpan(w): exactly N days in an
-// N-day window in every zone. Only counted PCs (pc_docs.at not more than 30
+// day D counts in w when D 12:00 UTC is in noonSpan(w): N days in an N-day
+// window (see noonSpan for the one exception). Only counted PCs (pc_docs.at not more than 30
 // days before now, nor more than 24 h after it; stale ones included).
 func othersAt(e env, w Window, version string) (others, error) {
 	k := othersKey{w.Since.UnixNano(), w.Until.UnixNano(), version}
@@ -145,9 +145,12 @@ func othersAt(e env, w Window, version string) (others, error) {
 // other PCs that w counts: w itself, cut for a window longer than a day to
 // its first round(length / 24 h) noons, so that it takes as many days as it
 // lasts. The day page of a 25 h local day and a custom 30 h window take one
-// day even when they hold two noons, a 36 h or 47 h window two; an N-day
-// window holds exactly N noons and is not cut. Every read of pc_days by
-// window (readOthers, otherVersions) takes these bounds.
+// day even when they hold two noons, a 36 h or 47 h window two. An N-day
+// window holds N noons and is not cut, except across a DST change in a zone
+// whose local midnight falls at 12:00 UTC (Pacific/Norfolk under DST): a
+// fall-back week holds 8 noons and takes 7, a spring-forward week holds 6.
+// Every read of pc_days by window (readOthers, otherVersions) takes these
+// bounds.
 func noonSpan(w Window) (lo, hi time.Time) {
 	lo, hi = w.Since, w.Until
 	if l := w.Length(); l > day {
