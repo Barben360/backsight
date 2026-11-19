@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
@@ -121,7 +122,7 @@ func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg c
 		}
 	}
 	slices.Sort(hidden)
-	next := feedback.SharedUpload{At: now, Server: shareTarget(d, cfg), Hash: sha256Hex(entries), HiddenHash: sha256Hex(strings.Join(hidden, "\n"))}
+	next := feedback.SharedUpload{At: now, Server: machines.TargetKey(shareTarget(d, cfg)), Hash: sha256Hex(entries), HiddenHash: sha256Hex(strings.Join(hidden, "\n"))}
 	if last, ok := feedback.LoadSharedUpload(d.FeedbackDir()); ok && !last.At.After(now) && last.Server == next.Server && last.HiddenHash == next.HiddenHash {
 		if age := now.Sub(last.At); age < shareUploadEvery || (last.Hash == next.Hash && age < shareResendEvery) {
 			return false, nil
