@@ -185,7 +185,8 @@ func jsonNames(types ...reflect.Type) []string {
 // another case: Go's decoder takes "PROMPTS" (or "dayſ") for the field, and
 // the last of two spellings wins, so the figures read would depend on a
 // spelling no writer uses. The keys of a versions object are versions, in
-// any case; an unknown field stays ignored.
+// any case; at any level, a key that folds to none of the field names
+// (an unknown field) stays ignored.
 func checkFieldCase(raw string) error {
 	type frame struct {
 		object, versions, wantKey bool
