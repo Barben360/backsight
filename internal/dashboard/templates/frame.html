@@ -315,7 +315,7 @@
 {{range .Tiles}}<article class="tile {{.Class}}" aria-labelledby="{{.Head.ID}}">
 {{if .Head.PCs}}<div class="tile-top"><div class="tile-who"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>{{template "pcschip" .Head.PCs}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .Head.OthersNF}}{{template "othersnf"}}{{end}}</div><span class="spacer"></span>
 {{template "info" .Head}}</div>{{else}}<div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
-{{if .Head.PCs}}{{template "pcschip" .Head.PCs}}{{else if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .Head.OthersNF}}{{template "othersnf"}}{{end}}<span class="spacer"></span>
+{{if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{if .Head.OthersNF}}{{template "othersnf"}}{{end}}<span class="spacer"></span>
 {{template "info" .Head}}</div>{{end}}
 {{with .Dev}}<span class="devid">{{.}}</span>
 {{end}}<p class="tile-q">{{.Question}}</p>
