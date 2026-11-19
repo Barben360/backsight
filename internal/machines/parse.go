@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -127,17 +129,17 @@ func Parse(name, raw string, now time.Time) (Doc, error) {
 	if len(raw) > MaxBytes {
 		return Doc{}, &ParseError{Reason: TooLarge}
 	}
-	var probe struct {
-		V json.RawMessage `json:"v"`
-	}
+	// A map, not a struct: the key is "v" exactly, never "V".
+	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
 		return Doc{}, &ParseError{Reason: NotValid, Err: err}
 	}
-	if len(probe.V) == 0 || string(probe.V) == "null" {
+	pv := probe["v"]
+	if len(pv) == 0 || string(pv) == "null" {
 		return Doc{}, bad("no v")
 	}
 	var v int64
-	if err := json.Unmarshal(probe.V, &v); err != nil {
+	if err := json.Unmarshal(pv, &v); err != nil {
 		return Doc{}, &ParseError{Reason: NotValid, Err: err}
 	}
 	if v != Version {
@@ -152,7 +154,90 @@ func Parse(name, raw string, now time.Time) (Doc, error) {
 	if dec.More() {
 		return Doc{}, bad("a second value after the object")
 	}
+	// After the decode, which bounds the nesting the walk goes through.
+	if err := checkFieldCase(raw); err != nil {
+		return Doc{}, err
+	}
 	return build(name, &w, now)
+}
+
+// fieldNames are the document's field names, v included, from the wire types.
+var fieldNames = append([]string{"v"}, jsonNames(reflect.TypeOf(wireDoc{}), reflect.TypeOf(wireDay{}))...)
+
+func jsonNames(types ...reflect.Type) []string {
+	var out []string
+	for _, t := range types {
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if f.Anonymous {
+				out = append(out, jsonNames(f.Type)...)
+				continue
+			}
+			if name, _, _ := strings.Cut(f.Tag.Get("json"), ","); name != "" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// checkFieldCase refuses a key that is one of the document's field names in
+// another case: Go's decoder takes "PROMPTS" (or "dayſ") for the field, and
+// the last of two spellings wins, so the figures read would depend on a
+// spelling no writer uses. The keys of a versions object are versions, in
+// any case; at any level, a key that folds to none of the field names
+// (an unknown field) stays ignored.
+func checkFieldCase(raw string) error {
+	type frame struct {
+		object, versions, wantKey bool
+		key                       string
+	}
+	var stack []*frame
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return &ParseError{Reason: NotValid, Err: err}
+		}
+		var top *frame
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		if top != nil && top.object && top.wantKey {
+			if d, ok := tok.(json.Delim); ok && d == '}' {
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			k, _ := tok.(string)
+			if !top.versions {
+				for _, n := range fieldNames {
+					if k != n && strings.EqualFold(k, n) {
+						return bad("a field name in another case")
+					}
+				}
+			}
+			top.key, top.wantKey = k, false
+			continue
+		}
+		if d, ok := tok.(json.Delim); ok && (d == '}' || d == ']') {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		if top != nil && top.object {
+			top.wantKey = true
+		}
+		switch tok {
+		case json.Delim('{'):
+			versions := top != nil && top.object && !top.versions && top.key == "versions"
+			stack = append(stack, &frame{object: true, versions: versions, wantKey: true})
+		case json.Delim('['):
+			stack = append(stack, &frame{})
+		}
+	}
 }
 
 func build(name string, w *wireDoc, now time.Time) (Doc, error) {

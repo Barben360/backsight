@@ -375,6 +375,46 @@ func TestUnreadableCacheKeepsTheRows(t *testing.T) {
 	}
 }
 
+// An unreadable cache is read once, not at every catch-up: the next read
+// waits for the file to change (size or modification time).
+func TestUnreadableCacheIsReadOnce(t *testing.T) {
+	e, calls := machEnv(t)
+	putCache(t, e, twoPCs(t))
+	e.catchUp(time.Minute)
+	path := machines.CacheFile(e.d.MetricsDir())
+	bad := func(body string) {
+		t.Helper()
+		writeFile(t, path, body)
+		cacheWrites++
+		at := time.Date(2026, 10, 30, 11, 0, 0, 0, time.UTC).Add(time.Duration(cacheWrites) * time.Second)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad(`{"fetched_at":"2026-10-30T11:`)
+	before := *calls
+	e.catchUp(time.Minute)
+	e.catchUp(time.Minute)
+	e.catchUp(time.Minute)
+	if got := *calls - before; got != 1 {
+		t.Errorf("%d reads of an unchanged unreadable cache over 3 catch-ups, want 1", got)
+	}
+	if len(e.errorsOf("machines_unreadable")) != 1 || e.count("pc_docs") != 2 {
+		t.Fatalf("the record or the rows: %v, %d documents", e.errorsOf("machines_unreadable"), e.count("pc_docs"))
+	}
+	bad(`{"fetched_at":"2026-10-30T12:`) // still unreadable, changed
+	e.catchUp(time.Minute)
+	e.catchUp(time.Minute)
+	if got := *calls - before; got != 2 {
+		t.Errorf("%d reads after the unreadable file changed once, want 2", got)
+	}
+	putCache(t, e, machines.Cache{FetchedAt: fetchedAt, Docs: []machines.CachedDoc{cachedDoc(t, pcDoc(pcA, "darwin"))}})
+	e.catchUp(time.Minute)
+	if errs := e.errorsOf("machines_unreadable"); len(errs) != 0 || e.count("pc_docs") != 1 {
+		t.Errorf("a good file after an unreadable one: record %v, %d documents", errs, e.count("pc_docs"))
+	}
+}
+
 func TestDuplicateNamesKeepTheFirst(t *testing.T) {
 	e, _ := machEnv(t)
 	first, second := cachedDoc(t, pcDoc(pcA, "linux")), cachedDoc(t, pcDoc(pcA, "darwin"))

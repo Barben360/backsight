@@ -39,8 +39,9 @@ type Options struct {
 	LocalStatus func() (LocalStatus, error)
 	// Machines reads the other PCs' cache (metrics/machines.json); nil:
 	// the pc_* tables are not refreshed. It is called only when the file's
-	// size or modification time differ from the last ingest's. A missing
-	// file (fs.ErrNotExist) is an empty cache.
+	// size or modification time differ from the last ingest's, and never
+	// once MachinesOff said sharing is off. A missing file (fs.ErrNotExist)
+	// is an empty cache.
 	Machines func() (machines.Cache, error)
 	// MachinesOff reports that sharing is off: the cache then reads as
 	// empty without the file being looked at (and Machines not called);
@@ -101,6 +102,7 @@ type Index struct {
 	// mtimes trusted for the ledger's skip.
 	localFeedback bool
 	skip          ledgerSkip
+	machinesBad   machinesBad
 }
 
 // OpensOf is how many times this process opened an index under stateDir.
