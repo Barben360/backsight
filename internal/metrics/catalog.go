@@ -152,7 +152,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight memory stale", Drill: "backsight stats sessions --has wrong",
 		Extra:      []string{"wrong", "outdated", "used", "confirmed"},
 		Question:   "How many memories that Claude relied on were wrong?",
-		Definition: "Wrong and out-of-date verdicts, out of used, confirmed, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
+		Definition: "Wrong and out-of-date verdicts, out of used, confirmed, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%. The interval is approximate: the verdicts of one turn are not independent of each other.",
 		Action:     "Stale facts are in memory. Go through the reported list and forget or fix them.",
 	},
 	{

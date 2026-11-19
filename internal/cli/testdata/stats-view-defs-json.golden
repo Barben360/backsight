@@ -413,7 +413,7 @@
           "id": "verdict.wrong_rate",
           "label": "Memories reported wrong or out of date",
           "question": "How many memories that Claude relied on were wrong?",
-          "definition": "Wrong and out-of-date verdicts, out of used, confirmed, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
+          "definition": "Wrong and out-of-date verdicts, out of used, confirmed, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%. The interval is approximate: the verdicts of one turn are not independent of each other.",
           "unit": "ratio",
           "aggregation": "raw",
           "direction": "down",
