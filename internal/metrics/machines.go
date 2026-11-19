@@ -121,11 +121,9 @@ type othersKey struct {
 }
 
 // othersAt reads pc_days once per (window, version) in the transaction. A
-// day D counts in w when D 12:00 UTC is in [since, until): exactly N days in
-// an N-day window in every zone. Only counted PCs (pc_docs.at not more than
-// 30 days before now, nor more than 24 h after it; stale ones included).
-// A window of more than 24 h and at most 25 h (the day page of a 25 h local
-// day) can hold two noons: it takes the first.
+// day D counts in w when D 12:00 UTC is in noonSpan(w): exactly N days in an
+// N-day window in every zone. Only counted PCs (pc_docs.at not more than 30
+// days before now, nor more than 24 h after it; stale ones included).
 func othersAt(e env, w Window, version string) (others, error) {
 	k := othersKey{w.Since.UnixNano(), w.Until.UnixNano(), version}
 	if e.memo != nil {
@@ -143,15 +141,24 @@ func othersAt(e env, w Window, version string) (others, error) {
 	return o, err
 }
 
-// maxOneNoon is the longest window that takes a single day (25 h: the
-// longest local day).
-const maxOneNoon = 25 * time.Hour
+// noonSpan is the span [lo, hi) whose noons (12:00 UTC) give the days of the
+// other PCs that w counts: w itself, cut for a window longer than a day to
+// its first round(length / 24 h) noons, so that it takes as many days as it
+// lasts. The day page of a 25 h local day and a custom 30 h window take one
+// day even when they hold two noons, a 36 h or 47 h window two; an N-day
+// window holds exactly N noons and is not cut. Every read of pc_days by
+// window (readOthers, otherVersions) takes these bounds.
+func noonSpan(w Window) (lo, hi time.Time) {
+	lo, hi = w.Since, w.Until
+	if l := w.Length(); l > day {
+		n := (l + day/2) / day
+		hi = min2(hi, firstNoon(lo).Add(n*day))
+	}
+	return lo, hi
+}
 
 func readOthers(e env, w Window, version string) (others, error) {
-	lo, hi := w.Since, w.Until
-	if l := w.Length(); l > day && l <= maxOneNoon {
-		hi = min2(hi, firstNoon(lo).Add(day))
-	}
+	lo, hi := noonSpan(w)
 	var buckets []Bucket
 	var o others
 	if w.Length() > hourlyMax {
@@ -801,13 +808,16 @@ type otherVersion struct {
 	first, last time.Time
 }
 
+// otherVersions are the versions the counted other PCs ran on the days w
+// counts (noonSpan, as readOthers).
 func otherVersions(e env, w Window) ([]otherVersion, error) {
+	lo, hi := noonSpan(w)
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT d.version, MIN(d.noon), MAX(d.noon)
 FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
 WHERE d.version <> '' AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?
 GROUP BY d.version ORDER BY d.version`,
-		w.Since.UnixMilli(), w.Until.UnixMilli(),
+		lo.UnixMilli(), hi.UnixMilli(),
 		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
 	if err != nil {
 		return nil, err

@@ -2008,3 +2008,65 @@ func TestMergedRunCarriesThisPCsOwnAnswer(t *testing.T) {
 		t.Errorf("sharing off: scope %q, own %v", r.Scope.Machines, r.ThisPC())
 	}
 }
+
+// A custom window longer than a day takes as many of the other PCs' days as
+// it lasts, rounded: the first round(length / 24 h) noons it holds. 30 h
+// holding two noons takes one day, 47 h holding two takes two, and 36 h,
+// a day and a half, takes two.
+func TestCustomWindowTakesTheNoonsItLasts(t *testing.T) {
+	late := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name         string
+		since, until time.Time
+		days         int64
+	}{
+		{"30 h, two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 17, 30, 0, 0, time.UTC), 1},
+		{"47 h, two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 3, 10, 30, 0, 0, time.UTC), 2},
+		{"36 h, two noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 23, 30, 0, 0, time.UTC), 2},
+		{"30 h, one noon", time.Date(2026, 11, 1, 13, 0, 0, 0, time.UTC), time.Date(2026, 11, 2, 19, 0, 0, 0, time.UTC), 1},
+		{"55 h, three noons", time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 3, 18, 30, 0, 0, time.UTC), 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFx(t, late)
+			x.pcDoc(pcOther1, "2026-09-10", late.Add(-time.Hour), "")
+			for _, d := range []string{"2026-11-01", "2026-11-02", "2026-11-03"} {
+				x.pcRows(pcRow{machine: pcOther1, day: d, f: machines.Figures{Prompts: 1, Hit: machines.Pair{1, 1}}})
+			}
+			w, err := NewWindow(late, 0, c.since, c.until, time.UTC, "UTC")
+			if err != nil {
+				t.Fatal(err)
+			}
+			isNum(t, c.name, x.mergedOf("quality", Query{Window: w})["recall.hit_rate"], c.days, c.days)
+		})
+	}
+}
+
+// Releases lists the other PCs' versions over the same noons as their
+// figures: a 25 h window holding two noons spans only the first, so a
+// version run on both days reads first = last = that noon, its n that day's.
+func TestReleasesOthersShareTheNoonBounds(t *testing.T) {
+	late := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	x := newFx(t, late)
+	x.pcDoc(pcOther1, "2026-09-10", late.Add(-time.Hour), "")
+	x.pcRows(
+		pcRow{machine: pcOther1, day: "2026-11-01", version: "0.1.3", f: machines.Figures{Prompts: 7, Hit: machines.Pair{2, 7}}},
+		pcRow{machine: pcOther1, day: "2026-11-02", version: "0.1.3", f: machines.Figures{Prompts: 5, Hit: machines.Pair{1, 5}}},
+		pcRow{machine: pcOther1, day: "2026-11-02", version: "0.1.4", f: machines.Figures{Prompts: 3, Hit: machines.Pair{1, 3}}},
+	)
+	w, err := NewWindow(late, 0, time.Date(2026, 11, 1, 11, 30, 0, 0, time.UTC), time.Date(2026, 11, 2, 12, 30, 0, 0, time.UTC), time.UTC, "UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := releaseByVersion(x.runAs("releases", Query{Window: w, Machines: "all"}))
+	v, ok := by["0.1.3"]
+	if !ok {
+		t.Fatalf("versions %v, want 0.1.3", by)
+	}
+	noon := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if v.N != 7 || !v.First.Equal(noon) || !v.Last.Equal(noon) {
+		t.Errorf("0.1.3: n %d, first %v, last %v; want 7, both %v", v.N, v.First, v.Last, noon)
+	}
+	if _, ok := by["0.1.4"]; ok {
+		t.Errorf("0.1.4 listed: it ran only on the second noon, which the window does not take")
+	}
+}
