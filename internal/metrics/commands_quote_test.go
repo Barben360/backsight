@@ -20,7 +20,7 @@ const (
 func word(t *testing.T, s string) string {
 	t.Helper()
 	posix := map[string]string{injectName: `'R&D $(touch /tmp/pwned)'`, quoteName: `'Bob'\''s notes'`, hostileID: `'m'\''1$(id)'`}
-	ps := map[string]string{injectName: `'R&D $(touch /tmp/pwned)'`, quoteName: `'Bob''s notes'`, hostileID: `'m''1$(id)'`}
+	ps := map[string]string{injectName: `'R&D $(touch /tmp/pwned)'`, quoteName: `"Bob's notes"`, hostileID: `'m''1$(id)'`}
 	if runtime.GOOS == "windows" {
 		return ps[s]
 	}

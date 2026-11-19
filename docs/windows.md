@@ -66,6 +66,8 @@ On Windows x86_64, setup runs the server natively (`--runtime native` is the def
 
 Each check, and what to do when it fails: [setup on the native runtime stops at its pre-flight](troubleshooting.md#setup-on-the-native-runtime-stops-at-its-pre-flight). The rest of setup is as on Linux ([install](install.md#run-setup)); then restart Claude Code. With backups on, save the backup identity in a password manager: `backsight backup identity show`, run at a terminal, shows it (`pass`, which the Linux hint names, does not exist on Windows).
 
+The commands backsight gives you to copy (the dashboard's Copy buttons, `stats` and the resume lines of setup and install) are written for PowerShell. A project name or a memory id holding an apostrophe is put in double quotes (`"Bob's notes"`), which Git Bash reads the same; one that also holds `$`, a backtick, `!` or a double quote keeps PowerShell's single quotes (`'it''s $x'`), which Git Bash reads without the apostrophe: run that one in PowerShell.
+
 ## What runs on your PC
 
 The [native runtime](native-runtime.md), as on Linux: Hindsight's API from PyPI in a Python environment, on the PostgreSQL with pgvector that [pg0](https://pypi.org/project/pg0-embedded/) ships, both listening on `127.0.0.1` only. Setup's server step downloads, at the versions this release pins:

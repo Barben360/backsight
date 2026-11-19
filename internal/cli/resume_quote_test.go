@@ -11,7 +11,7 @@ func TestPowerShellQuoting(t *testing.T) {
 		`C:\Users\RUNNER~1\x`:                         `C:\Users\RUNNER~1\x`,
 		"u@h":                                         "u@h",
 		"consent=yes":                                 "consent=yes",
-		`C:\Users\O'Brien\x`:                          `'C:\Users\O''Brien\x'`,
+		`C:\Users\O'Brien\x`:                          `"C:\Users\O'Brien\x"`,
 		`C:\Users\Jé & Co\x`:                          `'C:\Users\Jé & Co\x'`,
 		"a,b":                                         "'a,b'",
 		"@h":                                          "'@h'",
@@ -19,7 +19,7 @@ func TestPowerShellQuoting(t *testing.T) {
 		"$env:HOME":                                   "'$env:HOME'",
 		"a`b":                                         "'a`b'",
 		"--%":                                         "'--%'",
-		"it\u2019s":                                   "'it\u2019\u2019s'",
+		"it\u2019s":                                   "\"it\u2019s\"",
 		"":                                            "''",
 	} {
 		if got := psWord(in); got != want {
