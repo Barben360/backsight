@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/shellword"
 	"github.com/Barben360/backsight/internal/views"
 )
 
@@ -183,8 +184,21 @@ func TestMemorySharedCardStates(t *testing.T) {
 		for _, code := range c.find("div.cmd code") {
 			cmds = append(cmds, code.Text)
 		}
-		if !slices.Contains(cmds, "backsight forget --restore "+posixOrPS(`'it'\''s; rm -rf'`, `'it''s; rm -rf'`)) {
+		const id = "it's; rm -rf"
+		word := posixOrPS(`'it'\''s; rm -rf'`, `"it's; rm -rf"`)
+		if !slices.Contains(cmds, "backsight forget --restore "+word) {
 			t.Errorf("commands %q", cmds)
+		}
+		// The word is one literal argument in each shell it may be pasted in:
+		// nothing after the ; runs, in sh (this PC's, or Git Bash) and in
+		// PowerShell on Windows.
+		for _, w := range []string{word, shellword.PowerShell(id)} { // the Windows word pasted in Git Bash too
+			if got, ok := shWords(t, w); ok && !slices.Equal(got, []string{id}) {
+				t.Errorf("sh reads %s as %q, want the one argument %q", w, got, id)
+			}
+		}
+		if got, ok := powerShellWords(t, word); ok && !slices.Equal(got, []string{id}) {
+			t.Errorf("PowerShell reads %s as %q, want the one argument %q", word, got, id)
 		}
 	})
 	t.Run("sharing off names its setting", func(t *testing.T) {
