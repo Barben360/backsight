@@ -352,3 +352,27 @@ func Count(l Locale, n int64, one, many string) string {
 	}
 	return l.Int(n) + " " + many
 }
+
+// PercentNumber writes a ratio as a percent without its sign: "31", "0,4".
+func (l Locale) PercentNumber(r float64) string { return l.pctNumber(r) }
+
+// UnitValue writes v in a catalog unit as the command line's detail lines
+// do (views.ValueIn), in the locale's marks: a percent, characters and
+// tokens as Size writes them, milliseconds under a second then seconds with
+// one decimal, money with its currency (in m's extras), else a whole number.
+func (l Locale) UnitValue(unit string, v float64, m metrics.Metric) string {
+	switch unit {
+	case "ratio":
+		return l.Percent(v)
+	case "chars", "tokens":
+		return l.Size(v, unit)
+	case "ms":
+		if math.Abs(v) < 1000 {
+			return l.Fixed(math.Round(v), 0) + " ms"
+		}
+		return l.Fixed(v/1000, 1) + " s"
+	case "money":
+		return l.Money(v, currencyOf(m))
+	}
+	return l.Fixed(v, 0)
+}

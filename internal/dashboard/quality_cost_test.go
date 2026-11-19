@@ -1556,6 +1556,24 @@ func TestCostPageBucketsFollowTheLocale(t *testing.T) {
 	if txt := line(format.Locale{}); !strings.Contains(txt, "all PCs: typical 500 ms–1.0 s") {
 		t.Errorf("English detail line: %q", txt)
 	}
+	// The detail lines' other figures follow it too: this PC's exact times, and the sizes with their grouping.
+	if txt := line(fr); !strings.Contains(txt, "this PC alone: typical 840 ms, slowest 1 in 20 1,6 s") {
+		t.Errorf("this PC's times not in the locale: %q", txt)
+	}
+	if txt := line(format.Locale{}); !strings.Contains(txt, "this PC alone: typical 840 ms, slowest 1 in 20 1.6 s") {
+		t.Errorf("English times: %q", txt)
+	}
+	ctx := func(l format.Locale) string {
+		n := allPCsCostNode(t, func(d *PageData) { d.L = l })
+		return cardOf(t, n, "w-context-per_session").text()
+	}
+	// (text() reads the locale's narrow no-break space as a space)
+	if txt := ctx(fr); !strings.Contains(txt, "this PC alone: typical 2 100 chars, high 3 600 chars") || strings.Contains(txt, "2,100") {
+		t.Errorf("the context's sizes not in the locale: %q", txt)
+	}
+	if txt := ctx(format.Locale{}); !strings.Contains(txt, "this PC alone: typical 2,100 chars, high 3,600 chars") {
+		t.Errorf("English sizes: %q", txt)
+	}
 }
 
 // The copy-summary line for Speed on all PCs writes its bucket in the locale.

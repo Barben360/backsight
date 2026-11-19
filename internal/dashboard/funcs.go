@@ -298,14 +298,15 @@ func foundLines(v MetricView, f func(metrics.Def, metrics.Metric) []string) []st
 // detailsOf are the lines under a metric that its number does not say.
 func detailsOf(v MetricView) []string { return detailsIn(format.Locale{}, v) }
 
-// detailsIn is detailsOf with the bucket ranges written in the page's locale.
+// detailsIn is detailsOf with the figures (ranges, values, counts, percents)
+// written in the page's locale.
 func detailsIn(l format.Locale, v MetricView) []string {
 	return foundLines(v, func(d metrics.Def, m metrics.Metric) []string {
 		loc := v.Loc
 		if loc == nil {
 			loc = time.UTC
 		}
-		return views.PageDetailsIn(d, m, loc, l.Range)
+		return views.PageDetailsIn(d, m, loc, views.Numbers{Range: l.Range, Value: l.UnitValue, Count: l.Int, Percent: l.PercentNumber})
 	})
 }
 
