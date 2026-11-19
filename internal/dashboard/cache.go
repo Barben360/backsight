@@ -50,8 +50,12 @@ func fresh(now, at time.Time, ttl time.Duration) bool {
 // cacheKey is the result cache's key: the view, the id and every
 // parameter but Text (never cached) and DevSet (Dev alone decides), each
 // quoted so no two sets of values read alike. It holds no time: a window
-// of days is keyed by its length, not by the instants it spans.
+// of days is keyed by its length, not by the instants it spans. Machines
+// "" reads "this" (views.Query), so both take one key.
 func cacheKey(view, id string, p views.Params) string {
+	if p.Machines == "" {
+		p.Machines = "this"
+	}
 	return fmt.Sprintf("%q %q days=%d/%t since=%q until=%q tz=%q project=%q path=%q dev=%t limit=%d offset=%d has=%q sort=%q state=%q compare=%q measure=%q machines=%q client=%q",
 		view, id, p.Days, p.DaysSet, p.Since, p.Until, p.TZ, p.Project, p.Path, p.Dev, p.Limit, p.Offset, p.Has, p.Sort, p.State, p.Compare, p.Measure, p.Machines, p.Client)
 }

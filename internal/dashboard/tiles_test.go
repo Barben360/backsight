@@ -54,10 +54,10 @@ func TestTilesFollowTheCopyDeck(t *testing.T) {
 		{"qualitywatch", "Used", none, none, none, none, "Borderline: the interval still reaches the usual level.", "borderline", none, none, none},
 		{"latency", "Speed", "2.3", "s", "", "slowest 1 in 20 · typical 1.1 s · limit 2.5 s", scLatencyText, "watch", none, none, none},
 		{"new", "Found", "3 of 9", "", "", "prompts got memory", "3 of 9: too few to judge.", "too few", "", none, none},
-		{"new", "Used", "—", "", "", scLearnText, "", "learning", "", none, "1 turn →"},
+		{"new", "Used", "—", "", "", scLearnText, "", "learning", "", none, "Events →"}, // used.turn_rate has no count of its own yet
 		{"new", "Reported wrong", "0 of 0", "", "", "no memory judged yet", "Nothing judged yet.", "too few", "", none, "0 verdicts →"},
 		{"new", "Context", none, none, "≈ 280 tokens", none, none, "ok", none, none, none},
-		{"cantjudge", "Used", "56", "%", "(33–77 %)", "Said what it used on 64 % of turns (16 of 25).", "Unreliable: Claude often didn't say what it used.", "unreliable", "", none, "25 turns →"},
+		{"cantjudge", "Used", "56", "%", "(33–77 %)", "Said what it used on 64 % of turns (16 of 25).", "Unreliable: Claude often didn't say what it used.", "unreliable", "", none, "16 turns →"},
 		{"serverdown", "Found", none, none, none, none, "Prompts skipped: server unreachable.", "watch", none, none, none},
 		{"serverdown", "Speed", "910", "ms", "", none, "", "ok", none, none, none},
 		{"serverdown", "Flowing", "17", "waiting", "", "14 notes and 3 sessions on this PC", "Memory server unreachable since 09:12. Nothing is lost.", "watch", "", "/pipeline?days=7", "Waiting items →"},
@@ -656,9 +656,9 @@ func TestMergedTilesSayOtherPCsNotFiltered(t *testing.T) {
 // others' never reach this PC. A PC with no activity shows in "Based on".
 func TestTileLinkNamesThisPCsCount(t *testing.T) {
 	r, own := allPCsOverview(t), scenarioNamed(t, "healthy")
-	u := own.Metrics["used.turn_rate"]
-	u.Den = scN(40) // the Used link counts the turns Claude declared (61), not the ones that used memory
-	own.Metrics["used.turn_rate"] = u
+	c := own.Metrics["declare.coverage"]
+	c.Den = scN(64) // the Used link counts the turns Claude declared (61), as the tile, not those it was asked to declare
+	own.Metrics["declare.coverage"] = c
 	want := map[string]string{
 		"Found": "This PC’s 167 prompts →", "Used": "This PC’s 61 turns →", "Reported wrong": "This PC’s 14 verdicts →",
 		"Context": "This PC’s 34 sessions →", "Speed": "This PC’s 167 prompts →", "Flowing": "This PC’s 239 items →",

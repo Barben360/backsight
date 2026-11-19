@@ -99,3 +99,24 @@ func TestMachinesCacheOfOtherPCs(t *testing.T) {
 		t.Error("the same seed gives another cache")
 	}
 }
+
+// One other PC is a fresh one: the stale document is the last of two or
+// more, never the only one.
+func TestMachinesCacheOfOneOtherPC(t *testing.T) {
+	dir := t.TempDir()
+	Generate(t, dir, Spec{Months: 1, TelemetryPerYear: 12, JournalPerYear: 12, Memories: 2, Seed: 5, OtherPCs: 1})
+	c, err := machines.LoadCache(filepath.Join(dir, "metrics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Docs) != 1 || len(c.Ignored) != 1 {
+		t.Fatalf("%d documents, %d ignored; want 1 and 1", len(c.Docs), len(c.Ignored))
+	}
+	d, err := machines.Parse(c.Docs[0].Name, c.Docs[0].Raw, Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if age := Now.Sub(d.At); age > machines.StaleAfter {
+		t.Errorf("the only other PC sent %v ago: stale, want a fresh one", age)
+	}
+}

@@ -803,24 +803,19 @@
             "value": null,
             "n": 83,
             "lo": 1000,
-            "hi": 2000,
-            "this_p95": 500
+            "hi": 2000
           },
           {
             "day": "2026-10-07",
             "value": null,
             "n": 82,
             "lo": 1000,
-            "hi": 2000,
-            "this_p95": 1200
+            "hi": 2000
           },
           {
             "day": "2026-10-08",
             "value": null,
             "n": 4,
-            "lo": 250,
-            "hi": 500,
-            "this_p95": 500,
             "partial": true
           }
         ],
@@ -1046,7 +1041,9 @@
         "aggregation": "raw",
         "status": "ok",
         "borderline": true,
-        "tags": [],
+        "tags": [
+          "extra_this_pc"
+        ],
         "ci": [
           0.04238219710770542,
           0.15437787016611806

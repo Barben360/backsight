@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -403,6 +405,93 @@ func TestPublishWaitsForAFullCatchUp(t *testing.T) {
 	}
 }
 
+// failIndexOpen makes the publish's first index open fail with err; later
+// opens are real.
+func failIndexOpen(t *testing.T, err error) {
+	t.Helper()
+	opens := 0
+	old := publishIndexOpen
+	publishIndexOpen = func(ctx context.Context, o index.Options) (*index.Index, error) {
+		if opens++; opens == 1 {
+			return nil, err
+		}
+		return old(ctx, o)
+	}
+	t.Cleanup(func() { publishIndexOpen = old })
+}
+
+// An index that does not open for a passing reason (an update being
+// applied, backsight updated meanwhile, another process holding it, the
+// budget spent) is waited for as one not caught up: tried at the next
+// tick, no failed_at. One that cannot open (corrupt, a full disk, a read
+// error, any other) is a compute failure, tried again an hour later. Either way the
+// tick's index line says why.
+func TestPublishIndexThatDoesNotOpen(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		wait bool
+		line string
+	}{
+		{index.ErrUpdateInProgress, true, "skipped: an update is being applied"},
+		{fmt.Errorf("open: %w", index.ErrSchemaChanged), true, "skipped: backsight was updated meanwhile"},
+		{index.ErrInUse, true, "failed: busy"},
+		{fmt.Errorf("open: %w", context.DeadlineExceeded), true, "failed: timeout"},
+		{index.ErrUnreadable, false, "failed: corrupt"},
+		{index.ErrDiskFull, false, "failed: full"},
+		{errors.New("open: some other error"), false, "failed: other"},
+	} {
+		t.Run(c.line, func(t *testing.T) {
+			m := newShareMachine(t)
+			writes := watchMetricsWrites(t)
+			calls := stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+			failIndexOpen(t, c.err)
+
+			s := m.publish(pubT0)
+			rec := m.record()
+			if s.Up || s.IndexLine != c.line || len(writes()) != 0 || *calls != 0 {
+				t.Fatalf("index not opened: %+v, %d writes, %d computes", s, len(writes()), *calls)
+			}
+			if c.wait {
+				if !s.Waiting || s.Failure != "budget" || !rec.FailedAt.IsZero() || !rec.FailedSince.Equal(pubT0) || rec.Failure != "budget" {
+					t.Fatalf("want a wait: %+v, record %+v", s, rec)
+				}
+				// The next tick, 15 minutes later: tried again, sent.
+				if s := m.publish(pubT0.Add(15 * time.Minute)); !s.Up || len(writes()) != 1 {
+					t.Fatalf("the next tick: %+v, %d writes", s, len(writes()))
+				}
+				return
+			}
+			if s.Waiting || s.Failure != "compute" || !rec.FailedAt.Equal(pubT0) || rec.Failure != "compute" {
+				t.Fatalf("want a compute failure: %+v, record %+v", s, rec)
+			}
+			if s := m.publish(pubT0.Add(15 * time.Minute)); s.Up || s.Failure != "" || len(writes()) != 0 {
+				t.Fatalf("15 min later: %+v, %d writes: a failure waits its hour", s, len(writes()))
+			}
+			if s := m.publish(pubT0.Add(61 * time.Minute)); !s.Up || len(writes()) != 1 {
+				t.Fatalf("61 min later: %+v, %d writes", s, len(writes()))
+			}
+		})
+	}
+}
+
+// The tick takes the publish's index line and does not open the index
+// again (its own step would have caught up and said so).
+func TestTickDoesNotReopenAnIndexThePublishCouldNotOpen(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	failIndexOpen(t, index.ErrUpdateInProgress)
+	withClock(t, pubT0)
+	before := index.OpensOf(pathsOf(home).State)
+	_, res := tickJSON(t)
+	if res.MetricsIndex != "skipped: an update is being applied" || !res.MetricsWaiting {
+		t.Errorf("metrics_index %q, waiting %v", res.MetricsIndex, res.MetricsWaiting)
+	}
+	if n := index.OpensOf(pathsOf(home).State) - before; n != 0 {
+		t.Errorf("the index was opened %d time(s) after the publish could not", n)
+	}
+}
+
 func TestPublishFailureIsRetriedAfterAnHour(t *testing.T) {
 	m := newShareMachine(t)
 	writes := watchMetricsWrites(t)
@@ -616,6 +705,29 @@ func TestTickPublishesAndReports(t *testing.T) {
 
 // A tick whose publish is due and whose index holds more than one budget of
 // lines does one catch-up, the publish's: the tick's line is its freshness.
+// A tick skipped for components.write = false still shares: its line says
+// what the sharing step did, as a done tick's does.
+func TestSkippedTickReportsTheDailyFigures(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	setComponents(t, home, "write = false")
+	writes := watchMetricsWrites(t)
+	stubDaily(t, []machines.Day{figures("2026-11-05")}, nil)
+	withClock(t, pubT0)
+	code, out, _ := run(t, "jobs", "tick")
+	if code != output.OK || len(writes()) != 1 {
+		t.Fatalf("exit %d, %d writes\n%s", code, len(writes()), out)
+	}
+	if !strings.HasPrefix(out, "skipped: components.write is off") || !strings.Contains(out, "daily figures sent (1 days") ||
+		!strings.Contains(out, "metrics index") {
+		t.Errorf("tick line: %q", out)
+	}
+	// Nothing to say: the skipped line is as before.
+	if got := tickText(tickResult{Status: "skipped", Reason: "another tick is running"}); got != "skipped: another tick is running\n" {
+		t.Errorf("bare skipped line: %q", got)
+	}
+}
+
 func TestTickCatchesUpOnceWhenThePublishIsDue(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
@@ -884,6 +996,124 @@ func TestFetchKeeps64Newest(t *testing.T) {
 		if want := n < machines.MaxDocs; have[machines.DocPrefix+otherPC(n)] != want {
 			t.Errorf("PC %d (sent %d h ago) cached: %v, want %v", n, n, !want, want)
 		}
+	}
+}
+
+// The list of ignored documents keeps 64, but the fetch counts every one it
+// set aside, and the tick's line says how many the list holds.
+func TestFetchCountsEveryIgnoredDocument(t *testing.T) {
+	m := newShareMachine(t)
+	const total = 70
+	l := &controlListing{done: true}
+	for n := range total {
+		l.items = append(l.items, hindsight.DocumentItem{ID: machines.DocPrefix + otherPC(n), Metadata: map[string]string{machines.MetaKey: "{}"}})
+	}
+	f, i, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != 0 || i != total {
+		t.Fatalf("%d fetched, %d ignored, %v: want 0 and %d", f, i, err, total)
+	}
+	if got := len(m.machinesCache().Ignored); got != machines.MaxDocs {
+		t.Errorf("%d ignored documents listed in the cache, want %d", got, machines.MaxDocs)
+	}
+	var r tickResult
+	r.applyFetch(f, i, "")
+	if want := "70 document(s) ignored, the first 64 listed"; !strings.Contains(r.fetchText(), want) {
+		t.Errorf("tick line %q, want %q", r.fetchText(), want)
+	}
+	r.applyFetch(1, 3, "")
+	if txt := r.fetchText(); !strings.HasSuffix(txt, "3 document(s) ignored") {
+		t.Errorf("tick line %q: under the cap it names no list", txt)
+	}
+}
+
+// A name listed twice keeps its first document: one cached, the first's
+// figures, and the second is neither cached nor counted as ignored.
+func TestFetchDuplicateNameKeepsTheFirst(t *testing.T) {
+	m := newShareMachine(t)
+	id := otherPC(1)
+	first := otherDoc(t, id, pubT0)
+	second := strings.Replace(otherDoc(t, id, pubT0.Add(-time.Hour)), `"os":"linux"`, `"os":"darwin"`, 1)
+	if second == otherDoc(t, id, pubT0.Add(-time.Hour)) {
+		t.Fatal("the second document's OS was not changed")
+	}
+	l := &controlListing{done: true, items: []hindsight.DocumentItem{
+		{ID: machines.DocPrefix + id, Metadata: map[string]string{machines.MetaKey: first}},
+		{ID: machines.DocPrefix + otherPC(2), Metadata: map[string]string{machines.MetaKey: otherDoc(t, otherPC(2), pubT0)}},
+		{ID: machines.DocPrefix + id, Metadata: map[string]string{machines.MetaKey: second}},
+	}}
+	f, i, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != 2 || i != 0 {
+		t.Fatalf("%d fetched, %d ignored, %v: want 2 and 0", f, i, err)
+	}
+	var raws []string
+	for _, d := range m.machinesCache().Docs {
+		if d.Name == machines.DocPrefix+id {
+			raws = append(raws, d.Raw)
+		}
+	}
+	if len(raws) != 1 || raws[0] != first {
+		t.Errorf("cached %d documents of %s (%v), want the first only", len(raws), id, raws)
+	}
+}
+
+// A failed listing is kept by the tick's one listing: the shared counts and
+// the daily figures both get the failure, from one request.
+func TestFailedListingIsSharedByBothCallers(t *testing.T) {
+	m := newShareMachine(t)
+	requests := 0
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "-control/documents") {
+			requests++
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(broken.Close)
+	cl, err := hindsight.New(broken.URL, "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &controlListing{}
+	if _, _, err := refreshShared(context.Background(), cl, l, m.d, m.cfg.Server.Bank, pubID, pubT0, feedbackParams(m.cfg)); err == nil {
+		t.Fatal("the shared counts: no error from a failing listing")
+	}
+	f, i, err := refreshMetricsDocs(context.Background(), cl, l, m.d, m.cfg, pubID, pubT0)
+	if err == nil || f != 0 || i != 0 {
+		t.Errorf("the daily figures: %d, %d, %v, want the listing's failure", f, i, err)
+	}
+	if requests != 1 {
+		t.Errorf("%d listing requests, want 1: the failure was not shared", requests)
+	}
+	if _, err := os.Stat(machines.CacheFile(m.d.MetricsDir())); err == nil {
+		t.Error("a cache was written from a failed listing")
+	}
+}
+
+// End to end, the documents past the cache's budget (the oldest first, as
+// kept newest first) are left out as too large, and the cache still loads.
+func TestFetchLeavesOutWhatIsOverTheCacheBudget(t *testing.T) {
+	m := newShareMachine(t)
+	l := &controlListing{done: true}
+	for n := range 3 { // PC n sent n hours ago
+		l.items = append(l.items, hindsight.DocumentItem{ID: machines.DocPrefix + otherPC(n),
+			Metadata: map[string]string{machines.MetaKey: otherDoc(t, otherPC(n), pubT0.Add(-time.Duration(n)*time.Hour))}})
+	}
+	one, err := json.Marshal(machines.CachedDoc{Name: machines.DocPrefix + otherPC(0), Raw: otherDoc(t, otherPC(0), pubT0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := cacheDocsBudget
+	cacheDocsBudget = 2*(len(one)+1) + 10 // two documents fit, not three
+	t.Cleanup(func() { cacheDocsBudget = old })
+	f, i, err := refreshMetricsDocs(context.Background(), m.cl, l, m.d, m.cfg, pubID, pubT0)
+	if err != nil || f != 2 || i != 1 {
+		t.Fatalf("%d fetched, %d ignored, %v: want 2 and 1", f, i, err)
+	}
+	c := m.machinesCache()
+	if len(c.Docs) != 2 || c.Docs[0].Name != machines.DocPrefix+otherPC(0) || c.Docs[1].Name != machines.DocPrefix+otherPC(1) {
+		t.Errorf("cached %+v, want the two newest", c.Docs)
+	}
+	if want := []machines.Ignored{{Machine: otherPC(2)[:8], Reason: machines.TooLarge}}; !slices.Equal(c.Ignored, want) {
+		t.Errorf("ignored %+v, want %+v", c.Ignored, want)
 	}
 }
 

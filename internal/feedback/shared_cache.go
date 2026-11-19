@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/machines"
 )
 
 // SharedCache is <state>/feedback/shared.json: the other machines'
@@ -75,12 +76,13 @@ func SharedMachines(docs []SharedDoc, self string, now time.Time) int {
 }
 
 // SharedUpload is <state>/feedback/shared-upload.json: when jobs tick
-// last sent this machine's shared document, to which server and bank,
-// the hash of its entries (its time left out, so that the same counts
-// hash the same) and of its hidden ids.
+// last sent this machine's shared document, to which server and bank (a
+// hash of the target, machines.TargetKey, never its text), the hash of its
+// entries (its time left out, so that the same counts hash the same) and
+// of its hidden ids.
 type SharedUpload struct {
 	At         time.Time `json:"at"`
-	Server     string    `json:"server,omitempty"`
+	Server     string    `json:"server,omitempty"` // machines.TargetKey of the share target
 	Hash       string    `json:"hash"`
 	HiddenHash string    `json:"hidden_hash"`
 }
@@ -90,12 +92,14 @@ func SharedUploadFile(dir string) string { return filepath.Join(dir, "shared-upl
 
 // LoadSharedUpload reads dir's record: false when it is missing, does
 // not parse or names no time (never sent, as far as this machine knows).
+// An older binary's record, holding the target's text, reads as its key.
 func LoadSharedUpload(dir string) (SharedUpload, bool) {
 	var u SharedUpload
 	raw, err := os.ReadFile(SharedUploadFile(dir))
 	if err != nil || json.Unmarshal(raw, &u) != nil || u.At.IsZero() {
 		return SharedUpload{}, false
 	}
+	u.Server = machines.AsTargetKey(u.Server)
 	return u, true
 }
 

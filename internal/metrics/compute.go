@@ -436,6 +436,12 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 			m.Delta = &delta
 		}
 	}
+	m.Usual = nil
+	if d.Relative && !o.Absent {
+		if u, ok := baselineMedian(d, o.Baseline); ok {
+			m.Usual = &u
+		}
+	}
 	m.Drill = d.Drill
 	m.Series = slices.Clone(m.Series) // the family run's own stays as computed (memo)
 	tags := make([]string, 0, len(m.Tags)+1)

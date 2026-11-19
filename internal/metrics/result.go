@@ -146,8 +146,9 @@ type ServerState struct {
 // are added), series_this_pc (a window drawn by the hour: the totals add the
 // other PCs' days, the series stay this PC's) and status_this_pc
 // (pipeline.flow and context.per_session: the status is this PC's rule),
-// average (context.per_session) and approximate (recall.latency: a range
-// from the merged buckets).
+// average (context.per_session), approximate (recall.latency: a range
+// from the merged buckets) and extra_this_pc (verdict.wrong_rate: the
+// breakdown in extra is this PC's, so it does not sum to num and den).
 type Metric struct {
 	Value       *float64       `json:"value"`
 	Num         *int64         `json:"num"`
@@ -162,6 +163,7 @@ type Metric struct {
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`
 	Delta       *float64       `json:"delta"`
+	Usual       *float64       `json:"usual,omitempty"` // relative metrics: the baseline median the rule compares with
 	Drill       string         `json:"drill"`
 	Series      []Point        `json:"series,omitempty"`
 	Extra       map[string]any `json:"extra,omitempty"` // keys declared in the catalog

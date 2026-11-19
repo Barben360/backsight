@@ -146,11 +146,12 @@ func bankSize(e env, _ Window, obs map[string]Observation, met map[string]Metric
 var bankSizeExtras = []string{"world", "experience", "observation", "documents", "links"}
 
 // bankGrowth fills bank.growth from the server's time series, read for the
-// period asked (seriesPeriod): the buckets overlapping the window, whole
-// (as inWindow keeps them), summed by kind (extra) and re-bucketed to
-// local days. A window reaching back past the series (90 days) reads the
-// days before the server's first one from the daily record, each point
-// saying where its figure came from (server, record, none).
+// period asked (seriesPeriod): the buckets whose middle lies in the window
+// (bucketIn, the extraction's midday rule: a UTC day by its noon, today's
+// cut at the read), whole, summed by kind (extra) and re-bucketed to local
+// days. A window reaching back past the series (90 days) reads the days
+// before the server's first one from the daily record, by the same rule,
+// each point saying where its figure came from (server, record, none).
 func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	const id = "bank.growth"
 	buckets := w.Buckets()
@@ -165,7 +166,7 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 	var kept int
 	var times []time.Time
 	for _, b := range e.srv.Series.Buckets {
-		if !b.Time.Add(width).After(w.Since) || !b.Time.Before(w.Until) {
+		if !bucketIn(b.Time, width, e.srv.SeriesSpan, w.Since, w.Until) {
 			continue
 		}
 		times = append(times, b.Time)
@@ -202,6 +203,9 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 		}
 		recorded := map[string]bool{}
 		for _, r := range rows {
+			if !bucketIn(r.Bucket, day, llmSpan{}, w.Since, w.Until) {
+				continue // a recorded UTC day counts by its noon, as the server's
+			}
 			local := r.Bucket.In(w.Loc)
 			if local.Before(w.Since) {
 				local = w.Since

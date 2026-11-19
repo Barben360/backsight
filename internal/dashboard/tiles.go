@@ -226,8 +226,8 @@ func foundSub(m metrics.Metric, l format.Locale, num, den int64, haveND, tooFew 
 		return ""
 	}
 	s := l.Int(num) + " of " + format.Count(l, den, "prompt", "prompts")
-	if (m.Status == metrics.StatusWatch || m.Status == metrics.StatusBad) && m.Previous != nil {
-		s = "usual " + l.Percent(*m.Previous) + " · " + s
+	if (m.Status == metrics.StatusWatch || m.Status == metrics.StatusBad) && m.Usual != nil {
+		s = "usual " + l.Percent(*m.Usual) + " · " + s
 	}
 	return s
 }
@@ -247,9 +247,6 @@ func wrongSub(l format.Locale, num, den int64, haveND, tooFew bool) string {
 // usedTile fills the parts of the Used tile that read declare.coverage.
 func usedTile(t *Tile, r *metrics.Result, l format.Locale, m metrics.Metric, learning bool) {
 	cov, haveCov := r.Metrics["declare.coverage"]
-	if haveCov && cov.Den != nil {
-		t.LinkText = format.Count(l, *cov.Den, "turn", "turns") + " →"
-	}
 	switch {
 	case learning:
 		if r.Verdict != nil {
@@ -439,14 +436,11 @@ func ownCounts(own *metrics.Result, id string) (num, den int64, ok bool) {
 }
 
 // thisPCLink is the link text of a merged tile: the events behind it are this
-// PC's, so it names this PC's count ("This PC’s 167 prompts →").
+// PC's, so it names this PC's count ("This PC’s 167 prompts →"), the
+// tile's own denominator (Used: the turns Claude declared).
 func thisPCLink(own *metrics.Result, s tileSpec, l format.Locale) string {
-	id := s.id
-	if id == "used.turn_rate" {
-		id = "declare.coverage" // the Used tile's link counts the turns Claude declared
-	}
 	if own != nil {
-		if m, ok := own.Metrics[id]; ok && m.Den != nil {
+		if m, ok := own.Metrics[s.id]; ok && m.Den != nil {
 			return "This PC’s " + format.Count(l, *m.Den, s.one, s.many) + " →"
 		}
 	}

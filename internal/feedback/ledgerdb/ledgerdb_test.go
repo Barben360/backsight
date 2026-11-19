@@ -564,6 +564,32 @@ func TestNoMigrationDuringAnUpdate(t *testing.T) {
 		uncommitted(t, o.Dirs)
 		mustCloseWriter(t, mustOpenWriter(t, o)) // nothing to migrate: it opens
 	})
+	// The probe read the head, then another process put an older file in
+	// its place: the writer's own read finds the migration pending and the
+	// gate holds it there too, the file left at its version.
+	t.Run("older after the probe", func(t *testing.T) {
+		o := tempOpts(t)
+		o.Migrations = withTestMigration(t)
+		mustCloseWriter(t, mustOpenWriter(t, o))
+		if v := headerVersion(t, mainPath(o)); v != 2 {
+			t.Fatalf("user_version %d, want the head 2", v)
+		}
+		uncommitted(t, o.Dirs)
+		setSeam(t, &afterProbe, func(path string) {
+			afterProbe = nil
+			for _, c := range []string{path + "-wal", path + "-shm"} {
+				_ = os.Remove(c)
+			}
+			writeFile(t, path, readBytes(t, fixturePath(1)))
+		})
+		_, err := OpenWriter(context.Background(), o)
+		if !errors.Is(err, ErrUpdateInProgress) {
+			t.Fatalf("OpenWriter: %v, want ErrUpdateInProgress", err)
+		}
+		if v := headerVersion(t, mainPath(o)); v != 1 {
+			t.Errorf("user_version %d, want 1: nothing migrated during the update", v)
+		}
+	})
 }
 
 // TestNewerSchemaUsesTheSideFile: a ledger.db a newer binary migrated is

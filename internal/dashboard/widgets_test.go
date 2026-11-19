@@ -154,7 +154,7 @@ func TestCLIFor(t *testing.T) {
 		{"overview", "", views.Params{Days: 7, Limit: 50}, "backsight stats overview"},
 		{"overview", "", views.Params{Days: 30, DaysSet: true, Project: "p1", Limit: 50}, "backsight stats overview --days 30 --project p1"},
 		{"overview", "", views.Params{Project: "my proj", Limit: 50}, "backsight stats overview --project 'my proj'"},
-		{"overview", "", views.Params{Project: "it's", Limit: 50}, "backsight stats overview --project " + posixOrPS(`'it'\''s'`, `'it''s'`)},
+		{"overview", "", views.Params{Project: "it's", Limit: 50}, "backsight stats overview --project " + posixOrPS(`'it'\''s'`, `"it's"`)},
 		{"sessions", "", views.Params{Has: "used", Limit: 2, Offset: 1}, "backsight stats sessions --limit 2 --offset 1 --has used"},
 		{"quality", "", views.Params{Dev: true, Limit: 50}, "backsight stats quality --dev"},
 		{"sessions", "sess-a1", views.Params{Since: "2026-10-01", Until: "2026-10-08", TZ: "UTC", Path: "/a b", Sort: "rate", State: "hidden", Limit: 50},

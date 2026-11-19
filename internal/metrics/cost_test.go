@@ -209,6 +209,33 @@ func TestRecallLatency(t *testing.T) {
 	}
 }
 
+// A day's typical and slowest 1 in 20 need 20 samples, as the last 24 h
+// that judge a recovery: 20 recalls on 10-28 (ms 100 … 2,000) give p50 the
+// 10th = 1,000 and p95 the 19th = 1,900; the 19 of 10-29 and the 3 of 10-27
+// give their n and no percentile, a gap on the chart, never a slowest 1 in
+// 20 read off 3 samples.
+func TestLatencyDayPointsNeedTwentySamples(t *testing.T) {
+	x := costFx(t)
+	for day, n := range map[int]int{28: 20, 29: 19, 27: 3} {
+		for i := 1; i <= n; i++ {
+			x.tel(time.Date(2026, 10, day, 8, i, 0, 0, fxParis), telemetry.Prompt{N: i, Decision: "recall", MS: 100 * i}, "s", "alpha")
+		}
+	}
+	m := costOf(x, x.query(7))["recall.latency"]
+	byDay := map[string]Point{}
+	for _, p := range m.Series {
+		byDay[p.Day] = p
+	}
+	if p := byDay["2026-10-28"]; p.P50 == nil || p.P95 == nil || *p.P50 != 1000 || *p.P95 != 1900 || num0(p.N) != 20 {
+		t.Errorf("10-28 = %+v, want p50 1,000, p95 1,900, n 20", p)
+	}
+	for day, n := range map[string]int64{"2026-10-29": 19, "2026-10-27": 3} {
+		if p := byDay[day]; p.P50 != nil || p.P95 != nil || num0(p.N) != n {
+			t.Errorf("%s = %+v, want n %d and no percentile", day, p, n)
+		}
+	}
+}
+
 // The rolling last 24 h of the window judge beside the week (#184): 100
 // recalls at 3,000 ms two days before the end, then fast ones (300 ms) at
 // given ages. 3 of them in the last calendar day and 22 the evening before
