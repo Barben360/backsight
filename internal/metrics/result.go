@@ -163,6 +163,7 @@ type Metric struct {
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`
 	Delta       *float64       `json:"delta"`
+	Usual       *float64       `json:"usual,omitempty"` // relative metrics: the baseline median the rule compares with
 	Drill       string         `json:"drill"`
 	Series      []Point        `json:"series,omitempty"`
 	Extra       map[string]any `json:"extra,omitempty"` // keys declared in the catalog

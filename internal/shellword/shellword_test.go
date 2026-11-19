@@ -32,11 +32,26 @@ func TestPowerShell(t *testing.T) {
 		"":                        "''",
 		`C:\Users\me\x`:           `C:\Users\me\x`,
 		"R&D $(touch /tmp/pwned)": "'R&D $(touch /tmp/pwned)'",
-		"it's":                    "'it''s'",
-		"it\u2019s":               "'it\u2019\u2019s'",
 		"a,b":                     "'a,b'",
 		"@h":                      "'@h'",
 		"--%":                     "'--%'",
+		// A quote inside: double quotes, which PowerShell and sh (Git Bash)
+		// both read literally when nothing in the word expands.
+		"it's":               `"it's"`,
+		"Bob's notes":        `"Bob's notes"`,
+		"it\u2019s":          "\"it\u2019s\"",
+		`C:\Users\O'Brien\x`: `"C:\Users\O'Brien\x"`,
+		"a'b,c @d ~e":        `"a'b,c @d ~e"`,
+		// Anything either shell expands or escapes in double quotes keeps
+		// PowerShell's single quotes, the quote doubled.
+		"m'1$(id)":   "'m''1$(id)'",
+		"a'b`c":      "'a''b`c'",
+		`a'b"c`:      `'a''b"c'`,
+		"a'b\u201cc": "'a''b\u201cc'",
+		"a'b!c":      "'a''b!c'",
+		`a'b\\c`:     `'a''b\\c'`,
+		`a'b\`:       `'a''b\'`,
+		"a'b\nc":     "'a''b\nc'",
 	} {
 		if got := PowerShell(in); got != want {
 			t.Errorf("PowerShell(%q) = %s, want %s", in, got, want)
@@ -57,7 +72,9 @@ func TestWordFollowsTheSystem(t *testing.T) {
 
 // Run by sh, a POSIX word gives back the exact value, and the command
 // substitution in it never runs. A PowerShell word pasted in sh runs
-// nothing either (its quotes may be lost, never its quoting).
+// nothing either (its quotes may be lost, never its quoting), and one in
+// double quotes (a quote inside, nothing that expands) gives back the exact
+// value: the Windows command pasted in Git Bash keeps "Bob's notes".
 func TestWordsRunNothingInSh(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh")
@@ -75,6 +92,10 @@ func TestWordsRunNothingInSh(t *testing.T) {
 		"a'b\u2019c $(touch " + pwned + ")'",
 		"'",
 		"",
+		"Bob's notes",
+		`C:\Users\O'Brien\x`,
+		"it\u2019s & it's, @all ~me; (x) | y > z",
+		`a'b\ c\x`,
 	} {
 		out, err := exec.Command(sh, "-c", "printf '%s\\n' "+POSIX(v)).Output()
 		if err != nil {
@@ -83,8 +104,12 @@ func TestWordsRunNothingInSh(t *testing.T) {
 		if got := strings.TrimSuffix(string(out), "\n"); got != v {
 			t.Errorf("POSIX %s gave %q, want %q", POSIX(v), got, v)
 		}
-		if _, err := exec.Command(sh, "-c", "printf '%s\\n' "+PowerShell(v)).Output(); err != nil {
+		out, err = exec.Command(sh, "-c", "printf '%s\\n' "+PowerShell(v)).Output()
+		if err != nil {
 			t.Fatalf("%s: %v", PowerShell(v), err)
+		}
+		if got := strings.TrimSuffix(string(out), "\n"); strings.HasPrefix(PowerShell(v), `"`) && got != v {
+			t.Errorf("PowerShell %s in sh gave %q, want %q", PowerShell(v), got, v)
 		}
 		if _, err := os.Stat(pwned); err == nil {
 			t.Fatalf("%q ran a command", v)

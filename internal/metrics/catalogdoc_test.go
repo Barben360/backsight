@@ -108,6 +108,24 @@ func TestErrorClassDefinitionsStateTheirRule(t *testing.T) {
 	}
 }
 
+// An approximate interval (wilson_approx: units that cluster, as the
+// verdicts of one turn) says so in its definition, which the ⓘ shows.
+func TestApproximateIntervalsSaySo(t *testing.T) {
+	n := 0
+	for _, d := range Catalog {
+		if d.CI != "wilson_approx" {
+			continue
+		}
+		n++
+		if !strings.Contains(d.Definition, "interval is approximate") {
+			t.Errorf("%s: its definition does not say its interval is approximate: %q", d.ID, d.Definition)
+		}
+	}
+	if n == 0 {
+		t.Error("no metric with an approximate interval")
+	}
+}
+
 func TestCatalogRowsUseNoJargon(t *testing.T) {
 	for _, bad := range []string{"Wilson", "p50", "p95", "percentile", "failed_capped", "breaker"} {
 		for _, d := range Catalog {

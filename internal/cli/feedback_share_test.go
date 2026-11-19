@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb"
 	"github.com/Barben360/backsight/internal/feedback/ledgerdb/ledgerdbtest"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
@@ -749,8 +750,49 @@ func TestShareResendsAfterAServerChange(t *testing.T) {
 	step("joined server", joined("srv-1", "http://10.0.0.9:8888"), true)
 	step("same server, new address", joined("srv-1", "http://10.0.0.7:8888"), false)
 	step("another joined server", joined("srv-2", "http://10.0.0.7:8888"), true)
-	if rec, ok := feedback.LoadSharedUpload(m.d.FeedbackDir()); !ok || !strings.Contains(rec.Server, "srv-2") {
-		t.Errorf("record %+v", rec)
+	if rec, ok := feedback.LoadSharedUpload(m.d.FeedbackDir()); !ok || rec.Server != machines.TargetKey(shareTarget(m.d, m.cfg)) {
+		t.Errorf("record %+v, want the hash of srv-2's target", rec)
+	}
+}
+
+// The upload record tells a change of server or bank by a hash, as the
+// publish record: shared-upload.json never holds the server's address or
+// the bank's name. An older binary's record, holding them as text, still
+// counts as sent to the same target (no send within the hour); another bank
+// is a new target.
+func TestSharedUploadRecordHoldsNoServerText(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: shareT0, LastShown: shareT0}})
+	m.cfg.Server.Bank = "CANARY-share-bank"
+	if up, _, _, err := m.share(shareT0); err != nil || !up {
+		t.Fatalf("first share: uploaded %v (%v)", up, err)
+	}
+	raw, err := os.ReadFile(feedback.SharedUploadFile(m.d.FeedbackDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(m.cfg.Server.URL, "http://"), "https://")
+	for _, text := range []string{host, m.cfg.Server.Bank, shareTarget(m.d, m.cfg)} {
+		if strings.Contains(string(raw), text) {
+			t.Errorf("shared-upload.json holds %q: %s", text, raw)
+		}
+	}
+	rec, ok := feedback.LoadSharedUpload(m.d.FeedbackDir())
+	if !ok || rec.Server != machines.TargetKey(shareTarget(m.d, m.cfg)) {
+		t.Fatalf("record %+v, want the target's hash", rec)
+	}
+
+	legacy := rec
+	legacy.Server = shareTarget(m.d, m.cfg)
+	if err := feedback.SaveSharedUpload(m.d.FeedbackDir(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if up, _, _, err := m.share(shareT0.Add(15 * time.Minute)); err != nil || up {
+		t.Errorf("an older record of the same target: uploaded %v (%v), want no send", up, err)
+	}
+	m.cfg.Server.Bank = "another-bank"
+	if up, _, _, err := m.share(shareT0.Add(30 * time.Minute)); err != nil || !up {
+		t.Errorf("another bank: uploaded %v (%v), want a send", up, err)
 	}
 }
 

@@ -172,7 +172,7 @@ func TestBannerRuleEdges(t *testing.T) {
 	if b = bannerOf(r, en, r.Window.Loc, views.Params{}); b.Axes[0].Note != "—" {
 		t.Errorf("missing number, no reason: %q", b.Axes[0].Note)
 	}
-	// Severity bad drops "two weeks running"; no Previous gives the ok note.
+	// Severity bad drops "two weeks running"; no usual level gives the ok note.
 	r = scenarioNamed(t, "qualitywatch")
 	r.Verdict.Axes["found"].Reasons[0].Severity = metrics.SeverityBad
 	if b = bannerOf(r, en, r.Window.Loc, views.Params{}); b.Axes[0].Note != "14 % vs 27 % usual" {
@@ -180,10 +180,10 @@ func TestBannerRuleEdges(t *testing.T) {
 	}
 	r = scenarioNamed(t, "qualitywatch")
 	m := r.Metrics["recall.hit_rate"]
-	m.Previous = nil
+	m.Usual = nil
 	r.Metrics["recall.hit_rate"] = m
 	if b = bannerOf(r, en, r.Window.Loc, views.Params{}); b.Axes[0].Note != "14 % of prompts got memory" {
-		t.Errorf("no previous: %q", b.Axes[0].Note)
+		t.Errorf("no usual level: %q", b.Axes[0].Note)
 	}
 	// No verdict: nothing is claimed.
 	if b = bannerOf(&metrics.Result{}, en, nil, views.Params{}); b.Class != "v-cant" || len(b.Axes) != 0 || b.Title == "Memory is working." {

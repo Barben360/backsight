@@ -129,6 +129,17 @@ func TargetKey(target string) string {
 	return targetKeyPrefix + hex.EncodeToString(sum[:])
 }
 
+// AsTargetKey is a record's server field as a TargetKey: the field itself
+// when it is one (or empty), else the key of the target's text an older
+// binary kept, so that the same target still compares equal and the next
+// save writes the key.
+func AsTargetKey(s string) string {
+	if s == "" || strings.HasPrefix(s, targetKeyPrefix) {
+		return s
+	}
+	return TargetKey(s)
+}
+
 // PublishedFile is the path of the publish record in metricsDir.
 func PublishedFile(metricsDir string) string { return filepath.Join(metricsDir, "published.json") }
 
@@ -147,11 +158,7 @@ func LoadPublished(metricsDir string) (Published, bool) {
 	if p.At.IsZero() && p.FailedAt.IsZero() && p.FailedSince.IsZero() {
 		return Published{}, false
 	}
-	// An older binary kept the target's text: read as its key, the same
-	// target still compares equal, and the next save writes the key.
-	if p.Server != "" && !strings.HasPrefix(p.Server, targetKeyPrefix) {
-		p.Server = TargetKey(p.Server)
-	}
+	p.Server = AsTargetKey(p.Server) // an older binary kept the target's text
 	return p, true
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/metricsfile"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -186,6 +187,43 @@ func TestBankGrowthPicksThePeriod(t *testing.T) {
 	}
 	if m.Extra["days_covered"] != 90 || val(m) != 1 {
 		t.Errorf("100-day growth = %v extra %v, want 1 with days_covered 90", m.Value, m.Extra)
+	}
+}
+
+// TestBankGrowthCountsUTCDaysByTheirNoon: as the extraction's, a UTC day
+// counts when its 12:00 UTC lies in the window, today's cut at the read.
+// Read at 18:00 Paris (17:00Z), the 7-day window starts after 10-23's noon:
+// 10-23 (world 7) is left out, 10-24 to 10-30 kept, today (00:00Z to the
+// read) included: 21 + 7 + 7 = 35 over 7 days = 5. On 120 days the record's
+// first day, 07-02 (world 9), straddles the start after its noon: left out,
+// so world is the server's 89 days × 2 = 178.
+func TestBankGrowthCountsUTCDaysByTheirNoon(t *testing.T) {
+	late := time.Date(2026, 10, 30, 18, 0, 0, 0, fxParis)
+	x := newFx(t, late)
+	x.server.set(func(d *fakeData) {
+		d.Series.Buckets = []hindsight.SeriesBucket{
+			{Time: utcDay(22), World: 1000},
+			{Time: utcDay(23), World: 7},
+			{Time: utcDay(24), World: 14, Experience: 7},
+			{Time: utcDay(25), Observation: 7},
+			{Time: utcDay(26)}, {Time: utcDay(27)}, {Time: utcDay(28)}, {Time: utcDay(29)},
+			{Time: utcDay(30), World: 7},
+		}
+	})
+	m := bankOf(x, x.query(7))["bank.growth"]
+	if val(m) != 5 || m.Extra["world"] != int64(28-7) {
+		t.Errorf("growth = %v, world %v; want 5 and 21 (10-23 left out)", m.Value, m.Extra["world"])
+	}
+	if p := pointOn(t, m, "2026-10-23"); p.Value == nil || *p.Value != 0 {
+		t.Errorf("10-23 = %v, want 0: its UTC day's noon is before the window", fv(p.Value))
+	}
+
+	x = newFx(t, late)
+	sdSeries(x, "2026-08-02")
+	sdNew(x, rcBase, "2026-07-02", metricsfile.KindCounts{World: 9})
+	m = bankOf(x, x.query(120))["bank.growth"]
+	if m.Extra["world"] != int64(178) {
+		t.Errorf("120 days: world %v, want 178 (07-02's record left out)", m.Extra["world"])
 	}
 }
 
