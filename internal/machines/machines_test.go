@@ -384,6 +384,23 @@ func TestPublishedJSONNames(t *testing.T) {
 
 func TestCorruptRecordsReadAsNone(t *testing.T) {
 	dir := t.TempDir()
+	// No send and no failure: `{}`, null and a record of another shape are
+	// no record (the next tick sends at once), not one that sent nothing.
+	for _, body := range []string{"{}", "null", `{"bytes":5}`, `{"until":"2026-11-05","first_seen":"2026-09-02"}`, `{"records":[1]}`} {
+		if err := os.WriteFile(PublishedFile(dir), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := LoadPublished(dir); ok {
+			t.Errorf("%s must read as no record", body)
+		}
+	}
+	// A failure without a send is a record.
+	if err := os.WriteFile(PublishedFile(dir), []byte(`{"bytes":0,"failed_since":"2026-11-06T10:00:00Z","failure":"budget"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := LoadPublished(dir); !ok || p.Failure != "budget" {
+		t.Errorf("a waiting record reads as %+v, %v", p, ok)
+	}
 	for _, body := range []string{"", "{", "[]", `{"at":"nope"}`} {
 		if err := os.WriteFile(PublishedFile(dir), []byte(body), 0o600); err != nil {
 			t.Fatal(err)

@@ -120,7 +120,9 @@ func TargetKey(target string) string {
 // PublishedFile is the path of the publish record in metricsDir.
 func PublishedFile(metricsDir string) string { return filepath.Join(metricsDir, "published.json") }
 
-// LoadPublished reads the record; a missing or corrupt file reads as none.
+// LoadPublished reads the record; a missing or corrupt file reads as none,
+// and so does one that holds neither a send nor a failure (`{}`, null, a
+// file of another shape): every record the publish step saves has one.
 func LoadPublished(metricsDir string) (Published, bool) {
 	b, err := fsutil.ReadFileShared(PublishedFile(metricsDir))
 	if err != nil {
@@ -128,6 +130,9 @@ func LoadPublished(metricsDir string) (Published, bool) {
 	}
 	var p Published
 	if err := json.Unmarshal(b, &p); err != nil {
+		return Published{}, false
+	}
+	if p.At.IsZero() && p.FailedAt.IsZero() && p.FailedSince.IsZero() {
 		return Published{}, false
 	}
 	// An older binary kept the target's text: read as its key, the same
