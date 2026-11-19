@@ -57,12 +57,24 @@ func LoadCache(metricsDir string) (Cache, error) {
 	if err != nil {
 		return Cache{}, err
 	}
-	var c Cache
-	if err := json.Unmarshal(b, &c); err != nil {
+	// Every key SaveCache writes must be there: JSON of another shape
+	// (`{}`, null) is no cache, not an empty one.
+	var shape struct {
+		FetchedAt *time.Time   `json:"fetched_at"`
+		Docs      *[]CachedDoc `json:"docs"`
+		Ignored   *[]Ignored   `json:"ignored"`
+	}
+	if err := json.Unmarshal(b, &shape); err != nil {
 		return Cache{}, err
 	}
-	return c, nil
+	if shape.FetchedAt == nil || shape.Docs == nil || shape.Ignored == nil {
+		return Cache{}, errCacheShape
+	}
+	return Cache{FetchedAt: *shape.FetchedAt, Docs: *shape.Docs, Ignored: *shape.Ignored}, nil
 }
+
+// errCacheShape: the cache file is JSON, but not of the cache's shape.
+var errCacheShape = errors.New("machines: the cache file is not of the cache's shape")
 
 // readCapped reads r to its end, refusing more than max bytes (a file that
 // grew after its size was checked).

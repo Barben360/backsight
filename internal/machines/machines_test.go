@@ -411,9 +411,33 @@ func TestCorruptRecordsReadAsNone(t *testing.T) {
 		if err := os.WriteFile(CacheFile(dir), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadCache(dir); err == nil && body != `{"at":"nope"}` { // valid JSON of an unknown shape is an empty cache
+		if _, err := LoadCache(dir); err == nil {
 			t.Errorf("corrupt cache %q must be an error", body)
 		}
+	}
+}
+
+// JSON of another shape is no cache: read as an empty one, it would clear
+// the other PCs' figures from the index until the next fetch.
+func TestCacheOfAnotherShapeIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	for _, body := range []string{"{}", "null", `{"at":"nope"}`, `{"docs":[],"ignored":[]}`,
+		`{"fetched_at":"2026-11-06T10:00:00Z","ignored":[]}`, `{"fetched_at":"2026-11-06T10:00:00Z","docs":[]}`,
+		`{"fetched_at":"2026-11-06T10:00:00Z","docs":null,"ignored":[]}`} {
+		if err := os.WriteFile(CacheFile(dir), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if c, err := LoadCache(dir); err == nil || errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: read as %+v, %v; want an error", body, c, err)
+		}
+	}
+	// What SaveCache writes, empty, still loads.
+	at := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	if err := SaveCache(dir, Cache{FetchedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := LoadCache(dir); err != nil || !c.FetchedAt.Equal(at) {
+		t.Errorf("an empty saved cache: %+v, %v", c, err)
 	}
 }
 
