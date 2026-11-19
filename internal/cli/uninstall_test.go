@@ -675,6 +675,26 @@ func TestUninstallDeletesTheMetricsDocument(t *testing.T) {
 		}
 	})
 
+	// A send whose record could not be saved leaves the record of an
+	// earlier failure, without at: the document may be on the server.
+	t.Run("a failure record only: deleted", func(t *testing.T) {
+		m, machine, cl := sharedInstall(t)
+		failed := time.Now().Add(-2 * time.Hour)
+		if err := machines.SavePublished(pathsOf(m.home).MetricsDir(), machines.Published{Server: "x", FailedAt: failed, FailedSince: failed, Failure: "server"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := retain.WriteControlDocument(context.Background(), cl, config.LegacyBank, machines.DocPrefix+machine, "x", map[string]string{machines.MetaKey: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+		if s := stepNamed(env.Data, "daily figures"); code != output.OK || s == nil || s.Status != "done" || !strings.Contains(s.Detail, "no send of them was recorded") {
+			t.Fatalf("exit %d, step %+v\n%s", code, s, out)
+		}
+		if got := metricsDocs(cl); len(got) != 0 {
+			t.Errorf("the server still holds %v", got)
+		}
+	})
+
 	t.Run("no record: skipped, the server is not asked", func(t *testing.T) {
 		_, machine, cl := sharedInstall(t)
 		if err := retain.WriteControlDocument(context.Background(), cl, config.LegacyBank, machines.DocPrefix+machine, "x", map[string]string{machines.MetaKey: "{}"}); err != nil {

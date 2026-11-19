@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,19 +24,27 @@ import (
 // any source. Its fields are a closed set of names and its values dates,
 // integers, an OS enum, the machine id and guarded versions; nothing else.
 
-var uuidShape = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+// uuidShape is any UUID-shaped text, in either case; machineID is the
+// machine id's own form, lower case.
+var (
+	uuidShape = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	machineID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
 
 // docFields are the names a field of the document may have; the keys of a
 // `versions` object are versions instead.
 var docFields = []string{"v", "machine", "at", "os", "first_seen", "binary_version", "until", "latency_edges_ms", "days",
 	"day", "prompts", "hit", "used", "coverage", "wrong", "context", "flow", "latency", "versions"}
 
+// osEnum is the published OS enum.
+var osEnum = []string{"linux", "darwin", "windows", "other"}
+
 // localNames are the texts of this computer that must never be published:
-// its name and the user's (a name under 3 characters would match anything).
+// its name and the user's.
 func localNames() []string {
 	var out []string
 	add := func(s string) {
-		if len(s) >= 3 && !slices.Contains(out, s) {
+		if s != "" && !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
@@ -51,23 +61,40 @@ func localNames() []string {
 
 // assertNoCanary fails when raw holds a canary, this computer's name or the
 // user's, not exactly one UUID-shaped text (the machine id), a field name
-// outside the document's, or a string that is not a date, an OS enum, the
-// machine id or a version that passes ValidVersion.
+// outside the document's, a string that is not a date, an OS enum, the
+// machine id or a version that passes ValidVersion, or anything after the
+// document.
 func assertNoCanary(tb testing.TB, raw string, canaries []string) {
 	tb.Helper()
+	assertNoText(tb, raw, canaries, localNames())
+}
+
+// assertNoText is assertNoCanary with the names of the computer given. Case
+// is ignored throughout. A canary is looked for in the whole text. A name is
+// looked for in the texts that could carry one: the versions (binary_version
+// and the versions keys) and any other key or string; the closed vocabulary
+// (the field names, the OS enum in os, the dates and the machine id) cannot,
+// so a computer called "days" is no leak. A name under 3 characters must not
+// be a whole text (inside one it would match any version).
+func assertNoText(tb testing.TB, raw string, canaries, names []string) {
+	tb.Helper()
+	lower := strings.ToLower(raw)
 	for _, c := range canaries {
-		if strings.Contains(raw, c) {
+		if strings.Contains(lower, strings.ToLower(c)) {
 			tb.Errorf("canary %q in the document", c)
-		}
-	}
-	for _, n := range localNames() {
-		// an OS enum is no leak of a computer that happens to be called so
-		if !slices.Contains([]string{"linux", "darwin", "windows", "other"}, n) && strings.Contains(raw, n) {
-			tb.Errorf("this computer's or user's name %q in the document", n)
 		}
 	}
 	if ids := uuidShape.FindAllString(raw, -1); len(ids) != 1 {
 		tb.Errorf("%d UUID-shaped texts %v, want exactly the machine id", len(ids), ids)
+	}
+	named := func(s string) {
+		ls := strings.ToLower(s)
+		for _, n := range names {
+			ln := strings.ToLower(n)
+			if ls == ln || (len(ln) >= 3 && strings.Contains(ls, ln)) {
+				tb.Errorf("this computer's or user's name %q in the document", n)
+			}
+		}
 	}
 	var doc any
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -75,6 +102,9 @@ func assertNoCanary(tb testing.TB, raw string, canaries []string) {
 	if err := dec.Decode(&doc); err != nil {
 		tb.Errorf("the document is no JSON: %v", err)
 		return
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		tb.Errorf("text after the document")
 	}
 	var walk func(v any, parent string)
 	walk = func(v any, parent string) {
@@ -85,8 +115,10 @@ func assertNoCanary(tb testing.TB, raw string, canaries []string) {
 					if !machines.ValidVersion(k) {
 						tb.Errorf("the versions key %q is no version", k)
 					}
+					named(k)
 				} else if !slices.Contains(docFields, k) {
 					tb.Errorf("the field name %q is not a field of the document", k)
+					named(k)
 				}
 				walk(e, k)
 			}
@@ -96,10 +128,14 @@ func assertNoCanary(tb testing.TB, raw string, canaries []string) {
 			}
 		case string:
 			_, derr := time.Parse(time.DateOnly, x)
-			ok := derr == nil || x == "linux" || x == "darwin" || x == "windows" || x == "other" ||
-				(uuidShape.MatchString(x) && len(x) == 36) || machines.ValidVersion(x)
-			if !ok {
+			switch {
+			case derr == nil, parent == "os" && slices.Contains(osEnum, x), parent == "machine" && machineID.MatchString(x):
+				// the closed vocabulary
+			case slices.Contains(osEnum, x) || machineID.MatchString(x) || machines.ValidVersion(x):
+				named(x)
+			default:
 				tb.Errorf("the string value %q (of %q) is no date, OS, machine id or version", x, parent)
+				named(x)
 			}
 		}
 	}
@@ -148,6 +184,47 @@ func TestCanaryCheckCatchesALeak(t *testing.T) {
 	for what, raw := range leaks {
 		if r := check(raw); !r.failed {
 			t.Errorf("%s: the check passes the leaking document\n%s", what, raw)
+		}
+	}
+}
+
+// The names check, with names of its own: it ignores case, does not mistake
+// the document's own words, dates, OS or machine id for a leak, and still
+// refuses a name under 3 characters that is a whole value.
+func TestCanaryCheckNames(t *testing.T) {
+	good := `{"v":1,"machine":"` + pubID + `","at":1,"os":"linux","first_seen":"2026-09-02","binary_version":"v0.1.30-m7","until":"2026-11-05","latency_edges_ms":[50],"days":[{"day":"2026-11-05","prompts":1,"versions":{"v0.1.30-m7":{"prompts":1}}}]}`
+	check := func(raw string, names ...string) *recordingTB {
+		r := &recordingTB{TB: t}
+		assertNoText(r, raw, []string{leakCanary}, names)
+		return r
+	}
+	// Names that are words, dates, the OS or part of the machine id of a
+	// clean document: no leak.
+	for _, n := range []string{"Days", "prompts", "VERSIONS", "first", "edges", "Linux", "2026", "3f9c", "m7", "v0"} {
+		if r := check(good, n); r.failed {
+			t.Errorf("name %q: a clean document fails the check: %v", n, r.log)
+		}
+	}
+	setVersion := func(v string) string {
+		return strings.Replace(good, `"binary_version":"v0.1.30-m7"`, `"binary_version":"`+v+`"`, 1)
+	}
+	leaks := []struct {
+		what, raw string
+		names     []string
+	}{
+		{"a user name in upper case", setVersion("JDUFF-1"), []string{"jduff"}},
+		{"a host name in another case as a versions key", strings.Replace(good, `"v0.1.30-m7":{"prompts":1}`, `"MyHost":{"prompts":1}`, 1), []string{"MYHOST"}},
+		{"a name that is a document word, as a versions key", strings.Replace(good, `"v0.1.30-m7":{"prompts":1}`, `"days":{"prompts":1}`, 1), []string{"days"}},
+		{"a 2-character name as a whole value", setVersion("pc"), []string{"pc"}},
+		{"a 1-character name as a whole value, in another case", setVersion("X"), []string{"x"}},
+		{"an upper-case UUID", setVersion(strings.ToUpper("00000000-0000-4000-8000-00000000abcd")), nil},
+		{"the canary inside a longer value", setVersion("v1-" + leakCanary + "-x"), nil},
+		{"the canary in lower case", setVersion(strings.ToLower(leakCanary)), nil},
+		{"a name after the document", good + ` "myhost"`, []string{"myhost"}},
+	}
+	for _, l := range leaks {
+		if r := check(l.raw, l.names...); !r.failed {
+			t.Errorf("%s: the check passes the leaking document\n%s", l.what, l.raw)
 		}
 	}
 }
