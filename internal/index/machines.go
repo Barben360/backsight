@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/Barben360/backsight/internal/machines"
@@ -19,6 +20,15 @@ import (
 // the state directory, as the month files'): its unreadable record is
 // kept by pruneOrphanErrors.
 const machinesSource = "metrics/machines.json"
+
+// machinesBad is the cache file last found unreadable, by size and
+// modification time (ok: one is known), so that it is not read again until
+// it changes.
+type machinesBad struct {
+	mu          sync.Mutex
+	size, mtime int64
+	ok          bool
+}
 
 // pcFetch is pc_fetch's row: the cache file as last ingested.
 type pcFetch struct {
@@ -38,7 +48,8 @@ type pcFetch struct {
 //     and SHA-256 are those of pc_fetch only the size and time are
 //     updated, else the four tables are replaced in one transaction.
 //   - A cache that does not load keeps the rows and is recorded once
-//     (machines_unreadable) until a good read clears it.
+//     (machines_unreadable) until a good read clears it; this Index reads it
+//     again only once its size or modification time changed.
 //
 // Every document is parsed again, at the index's clock; the tables hold
 // only what machines.Parse returns (G-untrusted), never a document's text.
@@ -85,6 +96,19 @@ func (ix *Index) refreshMachines(ctx context.Context) error {
 	if have && !flagged && old.size == size && old.mtime == mtime {
 		return nil
 	}
+	ix.machinesBad.mu.Lock()
+	defer ix.machinesBad.mu.Unlock()
+	if flagged && ix.machinesBad.ok && ix.machinesBad.size == size && ix.machinesBad.mtime == mtime {
+		return nil // the same unreadable file: already recorded
+	}
+	ix.machinesBad.ok = false
+	unreadable := func() error {
+		if err := ix.recordOnce(ctx, machinesSource, 0, errMachinesUnreadable); err != nil {
+			return err
+		}
+		ix.machinesBad.size, ix.machinesBad.mtime, ix.machinesBad.ok = size, mtime, true
+		return nil
+	}
 
 	c, err := ix.opts.Machines()
 	if errors.Is(err, fs.ErrNotExist) { // gone since the stat
@@ -94,11 +118,11 @@ func (ix *Index) refreshMachines(ctx context.Context) error {
 		return ix.replaceMachines(ctx, nil, pcFetch{}, false)
 	}
 	if err != nil {
-		return ix.recordOnce(ctx, machinesSource, 0, errMachinesUnreadable)
+		return unreadable()
 	}
 	canon, err := json.Marshal(c) // the content, whatever the file's spacing
 	if err != nil {
-		return ix.recordOnce(ctx, machinesSource, 0, errMachinesUnreadable)
+		return unreadable()
 	}
 	sum := sha256.Sum256(canon)
 	now := pcFetch{fetchedAt: c.FetchedAt.UnixMilli(), size: size, mtime: mtime, sha: hex.EncodeToString(sum[:])}

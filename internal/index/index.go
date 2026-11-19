@@ -101,6 +101,7 @@ type Index struct {
 	// mtimes trusted for the ledger's skip.
 	localFeedback bool
 	skip          ledgerSkip
+	machinesBad   machinesBad
 }
 
 // OpensOf is how many times this process opened an index under stateDir.
