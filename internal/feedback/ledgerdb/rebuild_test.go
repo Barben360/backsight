@@ -180,6 +180,37 @@ func TestTheTailLeavesDroppedImportsOut(t *testing.T) {
 	}
 }
 
+// TestAFoldLeavesDroppedImportsOut: the fold that next reads such an import
+// (a writer that journaled it during the rebuild, dated before the
+// rebuild's cut) applies its batch without it, with no refold, while an
+// import journaled after the cut in the same batch applies.
+func TestAFoldLeavesDroppedImportsOut(t *testing.T) {
+	o := tempOpts(t)
+	w := mustOpenWriter(t, o)
+	defer mustCloseWriter(t, w)
+	appendLines(t, o, settleOf(nov(2), show("k1", "m1", nov(1), feedback.OutcomeCredit)))
+	setSeam(t, &beforeFoldCommit, func() error {
+		beforeFoldCommit = nil
+		appendLines(t, o, importOf(nov(3), "m2", oct(0))) // read past by the rebuild
+		return nil
+	})
+	if _, err := w.Rebuild(context.Background(), testParams, false); err != nil {
+		t.Fatal(err)
+	}
+	appendLines(t, o, importOf(clock.Add(time.Hour), "m3", oct(0)))
+	if res := mustFold(t, w, testParams); res.Refolded || res.Lines != 2 {
+		t.Fatalf("fold: %+v, want the 2 lines past the cursors applied, no refold", res)
+	}
+	got := folded(t, o)
+	if e, ok := got.Memories["m2"]; ok {
+		t.Errorf("the fold applied the import the rebuild left out: m2 %+v", e)
+	}
+	if e := got.Memories["m3"]; e.Imported.Shown != 1 {
+		t.Errorf("m3 %+v, want the import journaled after the rebuild", e)
+	}
+	matchesOracle(t, "folded", o, testParams)
+}
+
 func TestRebuildIsANewBuild(t *testing.T) {
 	o := tempOpts(t)
 	w := mustOpenWriter(t, o)

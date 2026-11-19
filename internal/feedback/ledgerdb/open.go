@@ -152,12 +152,20 @@ func openWriter(ctx context.Context, o Options, reg []sqlitedb.Migration, cut in
 	return openTarget(ctx, o, reg, t, cut)
 }
 
+// afterProbe runs between the probe's read of the target's version and the
+// writer's open: a test there plays a writer that changes the file meanwhile
+// (the seam of the tests).
+var afterProbe func(path string)
+
 // openTarget opens t.path, creating it, and migrates it to the head.
 func openTarget(ctx context.Context, o Options, reg []sqlitedb.Migration, t target, cut int64) (*Writer, error) {
 	if t.known && t.version < sqlitedb.Head(reg) { // before the file is created
 		if err := sqlitedb.UpdateGate(o.Dirs); err != nil {
 			return nil, err
 		}
+	}
+	if afterProbe != nil {
+		afterProbe(t.path)
 	}
 	dir := filepath.Dir(t.path)
 	if err := fsutil.MkdirPrivate(dir); err != nil {
