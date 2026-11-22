@@ -314,7 +314,7 @@ func (d PageData) rankingCard(r *metrics.Result) *Card {
 	h.Chip = "developer"
 	c := Card{Head: h}
 	var vs []MetricView
-	for _, id := range []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"} {
+	for _, id := range []string{"used.share_confident", "used.rank", "used.by_path", "used.by_source", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"} {
 		vs = append(vs, d.view(r, id))
 	}
 	c.Dev = d.devIDs(vs...)
@@ -329,7 +329,7 @@ func (d PageData) rankingCard(r *metrics.Result) *Card {
 		c.Charts = []PathChart{{HTML: rankHistOf(d.L, d.more(), rank)}}
 	}
 	c.Extras = extrasOf(d.L, slices.DeleteFunc(slices.Clone(vs), func(v MetricView) bool {
-		return v.ID != "used.rank" && v.ID != "used.by_path" && v.ID != "recall.by_lang"
+		return v.ID != "used.rank" && v.ID != "used.by_path" && v.ID != "used.by_source" && v.ID != "recall.by_lang"
 	})...)
 	return &c
 }

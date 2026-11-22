@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -96,6 +97,57 @@ func TestPromptRecallTagsEachMemoryWithItsSource(t *testing.T) {
 	st, _ := sessions(home).Load("s1")
 	if len(st.Injected) == 0 || st.Injected[0].Source != "note" {
 		t.Errorf("injections do not keep the source: %+v", st.Injected)
+	}
+}
+
+// The prompt recall journals each memory's source words with its show
+// (credit per show by source, issue 348): every word of its facts, sorted,
+// where the context line says mixed; none for an observation listed
+// without its facts, never a guess.
+func TestPromptShowsJournalEachMemorysSource(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1"],"scores":{"reranker":0.9}},
+		{"id":"0c4c2a52-0000-4000-8000-000000000002","text":"Deploys run on Fridays.","type":"observation","tags":["project:billing"],"source_fact_ids":["f2","f1"],"scores":{"reranker":0.8}},
+		{"id":"0d4c2a52-0000-4000-8000-000000000003","text":"The cron runs at 02:00.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}}]`
+	recallSourceFacts = `{"f1":{"tags":["source:note"]},"f2":{"tags":["source:chat"]}}`
+	prompt(t, home, "s1", longPrompt)
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "prompt" {
+		t.Fatalf("shows %+v", shows)
+	}
+	got := map[string]string{}
+	for _, it := range shows[0].Items {
+		got[it.ID[:8]] = it.Source
+	}
+	if want := map[string]string{"0b4c2a52": "note", "0c4c2a52": "note+session", "0d4c2a52": ""}; !maps.Equal(got, want) {
+		t.Errorf("sources %v, want %v", got, want)
+	}
+}
+
+// A memory_search's recall line journals each hit's source words too: the
+// search path's show, read back from the text, has no source of its own.
+func TestSearchRecallJournalsEachMemorysSource(t *testing.T) {
+	cs, home := creditSession(t)
+	if err := feedback.SetTurn(pathsOf(home).FeedbackDir(), "S", feedback.Turn{ID: "p-7", N: 7, At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	recallAnswer = `[{"id":"m1","text":"Proj keeps PostgreSQL 16.","type":"observation","tags":["project:proj"],"source_fact_ids":["f1","f2"],"scores":{"reranker":0.72}},
+		{"id":"m2","text":"A raw fact.","type":"world","tags":["project:proj","source:subagent"],"scores":{"reranker":0.70}},
+		{"id":"m3","text":"Cut.","type":"observation","tags":["project:proj"],"source_fact_ids":["f9"],"scores":{"reranker":0.69}}]`
+	recallSourceFacts = `{"f1":{"tags":["kind:state","source:chat"]},"f2":{"tags":["source:note"]}}`
+	if _, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}}); isErr {
+		t.Fatal("search failed")
+	}
+	evs := recallEvents(t, home)
+	if len(evs) != 1 {
+		t.Fatalf("recall events %+v", evs)
+	}
+	got := map[string]string{}
+	for _, it := range evs[0].Items {
+		got[it.ID] = it.Source
+	}
+	if want := map[string]string{"m1": "note+session", "m2": "subagent", "m3": ""}; !maps.Equal(got, want) {
+		t.Errorf("sources %v, want %v", got, want)
 	}
 }
 

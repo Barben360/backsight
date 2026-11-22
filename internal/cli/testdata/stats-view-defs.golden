@@ -13,6 +13,7 @@ used.rubber_stamp        Turns where every memory was marked used    rate    30 
 used.share_confident     Confidently ranked memories that were used  rate    20       0      —
 used.rank                Position of the memories used               count   20       0      —
 used.by_path             Used, by where memory was shown             rate    20       0      —
+used.by_source           Used, by where memory came from             rate    20       3      —
 search.rescue_rate       Memories Claude found itself                rate    20       0      —
 verdict.wrong_rate       Memories reported wrong or out of date      rate    20       0      —
 stale.never_used         Often shown, never used                     count   0        0      —

@@ -1,7 +1,7 @@
 {{/* views: quality */}}
 {{template "head" .}}{{template "top" .}}
 
-{{/* widgets: the cards of quality (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd; Reported adds Rows: Memory, Session, Project, Verdict, When). Reads the metrics used.turn_rate, declare.coverage, recall.hit_rate, recall.empty_reasons, search.rate, search.empty_rate, verdict.wrong_rate, .V.quality.Tables.OutcomeMix and .Reported, and with developer mode used.share_confident, used.rank, used.by_path, search.rescue_rate, used.rubber_stamp, recall.by_lang, injection.contradicted, boost.set_changed, stopcheck.block_yield (Dev: Contradicted, SetChanged and Blocks, Cards; Lang adds Rows: Name, Got, Interval, Prompts, Few, Lines: Text, and Small). */}}
+{{/* widgets: the cards of quality (Card: Head, Leads, Word, Note, Charts, Figs, Extras, Hint, HintCmd; Reported adds Rows: Memory, Session, Project, Verdict, When). Reads the metrics used.turn_rate, declare.coverage, recall.hit_rate, recall.empty_reasons, search.rate, search.empty_rate, verdict.wrong_rate, .V.quality.Tables.OutcomeMix and .Reported, and with developer mode used.share_confident, used.rank, used.by_path, used.by_source, search.rescue_rate, used.rubber_stamp, recall.by_lang, injection.contradicted, boost.set_changed, stopcheck.block_yield (Dev: Contradicted, SetChanged and Blocks, Cards; Lang adds Rows: Name, Got, Interval, Prompts, Few, Lines: Text, and Small). */}}
 {{with quality .}}<div class="grid-2">
 {{template "pcard" .Used}}
 {{template "pcard" .Outcomes}}

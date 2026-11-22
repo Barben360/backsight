@@ -179,8 +179,8 @@ func TestQualityCards(t *testing.T) {
 		if chip := c.first("span.chip-dev"); chip == nil || chip.text() != "developer" {
 			t.Errorf("chip %+v", chip)
 		}
-		if got := len(c.find("div.figs div.fig")); got != 6 {
-			t.Errorf("%d figures, want the six developer metrics", got)
+		if got := len(c.find("div.figs div.fig")); got != 7 {
+			t.Errorf("%d figures, want the seven developer metrics", got)
 		}
 		if got := len(c.find("rect.f-seq1")); got != 7 {
 			t.Errorf("%d rank bars, want 7", got)

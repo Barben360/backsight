@@ -42,6 +42,7 @@ var released = map[string]string{
 	"0005-waiting":    "a36ea344d07e8cc422223b4e6bb06664e4b0c43cfdc5ba22c4ad0aed987c8f7e",
 	"0006-client":     "228345391978a865f9dc58a143b7a9c8731c142f0bc4bacd6fd45bab7052981a",
 	"0007-indexes":    "dfe70a2dbc885213383ccc4170de8fab0bb957a93c9548252e39dc6e9865b1e0",
+	"0008-source":     "bb3aead1103761f80caed4968cf8b573cd694eca308e7d2c184fca26ee64679a",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -74,12 +75,12 @@ var schemaTables = []struct{ name, cols string }{
 	{"tel_config_values", rowKey + "ts key value"},
 	{"events", rowKey + "ts kind session project binary_version fields client"},
 	{"turns", rowKey + "ts session turn agent project n machine binary_version client"},
-	{"shows", rowKey + "pos ts session key turn agent path memory_id rank reranker boost rank_without_boost score_without_boost project client"},
+	{"shows", rowKey + "pos ts session key turn agent path memory_id rank reranker boost rank_without_boost score_without_boost project client source"},
 	{"settles", rowKey + "pos key memory_id show_at outcome settle_ts client"},
 	{"credits", rowKey + "pos ts session turn agent project memory_id verdict client"},
 	{"stops", rowKey + "ts session turn agent outcome stop_check flags client"},
 	{"retirements", rowKey + "pos ts session kind memory_id verdict outcome note_id client"},
-	{"recalls", rowKey + "pos ts session turn agent path memory_id rank rank_without_boost reranker boost score_without_boost flags client"},
+	{"recalls", rowKey + "pos ts session turn agent path memory_id rank rank_without_boost reranker boost score_without_boost flags client source"},
 	{"imports", rowKey + "pos ts source key memory_id at outcome rank client"},
 	{"journal_other", rowKey + "ts session kind client"},
 	{"ledger", "memory_id shown credits credits_at misses misses_at last_shown last_credited wrong hidden_since unhidden_at imported_shown imported_credits"},
@@ -120,8 +121,8 @@ func TestReleasedMigrationsArePinned(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	ix := mustOpen(t, opts(t, tempDirs(t), nil))
 	defer mustClose(t, ix)
-	if ix.Schema() != 7 {
-		t.Fatalf("schema %d, want 7", ix.Schema())
+	if ix.Schema() != 8 {
+		t.Fatalf("schema %d, want 8", ix.Schema())
 	}
 	for _, tc := range schemaTables {
 		got := columnsOf(t, ix.sh.w, tc.name)

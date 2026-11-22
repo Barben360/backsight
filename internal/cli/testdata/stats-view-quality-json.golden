@@ -538,6 +538,60 @@
           "by_path": {}
         }
       },
+      "used.by_source": {
+        "value": 0,
+        "num": 0,
+        "den": 3,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats quality --dev",
+        "extra": {
+          "all_ranks": {
+            "num": 0,
+            "den": 3,
+            "value": 0,
+            "mdc": null,
+            "status": "too_few"
+          },
+          "by_project": {
+            "unknown": {
+              "num": 0,
+              "den": 3,
+              "value": 0,
+              "mdc": null,
+              "status": "too_few"
+            }
+          },
+          "by_source": {
+            "unknown": {
+              "prompt": {
+                "all": {
+                  "num": 0,
+                  "den": 3,
+                  "value": 0,
+                  "mdc": null,
+                  "status": "too_few"
+                },
+                "top8": {
+                  "num": 0,
+                  "den": 3,
+                  "value": 0,
+                  "mdc": null,
+                  "status": "too_few"
+                }
+              }
+            }
+          },
+          "top_rank": 8
+        }
+      },
       "used.rank": {
         "value": 0,
         "num": null,

@@ -38,6 +38,7 @@ var catalogRows = []catalogRow{
 	{"used.share_confident", "Confidently ranked memories that were used", "ratio", "up", 20, none, none, "", false, false, "none", "machine", true, "quality", "daily", "backsight stats quality --dev", "unknown,shown,forgotten,pending,path"},
 	{"used.rank", "Position of the memories used", "count", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "histogram,hit_at_1,hit_at_3"},
 	{"used.by_path", "Used, by where memory was shown", "ratio", "up", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "by_path"},
+	{"used.by_source", "Used, by where memory came from", "ratio", "up", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", "by_source,by_project,all_ranks,top_rank"},
 	{"search.rescue_rate", "Memories Claude found itself", "ratio", "none", 20, none, none, "", false, false, "none", "machine", true, "quality", "none", "backsight stats quality --dev", ""},
 	{"verdict.wrong_rate", "Memories reported wrong or out of date", "ratio", "down", 20, 0.05, 0.15, "lo", false, false, "wilson_approx", "machine", false, "quality", "daily", "backsight stats sessions --has wrong", "wrong,outdated,used,confirmed"},
 	{"stale.never_used", "Often shown, never used", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "quality", "none", "backsight memory stale", "min_shows"},
@@ -80,8 +81,8 @@ var catalogRows = []catalogRow{
 // A typo in any value of any row goes red: each Def is read back against the
 // row stated above, in order.
 func TestCatalogRows(t *testing.T) {
-	if len(catalogRows) != 48 || len(Catalog) != 48 {
-		t.Fatalf("rows: table %d, catalog %d, want 48 each", len(catalogRows), len(Catalog))
+	if len(catalogRows) != 49 || len(Catalog) != 49 {
+		t.Fatalf("rows: table %d, catalog %d, want 49 each", len(catalogRows), len(Catalog))
 	}
 	num := func(p *float64) float64 {
 		if p == nil {
@@ -123,7 +124,7 @@ func TestCatalogSources(t *testing.T) {
 	for _, id := range []string{"recall.hit_rate", "recall.empty_reasons", "recall.by_lang", "search.rate", "search.empty_rate", "context.per_session", "context.per_prompt", "recall.latency", "search.latency", "hooks.failures", "notes.stored", "imports.sent", "pipeline.flow", "retain.outcomes", "jobs.last_run"} {
 		want[id] = "telemetry"
 	}
-	for _, id := range []string{"used.turn_rate", "declare.coverage", "used.rubber_stamp", "used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "verdict.wrong_rate", "bank.churn"} {
+	for _, id := range []string{"used.turn_rate", "declare.coverage", "used.rubber_stamp", "used.share_confident", "used.rank", "used.by_path", "used.by_source", "search.rescue_rate", "verdict.wrong_rate", "bank.churn"} {
 		want[id] = "journal"
 	}
 	for _, id := range []string{"stale.never_used", "stale.hidden", "stale.reported"} {

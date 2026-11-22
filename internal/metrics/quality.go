@@ -19,7 +19,7 @@ import (
 
 var qualityIDs = []string{
 	"used.turn_rate", "declare.coverage", "used.rubber_stamp",
-	"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate",
+	"used.share_confident", "used.rank", "used.by_path", "used.by_source", "search.rescue_rate",
 	"verdict.wrong_rate",
 	"stale.never_used", "stale.hidden", "stale.reported",
 	"injection.contradicted", "boost.set_changed", "stopcheck.block_yield",
@@ -29,7 +29,7 @@ var qualityIDs = []string{
 // steps a view asks for.
 var qualityStepOf = map[string]string{
 	"used.turn_rate": "turns", "declare.coverage": "turns", "used.rubber_stamp": "turns",
-	"used.share_confident": "shows", "used.rank": "shows", "used.by_path": "shows", "search.rescue_rate": "shows",
+	"used.share_confident": "shows", "used.rank": "shows", "used.by_path": "shows", "used.by_source": stepBySource, "search.rescue_rate": "shows",
 	"verdict.wrong_rate": "verdicts",
 	"stale.never_used":   "stale", "stale.hidden": "stale", "stale.reported": "stale",
 	"injection.contradicted": stepContradicted, "boost.set_changed": stepSetChanged, "stopcheck.block_yield": stepBlocks,
@@ -108,6 +108,7 @@ func quality(e env, w Window) (map[string]Observation, map[string]Metric, error)
 		{stepContradicted, []string{"injection.contradicted"}, "tel_outcome", qualityContradicted},
 		{stepSetChanged, []string{"boost.set_changed"}, "show_sets", qualitySetChanged},
 		{stepBlocks, []string{"stopcheck.block_yield"}, "tel_stop_block", qualityBlocks},
+		{stepBySource, []string{"used.by_source"}, "shows", qualityBySource},
 	} {
 		if !e.runs(s.step) {
 			continue

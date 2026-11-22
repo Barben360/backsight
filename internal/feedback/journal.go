@@ -47,6 +47,41 @@ type Item struct {
 	// Of: on a sources show, the observation the fact was listed for, so
 	// a verdict on the fact counts as one on the observation (issue 317).
 	Of string `json:"of,omitempty"`
+	// Source: where the memory came from (JoinSources): the source words
+	// of a raw fact's own tags, or of an observation's facts, sorted and
+	// joined by "+" (note+session: facts of a conversation and of a note);
+	// empty when the recall did not tell (an observation whose facts it
+	// did not ask for, or left some out), on paths that do not know, and
+	// on lines written before the field (issue 348).
+	Source string `json:"source,omitempty"`
+}
+
+// SourceWords are the words of a memory's Source, in their sorted order:
+// a conversation's facts (session), a note, a subagent's report, an
+// import, and other for a source tag the binary does not write.
+var SourceWords = []string{"import", "note", "other", "session", "subagent"}
+
+// JoinSources is the Source of a memory whose facts have the source words
+// given: each once, sorted, joined by "+"; "" for none.
+func JoinSources(words []string) string {
+	w := slices.Clone(words)
+	slices.Sort(w)
+	return strings.Join(slices.Compact(w), "+")
+}
+
+// ValidSource reports whether s is a Source JoinSources writes: words of
+// SourceWords, each once, sorted, joined by "+" (not empty).
+func ValidSource(s string) bool {
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, "+")
+	for i, p := range parts {
+		if !slices.Contains(SourceWords, p) || (i > 0 && parts[i-1] >= p) {
+			return false
+		}
+	}
+	return true
 }
 
 // BriefingPagePrefix starts every briefing page's id (retain's
