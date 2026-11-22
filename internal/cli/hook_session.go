@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"runtime"
 	"slices"
@@ -524,7 +525,10 @@ func (h *hookEnv) compactPage(st session.State) (page, refreshed, id string, cha
 }
 
 // subagentStart: a short guide and the top briefing items, no network.
+// Every subagent, skipped or not, is recorded as running until its
+// SubagentStop: its memory calls reach the session's memory server too.
 func (h *hookEnv) subagentStart() []byte {
+	h.subagentRunning(true)
 	if slices.Contains(h.cfg.Hooks.SubagentSkip, h.in.AgentType) {
 		return nil
 	}
@@ -552,4 +556,43 @@ func (h *hookEnv) subagentStart() []byte {
 		h.journalShows("briefing", itemsFromInjections(shown))
 	}
 	return h.answer(harness.EventSubagentStart, text, "")
+}
+
+// subagentRunningFor: a subagent recorded as running longer than this is
+// taken as gone (its SubagentStop never came: a crash, a kill).
+const subagentRunningFor = 12 * time.Hour
+
+// subagentRunning records the hook's subagent as running (SubagentStart)
+// or stopped (SubagentStop) in the session state, waiting for the lock as
+// PostToolUse does: a start lost to a busy lock would let memory_search
+// take the subagent's calls for the main agent's.
+func (h *hookEnv) subagentRunning(running bool) {
+	if h.in.AgentID == "" {
+		return
+	}
+	h.store.Retry = postToolUseLockWait
+	at := now()
+	h.updateSession(func(s *session.State) error {
+		if running {
+			if s.Subagents == nil {
+				s.Subagents = map[string]time.Time{}
+			}
+			s.Subagents[h.in.AgentID] = at
+		} else {
+			delete(s.Subagents, h.in.AgentID)
+		}
+		maps.DeleteFunc(s.Subagents, func(_ string, started time.Time) bool { return at.Sub(started) > subagentRunningFor })
+		return nil
+	})
+}
+
+// subagentsRunning: a subagent of the session in st started less than
+// subagentRunningFor before at and has not stopped.
+func subagentsRunning(st session.State, at time.Time) bool {
+	for _, started := range st.Subagents {
+		if at.Sub(started) <= subagentRunningFor {
+			return true
+		}
+	}
+	return false
 }

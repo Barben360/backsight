@@ -178,6 +178,7 @@ func (h *hookEnv) stop() []byte {
 // lock until lockDeadline at most), then runs the end-of-turn check for
 // the subagent, whose block is its answer.
 func (h *hookEnv) subagentStop(lockDeadline time.Time) []byte {
+	h.subagentRunning(false) // a helper agent too: its start was recorded
 	if !subagentRan(h.in) {
 		return nil // an internal helper agent (a tool-call summary): no transcript, no result, no report
 	}

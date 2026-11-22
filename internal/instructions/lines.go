@@ -37,17 +37,27 @@ func short(id string) string {
 	return id
 }
 
+// CreditLinePrefix and ConfirmedLinePrefix start every CreditLine and
+// ConfirmedLine: memory_credit's used and confirmed answers are these
+// lines alone, and the hook knows an accepted credit by them.
+const (
+	creditLabel         = "From memory"
+	confirmedLabel      = "Confirmed by memory"
+	CreditLinePrefix    = "> 🧠 **" + creditLabel + " ("
+	ConfirmedLinePrefix = "> 🧠" + emojiConfirmed + " **" + confirmedLabel + " ("
+)
+
 // CreditLine is the line memory_credit hands back for the agent to print:
 // the memories of one project it used, by short id.
 func CreditLine(project string, ids8 []string) string {
-	return line("", "From memory", project+" · "+strings.Join(ids8, ", "), "<the facts you used, in your words>")
+	return line("", creditLabel, project+" · "+strings.Join(ids8, ", "), "<the facts you used, in your words>")
 }
 
 // ConfirmedLine is the line memory_credit hands back for a confirmed
 // verdict: the memories of one project that this session established
 // independently, by short id.
 func ConfirmedLine(project string, ids8 []string) string {
-	return line(emojiConfirmed, "Confirmed by memory", project+" · "+strings.Join(ids8, ", "), "<what this session confirmed, in your words>")
+	return line(emojiConfirmed, confirmedLabel, project+" · "+strings.Join(ids8, ", "), "<what this session confirmed, in your words>")
 }
 
 // SavedLine and UpdatedLine are memory_store's: a new fact, or one that

@@ -211,14 +211,14 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 [ -n "$found" ] || fail "the server's search never answered with the stored memory"
-# A memory id in memory_search's answer: "- #1 … (<date>, <age> ago, <id>, <score>)".
+# A memory id in memory_search's answer: "- #1 … (<date>, <age> ago, <id>, <score>)" (a whole hit, rank 8 or better).
 idre='ago, ([0-9a-f-]{36})'
 exec_turn recall "$query" "$(jq -cn --arg q "$query" --arg re "{{match:$idre}}" \
   '[{call: "memory_search", args: {queries: [$q], min_score: 0, limit: 20}}, {call: "memory_credit", args: {ids: [$re], verdict: "used"}}, {say: "S2-DONE"}]')"
 s2=$(thread recall)
 [ "$(calls recall | tr '\n' ' ')" = "backsight/memory_search=completed backsight/memory_credit=completed " ] || fail "calls: $(calls recall | tr '\n' ' ')"
 shown=$(result recall memory_search)
-ids=$(grep -oE 'ago, [0-9a-f-]{36}' <<< "$shown" | cut -c6- || true)
+ids=$(grep -oE "[0-9a-f-]{36}, -?[0-9]+\.[0-9]+\)$" <<< "$shown" | cut -c1-36 || true) # every hit line ends "<id>, <score>)", a shortened or id-only one too
 [ -n "$ids" ] || fail "memory_search showed no memory: $(head -n 5 <<< "$shown")"
 from=
 for id in $ids; do
@@ -238,7 +238,7 @@ pass "thread $s2: the prompt hook injected $inj memory(ies) into the model's req
 # --- credit ----------------------------------------------------------------
 step=credit
 credit=$(result recall memory_credit)
-grep -q '^Credited\.' <<< "$credit" || fail "memory_credit answered: $(head -n 3 <<< "$credit")"
+grep -qF '> 🧠 **From memory (' <<< "$credit" || fail "memory_credit answered: $(head -n 3 <<< "$credit")"
 [ "$(said recall)" = S2-DONE ] || fail "the turn ended with '$(said recall)'"
 # The control, in the TUI (Stop's check skips codex exec, a headless
 # session: no one to ask): a shown memory left uncredited is held once by

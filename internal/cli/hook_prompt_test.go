@@ -614,7 +614,7 @@ func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
 		{ID: "2d4c2a52-0000-4000-8000-000000000003", Text: "third", Project: "billing", Age: "4d", Score: 0.7},
 	}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true, nil)}}})
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_read",
 		"tool_input": map[string]string{"id": "1c4c2a52-0000-4000-8000-000000000002"}, "tool_response": "second"})
 	shows := eventsOf(journalEvents(t, home), "shows")
@@ -708,15 +708,15 @@ func TestPostToolUseJournalsTheCredit(t *testing.T) {
 	full := "0b4c2a52-0000-4000-8000-000000000001"
 	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true, nil)}}})
 	credit := func(prompt string, input map[string]any, response string) {
 		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": prompt, "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
 			"tool_input": input, "tool_response": []map[string]string{{"type": "text", "text": response}}})
 	}
-	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · 0b4c2a52)** — <the facts you used, in your words>")
+	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "> 🧠 **From memory (billing · 0b4c2a52)** — <the facts you used, in your words>")
 	credit("p-2", map[string]any{"verdict": "none"}, "Noted: no memory used.")
 	// a refused call is no credit, whatever it was asked
-	credit("p-2", map[string]any{"ids": []string{"cccccccc"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · cccccccc)** — x") // used, but no id resolves: no empty credit
+	credit("p-2", map[string]any{"ids": []string{"cccccccc"}}, "> 🧠 **From memory (billing · cccccccc)** — x") // used, but no id resolves: no empty credit
 	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "0b4c2a52: not shown in this session, or its search result has not arrived yet: call again after the result")
 	credits := eventsOf(journalEvents(t, home), "credit")
 	if len(credits) != 2 {
@@ -744,7 +744,7 @@ func TestVerdictCreditIsJournaled(t *testing.T) {
 	full := "0b4c2a52-0000-4000-8000-000000000001"
 	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true, nil)}}})
 	credit := func(verdict, response string) {
 		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
 			"tool_input":    map[string]any{"ids": []string{"0b4c2a52"}, "verdict": verdict, "correction": "Billing runs PostgreSQL 16.", "evidence": "psql printed 16.4"},

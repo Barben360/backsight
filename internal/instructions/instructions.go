@@ -48,8 +48,10 @@ import (
 // past event never does; v22 (decision 0089): the short guide names the source word of each memory's
 // tag (a note or an import is a claim to verify), the briefing headers say the notes are to verify and
 // that the user's words and CLAUDE.md or AGENTS.md take precedence, and the briefing request asks for
-// statements with their origin, never orders to the assistant.
-const Version = "v22"
+// statements with their origin, never orders to the assistant; v23 (issue 349): memory_read's
+// description says a memory_search hit past #8 is cut and one already shown this session is its id
+// only, and memory_credit's used and confirmed answers are the lines to print alone.
+const Version = "v23"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -295,7 +297,8 @@ const (
 		"Close the loop: when a recalled open item is settled (shipped, abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
 		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"); kind correction for a contradiction. " +
 		"Print the line the result gives: Updated if the fact updates the memory it shows (no parallel fact), else Saved; a repeat: say so in it."
-	ReadDescription   = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
+	ReadDescription = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from. " +
+		"A memory_search hit past #8 is cut (…), one already shown this session is its id only: read either here."
 	CreditDescription = "Declare the memories shown in this session that informed your answer; a search sent in the same message must return its result first. " +
 		"Verdict `used` (the default) returns the line to print in your final message. " +
 		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): " +

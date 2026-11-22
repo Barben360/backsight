@@ -382,7 +382,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				_, eng = key.get()
 				res = searchMemory(ctx, deps.dirs, deps.home, deps.cfg, deps.tw, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			}
-			text, failed := mcpSearchText(res, deps.cfg.Feedback.Enabled), len(res.Hits) == 0 && !scopesOK(res)
+			text, failed := mcpSearchText(res, deps.cfg.Feedback.Enabled, deps.shownWhole(live, found)), len(res.Hits) == 0 && !scopesOK(res)
 			if failed {
 				text = "memory unavailable: " + scopeErrors(res)
 			} else if note := unknownProjectsNote(deps.dirs, a.Projects); note != "" {
@@ -529,7 +529,10 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 }
 
 // memory_credit's accepted answers start with these: the PostToolUse hook
-// journals a credit only behind one of them.
+// journals a credit only behind one of them. A used or confirmed answer is
+// its lines to print (instructions.CreditLinePrefix,
+// instructions.ConfirmedLinePrefix); an older server's started with
+// creditUsedPrefix or creditConfirmedPrefix, which the hook still reads.
 const (
 	creditUsedPrefix      = "Credited."
 	creditNonePrefix      = "Noted:"
@@ -625,15 +628,17 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 		}
 		groups[p] = append(groups[p], shortID(id))
 	}
+	// The answer is the lines to print, nothing else (issue 349): the tool's
+	// description says so.
 	lines := make([]string, 0, len(order))
-	prefix, build := creditUsedPrefix, instructions.CreditLine
+	build := instructions.CreditLine
 	if verdict == "confirmed" {
-		prefix, build = creditConfirmedPrefix, instructions.ConfirmedLine
+		build = instructions.ConfirmedLine
 	}
 	for _, p := range order {
 		lines = append(lines, build(p, groups[p]))
 	}
-	return prefix + " " + printLines(lines) + "\n" + strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n"), nil
 }
 
 // shownProjects is the project of each memory shown: the one its latest
@@ -893,11 +898,49 @@ func unknownProjectsNote(d paths.Dirs, projects []string) string {
 	return instructions.UnknownProjects(unknown, closest[:min(len(closest), 3)])
 }
 
-func mcpSearchText(r recall.Result, feedback bool) string {
+// mcpSearchText is memory_search's answer: past searchWholeRanks a hit is
+// shortened, and the memories the call's context holds whole (shown,
+// shownWhole) come back as their id only.
+func mcpSearchText(r recall.Result, feedback bool, shown map[string]bool) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
 	}
-	return searchText(r) + "\n" + instructions.For(feedback).SearchEnd + "\n"
+	return searchTextIn(r, searchLayout{compact: true, shown: shown}) + "\n" + instructions.For(feedback).SearchEnd + "\n"
+}
+
+// shownWhole is the memories the context of this call already holds whole,
+// which its search answer gives as their id only: those in the session's
+// seen set (the main agent's, back to what a compaction replayed) that one
+// of the main agent's shows gave whole (not a search line past
+// searchWholeRanks). None unless the call is certainly the session's own
+// (ownSession) and no subagent of it is running (its calls reach this
+// server too, and the server cannot tell them apart); none when the
+// journal or the state cannot be read: every hit is then whole.
+func (d mcpDeps) shownWhole(live session.Live, found string) map[string]bool {
+	if !ownSession(found) || !session.ValidID(live.SessionID) {
+		return nil
+	}
+	st, err := session.Store{Dir: d.dirs.SessionsDir()}.Load(live.SessionID)
+	if err != nil || len(st.Seen) == 0 || subagentsRunning(st, now()) {
+		return nil
+	}
+	events, err := sessionJournal(d.dirs, live.SessionID)
+	if err != nil {
+		return nil
+	}
+	whole := map[string]bool{}
+	for _, s := range feedback.Shows(events, live.SessionID) {
+		if s.Agent == "" && (s.Path != "search" || s.Rank <= searchWholeRanks) {
+			whole[s.ID] = true
+		}
+	}
+	shown := map[string]bool{}
+	for _, id := range st.Seen {
+		if whole[id] {
+			shown[id] = true
+		}
+	}
+	return shown
 }
 
 // storeSimilarHeader opens the similar memory of a memory_store answer,

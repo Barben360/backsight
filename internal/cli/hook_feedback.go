@@ -449,9 +449,9 @@ func (h *hookEnv) journalCredit(text string) {
 	_ = json.Unmarshal(h.in.ToolInput, &in)
 	var verdict string
 	switch {
-	case strings.HasPrefix(text, creditUsedPrefix):
+	case strings.HasPrefix(text, instructions.CreditLinePrefix), strings.HasPrefix(text, creditUsedPrefix):
 		verdict = "used"
-	case strings.HasPrefix(text, creditConfirmedPrefix):
+	case strings.HasPrefix(text, instructions.ConfirmedLinePrefix), strings.HasPrefix(text, creditConfirmedPrefix):
 		verdict = "confirmed"
 	case strings.HasPrefix(text, creditNonePrefix):
 		verdict = "none"

@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/harness"
 	"github.com/Barben360/backsight/internal/harnessid"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/testtool"
@@ -194,7 +195,7 @@ func TestCodexRootAndSubagentCallsPairWithTheRootSession(t *testing.T) {
 	retainStatus.Store(http.StatusServiceUnavailable) // notes stay queued, where the test reads them
 	for name, meta := range map[string]map[string]any{"root": root, "subagent": sub} {
 		cs := codexMCP(t, home)
-		if out, isErr := callMeta(t, cs, meta, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, creditUsedPrefix) {
+		if out, isErr := callMeta(t, cs, meta, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) {
 			t.Errorf("%s: credit of the root's show: %v %s", name, isErr, out)
 		}
 		if out, isErr := callMeta(t, cs, meta, "memory_read", map[string]any{"id": "aaaaaaaa"}); isErr || !strings.Contains(out, "PostgreSQL 16 stays.") {
@@ -231,7 +232,7 @@ func TestTwoCodexChatsOnOneServerNeverSeeEachOthersShows(t *testing.T) {
 		if out, isErr := callMeta(t, cs, c.meta, "memory_credit", map[string]any{"ids": []string{c.others}}); !isErr || !strings.Contains(out, "not shown in this session") {
 			t.Errorf("%s credited the other chat's %s: %v %s", c.meta["sessionId"], c.others, isErr, out)
 		}
-		if out, isErr := callMeta(t, cs, c.meta, "memory_credit", map[string]any{"ids": []string{c.own}}); isErr || !strings.HasPrefix(out, creditUsedPrefix) {
+		if out, isErr := callMeta(t, cs, c.meta, "memory_credit", map[string]any{"ids": []string{c.own}}); isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) {
 			t.Errorf("%s: its own %s: %v %s", c.meta["sessionId"], c.own, isErr, out)
 		}
 		if out, isErr := callMeta(t, cs, c.meta, "memory_read", map[string]any{"id": c.others}); !isErr || !strings.Contains(out, "no memory "+c.others) {
@@ -346,7 +347,7 @@ func TestACodexCallWithoutAHookRecordKeepsItsOwnSession(t *testing.T) {
 	retainStatus.Store(http.StatusServiceUnavailable)
 	m := codexMeta(codexChatA, codexChatA, filepath.Join(home, "shop"))
 	showIn(t, home, codexChatA, creditA)
-	if out, isErr := callMeta(t, cs, m, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, creditUsedPrefix) {
+	if out, isErr := callMeta(t, cs, m, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) {
 		t.Errorf("credit: %v %s", isErr, out)
 	}
 	// Another session's pause does not stop it: the server knows its session.
@@ -460,7 +461,7 @@ func TestParallelCodexSearchesInOneTurnBothSucceed(t *testing.T) {
 	b := codexMeta(codexChatB, codexChatB)
 	for range 8 {
 		wg.Go(func() {
-			if out, isErr := callMeta(t, cs, a, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, creditUsedPrefix) {
+			if out, isErr := callMeta(t, cs, a, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) {
 				t.Errorf("A: %v %s", isErr, out)
 			}
 		})

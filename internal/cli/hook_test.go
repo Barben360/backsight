@@ -597,7 +597,7 @@ func TestShownTextsAreKeptWhereShown(t *testing.T) {
 	prompt(t, home, "s1", longPrompt)
 	res := recall.Result{Hits: []recall.Hit{{ID: stopIDB, Text: "trap, b, 0.9) not an id", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true, nil)}}})
 	recallAnswer = `[{"id":"` + stopIDC + `","text":"Ask before merging.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`
 	_ = sessions(home).Update("s1", func(st *session.State) error { st.SearchedPromptID = 0; return nil })
 	if g := gate(t, home); g.Specific.Decision != "deny" {
@@ -668,7 +668,7 @@ func TestHooksFileUnderThePointersTurn(t *testing.T) {
 	showTurn(t, home, "s1", "t-2", 2, false)
 	res := recall.Result{Hits: []recall.Hit{{ID: stopIDA, Text: "Billing keeps PostgreSQL 16.", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "cc-other", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true, nil)}}})
 	shows := eventsOf(journalEvents(t, home), "shows")
 	if len(shows) != 1 || shows[0].Turn != "t-2" {
 		t.Fatalf("shows %+v", shows)
@@ -677,7 +677,7 @@ func TestHooksFileUnderThePointersTurn(t *testing.T) {
 		t.Fatalf("stop: %q %q", d, reason)
 	}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "cc-other", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
-		"tool_input": map[string]any{"ids": []string{"0b4c2a52"}}, "tool_response": []map[string]string{{"type": "text", "text": "Credited. Print this line in your final message:\n> x"}}})
+		"tool_input": map[string]any{"ids": []string{"0b4c2a52"}}, "tool_response": []map[string]string{{"type": "text", "text": "> 🧠 **From memory (billing · 0b4c2a52)** — x"}}})
 	credits := eventsOf(journalEvents(t, home), "credit")
 	if len(credits) != 1 || credits[0].Turn != "t-2" {
 		t.Fatalf("credits %+v", credits)
@@ -707,7 +707,7 @@ func TestPausedSessionJournalsNothing(t *testing.T) {
 	}
 	res := recall.Result{Hits: []recall.Hit{{ID: stopIDB, Text: "second", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true, nil)}}})
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_read",
 		"tool_input": map[string]string{"id": stopIDC}, "tool_response": "third"})
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_credit",

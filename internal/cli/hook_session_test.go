@@ -420,10 +420,10 @@ func TestBriefingPageIsShownAndCreditable(t *testing.T) {
 	}
 	// "page", as the tag shows it, names the page shown; its whole id too.
 	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"page"}})
-	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, "(billing · page)") {
+	if isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) || !strings.Contains(out, "(billing · page)") {
 		t.Fatalf("credit: %v %s", isErr, out)
 	}
-	if full, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{id}}); isErr || !strings.HasPrefix(full, "Credited.") {
+	if full, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{id}}); isErr || !strings.HasPrefix(full, instructions.CreditLinePrefix) {
 		t.Errorf("credit by the whole id: %v %s", isErr, full)
 	}
 	fire(t, "post-tool-use", map[string]any{"session_id": "S", "tool_name": "mcp__plugin_backsight_memory__memory_credit",

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/instructions"
 )
 
 func confirmed(ids ...string) map[string]any {
@@ -18,8 +19,8 @@ func TestCreditConfirmedReturnsItsOwnLine(t *testing.T) {
 	showIn(t, home, "S", creditA, creditB)
 	before := len(journalEvents(t, home))
 	out, isErr := call(t, cs, "memory_credit", confirmed("aaaaaaaa"))
-	if isErr || !strings.HasPrefix(out, "Confirmed.") || !strings.Contains(out, "> 🧠✔ **Confirmed by memory (proj · aaaaaaaa)** — ") ||
-		strings.Contains(out, "From memory") || !strings.Contains(out, "final message") {
+	if isErr || !strings.HasPrefix(out, instructions.ConfirmedLinePrefix) || !strings.Contains(out, "> 🧠✔ **Confirmed by memory (proj · aaaaaaaa)** — ") ||
+		strings.Contains(out, "From memory") {
 		t.Errorf("%v\n%s", isErr, out)
 	}
 	if n := len(journalEvents(t, home)); n != before {
@@ -64,8 +65,7 @@ func TestCreditConfirmedNamesEachProject(t *testing.T) {
 	cs, home := creditSession(t)
 	showItems(t, home, "S", "search", "billing", feedback.Item{ID: creditB, Rank: 1, Project: "infra"}, feedback.Item{ID: creditA, Rank: 2, Project: "billing"})
 	out, isErr := call(t, cs, "memory_credit", confirmed(creditB, "aaaaaaaa"))
-	want := "Confirmed. Print these lines in your final message:\n" +
-		"> 🧠✔ **Confirmed by memory (infra · bbbbbbbb)** — <what this session confirmed, in your words>\n" +
+	want := "> 🧠✔ **Confirmed by memory (infra · bbbbbbbb)** — <what this session confirmed, in your words>\n" +
 		"> 🧠✔ **Confirmed by memory (billing · aaaaaaaa)** — <what this session confirmed, in your words>"
 	if isErr || out != want {
 		t.Errorf("%v\n%s", isErr, out)
@@ -90,7 +90,7 @@ func TestPostToolUseJournalsAConfirmedCredit(t *testing.T) {
 	showItems(t, home, "s1", "search", "billing", feedback.Item{ID: full, Rank: 1, Project: "billing"})
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
 		"tool_input":    map[string]any{"ids": []string{"0b4c2a52"}, "verdict": "confirmed"},
-		"tool_response": []map[string]string{{"type": "text", "text": "Confirmed. Print this line in your final message:\n> 🧠✔ **Confirmed by memory (billing · 0b4c2a52)** — x"}}})
+		"tool_response": []map[string]string{{"type": "text", "text": "> 🧠✔ **Confirmed by memory (billing · 0b4c2a52)** — x"}}})
 	credits := eventsOf(journalEvents(t, home), "credit")
 	if len(credits) != 1 || credits[0].Verdict != "confirmed" || strings.Join(credits[0].IDs, ",") != full {
 		t.Errorf("credits %+v", credits)

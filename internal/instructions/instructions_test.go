@@ -68,7 +68,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v22" {
+	if Version != "v23" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -557,6 +557,7 @@ var wordings = map[string]string{
 	"v20": "7289e3614a9bd8c5a2e28e387df92833e36f7b0a9538d1a06ac872cdb29c68b9",
 	"v21": "87aeeade9b320deb89f6666fd28f8bdc1d632d8eb3fb0f20b7d7488eec2b9f97",
 	"v22": "24d3414842e023629584c06e31adc3ee9aa749534274b553a3944649af507bdc",
+	"v23": "0bd4e4fb0f0cfb6224f30a8fbcd5b6de1551fbbc195646a5a701748fb1eec7ac",
 }
 
 func wordingHash() string {
