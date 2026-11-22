@@ -91,8 +91,15 @@ func i64(v int64) *int64 { return &v }
 const projectClause = `(? = '' OR project = ?)`
 
 // versionClause is the binary-version filter of the releases view's
-// metrics, two bind values (empty: no filter).
-const versionClause = `(? = '' OR binary_version = ?)`
+// metrics, two bind values: the version's name (machines.CanonVersion)
+// twice; empty: no filter. It keeps the rows of either spelling.
+var versionClause = `(? = '' OR ` + canonVersionSQL("binary_version") + ` = ?)`
+
+// canonVersionSQL is the name of the binary version in column col, as
+// machines.CanonVersion gives it: without one leading "v" before a digit.
+func canonVersionSQL(col string) string {
+	return `(CASE WHEN ` + col + ` GLOB 'v[0-9]*' THEN substr(` + col + `, 2) ELSE ` + col + ` END)`
+}
 
 // reachAbsent reports why the family has nothing to read: a server-only
 // host, or no row at all in table (any time) for the project.
@@ -213,7 +220,7 @@ LEFT JOIN (SELECT session, n, MAX(ts) AS last FROM tel_tool_use
            WHERE ts >= ? AND COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)
            GROUP BY session, n) s
        ON s.session = p.session AND s.n = p.n
-WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.binary_version = ?)`, args...)
+WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR `+canonVersionSQL("p.binary_version")+` = ?)`, args...)
 	if err != nil {
 		return nil, err
 	}

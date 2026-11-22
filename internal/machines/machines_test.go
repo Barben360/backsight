@@ -207,6 +207,34 @@ func TestValidVersionGuard(t *testing.T) {
 	}
 }
 
+// TestCanonVersion: one leading "v" before a digit goes, as a release names
+// its tag's version; anything else is kept as it is.
+func TestCanonVersion(t *testing.T) {
+	for in, want := range map[string]string{
+		"v0.1.27-m7": "0.1.27-m7", "0.1.27-m7": "0.1.27-m7", "v1": "1",
+		"vv1.2": "vv1.2", // one v only, and only before a digit
+		"v":     "v", "dev": "dev", "vdev": "vdev", "V1.2": "V1.2", "other": "other", "": "",
+		"v0.0.2-m0-93-gfd77ae6": "0.0.2-m0-93-gfd77ae6",
+	} {
+		if got := CanonVersion(in); got != want {
+			t.Errorf("CanonVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestVersionSpellings: a version's spellings are its canonical name and,
+// when that starts with a digit, the same with a leading "v".
+func TestVersionSpellings(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"v0.1.27-m7": {"0.1.27-m7", "v0.1.27-m7"}, "0.1.27-m7": {"0.1.27-m7", "v0.1.27-m7"},
+		"v": {"v", "v"}, "dev": {"dev", "dev"}, "vv1.2": {"vv1.2", "vv1.2"}, "": {"", ""},
+	} {
+		if got := VersionSpellings(in); got != want {
+			t.Errorf("VersionSpellings(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestShortNeedsAValidName(t *testing.T) {
 	cases := map[string]string{
 		DocPrefix + "3f9c2a17-1b2c-4d5e-8f90-a1b2c3d4e5f6": "3f9c2a17",

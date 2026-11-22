@@ -752,7 +752,7 @@ func TestStatsBlockText(t *testing.T) {
 
 	rel := text("releases")
 	wantLines(t, "releases", rel, "What changed", "When What")
-	if !strings.Contains(rel, "recall.min_score 0.5 → 0.6") || !strings.Contains(rel, "new version v0.1.18") {
+	if !strings.Contains(rel, "recall.min_score 0.5 → 0.6") || !strings.Contains(rel, "new version 0.1.18") {
 		t.Errorf("releases: no marker for the version and the setting:\n%s", rel)
 	}
 	// the markers of a day are on its page: the setting changed on the 7th
@@ -760,13 +760,13 @@ func TestStatsBlockText(t *testing.T) {
 	if p := text("days", "2026-10-07"); !strings.Contains(p, "recall.min_score 0.5 → 0.6") || strings.Contains(p, "new version") {
 		t.Errorf("the page of the 7th:\n%s", p)
 	}
-	if p := text("days", "2026-10-08"); !strings.Contains(p, "new version v0.1.18 (after v0.1.17)") || strings.Contains(p, "recall.min_score") {
+	if p := text("days", "2026-10-08"); !strings.Contains(p, "new version 0.1.18 (after 0.1.17)") || strings.Contains(p, "recall.min_score") {
 		t.Errorf("the page of the 8th:\n%s", p)
 	}
 
-	cmp := text("releases", "--compare", "v0.1.17,v0.1.18")
-	if !strings.Contains(cmp, "Comparison of v0.1.17 and v0.1.18 on Turns where Claude used memory") ||
-		!strings.Contains(cmp, "too few to compare: v0.1.17 has 0 active days and 0 turns in its best group; not enough active days") {
+	cmp := text("releases", "--compare", "v0.1.17,v0.1.18") // named without the tag's v
+	if !strings.Contains(cmp, "Comparison of 0.1.17 and 0.1.18 on Turns where Claude used memory") ||
+		!strings.Contains(cmp, "too few to compare: 0.1.17 has 0 active days and 0 turns in its best group; not enough active days") {
 		t.Errorf("a comparison with too few days:\n%s", cmp)
 	}
 }

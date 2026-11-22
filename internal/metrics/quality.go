@@ -57,10 +57,11 @@ func notPage(col string) string {
 }
 
 // sessionVersion is the binary-version filter of a journal row aliased a:
-// the version of its turn (two bind values: the version twice; empty: no
-// filter).
+// the version of its turn, of either spelling (two bind values: the
+// version's name twice; empty: no filter).
 func sessionVersion(a string) string {
-	return fmt.Sprintf(`(? = '' OR EXISTS (SELECT 1 FROM turns tv WHERE tv.session = %[1]s.session AND tv.turn = %[1]s.turn AND tv.binary_version = ?))`, a)
+	return fmt.Sprintf(`(? = '' OR EXISTS (SELECT 1 FROM turns tv WHERE tv.session = %[1]s.session AND tv.turn = %[1]s.turn AND %[2]s = ?))`,
+		a, canonVersionSQL("tv.binary_version"))
 }
 
 // quality computes the quality metrics over w.

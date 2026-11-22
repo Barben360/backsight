@@ -46,7 +46,7 @@ func (x *fx) daily() []machines.Day {
 // without credit, T4 undeclared; a document sent ok.
 //
 // Day 2: 4 recalls, 2 injecting; p1 (v9.0, session S) 500 chars; p3 (v9.1) 300 ms; turn T5 (v9.0) declared,
-// turn T6 (v9.1) declared with a used credit.
+// turn T6 (v9.1) declared with a used credit. The figures name them 9.0 and 9.1, without the tag's v.
 func dailyFixture(t *testing.T) *fx {
 	x := newFx(t, dailyAt)
 	ms := map[int]int{0: 40, 1: 2000, 2: 2001, 3: 6000}
@@ -114,11 +114,11 @@ func TestDailyFigures(t *testing.T) {
 		t.Errorf("day 2 flow = %v, want [0 0]", d2.Flow)
 	}
 	wantV := map[string]machines.Figures{
-		"v9.0": {Prompts: 2, Hit: machines.Pair{1, 2}, Coverage: machines.Pair{1, 1}, Used: machines.Pair{0, 1}, Context: machines.Pair{500, 0}},
-		"v9.1": {Prompts: 2, Hit: machines.Pair{1, 2}, Coverage: machines.Pair{1, 1}, Used: machines.Pair{1, 1}, Wrong: machines.Pair{0, 1},
+		"9.0": {Prompts: 2, Hit: machines.Pair{1, 2}, Coverage: machines.Pair{1, 1}, Used: machines.Pair{0, 1}, Context: machines.Pair{500, 0}},
+		"9.1": {Prompts: 2, Hit: machines.Pair{1, 2}, Coverage: machines.Pair{1, 1}, Used: machines.Pair{1, 1}, Wrong: machines.Pair{0, 1},
 			Latency: machines.Latency{0, 0, 0, 1, 0, 0, 0, 0, 0}},
 	}
-	if len(d2.Versions) != 2 || d2.Versions["v9.0"] != wantV["v9.0"] || d2.Versions["v9.1"] != wantV["v9.1"] {
+	if len(d2.Versions) != 2 || d2.Versions["9.0"] != wantV["9.0"] || d2.Versions["9.1"] != wantV["9.1"] {
 		t.Errorf("day 2 versions = %+v, want %+v", d2.Versions, wantV)
 	}
 }
@@ -297,8 +297,8 @@ func TestDailyDropsInvalidVersions(t *testing.T) {
 	if d.Prompts != 3 || d.Hit != (machines.Pair{2, 3}) || d.Used != (machines.Pair{1, 1}) {
 		t.Errorf("day = %+v, want the invalid version's rows counted: 3 prompts, hit [2 3], used [1 1]", d.Figures)
 	}
-	if len(d.Versions) != 1 || d.Versions["v2"].Prompts != 1 || d.Versions["v2"].Hit != (machines.Pair{1, 1}) {
-		t.Errorf("versions = %+v, want only v2 with 1 prompt", d.Versions)
+	if len(d.Versions) != 1 || d.Versions["2"].Prompts != 1 || d.Versions["2"].Hit != (machines.Pair{1, 1}) {
+		t.Errorf("versions = %+v, want only v2 (named 2) with 1 prompt", d.Versions)
 	}
 }
 

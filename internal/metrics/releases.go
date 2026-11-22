@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/machines"
 )
 
 // releaseNote is what the releases view says of its own numbers.
@@ -23,7 +24,8 @@ var ReleaseFlagship = []string{"recall.hit_rate", "used.turn_rate", "declare.cov
 // thresholds; no previous window), the share of its prompts per project,
 // the prompts per active day (days with a typed prompt), and the bank's
 // size at its last day when the server's series reaches it (90 days; null
-// otherwise and under a project filter). Newest first version first (by
+// otherwise and under a project filter). A version is named as
+// machines.CanonVersion names it, and counts the rows of either spelling. Newest first version first (by
 // first prompt, then version), paged. settings are the numeric fields of
 // the [recall] and [feedback] tables.
 func Releases(ctx context.Context, s Source, q Query) (Result, error) {
@@ -91,6 +93,7 @@ WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '' AND `+projectCla
 		if err := rows.Scan(&version, &ts, &project, &typed); err != nil {
 			return nil, err
 		}
+		version = machines.CanonVersion(version)
 		a := accs[version]
 		if a == nil {
 			a = &releaseAcc{days: map[string]bool{}, projects: map[string]int64{}}
@@ -143,7 +146,7 @@ WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '' AND `+projectCla
 // them by version), so releaseOthers does not read them again.
 func flagship(e env, w Window, version string) (map[string]Metric, error) {
 	ve := e
-	ve.q.version = version
+	ve.q.version = machines.CanonVersion(version)
 	ve.memo = newMemo()
 	if e.memo != nil {
 		if e.memo.others == nil {

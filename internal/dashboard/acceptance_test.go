@@ -703,7 +703,7 @@ func TestPagesWorkWithoutScripts(t *testing.T) {
 		if p.Kind == "overview" || p.Kind == "scenario" {
 			checkSummaryText(t, doc)
 		}
-		if p.Set == "compare" && !strings.Contains(stripped, "Comparing v0.1.17 with v0.1.18") {
+		if p.Set == "compare" && !strings.Contains(stripped, "Comparing 0.1.17 with 0.1.18") {
 			t.Error("no result line of the comparison without scripts")
 		}
 		// Everything that opens does it without a script: a <details>.

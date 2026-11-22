@@ -65,6 +65,28 @@ var versionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 // ValidVersion reports whether s is a binary version safe to publish and show.
 func ValidVersion(s string) bool { return versionRe.MatchString(s) }
 
+// CanonVersion is the name of binary version s: s without one leading "v"
+// before a digit. A build named by its tag wrote "v0.1.27-m7" where a
+// release (and make build since) writes "0.1.27-m7"; both are one version.
+// Anything else ("dev", "v", "vv1.2") is kept as it is.
+func CanonVersion(s string) string {
+	if len(s) > 1 && s[0] == 'v' && s[1] >= '0' && s[1] <= '9' {
+		return s[1:]
+	}
+	return s
+}
+
+// VersionSpellings are the stored spellings of version s: its name
+// (CanonVersion) and, when that starts with a digit, the same with a
+// leading "v"; the name twice otherwise.
+func VersionSpellings(s string) [2]string {
+	c := CanonVersion(s)
+	if c != "" && c[0] >= '0' && c[0] <= '9' {
+		return [2]string{c, "v" + c}
+	}
+	return [2]string{c, c}
+}
+
 // OS maps runtime.GOOS to the published enum.
 func OS(goos string) string {
 	switch goos {

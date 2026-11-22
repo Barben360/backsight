@@ -97,6 +97,7 @@ These cards come from the daily upkeep's record (see the notes of v0.1.28-m7 in 
 **Developer mode** adds these cards: the share of the memory that came up and how concentrated the shows are (Bank); the share of turns followed by a correction and the share of recalls the learned ranking changed (Quality); and, in **Does memory show up as often in every language?**, whether a language differs from the most used one by more than chance (a gap of more than 15 points is watched). The learned-ranking share undercounts recalls from before it was recorded, until `backsight stats index rebuild`.
 
 **Releases** (developer mode)
+- **Versions that ran.** One row per version, named without its tag's leading `v`: `v0.1.27-m7` and `0.1.27-m7` (what a build from a tag and a release record) are one version, their figures added up, on this PC and the others alike.
 - **Do two versions differ?** Pick two versions and a measure. The answer is a difference with its 95 % interval, matched by project and by where memory was shown, read as differs, no clear difference or too few, with what is missing and when to look again. It is observational: the two versions ran on different weeks, work and settings, so it never says one is better. When the raw numbers point the other way it says so.
 - **When did Claude use memory?** The share of turns where Claude used memory over time, with a marker at each version switch and settings change recorded on this PC.
 
@@ -239,7 +240,7 @@ The pages' titles above are the short form of these questions.
 
 Flags go after the view word: `backsight stats overview --days 30`, `--project <name>`, `--since` and `--until`, `--tz`. [commands.md](commands.md) lists them all.
 
-`backsight stats releases --compare A,B` (with `--measure used.turn_rate`, `recall.hit_rate` or `verdict.wrong_rate`) compares two versions. It matches turns by project and by where memory was first shown; a turn with no main-agent show falls in the `unknown` stratum. Only groups where both versions have 7 active days and 30 turns count, and the figure it gives is the matched difference with its 95 % interval, read as `differs`, `no clear difference` or `too few to compare`. The comparison is observational: the weeks, the projects and the settings differ between two versions, so it never says one is better. When the unmatched difference points the other way it says so and tells you to read the matched figure.
+`backsight stats releases --compare A,B` (with `--measure used.turn_rate`, `recall.hit_rate` or `verdict.wrong_rate`) compares two versions, each given with or without its tag's leading `v`. It matches turns by project and by where memory was first shown; a turn with no main-agent show falls in the `unknown` stratum. Only groups where both versions have 7 active days and 30 turns count, and the figure it gives is the matched difference with its 95 % interval, read as `differs`, `no clear difference` or `too few to compare`. The comparison is observational: the weeks, the projects and the settings differ between two versions, so it never says one is better. When the unmatched difference points the other way it says so and tells you to read the matched figure.
 
 ## Reading the numbers
 

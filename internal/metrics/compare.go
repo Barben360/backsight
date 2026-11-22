@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/machines"
 )
 
 // Gates of a comparison (R23), exported so that the page words the same
@@ -40,8 +42,11 @@ type cmpUnit struct {
 // empty) over the query's window: the units of each version are grouped
 // into strata and pooled as compareOf says; the settings in effect under
 // each version are read from the config records. A version without a unit
-// in the window is a too_few comparison, not an error.
+// in the window is a too_few comparison, not an error. A version is named
+// as machines.CanonVersion names it, and takes the units of either
+// spelling.
 func Compare(e env, versions [2]string, measure string) (Comparison, error) {
+	versions = [2]string{machines.CanonVersion(versions[0]), machines.CanonVersion(versions[1])}
 	if measure == "" {
 		measure = CompareMeasures[0]
 	}
@@ -86,7 +91,7 @@ func compareUnits(e env, versions [2]string, measure string) ([]cmpUnit, error) 
 		rows, err = e.tx.QueryContext(e.ctx, `
 SELECT COALESCE(session, ''), COALESCE(project, ''), binary_version, ts, 'prompt', COALESCE(injected, 0) > 0
 FROM tel_prompt
-WHERE decision = 'recall' AND ts >= ? AND ts < ? AND binary_version IN (?, ?) AND `+projectClause,
+WHERE decision = 'recall' AND ts >= ? AND ts < ? AND `+canonVersionSQL("binary_version")+` IN (?, ?) AND `+projectClause,
 			since, until, versions[0], versions[1], e.q.Project, e.q.Project)
 	case "verdict.wrong_rate":
 		rows, err = e.tx.QueryContext(e.ctx, `
@@ -119,6 +124,7 @@ FROM g JOIN turn_final_stop f ON f.session = g.session AND f.turn = g.turn AND C
 		if err := rows.Scan(&u.session, &u.project, &u.version, &at, &u.path, &u.hit); err != nil {
 			return nil, err
 		}
+		u.version = machines.CanonVersion(u.version)
 		if u.version != versions[0] && u.version != versions[1] {
 			continue
 		}
