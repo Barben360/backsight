@@ -232,6 +232,28 @@ func TestBySourceEdges(t *testing.T) {
 	}
 }
 
+// Under a version filter (a release's flagship figures), a session's
+// turns spelled "v1.2.0" and "1.2.0" are one version; another is left out.
+func TestBySourceVersionFilterMergesSpellings(t *testing.T) {
+	x := newFx(t, fxNow)
+	at := hoursAgo(1)
+	for i, b := range []string{"v1.2.0", "1.2.0", "1.3.0"} {
+		x.binary = b
+		s := fmt.Sprintf("v-%d", i)
+		x.turnEvent(at.Add(-time.Minute), s, "alpha")
+		x.sourced(at, s, fxTurn, "prompt", feedback.Item{ID: "m" + s, Rank: 1, Source: "session"})
+		x.credit(at.Add(time.Minute), s, "", "alpha", "used", "m"+s)
+	}
+	q := x.query(7)
+	q.version = "1.2.0"
+	if m := qualityOf(x, q)["used.by_source"]; num(m) != 2 || den(m) != 2 {
+		t.Errorf("version 1.2.0: %d/%d, want 2/2 (both spellings)", num(m), den(m))
+	}
+	if m := qualityOf(x, x.query(7))["used.by_source"]; den(m) != 3 {
+		t.Errorf("no filter: den %d, want 3", den(m))
+	}
+}
+
 // Without a show of the window, the breakdown is empty and the headline
 // has no value; a briefing page is never a memory shown.
 func TestBySourceEmptyAndPagesLeftOut(t *testing.T) {
