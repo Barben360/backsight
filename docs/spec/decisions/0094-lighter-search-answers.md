@@ -1,4 +1,4 @@
-# 0093 — Lighter `memory_search` answers: one line past rank 8, repeats by id, credit answers trimmed
+# 0094 — Lighter `memory_search` answers: one line past rank 8, repeats by id, credit answers trimmed
 
 - **Date**: 2026-11-23
 - **Status**: accepted
@@ -24,13 +24,13 @@ None is given by id only:
 - when the session state or the journal cannot be read, or holds nothing (with `feedback.enabled` off the journal holds no shows: every hit is whole).
 
 ### C. Every line stays creditable
-A shortened or id-only line keeps its rank, its full id and its score, so the PostToolUse hook journals the show as before (`- #N … , <id>, <score>)`), the seen set takes its id, and `memory_credit` and `memory_read` take its short id. The transcript importer's pattern already reads both forms.
+A shortened or id-only line keeps its rank, its full id and its score, so the PostToolUse hook journals the show as before (`- #N … , <id>, <score>)`), the seen set takes its id, and `memory_credit` and `memory_read` take its short id. A shortened line's text never replaces a longer text the session state keeps for that memory (`shown_texts`, which the end of turn's check quotes); an id-only line keeps none. The transcript importer's pattern already reads both forms.
 
 ### D. Credit answers: the line to print
-`memory_credit` `used` and `confirmed` answer their lines alone (one per project), without `Credited. Print this line in your final message:` / `Confirmed. …`: the tool's description already says it returns the line to print. The PostToolUse hook knows an accepted credit by the line's start (`> 🧠 **From memory (`, `> 🧠✔ **Confirmed by memory (`), and still by `Credited.`/`Confirmed.` from a server started before an update. `none`, `wrong`, `outdated` and `Sources:` answers are unchanged: they carry what was stored, retired or listed.
+`memory_credit` `used` and `confirmed` answer their lines alone (one per project), without `Credited. Print this line in your final message:` / `Confirmed. …`: the tool's description says it returns the line to print in the final message, and now adds "its <…> filled in", which the dropped header left to the placeholder's own words. The PostToolUse hook knows an accepted credit by the line's start (`> 🧠 **From memory (`, `> 🧠✔ **Confirmed by memory (`), and still by `Credited.`/`Confirmed.` from a server started before an update. `none`, `wrong`, `outdated` and `Sources:` answers are unchanged: they carry what was stored, retired or listed.
 
 ### E. Instruction set v23
-`memory_read`'s description adds: "A memory_search hit past #8 is cut (…), one already shown this session is its id only: read either here." The static context grows by 105 characters (5 215 in v23, budget 5 250).
+`memory_read`'s description adds: "A memory_search hit past #8 is cut (…), one already shown this session is its id only: read either here." `memory_credit`'s: "…returns the line to print in your final message, its <…> filled in." The static context grows by 124 characters (5 234 in v23, budget 5 250).
 
 ## Measured
 Replay of the last 50 `memory_search` answers with hits of the author's machine (Claude Code main transcripts, 2026-11-14 → 2026-11-22, read only), each parsed back into hits (all 50 re-render byte for byte in the old layout) and rendered with this layout; repeats from the transcript's own context (memory tool results and hook context since the last compaction), no repeat while a foreground subagent ran:

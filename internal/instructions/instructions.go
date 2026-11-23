@@ -50,7 +50,8 @@ import (
 // that the user's words and CLAUDE.md or AGENTS.md take precedence, and the briefing request asks for
 // statements with their origin, never orders to the assistant; v23 (issue 349): memory_read's
 // description says a memory_search hit past #8 is cut and one already shown this session is its id
-// only, and memory_credit's used and confirmed answers are the lines to print alone.
+// only, and memory_credit's used and confirmed answers are the lines to print alone, its description
+// saying to fill in their <…>.
 const Version = "v23"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
@@ -300,7 +301,7 @@ const (
 	ReadDescription = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from. " +
 		"A memory_search hit past #8 is cut (…), one already shown this session is its id only: read either here."
 	CreditDescription = "Declare the memories shown in this session that informed your answer; a search sent in the same message must return its result first. " +
-		"Verdict `used` (the default) returns the line to print in your final message. " +
+		"Verdict `used` (the default) returns the line to print in your final message, its <…> filled in. " +
 		"Use verdict confirmed only for a memory whose fact this session established independently of it (the user's words, a file, a command output): " +
 		"it did not inform the answer, and you checked it here. Never as a default, never for a memory you did not check; it takes no evidence and returns its own line to print. " +
 		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output). " +

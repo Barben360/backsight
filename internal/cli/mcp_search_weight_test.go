@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,8 +12,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // What tells Claude how to read a shortened or id-only hit follows the
@@ -26,8 +30,16 @@ func TestToolTextsDescribeTheAnswersShapes(t *testing.T) {
 			t.Errorf("memory_read's description lacks %q: %s", want, read)
 		}
 	}
-	if !strings.Contains(instructions.CreditDescription, "returns the line to print") {
-		t.Errorf("memory_credit's description: %s", instructions.CreditDescription)
+	// The answer is the bare line: the description says to print it with
+	// its placeholder replaced, as the answer's own header used to.
+	credit := instructions.CreditDescription
+	if !strings.Contains(credit, "returns the line to print in your final message, its <…> filled in") {
+		t.Errorf("memory_credit's description: %s", credit)
+	}
+	for _, line := range []string{instructions.CreditLine("p", []string{"a"}), instructions.ConfirmedLine("p", []string{"a"})} {
+		if !regexp.MustCompile(` — <[^<>]+>$`).MatchString(line) {
+			t.Errorf("a line to print ends in its <…> placeholder: %s", line)
+		}
 	}
 }
 
@@ -303,5 +315,116 @@ func TestCreditAnswerIsTheLineToPrint(t *testing.T) {
 		"tool_input": map[string]any{"ids": []string{"aaaaaaaa"}}, "tool_response": []map[string]string{{"type": "text", "text": "cccccccc: not shown in this session"}}})
 	if n := len(eventsOf(journalEvents(t, home), "credit")); n != before {
 		t.Errorf("a refusal was journaled as a credit")
+	}
+}
+
+// A subagent's whole show does not make a hit whole in the main context:
+// shown shortened to the main agent (rank 12), whole to a subagent, the
+// hit comes back whole to the main agent once the subagent stopped.
+func TestSearchRepeatsIgnoreASubagentsWholeShow(t *testing.T) {
+	cs, home := creditSession(t)
+	weightHits(12, nil)
+	searchAsHook(t, cs, "S") // hit 12 shortened to the main agent
+	fire(t, "subagent-start", map[string]any{"session_id": "S", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "proj")})
+	weightHits(12, map[int]float64{12: 0.999})
+	searchAsHook(t, cs, "S", "a1") // hit 12 whole at rank 1, to the subagent
+	fire(t, "subagent-stop", map[string]any{"session_id": "S", "agent_id": "a1", "cwd": filepath.Join(home, "proj"), "last_assistant_message": "done"})
+	out := searchQ(t, cs)
+	if !whole(hitLine(out, 1), 12) {
+		t.Errorf("hit 12, whole only to a subagent, must be whole to the main agent: %s", hitLine(out, 1))
+	}
+	if !idOnly(hitLine(out, 2), 2, 1) {
+		t.Errorf("hit 1, whole to the main agent, stays id only: %s", hitLine(out, 2))
+	}
+}
+
+// A session state that cannot be read whole gives no id-only hit, though
+// it decoded its seen set (a field of the wrong type stops the decoding
+// after it).
+func TestSearchRepeatsNeedAReadableState(t *testing.T) {
+	cs, home := creditSession(t)
+	weightHits(4, nil)
+	searchAsHook(t, cs, "S")
+	if out := searchQ(t, cs); !idOnly(hitLine(out, 1), 1, 1) {
+		t.Fatalf("readable state: id only:\n%s", out)
+	}
+	raw := fmt.Sprintf(`{"seen":[%q,%q,%q,%q],"subagents":"not a map"}`, weightID(1), weightID(2), weightID(3), weightID(4))
+	if err := os.WriteFile(filepath.Join(pathsOf(home).SessionsDir(), "S.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := searchQ(t, cs); !whole(hitLine(out, 1), 1) || strings.Contains(out, searchShownBefore) {
+		t.Errorf("unreadable state: every hit whole:\n%s", out)
+	}
+}
+
+// A journal read in part (a month file that cannot be read) gives no
+// id-only hit, though the months it read hold the shows.
+func TestSearchRepeatsNeedAReadableJournal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file without permissions")
+	}
+	cs, home := creditSession(t)
+	weightHits(4, nil)
+	searchAsHook(t, cs, "S")
+	dir := pathsOf(home).FeedbackDir()
+	now := time.Now().UTC()
+	this := filepath.Join(dir, feedback.MonthFile(now))
+	last := filepath.Join(dir, feedback.MonthFile(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)))
+	if err := os.Rename(this, last); err != nil {
+		t.Fatal(err)
+	}
+	if out := searchQ(t, cs); !idOnly(hitLine(out, 1), 1, 1) {
+		t.Fatalf("last month's shows, readable: id only:\n%s", out)
+	}
+	if err := os.WriteFile(this, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testtool.DenyRead(t, this)
+	if out := searchQ(t, cs); !whole(hitLine(out, 1), 1) || strings.Contains(out, searchShownBefore) {
+		t.Errorf("a month that cannot be read: every hit whole:\n%s", out)
+	}
+}
+
+// A subagent that never stopped is dropped from the state at the next
+// start or stop, after subagentRunningFor.
+func TestStaleSubagentsAreDroppedFromTheState(t *testing.T) {
+	cs, home := creditSession(t)
+	_ = cs
+	_ = sessions(home).Update("S", func(st *session.State) error {
+		st.Subagents = map[string]time.Time{"stuck": time.Now().Add(-subagentRunningFor - time.Minute), "recent": time.Now()}
+		return nil
+	})
+	fire(t, "subagent-start", map[string]any{"session_id": "S", "agent_id": "a2", "agent_type": "general-purpose", "cwd": filepath.Join(home, "proj")})
+	st, _ := sessions(home).Load("S")
+	if _, ok := st.Subagents["stuck"]; ok || len(st.Subagents) != 2 {
+		t.Errorf("subagents %v: want recent and a2, stuck dropped", st.Subagents)
+	}
+}
+
+// A shortened search line never replaces the longer text the session kept
+// for a memory (the end of turn's check quotes it); a memory with no text
+// kept keeps the shortened one.
+func TestShortenedSearchLineKeepsTheLongerShownText(t *testing.T) {
+	cs, home := creditSession(t)
+	_ = cs
+	_ = sessions(home).Update("S", func(st *session.State) error {
+		st.ShownTexts = map[string]string{weightID(12): weightText(12)}
+		return nil
+	})
+	var hits []recall.Hit
+	for i := 1; i <= 12; i++ {
+		hits = append(hits, recall.Hit{ID: weightID(i), Text: weightText(i), Project: "proj", Age: "2d", Score: 0.99 - float64(i)*0.01})
+	}
+	fire(t, "post-tool-use", map[string]any{"session_id": "S", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(recall.Result{Hits: hits}, true, nil)}}})
+	st, _ := sessions(home).Load("S")
+	if st.ShownTexts[weightID(12)] != weightText(12) {
+		t.Errorf("hit 12's kept text replaced by its shortened line: %q", st.ShownTexts[weightID(12)])
+	}
+	if got := st.ShownTexts[weightID(11)]; !strings.HasSuffix(got, "…") || !strings.HasPrefix(got, "memory 11 ") {
+		t.Errorf("hit 11, nothing kept before: its shortened text: %q", got)
+	}
+	if st.ShownTexts[weightID(1)] != weightText(1) {
+		t.Errorf("hit 1, whole: %q", st.ShownTexts[weightID(1)])
 	}
 }

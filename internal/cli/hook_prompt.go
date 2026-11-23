@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -812,6 +813,12 @@ func (h *hookEnv) postToolUse() {
 	}
 	h.updateSession(func(s *session.State) error {
 		n = s.Prompts
+		// A shortened search line (past rank 8) never replaces the text
+		// already kept for its memory, which the end of turn's check quotes.
+		maps.DeleteFunc(shownTexts, func(id, text string) bool {
+			kept, ok := s.ShownTexts[id]
+			return ok && strings.HasSuffix(text, "…") && len(kept) > len(text)
+		})
 		s.KeepShownTexts(shownTexts) // a subagent's too: the end of its turn asks about them
 		if !subagent {
 			s.SearchedPromptID = s.Prompts
