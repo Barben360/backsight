@@ -78,7 +78,8 @@ func CanonVersion(s string) string {
 
 // VersionSpellings are the stored spellings of version s: its name
 // (CanonVersion) and, when that starts with a digit, the same with a
-// leading "v"; the name twice otherwise.
+// leading "v". Otherwise ("dev", "v", "vv1.2", "") the name is its only
+// spelling and comes twice, which an SQL IN (?, ?) reads as one value.
 func VersionSpellings(s string) [2]string {
 	c := CanonVersion(s)
 	if c != "" && c[0] >= '0' && c[0] <= '9' {

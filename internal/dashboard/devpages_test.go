@@ -511,6 +511,43 @@ func TestReleaseSpanNamesYearsAndTheRunningVersion(t *testing.T) {
 	}
 }
 
+// TestReleaseRunningVersionSpelledWithItsV: a binary whose version reads
+// "v0.1.17" runs the row named 0.1.17: that row reads "→ now", and the
+// footer's version link opens that row.
+func TestReleaseRunningVersionSpelledWithItsV(t *testing.T) {
+	var want string
+	b := pageHTML(t, "releases", func(d *PageData) {
+		rows := d.V["releases"].Tables.Releases
+		want = rows[1].Version
+		d.Frame.Version = "v" + want
+	})
+	doc := parseHTML(t, b)
+	if strings.HasPrefix(want, "v") {
+		t.Fatalf("the golden's row %q is spelled with its v", want)
+	}
+	var running *node
+	for _, tr := range doc.find("main tbody tr") {
+		if tr.attr("id") == "release-"+want {
+			running = tr
+		}
+	}
+	if running == nil {
+		t.Fatalf("no row release-%s", want)
+	}
+	if got := running.find("td")[1].text(); !strings.HasSuffix(got, "→ now") {
+		t.Errorf("the running version's span %q, want it to end with → now", got)
+	}
+	var footer []string
+	for _, a := range doc.find("a") {
+		if h := a.attr("href"); strings.HasPrefix(h, "/releases#") {
+			footer = append(footer, h)
+		}
+	}
+	if !slices.Equal(footer, []string{"/releases#release-" + want}) {
+		t.Errorf("footer version links %q, want the running row's anchor release-%s", footer, want)
+	}
+}
+
 func TestReleasePageSentences(t *testing.T) {
 	b := pageHTML(t, "releases", nil)
 	text := visibleText(b)
