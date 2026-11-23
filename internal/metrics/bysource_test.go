@@ -170,6 +170,68 @@ func TestBySourceJudgesEachCellAndSplitsByProject(t *testing.T) {
 	}
 }
 
+// The edges of a show's count: a none or outdated credit is no credit; a
+// credit at the very time of the show is one; an unranked show counts at
+// all ranks only; a session whose turn names no project is the unknown
+// project; of two recall lines of the memory, the nearest in time gives
+// the source, whichever came last; an import reads other and a note with
+// a subagent's report subagent.
+func TestBySourceEdges(t *testing.T) {
+	x := newFx(t, fxNow)
+	at := hoursAgo(1)
+	for _, s := range []string{"e1", "e2", "e3", "e5", "e6", "e7"} {
+		x.turnEvent(at.Add(-time.Minute), s, "alpha")
+	}
+	x.turnEvent(at.Add(-time.Minute), "e4", "")
+	x.sourced(at, "e1", fxTurn, "prompt", feedback.Item{ID: "mN", Rank: 1, Source: "session"})
+	x.credit(at.Add(time.Minute), "e1", "", "alpha", "none", "mN")
+	x.sourced(at, "e2", fxTurn, "prompt", feedback.Item{ID: "mO", Rank: 1, Source: "session"})
+	x.credit(at.Add(time.Minute), "e2", "", "alpha", "outdated", "mO")
+	x.sourced(at, "e3", fxTurn, "prompt", feedback.Item{ID: "mZ", Source: "note"}) // unranked
+	x.credit(at.Add(time.Minute), "e3", "", "alpha", "used", "mZ")
+	x.journal(feedback.Event{TS: at, Kind: "shows", Session: "e4", Turn: fxTurn, Path: "prompt", Items: []feedback.Item{{ID: "mP", Rank: 1, Source: "note"}}})
+	x.credit(at.Add(time.Minute), "e4", "", "", "used", "mP")
+	x.recallLine(at.Add(-time.Second), "e5", fxTurn, feedback.Item{ID: "mR", Rank: 2, Source: "session"})
+	x.recallLine(at.Add(50*time.Minute), "e5", "t2", feedback.Item{ID: "mR", Rank: 1, Source: "note"})
+	x.sourced(at, "e5", fxTurn, "search", feedback.Item{ID: "mR", Rank: 2})
+	x.sourced(at, "e6", fxTurn, "search", feedback.Item{ID: "mI", Rank: 1, Source: "import"}, feedback.Item{ID: "mJ", Rank: 2, Source: "note+subagent"})
+	x.sourced(at, "e7", fxTurn, "prompt", feedback.Item{ID: "mT", Rank: 1, Source: "session"})
+	x.credit(at, "e7", "", "alpha", "used", "mT")
+
+	m := qualityOf(x, x.query(7))["used.by_source"]
+	want := map[string]map[string][2]string{
+		"conversation": {"prompt": {"1/3=0.3333", "1/3=0.3333"}, "search": {"0/1=0.0000", "0/1=0.0000"}},
+		"note":         {"prompt": {"2/2=1.0000", "1/1=1.0000"}},
+		"other":        {"search": {"0/1=0.0000", "0/1=0.0000"}},
+		"subagent":     {"search": {"0/1=0.0000", "0/1=0.0000"}},
+	}
+	bs := bySource(t, m)
+	if len(bs) != len(want) {
+		t.Errorf("sources %v, want %v", bs, want)
+	}
+	for src, paths := range want {
+		if len(bs[src]) != len(paths) {
+			t.Errorf("%s: paths %v, want %v", src, bs[src], paths)
+		}
+		for p, w := range paths {
+			got := bs[src][p]
+			if srcCell(got.All) != w[0] || srcCell(got.Top8) != w[1] {
+				t.Errorf("%s/%s: all %s, ranks 1-8 %s, want %s and %s", src, p, srcCell(got.All), srcCell(got.Top8), w[0], w[1])
+			}
+		}
+	}
+	if num(m) != 2 || den(m) != 7 {
+		t.Errorf("headline %d/%d, want 2/7", num(m), den(m))
+	}
+	if a, _ := m.Extra["all_ranks"].(sourceStat); srcCell(a) != "3/8=0.3750" {
+		t.Errorf("all ranks %s, want 3/8", srcCell(a))
+	}
+	bp, _ := m.Extra["by_project"].(map[string]sourceStat)
+	if len(bp) != 2 || srcCell(bp["alpha"]) != "1/6=0.1667" || srcCell(bp[unknownKey]) != "1/1=1.0000" {
+		t.Errorf("by project %v, want alpha 1/6 and unknown 1/1", bp)
+	}
+}
+
 // Without a show of the window, the breakdown is empty and the headline
 // has no value; a briefing page is never a memory shown.
 func TestBySourceEmptyAndPagesLeftOut(t *testing.T) {
