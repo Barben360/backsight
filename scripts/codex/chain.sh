@@ -211,8 +211,10 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 [ -n "$found" ] || fail "the server's search never answered with the stored memory"
-# A memory id in memory_search's answer: "- #1 … (<date>, <age> ago, <id>, <score>)" (a whole hit, rank 8 or better).
-idre='ago, ([0-9a-f-]{36})'
+# A memory id in memory_search's answer: every hit line ends "<id>, <score>)", a whole hit
+# ("- #1 … (<date>, <age> ago, <id>, <score>)"), a shortened one, or one already shown this
+# session ("- #1 (already shown, <id>, <score>)": the prompt's recall shows the note first).
+idre='([0-9a-f-]{36}), [0-9.-]+[)]'
 exec_turn recall "$query" "$(jq -cn --arg q "$query" --arg re "{{match:$idre}}" \
   '[{call: "memory_search", args: {queries: [$q], min_score: 0, limit: 20}}, {call: "memory_credit", args: {ids: [$re], verdict: "used"}}, {say: "S2-DONE"}]')"
 s2=$(thread recall)
