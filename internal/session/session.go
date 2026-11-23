@@ -78,6 +78,11 @@ type State struct {
 	// session in their environment). A shell of this session inherits
 	// that session's variables: the shell's own is this one.
 	StartedIn string `json:"started_in,omitempty"`
+	// Subagents: the subagents of this session running now, by agent id,
+	// each with when SubagentStart saw it (SubagentStop removes it). The
+	// memory server cannot tell a subagent's call from the main agent's:
+	// while one runs, memory_search shows every hit whole.
+	Subagents map[string]time.Time `json:"subagents,omitempty"`
 }
 
 // maxShownTexts bounds ShownTexts: a turn shows a dozen memories at most.

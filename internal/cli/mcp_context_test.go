@@ -123,8 +123,11 @@ func TestStaticContextTeachesEachRuleOnce(t *testing.T) {
 // it under 5 000.
 func TestStaticContextBudget(t *testing.T) {
 	for _, feedback := range []bool{true, false} {
-		if n := utf8.RuneCountInString(staticContext(t, feedback)); n > 5150 { // 0089 P2: + the source words (5 110 in v22)
-			t.Errorf("feedback %v: static context %d chars (max 5 150)", feedback, n)
+		// 0089 P2: + the source words (5 110 in v22); issue 349: + how a
+		// shortened or id-only search hit is read and the credit line filled in (5 234 in v23), against
+		// about 2 000 characters off each search answer.
+		if n := utf8.RuneCountInString(staticContext(t, feedback)); n > 5250 {
+			t.Errorf("feedback %v: static context %d chars (max 5 250)", feedback, n)
 		}
 	}
 }

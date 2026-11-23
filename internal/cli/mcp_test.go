@@ -117,11 +117,11 @@ const searchTrailer = "If a memory informs your answer, call memory_credit with 
 // v7: the search result asks for a declaration, not a citation format;
 // an empty search asks for nothing.
 func TestSearchTrailerAsksForACredit(t *testing.T) {
-	out := mcpSearchText(recall.Result{Hits: []recall.Hit{{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "fact", Project: "billing", Age: "2d", Score: 0.9}}}, true)
+	out := mcpSearchText(recall.Result{Hits: []recall.Hit{{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "fact", Project: "billing", Age: "2d", Score: 0.9}}}, true, nil)
 	if !strings.HasSuffix(out, "\n"+searchTrailer) || strings.Contains(out, instructions.Credit) || strings.Contains(out, "Cite what you use") {
 		t.Errorf("trailer:\n%s", out)
 	}
-	if out := mcpSearchText(recall.Result{}, true); out != "nothing in memory\n" {
+	if out := mcpSearchText(recall.Result{}, true, nil); out != "nothing in memory\n" {
 		t.Errorf("empty search: %q", out)
 	}
 }
@@ -842,7 +842,7 @@ func TestCreditUsedReturnsTheLineToPrint(t *testing.T) {
 	showIn(t, home, "S", creditA)
 	before := len(journalEvents(t, home))
 	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}})
-	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, "> 🧠 **From memory (proj · aaaaaaaa)** — ") || !strings.Contains(out, "final message") {
+	if isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) || !strings.Contains(out, "> 🧠 **From memory (proj · aaaaaaaa)** — ") {
 		t.Errorf("%v\n%s", isErr, out)
 	}
 	if n := len(journalEvents(t, home)); n != before {
@@ -865,8 +865,7 @@ func TestCreditNamesEachMemorysOwnProject(t *testing.T) {
 	}
 	// ids of two projects: one line each, full ids and prefixes alike
 	out, isErr = call(t, cs, "memory_credit", map[string]any{"ids": []string{creditB, "aaaaaaaa"}, "verdict": "used"})
-	want := "Credited. Print these lines in your final message:\n" +
-		"> 🧠 **From memory (infra · bbbbbbbb)** — <the facts you used, in your words>\n" +
+	want := "> 🧠 **From memory (infra · bbbbbbbb)** — <the facts you used, in your words>\n" +
 		"> 🧠 **From memory (billing · aaaaaaaa)** — <the facts you used, in your words>"
 	if isErr || out != want {
 		t.Errorf("%v\n%s", isErr, out)
@@ -906,7 +905,7 @@ func TestCreditBeforeTheSearchResultIsRefused(t *testing.T) {
 		t.Errorf("%v %s", isErr, out)
 	}
 	showIn(t, home, "S", creditA)
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, "Credited.") {
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, instructions.CreditLinePrefix) {
 		t.Errorf("after the show: %v %s", isErr, out)
 	}
 }

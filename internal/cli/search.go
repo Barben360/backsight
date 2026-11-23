@@ -118,8 +118,31 @@ func newSearchCmd(e *env) *cobra.Command {
 // its own, which the rank parser would read as a hit.
 var oneLine = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
-// searchText groups hits by project, best first, each with its rank.
-func searchText(r recall.Result) string {
+// searchText groups hits by project, best first, each with its rank, every
+// hit whole (backsight search).
+func searchText(r recall.Result) string { return searchTextIn(r, searchLayout{}) }
+
+// The weight of a memory_search answer (issue 349): past searchWholeRanks
+// a hit is one line, its text cut at searchCompactChars; a hit the
+// session's context already holds whole is its id only. Every line keeps
+// its rank, id and score, so the hook journals the show and memory_credit
+// and memory_read take its id.
+const (
+	searchWholeRanks   = 8
+	searchCompactChars = 120 // of a shortened hit's text, ellipsis included
+	searchShownBefore  = "already shown"
+)
+
+// searchLayout is how much of each hit an answer shows: the zero value,
+// every hit whole; compact, memory_search's weight; shown, the ids the
+// session's context holds whole (nil: none).
+type searchLayout struct {
+	compact bool
+	shown   map[string]bool
+}
+
+// searchTextIn is searchText under layout l.
+func searchTextIn(r recall.Result, l searchLayout) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
 	}
@@ -141,7 +164,14 @@ func searchText(r recall.Result) string {
 		fmt.Fprintf(&b, "[%s]\n", tagProject(p))
 		for _, i := range groups[p] {
 			h := r.Hits[i]
-			fmt.Fprintf(&b, "- #%d %s (%s%s%s, %s ago, %s, %.2f)\n", i+1, oneLine.Replace(h.Text), h.Date.Format("2006-01-02"), kindLabel(h), sourceLabel(h.Source), h.Age, h.ID, h.Score)
+			switch {
+			case l.shown[h.ID]:
+				fmt.Fprintf(&b, "- #%d (%s, %s, %.2f)\n", i+1, searchShownBefore, h.ID, h.Score)
+			case l.compact && i >= searchWholeRanks:
+				fmt.Fprintf(&b, "- #%d %s (%s%s, %s, %.2f)\n", i+1, clip(oneLine.Replace(h.Text), searchCompactChars), h.Date.Format("2006-01-02"), sourceLabel(h.Source), h.ID, h.Score)
+			default:
+				fmt.Fprintf(&b, "- #%d %s (%s%s%s, %s ago, %s, %.2f)\n", i+1, oneLine.Replace(h.Text), h.Date.Format("2006-01-02"), kindLabel(h), sourceLabel(h.Source), h.Age, h.ID, h.Score)
+			}
 		}
 	}
 	return b.String()
