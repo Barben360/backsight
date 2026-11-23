@@ -161,21 +161,23 @@ func noonSpan(w Window) (lo, hi time.Time) {
 }
 
 // othersQuery is readOthers' read of pc_days: one version's days of the
-// counted PCs, by noon, through the index pc_days_version_noon.
+// counted PCs, by noon, through the index pc_days_version_noon; the
+// version's two spellings (machines.VersionSpellings), an older binary on
+// another PC having sent "v0.1.27" for "0.1.27".
 const othersQuery = `
 SELECT d.machine, d.noon, d.prompts, d.hit_n, d.hit_d, d.used_n, d.used_d, d.cov_n, d.cov_d, d.wrong_n, d.wrong_d,
        d.ctx_chars, d.ctx_sessions, COALESCE(d.flow_n, 0), COALESCE(d.flow_d, 0),
        d.lat0, d.lat1, d.lat2, d.lat3, d.lat4, d.lat5, d.lat6, d.lat7, d.lat8
 FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
-WHERE d.version = ? AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`
+WHERE d.version IN (?, ?) AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?`
 
 // otherVersionsQuery is otherVersions' read: the versions of the counted
-// PCs' days by noon, through the same index.
-const otherVersionsQuery = `
-SELECT d.version, MIN(d.noon), MAX(d.noon)
+// PCs' days by noon, by name (machines.CanonVersion), through the same index.
+var otherVersionsQuery = `
+SELECT ` + canonVersionSQL("d.version") + ` AS name, MIN(d.noon), MAX(d.noon)
 FROM pc_days d JOIN pc_docs c ON c.machine = d.machine
 WHERE d.version <> '' AND d.noon >= ? AND d.noon < ? AND c.at >= ? AND c.at <= ?
-GROUP BY d.version ORDER BY d.version`
+GROUP BY name ORDER BY name`
 
 // onReadOthers runs at each read of pc_days by readOthers (tests count them).
 var onReadOthers = func(version string) {}
@@ -191,8 +193,9 @@ func readOthers(e env, w Window, version string) (others, error) {
 		o.flowByBucket = make([]machines.Pair, len(buckets))
 		o.rowsByBucket = make([]int, len(buckets))
 	}
+	sp := machines.VersionSpellings(version)
 	rows, err := e.tx.QueryContext(e.ctx, othersQuery,
-		version, lo.UnixMilli(), hi.UnixMilli()+1,
+		sp[0], sp[1], lo.UnixMilli(), hi.UnixMilli()+1,
 		e.now.Add(-machines.DropAfter).UnixMilli(), e.now.Add(machines.MaxSkew).UnixMilli())
 	if err != nil {
 		return others{}, err

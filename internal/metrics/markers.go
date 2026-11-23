@@ -14,7 +14,8 @@ import (
 // project filter does not cut them.
 //
 // A release marker is a prompt whose binary version differs from the
-// version of the prompt just before it on this PC; Previous is that
+// version of the prompt just before it on this PC (by name: "v0.1.27" and
+// "0.1.27" are one version, machines.CanonVersion); Previous is that
 // version, even when that prompt is before the window (a marker must itself
 // fall in the window; the first prompt ever is none). A config marker is a
 // config record whose hash differs from the previous record's, with the
@@ -49,15 +50,15 @@ func releaseMarkers(e env, w Window) ([]Marker, error) {
 	// read.
 	var before sql.NullString
 	err := e.tx.QueryRowContext(e.ctx, `
-SELECT binary_version FROM tel_prompt WHERE ts < ? AND COALESCE(binary_version, '') <> ''
+SELECT `+canonVersionSQL("binary_version")+` FROM tel_prompt WHERE ts < ? AND COALESCE(binary_version, '') <> ''
 ORDER BY ts DESC, source_file DESC, "offset" DESC LIMIT 1`, w.Since.UnixMilli()).Scan(&before)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
 WITH p AS (
-  SELECT ts, source_file, "offset", binary_version AS v,
-         LAG(binary_version) OVER (ORDER BY ts, source_file, "offset") AS prev
+  SELECT ts, source_file, "offset", `+canonVersionSQL("binary_version")+` AS v,
+         LAG(`+canonVersionSQL("binary_version")+`) OVER (ORDER BY ts, source_file, "offset") AS prev
   FROM tel_prompt WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '')
 SELECT ts, v, prev FROM p
 WHERE prev IS NULL OR prev <> v

@@ -964,10 +964,11 @@ func TestDaysShortWindow(t *testing.T) {
 // relPrompts writes count typed recalls of version ver, one per hour going
 // back from start (the first one an hour before it): every injectEvery-th
 // one injects (0: all but every fifth), in project alpha (beta for every
-// fourth when split), taking ms.
-func relPrompts(x *fx, ver string, start time.Time, count int, inject func(i int) bool, split bool, ms int) {
-	x.binary = ver
+// fourth when split), taking ms; the i-th one's version is spelled
+// spell(ver, i).
+func relPrompts(x *fx, ver string, spell func(string, int) string, start time.Time, count int, inject func(i int) bool, split bool, ms int) {
 	for i := range count {
+		x.binary = spell(ver, i)
 		project := "alpha"
 		if split && i%4 == 0 {
 			project = "beta"
@@ -986,11 +987,17 @@ func relPrompts(x *fx, ver string, start time.Time, count int, inject func(i int
 // 20 use memory, 5 are reported wrong) and 0.1.15 (3 prompts on 28 October).
 // The first turn of 0.1.16 was credited and ended by the 0.1.17 binary.
 func releaseFx(t *testing.T) *fx {
+	return releaseFxSpelled(t, func(v string, _ int) string { return v })
+}
+
+// releaseFxSpelled is releaseFx with the version of the i-th prompt or turn
+// of each version spelled spell(version, i).
+func releaseFxSpelled(t *testing.T, spell func(string, int) string) *fx {
 	x := newFx(t, fxNow)
-	relPrompts(x, "0.1.16", fxNow.Add(-2*time.Hour), 40, func(i int) bool { return i%4 == 0 }, true, 100)
-	relPrompts(x, "0.1.17", fxNow.Add(-150*time.Minute), 50, func(i int) bool { return i%5 != 0 }, false, 300)
-	x.binary = "0.1.15"
+	relPrompts(x, "0.1.16", spell, fxNow.Add(-2*time.Hour), 40, func(i int) bool { return i%4 == 0 }, true, 100)
+	relPrompts(x, "0.1.17", spell, fxNow.Add(-150*time.Minute), 50, func(i int) bool { return i%5 != 0 }, false, 300)
 	for i := range 3 {
+		x.binary = spell("0.1.15", i)
 		x.tel(paris(28, 10+i, 0), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, fmt.Sprintf("old-%d", i), "alpha")
 	}
 	x.tel(paris(28, 13, 0), telemetry.Prompt{N: 1, Decision: "recall", Reason: "machine", Plen: 80}, "old-machine", "alpha") // not typed: no n
@@ -1000,17 +1007,17 @@ func releaseFx(t *testing.T) *fx {
 		if i < 5 {
 			verdict = "used"
 		}
-		x.binary = "0.1.16"
+		x.binary = spell("0.1.16", i)
 		x.turnEvent(hoursAgo(i).Add(-time.Second), s, "alpha")
 		x.shows(hoursAgo(i), s, fxTurn, "", "alpha", "prompt", "", mem)
 		if i == 0 {
-			x.binary = "0.1.17" // the binary was upgraded mid-turn
+			x.binary = spell("0.1.17", i) // the binary was upgraded mid-turn
 		}
 		x.credit(hoursAgo(i).Add(30*time.Second), s, "", "alpha", verdict, mem)
 		x.stop(hoursAgo(i).Add(time.Minute), s, "", "declared")
 	}
-	x.binary = "0.1.17"
 	for i := range 25 {
+		x.binary = spell("0.1.17", i)
 		verdict := "used"
 		if i >= 20 {
 			verdict = "wrong"

@@ -231,7 +231,7 @@ func ratioSeries(e env, w Window, withFlow bool) (map[string]pairs, map[string]m
 
 // readDaily reads the prompts and briefings of [since, until) once: per UTC day the typed prompts, the
 // context and the latency counts (in total and per valid version), and per valid version the span of its
-// prompts as whole UTC days. A session's characters count on the day of each event; the session itself on
+// prompts as whole UTC days. A version is named as machines.CanonVersion names it, both spellings together. A session's characters count on the day of each event; the session itself on
 // the day of its first event, for the version of that event.
 func readDaily(e env, since, until time.Time) (map[string]*dayAcc, map[string][2]time.Time, error) {
 	accs := map[string]*dayAcc{}
@@ -274,6 +274,7 @@ FROM tel_prompt WHERE ts >= ? AND ts < ?`, since.UnixMilli(), until.UnixMilli())
 		if err := rows.Scan(&ts, &session, &chars, &decision, &ms, &typed, &version); err != nil {
 			return nil, nil, err
 		}
+		version = machines.CanonVersion(version)
 		a := acc(ts)
 		v := a.of(version)
 		figs := []*machines.Figures{&a.Figures}
@@ -322,6 +323,7 @@ WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> ''`, since.UnixMilli(), un
 		if err := b.Scan(&ts, &session, &chars, &version); err != nil {
 			return nil, nil, err
 		}
+		version = machines.CanonVersion(version)
 		a := acc(ts)
 		a.Context[0] += chars
 		if v := a.of(version); v != nil {

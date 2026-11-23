@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/format"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -65,15 +66,17 @@ type SettingLine struct{ Name, Value string }
 const releaseIDPrefix = "release-"
 
 // versionHref is the link to a version's row on the Releases page. A
-// version without a row in the window opens the page at its top.
+// version without a row in the window opens the page at its top. A row is
+// named without the tag's v (machines.CanonVersion), as is its anchor.
 func versionHref(version string) string {
-	return "/releases#" + (&url.URL{Fragment: releaseIDPrefix + version}).EscapedFragment()
+	return "/releases#" + (&url.URL{Fragment: releaseIDPrefix + machines.CanonVersion(version)}).EscapedFragment()
 }
 
 // versionHref is the link to a version's row on the Releases page; the
 // page's window travels with it, as the row may be outside the default one.
 func (d PageData) versionHref(version string) string {
-	return "/releases" + windowQuery(d.P, "days", "since", "until", "tz") + "#" + (&url.URL{Fragment: releaseIDPrefix + version}).EscapedFragment()
+	return "/releases" + windowQuery(d.P, "days", "since", "until", "tz") + "#" +
+		(&url.URL{Fragment: releaseIDPrefix + machines.CanonVersion(version)}).EscapedFragment()
 }
 
 // dayText is a day as "Oct 8", with the year when it is not now's.
@@ -135,7 +138,7 @@ func releasesOf(d PageData) ReleasesPage {
 			Prompts: l.Int(row.N), Judged: dash, Top: Ref{None: true}, TopShare: dash,
 			PerDay: l.Fixed(row.PromptsPerDay, 1), Bank: dash,
 		}
-		if row.Version == d.Frame.Version { // the running binary is in use now
+		if row.Version == machines.CanonVersion(d.Frame.Version) { // the running binary is in use now
 			ln.Span = dayText(row.First, r.GeneratedAt, d.Loc) + " → now"
 		}
 		// The turns judged are those that showed memory and said what they used.

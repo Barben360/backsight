@@ -6,13 +6,13 @@ Turns where Claude used memory               51 % (41–60 %)           (n=97, o
 
 Versions that ran
 Version  First             Last              Events  Prompts per day  Memories
-v0.1.18  2026-10-03 14:00  2026-10-08 04:00  201     1.0              0
-v0.1.17  2026-10-02 14:00  2026-10-06 12:00  121     1.0              0
+0.1.18   2026-10-03 14:00  2026-10-08 04:00  201     1.0              0
+0.1.17   2026-10-02 14:00  2026-10-06 12:00  121     1.0              0
 
 What changed
 When              What
 2026-10-07 18:00  settings changed: recall.min_score 0.5 → 0.6
-2026-10-08 04:00  new version v0.1.18 (after v0.1.17)
+2026-10-08 04:00  new version 0.1.18 (after 0.1.17)
 
 Settings in force
 feedback.boost_weight              0.1

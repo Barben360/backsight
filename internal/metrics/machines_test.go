@@ -1962,8 +1962,8 @@ func TestMergedMetricAndViewListsMatchTheMerge(t *testing.T) {
 }
 
 // The versions the binaries really write differ in shape (a release build has
-// no "v": 0.1.27-m7; make build gives git describe's v0.1.30-m7): each is a
-// valid name and a row of its own. With all PCs, the other PC's versions are
+// no "v": 0.1.27-m7; an older make build gave git describe's v0.1.30-m7): each
+// is a valid name and a row of its own, named without the tag's "v". With all PCs, the other PC's versions are
 // listed beside this PC's, after them when their first day is older than this
 // PC's first prompt (the table is newest first), so a short page can hide them:
 // the count says how many there are.
@@ -1978,7 +1978,7 @@ func TestReleasesListOtherPCsVersionsOfEveryShape(t *testing.T) {
 	)
 	r := x.runAs("releases", x.allQuery())
 	by := releaseByVersion(r)
-	for v, n := range map[string]int64{"0.1.27-m7": 3, "v0.1.29": 6, "v0.1.30-m7": 9} {
+	for v, n := range map[string]int64{"0.1.27-m7": 3, "0.1.29": 6, "0.1.30-m7": 9} {
 		if row, ok := by[v]; !ok || row.N != n {
 			t.Errorf("%s: row %+v (present %t), want n %d", v, row, ok, n)
 		}
@@ -2307,7 +2307,7 @@ func TestOtherPCsDaysReadThroughTheVersionNoonIndex(t *testing.T) {
 			name, q string
 			args    []any
 		}{
-			{"readOthers", othersQuery, []any{"", lo.UnixMilli(), hi.UnixMilli() + 1, at0, at1}},
+			{"readOthers", othersQuery, []any{"0.1.2", "v0.1.2", lo.UnixMilli(), hi.UnixMilli() + 1, at0, at1}},
 			{"otherVersions", otherVersionsQuery, []any{lo.UnixMilli(), hi.UnixMilli(), at0, at1}},
 		} {
 			rows, err := e.tx.QueryContext(e.ctx, "EXPLAIN QUERY PLAN "+c.q, c.args...)

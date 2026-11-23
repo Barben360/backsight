@@ -6,16 +6,16 @@ Turns where Claude used memory               1 of 1                   (n=1, too 
 
 Versions that ran
 Version  First             Last              Events  Prompts per day  Memories
-v0.1.18  2026-10-08 04:00  2026-10-08 04:00  1       1.0              0
-v0.1.17  2026-10-06 12:00  2026-10-06 12:00  1       1.0              0
+0.1.18   2026-10-08 04:00  2026-10-08 04:00  1       1.0              0
+0.1.17   2026-10-06 12:00  2026-10-06 12:00  1       1.0              0
 
 What changed
 When              What
 2026-10-07 18:00  settings changed: recall.min_score 0.5 → 0.6
-2026-10-08 04:00  new version v0.1.18 (after v0.1.17)
+2026-10-08 04:00  new version 0.1.18 (after 0.1.17)
 
-Comparison of v0.1.17 and v0.1.18 on Turns where Claude used memory
-too few to compare: v0.1.17 has 0 active days and 0 turns in its best group; not enough active days
+Comparison of 0.1.17 and 0.1.18 on Turns where Claude used memory
+too few to compare: 0.1.17 has 0 active days and 0 turns in its best group; not enough active days
 
 Settings in force
 feedback.boost_weight              0.1

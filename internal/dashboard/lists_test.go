@@ -1021,7 +1021,7 @@ func TestDayMarkers(t *testing.T) {
 	if len(lis) == 0 {
 		t.Fatal("release day: no lines")
 	}
-	if a := lis[0].first("a"); a == nil || !strings.HasPrefix(a.attr("href"), "/releases") || !strings.HasSuffix(a.attr("href"), "#release-v0.1.17-m7") {
+	if a := lis[0].first("a"); a == nil || !strings.HasPrefix(a.attr("href"), "/releases") || !strings.HasSuffix(a.attr("href"), "#release-0.1.17-m7") { // the row is named without the tag's v
 		t.Errorf("the version does not link to its row: %v", a)
 	}
 	if tm := lis[0].first("time"); tm == nil || tm.attr("datetime") != "2026-10-05T14:02:00Z" {

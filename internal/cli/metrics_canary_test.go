@@ -343,8 +343,8 @@ func TestPublishedDocumentHoldsNoCanary(t *testing.T) {
 			}
 		}
 	})
-	if len(vs) != 1 || vs[0] != "v0.0.7" || day.Versions["v0.0.7"].Prompts != 6 {
-		t.Errorf("the day's versions %v, want only v0.0.7 with 6 prompts", day.Versions)
+	if len(vs) != 1 || vs[0] != "0.0.7" || day.Versions["0.0.7"].Prompts != 6 {
+		t.Errorf("the day's versions %v, want only v0.0.7 (named 0.0.7) with 6 prompts", day.Versions)
 	}
 	if strings.Contains(raw, "CANARY") {
 		t.Errorf("CANARY in the document: %s", raw)

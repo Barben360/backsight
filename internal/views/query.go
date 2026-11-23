@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/harnessid"
+	"github.com/Barben360/backsight/internal/machines"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 )
@@ -173,6 +174,8 @@ func windowUsage(err error) error {
 // compareOf reads --compare A,B and --measure: two different, non-empty
 // versions, a measure that comparisons know, and no measure without a
 // comparison. A measure is set to its default when only --compare is given.
+// A version is named without the tag's leading v (machines.CanonVersion),
+// so "v0.1.27" and "0.1.27" are the same one.
 func compareOf(p Params) ([2]string, error) {
 	if p.Measure != "" && !slices.Contains(metrics.CompareMeasures, p.Measure) {
 		return [2]string{}, Usage("--measure: one of %s", strings.Join(metrics.CompareMeasures, ", "))
@@ -187,7 +190,7 @@ func compareOf(p Params) ([2]string, error) {
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
 		return [2]string{}, Usage("--compare: two versions, as A,B")
 	}
-	a, b := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	a, b := machines.CanonVersion(strings.TrimSpace(parts[0])), machines.CanonVersion(strings.TrimSpace(parts[1]))
 	if a == b {
 		return [2]string{}, Usage("--compare: A and B are the same version")
 	}

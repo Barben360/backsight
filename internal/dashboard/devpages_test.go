@@ -359,7 +359,7 @@ func TestReleaseRowsKeepTheViewsOrder(t *testing.T) {
 
 func TestReleaseLinkKeepsTheWindow(t *testing.T) {
 	b := pageHTML(t, "releases", nil)
-	if !strings.Contains(b, `href="/releases?days=30#release-v0.1.18"`) {
+	if !strings.Contains(b, `href="/releases?days=30#release-0.1.18"`) {
 		t.Errorf("a version link lacks the window: %q", linksIn(parseHTML(t, b), "main tbody"))
 	}
 }
@@ -392,7 +392,7 @@ func TestReleaseTableCells(t *testing.T) {
 	for _, td := range tr.find("td") {
 		got = append(got, td.text())
 	}
-	want := []string{"v0.1.18", "Oct 3 → Oct 21", "1,234", "7", "29 % (18–42 %)", "5 of 7", "—", "0 of 6", "—", "1.6 s", "alpha 38 %", "24.5", "1,284"}
+	want := []string{"0.1.18", "Oct 3 → Oct 21", "1,234", "7", "29 % (18–42 %)", "5 of 7", "—", "0 of 6", "—", "1.6 s", "alpha 38 %", "24.5", "1,284"}
 	if !slices.Equal(got, want) {
 		t.Errorf("cells\n got %q\nwant %q", got, want)
 	}
@@ -508,6 +508,43 @@ func TestReleaseSpanNamesYearsAndTheRunningVersion(t *testing.T) {
 	}
 	if strings.Contains(rows[0].find("td")[1].text(), "now") {
 		t.Error("a version that is not the running one reads as in use")
+	}
+}
+
+// TestReleaseRunningVersionSpelledWithItsV: a binary whose version reads
+// "v0.1.17" runs the row named 0.1.17: that row reads "→ now", and the
+// footer's version link opens that row.
+func TestReleaseRunningVersionSpelledWithItsV(t *testing.T) {
+	var want string
+	b := pageHTML(t, "releases", func(d *PageData) {
+		rows := d.V["releases"].Tables.Releases
+		want = rows[1].Version
+		d.Frame.Version = "v" + want
+	})
+	doc := parseHTML(t, b)
+	if strings.HasPrefix(want, "v") {
+		t.Fatalf("the golden's row %q is spelled with its v", want)
+	}
+	var running *node
+	for _, tr := range doc.find("main tbody tr") {
+		if tr.attr("id") == "release-"+want {
+			running = tr
+		}
+	}
+	if running == nil {
+		t.Fatalf("no row release-%s", want)
+	}
+	if got := running.find("td")[1].text(); !strings.HasSuffix(got, "→ now") {
+		t.Errorf("the running version's span %q, want it to end with → now", got)
+	}
+	var footer []string
+	for _, a := range doc.find("a") {
+		if h := a.attr("href"); strings.HasPrefix(h, "/releases#") {
+			footer = append(footer, h)
+		}
+	}
+	if !slices.Equal(footer, []string{"/releases#release-" + want}) {
+		t.Errorf("footer version links %q, want the running row's anchor release-%s", footer, want)
 	}
 }
 
@@ -916,7 +953,7 @@ func TestComparisonPicker(t *testing.T) {
 	}
 	// the redirect is followed by a page that asks the view
 	r := h.do("GET", "/releases?compare=v1,v2&measure=recall.hit_rate", hdr...)
-	if r.StatusCode != 200 || !strings.Contains(body(t, r), "Comparing v1 with v2 on prompts that got memory:") {
+	if r.StatusCode != 200 || !strings.Contains(body(t, r), "Comparing 1 with 2 on prompts that got memory:") {
 		t.Errorf("the comparison page: %d", r.StatusCode)
 	}
 	// the same version twice, a missing one or an unknown measure: the view's sentence, 400
@@ -942,7 +979,7 @@ func TestComparisonPicker(t *testing.T) {
 	}
 	r = h.do("GET", "/releases?compare=v9,v2", hdr...)
 	card := compareCard(t, body(t, r))
-	if r.StatusCode != 200 || !strings.Contains(card.text(), "Too few to compare. v9 has run 0 days with 0 turns that said what they used;") {
+	if r.StatusCode != 200 || !strings.Contains(card.text(), "Too few to compare. 9 has run 0 days with 0 turns that said what they used;") {
 		t.Errorf("unknown version page: %d %q", r.StatusCode, card.text())
 	}
 	// the picker is only the Releases page's
@@ -1220,7 +1257,7 @@ func TestReleasesMarkersChart(t *testing.T) {
 		days = append(days, p.Day)
 	}
 	oct7, oct8 := slices.Index(days, "2026-10-07"), slices.Index(days, "2026-10-08")
-	if oct7 < 0 || oct8 != oct7+1 || len(g.Tables.Markers) != 1 || g.Tables.Markers[0].Version != "v0.1.18" {
+	if oct7 < 0 || oct8 != oct7+1 || len(g.Tables.Markers) != 1 || g.Tables.Markers[0].Version != "0.1.18" {
 		t.Fatalf("the golden changed: days %q, markers %+v", days, g.Tables.Markers)
 	}
 	two := func(d *PageData) {
@@ -1243,7 +1280,7 @@ func TestReleasesMarkersChart(t *testing.T) {
 	for _, m := range card.find("svg line.cfg-mk title") {
 		cfg = append(cfg, m.text())
 	}
-	if want := []string{"Oct 8: new version v0.1.18 (was v0.1.17)"}; !slices.Equal(rel, want) {
+	if want := []string{"Oct 8: new version 0.1.18 (was 0.1.17)"}; !slices.Equal(rel, want) {
 		t.Errorf("release markers %q, want %q", rel, want)
 	}
 	if want := []string{"Oct 7: settings changed, recorded at 18:00 (recall.min_score 0.5 → 0.6)"}; !slices.Equal(cfg, want) {
@@ -1268,7 +1305,7 @@ func TestReleasesMarkersChart(t *testing.T) {
 		case oct7:
 			want = "settings changed"
 		case oct8:
-			want = "v0.1.18"
+			want = "0.1.18"
 		}
 		if got := r[len(r)-1]; got != want {
 			t.Errorf("%s: marker %q, want %q", r[0], got, want)
