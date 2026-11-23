@@ -875,6 +875,8 @@ func blockDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string 
 	var out []string
 	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
 	switch d.ID {
+	case "used.by_source": // the page's lines: by source and path, every show, by project
+		out = append(out, views.ExtraLines(d, m)...)
 	case "pipeline.time_to_recall":
 		f, ok := extraAs[map[string]int64](m, "funnel")
 		if !ok || f["ended"] == 0 {

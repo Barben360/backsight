@@ -71,7 +71,7 @@ var pageMetrics = map[string][]string{
 var drawnInOtherCard = map[string]bool{"declare.coverage": true, "search.empty_rate": true, "search.latency": true,
 	"context.per_prompt": true, "extraction.cost": true}
 
-var devMetrics = []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"}
+var devMetrics = []string{"used.share_confident", "used.rank", "used.by_path", "used.by_source", "search.rescue_rate", "used.rubber_stamp", "recall.by_lang"}
 
 // apiResult is the data of GET /api/v1/<view>.
 func apiResult(t *testing.T, h *harness, view string) metrics.Result {

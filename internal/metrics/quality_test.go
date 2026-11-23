@@ -939,7 +939,7 @@ func TestMemoryProjectIsItsLatestShow(t *testing.T) {
 
 // The dashboard words read these shapes by their json names.
 func TestBreakdownStatsKeepTheirJSONNames(t *testing.T) {
-	for name, v := range map[string]any{"pathStat": pathStat{}, "langStat": langStat{}} {
+	for name, v := range map[string]any{"pathStat": pathStat{}, "langStat": langStat{}, "sourceStat": sourceStat{}} {
 		raw, err := json.Marshal(v)
 		if err != nil {
 			t.Fatal(err)

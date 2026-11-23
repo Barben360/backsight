@@ -164,6 +164,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			}
 			r.add("score_without_boost", swb)
 			r.add("project", nameValue(s.Project))
+			r.add("source", sourceValue(it.Source))
 			out = append(out, r)
 		}
 	case "credit":
@@ -237,6 +238,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			}
 			r.add("score_without_boost", swb)
 			r.add("flags", flagsValue(e.Flags))
+			r.add("source", sourceValue(it.Source))
 			out = append(out, r)
 		}
 	case feedback.KindImport:

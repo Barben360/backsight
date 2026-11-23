@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -766,6 +767,49 @@ func TestSearchProvenance(t *testing.T) {
 	raw := `{"results":[{"id":"w1","text":"A raw fact.","type":"world","tags":["project:billing","source:import"],"scores":{"reranker":0.9}}]}`
 	res = kindsEngine(t, `{"results":[]}`, raw, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
 	if len(res.Hits) != 1 || res.Hits[0].Source != "import" {
+		t.Errorf("raw fact: %+v", res.Hits)
+	}
+}
+
+// Each hit's Sources are its source words, each once and sorted, where
+// Source sums them up: the facts of a conversation and a note are note and
+// session (Source mixed). An observation whose facts the recall did not
+// ask for, or the answer left some out (cut or gone without the flag),
+// has none: unknown, never a guess. A raw fact's come from its own tags.
+func TestSearchSourcesListEveryWord(t *testing.T) {
+	obs := `{"results":[
+		{"id":"o1","text":"Both.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f2","f4"],"scores":{"reranker":0.8}},
+		{"id":"o2","text":"Gone.","type":"observation","tags":["project:billing"],"source_fact_ids":["gone"],"scores":{"reranker":0.7}},
+		{"id":"o3","text":"Noted.","type":"observation","tags":["project:billing"],"source_fact_ids":["f3"],"scores":{"reranker":0.6}},
+		{"id":"o4","text":"Untagged.","type":"observation","tags":["project:billing"],"source_fact_ids":["f5"],"scores":{"reranker":0.5}}],
+		"source_facts":{"f1":{"tags":["source:chat"]},"f2":{"tags":["source:note"]},"f3":{"tags":["source:note"]},"f4":{"tags":["source:chat"]},"f5":{"tags":["kind:state"]}}}`
+	var bodies []string
+	for _, q := range []Query{{Provenance: true}, {Kinds: true}} {
+		q.Queries, q.Current = []string{"pg"}, "billing"
+		res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), q)
+		got := map[string]string{}
+		for _, h := range res.Hits {
+			got[h.ID] = strings.Join(h.Sources, ",")
+		}
+		if want := map[string]string{"o1": "note,session", "o2": "", "o3": "note", "o4": ""}; !maps.Equal(got, want) {
+			t.Errorf("%+v: sources %v, want %v", q, got, want)
+		}
+	}
+	cut := `{"results":[{"id":"o1","text":"Cut.","type":"observation","tags":["project:billing"],"source_fact_ids":["f1","f9"],"scores":{"reranker":0.8}}],
+		"source_facts":{"f1":{"tags":["source:chat"]}},"source_facts_truncated":true}`
+	res := kindsEngine(t, cut, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Provenance: true})
+	if len(res.Hits) != 1 || res.Hits[0].Sources != nil {
+		t.Errorf("facts cut: %+v", res.Hits)
+	}
+	res = kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	for _, h := range res.Hits {
+		if h.Sources != nil {
+			t.Errorf("no source facts asked: %+v", h)
+		}
+	}
+	raw := `{"results":[{"id":"w1","text":"A raw fact.","type":"world","tags":["project:billing","source:subagent","source:chat"],"scores":{"reranker":0.9}}]}`
+	res = kindsEngine(t, `{"results":[]}`, raw, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	if len(res.Hits) != 1 || strings.Join(res.Hits[0].Sources, ",") != "session,subagent" {
 		t.Errorf("raw fact: %+v", res.Hits)
 	}
 }

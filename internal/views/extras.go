@@ -110,6 +110,34 @@ func share(m map[string]any) (string, bool) {
 	return s, true
 }
 
+// memorySources is the order used.by_source lists its sources in.
+var memorySources = []string{"conversation", "note", "conversation+note", "subagent", "other", "unknown"}
+
+// MemorySourceWords say where a memory of used.by_source came from.
+var MemorySourceWords = map[string]string{
+	"conversation": "from conversations", "note": "from notes", "conversation+note": "from conversations and notes",
+	"subagent": "with a subagent's report", "other": "from other sources", "unknown": "source not recorded",
+}
+
+// smallestChange is ", smallest change it can show N pts" of a decoded
+// cell that has one, else "".
+func smallestChange(m map[string]any) string {
+	if v, ok := m["mdc"].(float64); ok {
+		return ", smallest change it can show " + Percent(v) + " pts"
+	}
+	return ""
+}
+
+// topShare is a cell at the top ranks (named by at): its share and the
+// smallest change it can show, or none when it holds no show.
+func topShare(m map[string]any, at string) string {
+	if n, ok := asCount(m["den"]); !ok || n == 0 {
+		return "none at " + at
+	}
+	s, _ := share(m)
+	return s + " at " + at + smallestChange(m)
+}
+
 // ExtraLines are the lines a metric's breakdown adds: the split by kind,
 // by result, by path, by language and by rank. MetricDetails holds the
 // other extras. A metric without a breakdown has none.
@@ -150,6 +178,44 @@ func ExtraLines(d metrics.Def, m metrics.Metric) []string {
 			if one, ok := g[k].(map[string]any); ok {
 				if s, ok := share(one); ok {
 					out = append(out, Word(PathWords, k)+": "+s)
+				}
+			}
+		}
+	case "used.by_source":
+		top := "ranks 1 to 8"
+		if n, ok := extraInt(m, "top_rank"); ok && n > 0 {
+			top = "ranks 1 to " + Grouped(n)
+		}
+		g := group("by_source")
+		for _, src := range memorySources {
+			paths, _ := g[src].(map[string]any)
+			for _, p := range sortedKeys(paths) {
+				one, _ := paths[p].(map[string]any)
+				all, okAll := one["all"].(map[string]any)
+				topCell, _ := one["top8"].(map[string]any)
+				a, ok := share(all)
+				if !okAll || !ok {
+					continue
+				}
+				out = append(out, Word(MemorySourceWords, src)+", "+Word(PathWords, p)+": "+topShare(topCell, top)+"; "+a+" at any rank")
+			}
+		}
+		if all, ok := m.Extra["all_ranks"]; ok {
+			if one, ok := generic(all).(map[string]any); ok {
+				if s, ok := share(one); ok {
+					out = append(out, "every source, any rank: "+s)
+				}
+			}
+		}
+		p := group("by_project")
+		for _, k := range sortedKeys(p) {
+			if one, ok := p[k].(map[string]any); ok {
+				if s, ok := share(one); ok {
+					name := "project " + k
+					if k == "unknown" { // the session's turn named none
+						name = "no project recorded"
+					}
+					out = append(out, name+", "+top+": "+s+smallestChange(one))
 				}
 			}
 		}

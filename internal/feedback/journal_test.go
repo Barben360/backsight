@@ -407,3 +407,28 @@ func TestClientFieldRoundTripsAndOldLinesReadAsClaudeCode(t *testing.T) {
 		t.Errorf("the client is not in the file: %v %s", err, raw)
 	}
 }
+
+// A memory's source is its words each once, sorted, joined by "+"; only
+// that shape of the binary's own words is valid.
+func TestJoinAndValidSource(t *testing.T) {
+	for _, tc := range []struct {
+		words []string
+		want  string
+	}{
+		{nil, ""}, {[]string{"session"}, "session"}, {[]string{"session", "note", "session"}, "note+session"},
+		{[]string{"subagent", "session", "note"}, "note+session+subagent"},
+	} {
+		if got := JoinSources(tc.words); got != tc.want {
+			t.Errorf("JoinSources(%v) = %q, want %q", tc.words, got, tc.want)
+		}
+	}
+	for s, want := range map[string]bool{
+		"session": true, "note+session": true, "import+note+other+session+subagent": true,
+		"": false, "session+note": false, "note+note": false, "chat": false, "+session": false, "session+": false,
+		"Session": false, "note session": false,
+	} {
+		if got := ValidSource(s); got != want {
+			t.Errorf("ValidSource(%q) = %v, want %v", s, got, want)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/harnessid"
 )
 
@@ -85,6 +86,18 @@ func closedValue(s string, set []string) any {
 	case s == "":
 		return nil
 	case slices.Contains(set, s):
+		return s
+	}
+	return other
+}
+
+// sourceValue is a journal item's memory source when it is one the binary
+// writes (feedback.ValidSource), other when not, nil when empty.
+func sourceValue(s string) any {
+	switch {
+	case s == "":
+		return nil
+	case feedback.ValidSource(s):
 		return s
 	}
 	return other

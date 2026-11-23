@@ -111,6 +111,11 @@ type Hit struct {
 	// Source: where the memory came from, one word (SourceOf), "" when
 	// its tags do not say (decision 0089 P2).
 	Source string `json:"source,omitempty"`
+	// Sources: every source word Source sums up, each once and sorted
+	// (SourcesOf: note and session where Source says mixed), for the
+	// feedback journal; nil when unknown (an observation whose facts were
+	// not asked for, or left out of the answer). Not part of any output.
+	Sources []string `json:"-"`
 }
 
 // ScopeMeta is how one scope's calls went (telemetry, A.4).
@@ -237,6 +242,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
 			}
 			h.Source = hitSource(r, sourceTokens > 0)
+			h.Sources = hitSources(r, sourceTokens > 0)
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
@@ -477,6 +483,43 @@ func hitSource(r hindsight.RecallHit, asked bool) string {
 		return "mixed"
 	}
 	return SourceOf(r.SourceTags)
+}
+
+// hitSources is every source word of a hit, as hitSource decides when it
+// is known: a raw fact's own tags; an observation's facts, when they were
+// asked for and all listed; nil otherwise, never a guess.
+func hitSources(r hindsight.RecallHit, asked bool) []string {
+	if r.Type != "observation" {
+		return SourcesOf(r.Tags)
+	}
+	if !asked || len(r.SourceFactIDs) == 0 || r.SourceFactsMissing > 0 {
+		return nil
+	}
+	return SourcesOf(r.SourceTags)
+}
+
+// SourcesOf is every word SourceOf would read in the tags given, each once
+// and sorted (session, note, subagent, import, other); nil when no tag
+// says.
+func SourcesOf(tagSets ...[]string) []string {
+	var words []string
+	for _, tags := range tagSets {
+		for _, t := range tags {
+			s, ok := strings.CutPrefix(t, "source:")
+			if !ok {
+				continue
+			}
+			w := sourceWords[s]
+			if w == "" {
+				w = "other"
+			}
+			if !contains(words, w) {
+				words = append(words, w)
+			}
+		}
+	}
+	sort.Strings(words)
+	return words
 }
 
 // sourceWords are the words of the source: tags the binary writes

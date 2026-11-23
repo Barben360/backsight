@@ -140,6 +140,14 @@ var Catalog = withDrills([]Def{
 		Action:     "Shows which channel earns its place and which one does not.",
 	},
 	{
+		ID: "used.by_source", Label: "Used, by where memory came from", Unit: "ratio", Direction: "up", MinN: 20,
+		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
+		Extra:      []string{"by_source", "by_project", "all_ranks", "top_rank"},
+		Question:   "Are memories from conversations, notes and subagents' reports used as often as each other?",
+		Definition: "Memories the prompt recall or a search showed, each counted once per session at its first show, and those the session then marked used or confirmed, at ranks 1 to 8 (all ranks beside it). Split by where the memory came from (a conversation, a note, both, a subagent's report, another source, or not recorded: shows from before this was recorded, and observations whose facts the recall did not list), by path and by project; each split is judged on its own 20 shows and gives the smallest change it can show.",
+		Action:     "A source used far less than the others brings memories that are shown without helping. A drop on every source at once points at how much is shown, not at one source: compare at the same ranks.",
+	},
+	{
 		ID: "search.rescue_rate", Label: "Memories Claude found itself", Unit: "ratio", Direction: "none", MinN: 20,
 		CI: "none", Scope: "machine", Source: "journal", Dev: true, Family: "quality", Series: "none", Command: "backsight stats quality --dev",
 		Question:   "How much does Claude find that the prompt recall missed?",

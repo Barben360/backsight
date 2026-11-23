@@ -18,6 +18,11 @@ Turns where every memory was marked used     0 of 0                   (n=0, too 
 Confidently ranked memories that were used   0 of 0                   (n=0, too few, 20 more needed)
 Position of the memories used                —                        (n=0, too few, 20 more needed)
 Used, by where memory was shown              0 of 0                   (n=0, too few, 20 more needed)
+Used, by where memory came from              1 of 4                   (n=4, too few, 16 more needed)
+  source not recorded, added to the prompt: 1 of 4 (25 %) at ranks 1 to 8; 1 of 4 (25 %) at any rank
+  every source, any rank: 1 of 4 (25 %)
+  project p1, ranks 1 to 8: 1 of 1 (100 %)
+  no project recorded, ranks 1 to 8: 0 of 3 (0 %)
 Memories Claude found itself                 0 of 0                   (n=0, too few, 20 more needed)
 Memories reported wrong or out of date       0 of 1                   (n=1, too few, 19 more needed)
 Corrections after memory was shown           0 of 1                   (n=1, too few, 19 more needed)

@@ -88,8 +88,8 @@ func TestJournalRows(t *testing.T) {
 	at := jT0.Add
 	score := ptr(0.9)
 	showEv := feedback.Event{TS: jT0, Kind: "shows", Turn: "t1", Path: "prompt", Items: []feedback.Item{
-		{ID: "m1", Rank: 1, Reranker: 0.5, Project: "p2", Boost: 0.1, RankWithoutBoost: 2, ScoreWithoutBoost: score},
-		{ID: "m2", Rank: 2}, // no project: the line's; no score: NULL
+		{ID: "m1", Rank: 1, Reranker: 0.5, Project: "p2", Boost: 0.1, RankWithoutBoost: 2, ScoreWithoutBoost: score, Source: "note+session"},
+		{ID: "m2", Rank: 2}, // no project: the line's; no score, no source: NULL
 	}}
 	for _, ev := range []feedback.Event{
 		{TS: jT0, Kind: "turn", Turn: "t1", N: 3, Machine: true},
@@ -107,7 +107,7 @@ func TestJournalRows(t *testing.T) {
 		{TS: at(7 * time.Second), Kind: "hide", IDs: []string{"m3"}, Verdict: "outdated", Note: "n:2"},
 		{TS: at(8 * time.Second), Kind: "unhide", IDs: []string{"m3"}, Outcome: "restored"},
 		{TS: at(9 * time.Second), Kind: "recall", Turn: "t1", Path: "search", Flags: []string{feedback.FlagSetChanged}, Items: []feedback.Item{
-			{ID: "m1", Rank: 1, RankWithoutBoost: 3, Reranker: 0.25, Boost: 0.05, ScoreWithoutBoost: ptr(0)},
+			{ID: "m1", Rank: 1, RankWithoutBoost: 3, Reranker: 0.25, Boost: 0.05, ScoreWithoutBoost: ptr(0), Source: "session"},
 		}},
 		{TS: at(10 * time.Second), Kind: "import", Source: "transcripts", Settled: []feedback.Settled{
 			{Key: "s1|ref|prompt|m1", ID: "m1", At: jT1, Outcome: "credit", Rank: 4},
@@ -129,9 +129,9 @@ func TestJournalRows(t *testing.T) {
 	key := func(id string) string { return fmt.Sprintf("s1|t1|%d|%s", jT0.UnixNano(), id) }
 	e.checkRows("shows", `"offset", pos`, []map[string]any{
 		{"pos": 0, "ts": ms(jT0), "session": "s1", "key": key("m1"), "turn": "t1", "agent": nil, "path": "prompt", "memory_id": "m1", "rank": 1,
-			"reranker": 0.5, "boost": 0.1, "rank_without_boost": 2, "score_without_boost": 0.9, "project": "p2"},
+			"reranker": 0.5, "boost": 0.1, "rank_without_boost": 2, "score_without_boost": 0.9, "project": "p2", "source": "note+session"},
 		{"pos": 1, "ts": ms(jT0), "session": "s1", "key": key("m2"), "turn": "t1", "agent": nil, "path": "prompt", "memory_id": "m2", "rank": 2,
-			"reranker": nil, "boost": nil, "rank_without_boost": nil, "score_without_boost": nil, "project": "proj"},
+			"reranker": nil, "boost": nil, "rank_without_boost": nil, "score_without_boost": nil, "project": "proj", "source": nil},
 	})
 	e.checkRows("credits", `"offset", pos`, []map[string]any{
 		{"pos": 0, "ts": ms(at(time.Second)), "session": "s1", "turn": "t1", "agent": "sub1", "project": "proj", "memory_id": "m1", "verdict": "used"},
@@ -154,7 +154,7 @@ func TestJournalRows(t *testing.T) {
 	})
 	e.checkRows("recalls", `"offset", pos`, []map[string]any{
 		{"pos": 0, "ts": ms(at(9 * time.Second)), "session": "s1", "turn": "t1", "agent": nil, "path": "search", "memory_id": "m1", "rank": 1,
-			"rank_without_boost": 3, "reranker": 0.25, "boost": 0.05, "score_without_boost": 0.0, "flags": "set_changed"},
+			"rank_without_boost": 3, "reranker": 0.25, "boost": 0.05, "score_without_boost": 0.0, "flags": "set_changed", "source": "session"},
 	})
 	e.checkRows("imports", `"offset", pos`, []map[string]any{
 		{"pos": 0, "ts": ms(at(10 * time.Second)), "source": "transcripts", "key": "s1|ref|prompt|m1", "memory_id": "m1", "at": ms(jT1), "outcome": "credit", "rank": 4},
@@ -381,6 +381,34 @@ func TestJournalGuards(t *testing.T) {
 	}
 	if got := str(`SELECT kind FROM journal_other`); !slices.Equal(got, []string{"other"}) {
 		t.Errorf("kind %v", got)
+	}
+}
+
+// A memory's source is its source words, sorted and each once, joined by
+// "+": a text, a word the binary does not write, words out of order or
+// twice read as other, on a show and on a search's recall line alike.
+func TestJournalSourceGuard(t *testing.T) {
+	e := newEnv(t)
+	e.appendJ(feedback.Event{TS: jT0, Kind: "shows", Path: "search", Turn: "t", Items: []feedback.Item{
+		{ID: "s1", Source: "the user said so"}, {ID: "s2", Source: "session+note"}, {ID: "s3", Source: "note+note"},
+		{ID: "s4", Source: "chat"}, {ID: "s5", Source: "note+session+subagent"}, {ID: "s6", Source: "+session"},
+		{ID: "s7", Source: "other"}, {ID: "s8"}}})
+	e.appendJ(feedback.Event{TS: jT0, Kind: "recall", Path: "search", Turn: "t", Items: []feedback.Item{
+		{ID: "s1", Source: "Session"}, {ID: "s2", Source: "import"}, {ID: "s3"}}})
+	e.ingest()
+	col := func(q string) []string {
+		var out []string
+		for _, r := range e.rowsOf(q) {
+			out = append(out, fmt.Sprint(r["s"]))
+		}
+		return out
+	}
+	if got := col(`SELECT memory_id || '=' || ifnull(source, 'NULL') AS s FROM shows ORDER BY pos`); !slices.Equal(got, []string{
+		"s1=other", "s2=other", "s3=other", "s4=other", "s5=note+session+subagent", "s6=other", "s7=other", "s8=NULL"}) {
+		t.Errorf("show sources %v", got)
+	}
+	if got := col(`SELECT memory_id || '=' || ifnull(source, 'NULL') AS s FROM recalls ORDER BY pos`); !slices.Equal(got, []string{"s1=other", "s2=import", "s3=NULL"}) {
+		t.Errorf("recall sources %v", got)
 	}
 }
 

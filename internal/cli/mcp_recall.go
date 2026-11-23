@@ -32,7 +32,7 @@ func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Resul
 	setChanged, orderChanged := false, false
 	for i, h := range res.Hits {
 		e.Items = append(e.Items, feedback.Item{ID: h.ID, Rank: i + 1, RankWithoutBoost: h.RankWithoutBoost, Reranker: h.Reranker, Boost: h.Boost,
-			ScoreWithoutBoost: scoreWithoutBoost(h)})
+			ScoreWithoutBoost: scoreWithoutBoost(h), Source: feedback.JoinSources(h.Sources)})
 		switch {
 		case h.RankWithoutBoost != 0:
 			setChanged = setChanged || h.RankWithoutBoost > len(res.Hits)

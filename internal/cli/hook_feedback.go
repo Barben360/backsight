@@ -226,7 +226,7 @@ func itemsFromHits(hits []recall.Hit) []feedback.Item {
 	items := make([]feedback.Item, 0, len(hits))
 	for i, hit := range hits {
 		items = append(items, feedback.Item{ID: hit.ID, Rank: i + 1, Reranker: hit.Reranker, Project: hit.Project,
-			Boost: hit.Boost, RankWithoutBoost: rankWithoutBoost(hits, hit), ScoreWithoutBoost: scoreWithoutBoost(hit)})
+			Boost: hit.Boost, RankWithoutBoost: rankWithoutBoost(hits, hit), ScoreWithoutBoost: scoreWithoutBoost(hit), Source: feedback.JoinSources(hit.Sources)})
 	}
 	return items
 }
