@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
       # The job's own Go caches below, not setup-go's: that one is shared
       # by every job and saved by whichever ends first.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
@@ -124,7 +124,7 @@ jobs:
           persist-credentials: false
       # The job's own Go caches below, not setup-go's: that one is shared
       # by every job and saved by whichever ends first.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
       # The job's own Go caches below, not setup-go's: that one is shared
       # by every job and saved by whichever ends first.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
@@ -203,7 +203,7 @@ jobs:
           persist-credentials: false
       # The job's own Go caches below, not setup-go's: that one is shared
       # by every job and saved by whichever ends first.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
@@ -274,7 +274,7 @@ jobs:
           persist-credentials: false
       # The job's own Go caches below, not setup-go's: that one is shared
       # by every job and saved by whichever ends first.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
@@ -337,7 +337,7 @@ jobs:
           persist-credentials: false
       # Built uncached, as the release is (release.yml, security review
       # M4): this job proves the release build, not a cache's.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
@@ -367,7 +367,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
@@ -390,7 +390,7 @@ jobs:
       # (scripts/ci-free-disk.sh frees it only when short).
       - name: Free the hosted runner's disk when it is short
         run: scripts/ci-free-disk.sh
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
@@ -437,7 +437,7 @@ jobs:
       # (scripts/ci-free-disk.sh frees it only when short).
       - name: Free the hosted runner's disk when it is short
         run: scripts/ci-free-disk.sh
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
@@ -498,7 +498,7 @@ jobs:
       # (scripts/ci-free-disk.sh frees it only when short).
       - name: Free the hosted runner's disk when it is short
         run: scripts/ci-free-disk.sh
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
@@ -561,7 +561,7 @@ jobs:
       # (scripts/ci-free-disk.sh frees it only when short).
       - name: Free the hosted runner's disk when it is short
         run: scripts/ci-free-disk.sh
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
@@ -609,7 +609,7 @@ jobs:
       # (scripts/ci-free-disk.sh frees it only when short).
       - name: Free the hosted runner's disk when it is short
         run: scripts/ci-free-disk.sh
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
@@ -694,7 +694,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: true
