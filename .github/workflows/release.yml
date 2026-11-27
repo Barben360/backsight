@@ -35,7 +35,7 @@ jobs:
       # the module cache, but compiled objects in GOCACHE are trusted on a
       # hit, so a poisoned cache would land in a signed binary. The release
       # builds from scratch: modules from the proxy, checked against go.sum.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4" # go.mod's toolchain line (workflows_test.go)
           cache: false
